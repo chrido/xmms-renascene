@@ -1,4 +1,5 @@
 #include "xmms.h"
+#include <glib/gstdio.h>
 
 #ifdef HAVE_LIBARCHIVE
 #include <archive.h>
@@ -6,6 +7,36 @@
 #endif
 
 Skin *skin = NULL;
+static gchar *skin_temp_dir = NULL;
+
+static void
+remove_dir_recursive(const gchar *dir)
+{
+    GDir *d = g_dir_open(dir, 0, NULL);
+    if (d) {
+        const gchar *name;
+        while ((name = g_dir_read_name(d))) {
+            gchar *path = g_build_filename(dir, name, NULL);
+            if (g_file_test(path, G_FILE_TEST_IS_DIR))
+                remove_dir_recursive(path);
+            else
+                g_unlink(path);
+            g_free(path);
+        }
+        g_dir_close(d);
+    }
+    g_rmdir(dir);
+}
+
+static void
+cleanup_temp_dir(void)
+{
+    if (!skin_temp_dir)
+        return;
+    remove_dir_recursive(skin_temp_dir);
+    g_free(skin_temp_dir);
+    skin_temp_dir = NULL;
+}
 
 static const guchar default_viscolor[24][3] = {
     {9,34,53}, {10,18,26}, {0,54,108}, {0,58,116},
@@ -174,17 +205,23 @@ extract_skin_archive(const gchar *archive_path, const gchar *dest_dir)
     archive_read_free(a);
     return TRUE;
 #else
-    /* Fallback: use system unzip for .wsz/.zip files */
-    gchar *cmd = g_strdup_printf("unzip -o -q '%s' -d '%s'",
-                                  archive_path, dest_dir);
-    gboolean ok = (system(cmd) == 0);
-    g_free(cmd);
+    /* Fallback: use g_spawn to safely run unzip/tar */
+    gchar *argv_unzip[] = { "unzip", "-o", "-q", (gchar *)archive_path,
+                            "-d", (gchar *)dest_dir, NULL };
+    gboolean ok = g_spawn_sync(NULL, argv_unzip, NULL,
+                               G_SPAWN_SEARCH_PATH |
+                               G_SPAWN_STDOUT_TO_DEV_NULL |
+                               G_SPAWN_STDERR_TO_DEV_NULL,
+                               NULL, NULL, NULL, NULL, NULL, NULL);
     if (!ok) {
         /* Try tar for .tar.gz/.tar.bz2 */
-        cmd = g_strdup_printf("tar xf '%s' -C '%s'",
-                               archive_path, dest_dir);
-        ok = (system(cmd) == 0);
-        g_free(cmd);
+        gchar *argv_tar[] = { "tar", "xf", (gchar *)archive_path,
+                              "-C", (gchar *)dest_dir, NULL };
+        ok = g_spawn_sync(NULL, argv_tar, NULL,
+                          G_SPAWN_SEARCH_PATH |
+                          G_SPAWN_STDOUT_TO_DEV_NULL |
+                          G_SPAWN_STDERR_TO_DEV_NULL,
+                          NULL, NULL, NULL, NULL, NULL, NULL);
     }
     return ok;
 #endif
@@ -326,6 +363,8 @@ skin_free(void)
     if (!skin)
         return;
 
+    cleanup_temp_dir();
+
     for (int i = 0; i < SKIN_PIXMAP_COUNT; i++) {
         SkinPixmap *sp = &skin->pixmaps[i];
         if (sp->surface)
@@ -347,6 +386,9 @@ skin_load(const gchar *path)
 
     gchar *skin_dir = NULL;
     gchar *temp_dir = NULL;
+
+    /* Clean up previous temp dir */
+    cleanup_temp_dir();
 
     if (g_file_test(path, G_FILE_TEST_IS_DIR)) {
         skin_dir = g_strdup(path);
@@ -408,7 +450,8 @@ skin_load(const gchar *path)
 
     if (skin_dir != temp_dir)
         g_free(skin_dir);
-    g_free(temp_dir);
+    /* Keep temp_dir reference for cleanup later */
+    skin_temp_dir = temp_dir;
     return TRUE;
 }
 

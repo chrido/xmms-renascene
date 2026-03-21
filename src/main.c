@@ -8,7 +8,7 @@ GtkWidget *mainwin_drawing_area = NULL;
 static GList *mainwin_wlist = NULL;
 
 /* Main window widgets */
-static PButton *mainwin_menubtn, *mainwin_minimize, *mainwin_shade, *mainwin_close;
+static PButton *mainwin_menubtn, *mainwin_minimize, *mainwin_close;
 static PButton *mainwin_rew, *mainwin_play, *mainwin_pause, *mainwin_stop;
 static PButton *mainwin_fwd, *mainwin_eject;
 static TButton *mainwin_shuffle, *mainwin_repeat, *mainwin_eq, *mainwin_pl;
@@ -123,9 +123,11 @@ mainwin_pl_pushed(gboolean toggled)
     playlistwin_show(!playlistwin_is_visible());
 }
 
-static void mainwin_close_pushed(void) { exit(0); }
+static void mainwin_close_pushed(void) {
+    GApplication *app = g_application_get_default();
+    if (app) g_application_quit(app);
+}
 static void mainwin_minimize_pushed(void) { gtk_window_minimize(GTK_WINDOW(mainwin)); }
-static void mainwin_shade_pushed(void) { /* TODO */ }
 static void
 mainwin_menu_skin_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
@@ -464,9 +466,6 @@ create_mainwin_widgets(void)
     mainwin_minimize = pbutton_new(&mainwin_wlist, 244, 3, 9, 9,
                                    9, 0, 9, 9,
                                    mainwin_minimize_pushed, SKIN_TITLEBAR);
-    mainwin_shade = pbutton_new(&mainwin_wlist, 254, 3, 9, 9,
-                                 0, 18, 9, 18,
-                                 mainwin_shade_pushed, SKIN_TITLEBAR);
     mainwin_close = pbutton_new(&mainwin_wlist, 264, 3, 9, 9,
                                  18, 0, 18, 9,
                                  mainwin_close_pushed, SKIN_TITLEBAR);
@@ -578,15 +577,6 @@ load_config(void)
     cfg.player_y = 100;
     cfg.scale_factor = 2;
     cfg.timer_mode = TIMER_ELAPSED;
-    cfg.vis_type = VIS_ANALYZER;
-    cfg.vis_refresh = 30;
-    cfg.analyzer_falloff = 3;
-    cfg.peaks_falloff = 1;
-    cfg.analyzer_peaks = TRUE;
-    cfg.smooth_title_scroll = TRUE;
-    cfg.save_window_position = TRUE;
-    cfg.shuffle = FALSE;
-    cfg.repeat = FALSE;
 
     /* Try loading config file */
     gchar *config_dir = xmms_get_config_dir();
