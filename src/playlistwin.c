@@ -99,25 +99,6 @@ draw_playlist_entries(cairo_t *cr)
 }
 
 static void
-draw_playlist_buttons(cairo_t *cr)
-{
-    /* Bottom area buttons - simple text labels */
-    gint btn_y = PLWIN_HEIGHT - 30;
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
-                           CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 8);
-    gdk_cairo_set_source_rgba(cr, &skin->pledit_normal);
-
-    /* Button labels */
-    const gchar *labels[] = { "+FILE", "+DIR", "-FILE", "SEL ALL", "MISC" };
-    for (int i = 0; i < 5; i++) {
-        cairo_move_to(cr, 12 + i * 52, btn_y + 10);
-        cairo_show_text(cr, labels[i]);
-    }
-}
-
-static void
 draw_playlist_frame(cairo_t *cr)
 {
     gint w = PLWIN_WIDTH, h = PLWIN_HEIGHT;
@@ -182,7 +163,6 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
 
     /* Draw entries */
     draw_playlist_entries(cr);
-    draw_playlist_buttons(cr);
 
     /* Draw all custom widgets */
     widget_list_draw(plwin_wlist, cr);
