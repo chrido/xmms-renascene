@@ -1,0 +1,50 @@
+app-id: org.xmms.Resuscitated
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: xmms
+
+finish-args:
+  # Wayland and X11
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # Audio playback
+  - --socket=pulseaudio
+  # Network for Spotify integration
+  - --share=network
+  # MPRIS D-Bus interface
+  - --own-name=org.mpris.MediaPlayer2.xmms_resuscitated
+  # Access music files
+  - --filesystem=xdg-music:ro
+  - --filesystem=xdg-download:ro
+  # File chooser portal for opening other files
+  - --talk-name=org.freedesktop.FileManager1
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: libarchive
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_INSTALL_LIBDIR=lib
+      - -DENABLE_TEST=OFF
+      - -DENABLE_TAR=OFF
+      - -DENABLE_CAT=OFF
+      - -DENABLE_CPIO=OFF
+      - -DENABLE_UNZIP=OFF
+    sources:
+      - type: archive
+        url: https://github.com/libarchive/libarchive/releases/download/v3.7.7/libarchive-3.7.7.tar.xz
+        sha256: 879acd83c3399c7caaee73fe5f7418e06087ab2aaf40af3e99b9e29beb29faee
+
+  - name: xmms-resuscitated
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: .

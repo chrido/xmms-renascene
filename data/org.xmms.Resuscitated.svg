@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background -->
+  <rect width="128" height="128" rx="16" fill="#1a1a2e"/>
+  <!-- Outer ring -->
+  <circle cx="64" cy="58" r="40" fill="none" stroke="#00cc00" stroke-width="4"/>
+  <!-- Inner disc -->
+  <circle cx="64" cy="58" r="24" fill="#2a2a4a"/>
+  <circle cx="64" cy="58" r="8" fill="#00cc00"/>
+  <!-- EQ bars -->
+  <rect x="24" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-4)"/>
+  <rect x="36" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-8)"/>
+  <rect x="48" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-12)"/>
+  <rect x="60" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-6)"/>
+  <rect x="72" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-10)"/>
+  <rect x="84" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-14)"/>
+  <rect x="96" y="106" width="8" height="14" rx="2" fill="#00cc00" transform="translate(0,-2)"/>
+</svg>

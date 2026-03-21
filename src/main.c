@@ -89,10 +89,10 @@ mainwin_eject_pushed(void)
     gtk_file_dialog_open_multiple(dialog,
         GTK_WINDOW(mainwin), NULL, open_files_cb, NULL);
 
+    /* dialog is owned by the async operation — do not unref it here */
     g_object_unref(filters);
     g_object_unref(filter);
     g_object_unref(all_filter);
-    g_object_unref(dialog);
 }
 
 static void
@@ -633,10 +633,10 @@ open_files_cb(GObject *source, GAsyncResult *result, gpointer data)
     playlist_clear();
     for (guint i = 0; i < g_list_model_get_n_items(files); i++) {
         GFile *file = g_list_model_get_item(files, i);
-        gchar *path = g_file_get_path(file);
-        if (path) {
-            playlist_add(path);
-            g_free(path);
+        gchar *uri = g_file_get_uri(file);
+        if (uri) {
+            playlist_add_uri(uri);
+            g_free(uri);
         }
         g_object_unref(file);
     }

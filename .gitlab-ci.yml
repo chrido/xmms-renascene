@@ -1,0 +1,23 @@
+flatpak:
+  image: 'bilelmoussaoui/flatpak-github-actions:gnome-48'
+  stage: build
+  variables:
+    MANIFEST_PATH: "org.xmms.Resuscitated.yml"
+    FLATPAK_MODULE: "xmms-resuscitated"
+    APP_ID: "org.xmms.Resuscitated"
+    BUNDLE: "xmms-resuscitated.flatpak"
+  script:
+    - flatpak-builder --user --disable-rofiles-fuse --force-clean
+      --repo=repo flatpak_app ${MANIFEST_PATH}
+    - flatpak build-bundle repo ${BUNDLE} ${APP_ID}
+  artifacts:
+    name: 'xmms-resuscitated-flatpak'
+    paths:
+      - "${BUNDLE}"
+    expire_in: 7 days
+  rules:
+    - changes:
+        - src/**/*
+        - data/**/*
+        - meson.build
+        - org.xmms.Resuscitated.yml

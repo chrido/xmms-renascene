@@ -64,6 +64,10 @@ install_data('data/org.xmms.Resuscitated.metainfo.xml',
   install_dir: get_option('datadir') / 'metainfo',
 )
 
+install_data('data/org.xmms.Resuscitated.svg',
+  install_dir: get_option('datadir') / 'icons' / 'hicolor' / 'scalable' / 'apps',
+)
+
 install_data('data/xmms.1',
   install_dir: get_option('mandir') / 'man1',
 )
