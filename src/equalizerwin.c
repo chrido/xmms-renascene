@@ -82,6 +82,10 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
     skin_draw_pixmap(cr, SKIN_EQMAIN,
                      0, 0, 0, 0, EQWIN_WIDTH, EQWIN_HEIGHT);
 
+    /* Overlay titlebar (focused at y=134, unfocused at y=149) */
+    skin_draw_pixmap(cr, SKIN_EQMAIN,
+                     0, 134, 0, 0, EQWIN_WIDTH, 14);
+
     /* On/Off button state */
     if (eq_active) {
         skin_draw_pixmap(cr, SKIN_EQMAIN,

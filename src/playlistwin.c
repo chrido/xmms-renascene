@@ -118,6 +118,55 @@ draw_playlist_buttons(cairo_t *cr)
 }
 
 static void
+draw_playlist_frame(cairo_t *cr)
+{
+    gint w = PLWIN_WIDTH, h = PLWIN_HEIGHT;
+    SkinIndex src = SKIN_PLEDIT;
+    gint y = 0; /* focused titlebar; would be 21 for unfocused */
+
+    /* Titlebar left corner */
+    skin_draw_pixmap(cr, src, 0, y, 0, 0, 25, 20);
+
+    /* Titlebar tiled fill */
+    gint c = (w - 150) / 25;
+    for (gint i = 0; i < c / 2; i++) {
+        skin_draw_pixmap(cr, src, 127, y, (i * 25) + 25, 0, 25, 20);
+        skin_draw_pixmap(cr, src, 127, y, (i * 25) + (w / 2) + 50, 0, 25, 20);
+    }
+    if (c & 1) {
+        skin_draw_pixmap(cr, src, 127, y, ((c / 2) * 25) + 25, 0, 12, 20);
+        skin_draw_pixmap(cr, src, 127, y, (w / 2) + ((c / 2) * 25) + 50, 0, 13, 20);
+    }
+
+    /* Titlebar title */
+    skin_draw_pixmap(cr, src, 26, y, (w / 2) - 50, 0, 100, 20);
+
+    /* Titlebar right corner */
+    skin_draw_pixmap(cr, src, 153, y, w - 25, 0, 25, 20);
+
+    /* Left and right sides */
+    for (gint i = 0; i < (h - 58) / 29; i++) {
+        skin_draw_pixmap(cr, src, 0, 42, 0, (i * 29) + 20, 12, 29);
+        skin_draw_pixmap(cr, src, 32, 42, w - 19, (i * 29) + 20, 19, 29);
+    }
+
+    /* Bottom left corner (menu buttons) */
+    skin_draw_pixmap(cr, src, 0, 72, 0, h - 38, 125, 38);
+
+    /* Bottom blank filler */
+    c = (w - 275) / 25;
+    if (c >= 3) {
+        c -= 3;
+        skin_draw_pixmap(cr, src, 205, 0, w - 225, h - 38, 75, 38);
+    }
+    for (gint i = 0; i < c; i++)
+        skin_draw_pixmap(cr, src, 179, 0, (i * 25) + 125, h - 38, 25, 38);
+
+    /* Bottom right corner */
+    skin_draw_pixmap(cr, src, 126, 72, w - 150, h - 38, 150, 38);
+}
+
+static void
 draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
                      int width, int height, gpointer data)
 {
@@ -128,8 +177,8 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
     cairo_scale(cr, (double)width / PLWIN_WIDTH,
                     (double)height / PLWIN_HEIGHT);
 
-    /* Draw playlist background from skin */
-    skin_draw_pixmap(cr, SKIN_PLEDIT, 0, 0, 0, 0, PLWIN_WIDTH, PLWIN_HEIGHT);
+    /* Draw assembled playlist frame from skin pieces */
+    draw_playlist_frame(cr);
 
     /* Draw entries */
     draw_playlist_entries(cr);
