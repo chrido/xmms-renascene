@@ -1,0 +1,8 @@
+builddir/
+*.o
+*.so
+*.a
+*.la
+*.lo
+.libs/
+autom4te.cache/

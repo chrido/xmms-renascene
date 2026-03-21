@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/xmms/defskin">
+    <file>defskin/main.png</file>
+    <file>defskin/cbuttons.png</file>
+    <file>defskin/titlebar.png</file>
+    <file>defskin/shufrep.png</file>
+    <file>defskin/text.png</file>
+    <file>defskin/volume.png</file>
+    <file>defskin/monoster.png</file>
+    <file>defskin/playpaus.png</file>
+    <file>defskin/nums_ex.png</file>
+    <file>defskin/numbers.png</file>
+    <file>defskin/posbar.png</file>
+    <file>defskin/pledit.png</file>
+    <file>defskin/eqmain.png</file>
+    <file>defskin/eq_ex.png</file>
+  </gresource>
+</gresources>

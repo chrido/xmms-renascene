@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=XMMS
+Comment=X Multimedia System - Music Player
+Exec=xmms %F
+Icon=org.xmms.XMMS
+Terminal=false
+Type=Application
+Categories=Audio;Music;Player;AudioVideo;
+MimeType=audio/mpeg;audio/x-mp3;audio/x-wav;audio/ogg;audio/x-vorbis+ogg;audio/flac;audio/x-flac;audio/mp4;audio/x-aac;audio/webm;
+Keywords=Music;Player;Audio;

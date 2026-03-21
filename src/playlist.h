@@ -1,0 +1,44 @@
+#ifndef PLAYLIST_H
+#define PLAYLIST_H
+
+#include <glib.h>
+
+typedef struct {
+    gchar *filename;
+    gchar *title;
+    gint64 length;  /* in milliseconds, -1 if unknown */
+    gboolean selected;
+} PlaylistEntry;
+
+void playlist_init(void);
+void playlist_free(void);
+
+void playlist_add(const gchar *filename);
+void playlist_add_uri(const gchar *uri);
+void playlist_add_dir(const gchar *dir);
+void playlist_remove(gint pos);
+void playlist_clear(void);
+
+gint playlist_get_length(void);
+PlaylistEntry *playlist_get_entry(gint pos);
+const gchar *playlist_get_filename(gint pos);
+const gchar *playlist_get_title(gint pos);
+
+gint playlist_get_position(void);
+void playlist_set_position(gint pos);
+
+void playlist_next(void);
+void playlist_prev(void);
+
+void playlist_play(void);
+void playlist_eof_reached(void);
+
+void playlist_shuffle_toggle(void);
+void playlist_repeat_toggle(void);
+
+GList *playlist_get_entries(void);
+
+gboolean playlist_load(const gchar *filename);
+gboolean playlist_save(const gchar *filename);
+
+#endif /* PLAYLIST_H */
