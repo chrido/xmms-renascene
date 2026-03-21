@@ -119,29 +119,32 @@ find_skin_file(const gchar *dir, const gchar *name)
     /* Try common extensions and case variations */
     const gchar *exts[] = { ".bmp", ".BMP", ".png", ".PNG", NULL };
     gchar *lower = g_ascii_strdown(name, -1);
+    gchar *upper = g_ascii_strup(name, -1);
+    /* Title case: first letter uppercase, rest lowercase */
+    gchar *title = g_strdup(lower);
+    if (title[0])
+        title[0] = g_ascii_toupper(title[0]);
+
+    const gchar *cases[] = { name, lower, upper, title, NULL };
 
     for (const gchar **ext = exts; *ext; ext++) {
-        gchar *fname = g_strconcat(name, *ext, NULL);
-        gchar *path = g_build_filename(dir, fname, NULL);
-        g_free(fname);
-        if (g_file_test(path, G_FILE_TEST_EXISTS))  {
-            g_free(lower);
-            return path;
+        for (const gchar **c = cases; *c; c++) {
+            gchar *fname = g_strconcat(*c, *ext, NULL);
+            gchar *path = g_build_filename(dir, fname, NULL);
+            g_free(fname);
+            if (g_file_test(path, G_FILE_TEST_EXISTS)) {
+                g_free(lower);
+                g_free(upper);
+                g_free(title);
+                return path;
+            }
+            g_free(path);
         }
-        g_free(path);
-
-        /* Try lowercase */
-        fname = g_strconcat(lower, *ext, NULL);
-        path = g_build_filename(dir, fname, NULL);
-        g_free(fname);
-        if (g_file_test(path, G_FILE_TEST_EXISTS)) {
-            g_free(lower);
-            return path;
-        }
-        g_free(path);
     }
 
     g_free(lower);
+    g_free(upper);
+    g_free(title);
     return NULL;
 }
 
@@ -203,8 +206,9 @@ load_skin_pixmaps(const gchar *dir)
             /* Try "numbers" as fallback for "nums_ex" */
             if (i == SKIN_NUMBERS)
                 path = find_skin_file(dir, "numbers");
-            if (!path)
+            if (!path) {
                 continue;
+            }
         }
 
         GdkPixbuf *pb = gdk_pixbuf_new_from_file(path, NULL);
@@ -357,6 +361,31 @@ skin_load(const gchar *path)
             return FALSE;
         }
         skin_dir = temp_dir;
+
+        /* Check if files are in a subdirectory */
+        GDir *d = g_dir_open(skin_dir, 0, NULL);
+        if (d) {
+            const gchar *entry;
+            gchar *subdir = NULL;
+            gboolean found_bmp = FALSE;
+            while ((entry = g_dir_read_name(d)) != NULL) {
+                if (g_str_has_suffix(entry, ".bmp") ||
+                    g_str_has_suffix(entry, ".BMP")) {
+                    found_bmp = TRUE;
+                    break;
+                }
+                gchar *full = g_build_filename(skin_dir, entry, NULL);
+                if (g_file_test(full, G_FILE_TEST_IS_DIR) && !subdir)
+                    subdir = g_strdup(full);
+                g_free(full);
+            }
+            g_dir_close(d);
+            if (!found_bmp && subdir) {
+                skin_dir = subdir;
+            } else {
+                g_free(subdir);
+            }
+        }
     } else {
         return FALSE;
     }
@@ -377,12 +406,9 @@ skin_load(const gchar *path)
     skin->path = g_strdup(path);
     skin->id++;
 
-    if (temp_dir) {
-        /* Clean up temp dir - leave files for now, OS will clean /tmp */
-        g_free(temp_dir);
-    }
-
-    g_free(skin_dir);
+    if (skin_dir != temp_dir)
+        g_free(skin_dir);
+    g_free(temp_dir);
     return TRUE;
 }
 
