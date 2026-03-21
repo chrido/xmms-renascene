@@ -93,6 +93,9 @@ pixbuf_to_surface(GdkPixbuf *pixbuf)
         for (gint x = 0; x < width; x++) {
             guchar r = src[0], g = src[1], b = src[2];
             guchar a = (n_channels == 4) ? src[3] : 255;
+            /* Winamp transparency key: (48,255,50) */
+            if (r == 48 && g == 255 && b == 50)
+                a = 0;
             /* Pre-multiply alpha for Cairo ARGB32 */
             dst[x] = ((guint32)a << 24) |
                      ((guint32)((r * a + 127) / 255) << 16) |
