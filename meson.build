@@ -39,6 +39,7 @@ sources = files(
   'src/playlistwin.c',
   'src/equalizerwin.c',
   'src/mpris.c',
+  'src/skinwin.c',
 )
 
 executable('xmms',

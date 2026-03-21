@@ -202,6 +202,12 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         return;
     }
 
+    /* Titlebar close button (top-right corner, 9x9) */
+    if (sx >= PLWIN_WIDTH - 11 && sx < PLWIN_WIDTH - 2 && sy >= 3 && sy < 12) {
+        playlistwin_show(FALSE);
+        return;
+    }
+
     /* Titlebar drag */
     if (sy < 20) {
         GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(playlistwin));

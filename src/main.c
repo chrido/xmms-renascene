@@ -126,7 +126,7 @@ mainwin_pl_pushed(gboolean toggled)
 static void mainwin_close_pushed(void) { exit(0); }
 static void mainwin_minimize_pushed(void) { gtk_window_minimize(GTK_WINDOW(mainwin)); }
 static void mainwin_shade_pushed(void) { /* TODO */ }
-static void mainwin_menubtn_pushed(void) { /* TODO */ }
+static void mainwin_menubtn_pushed(void) { skinwin_show(); }
 
 /* ---- Volume/Balance/Position callbacks ---- */
 

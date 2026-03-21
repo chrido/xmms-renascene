@@ -46,9 +46,15 @@ draw_eq_graph(cairo_t *cr)
     gint graph_x = 86, graph_y = 17;
     gint graph_w = 113, graph_h = 19;
 
-    /* Background */
-    skin_draw_pixmap(cr, SKIN_EQMAIN,
-                     66, 132, graph_x, graph_y, graph_w, graph_h);
+    /* Background - source is at y=132 in eqmain, only available in full skins */
+    if (skin->pixmaps[SKIN_EQMAIN].current_height >= 151) {
+        skin_draw_pixmap(cr, SKIN_EQMAIN,
+                         66, 132, graph_x, graph_y, graph_w, graph_h);
+    } else {
+        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
+        cairo_rectangle(cr, graph_x, graph_y, graph_w, graph_h);
+        cairo_fill(cr);
+    }
 
     /* Draw response curve */
     cairo_set_source_rgb(cr, 0.0, 1.0, 0.0);
@@ -82,9 +88,11 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
     skin_draw_pixmap(cr, SKIN_EQMAIN,
                      0, 0, 0, 0, EQWIN_WIDTH, EQWIN_HEIGHT);
 
-    /* Overlay titlebar (focused at y=134, unfocused at y=149) */
-    skin_draw_pixmap(cr, SKIN_EQMAIN,
-                     0, 134, 0, 0, EQWIN_WIDTH, 14);
+    /* Overlay titlebar (focused at y=134, unfocused at y=149)
+     * Only if the skin image is tall enough (real Winamp skins are 164+ px) */
+    if (skin->pixmaps[SKIN_EQMAIN].current_height >= 148)
+        skin_draw_pixmap(cr, SKIN_EQMAIN,
+                         0, 134, 0, 0, EQWIN_WIDTH, 14);
 
     /* On/Off button state */
     if (eq_active) {
@@ -170,6 +178,12 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
             eqwin_queue_draw();
             return;
         }
+    }
+
+    /* Titlebar close button (x=264, y=3, 9x9) */
+    if (sx >= 264 && sx < 273 && sy >= 3 && sy < 12) {
+        equalizerwin_show(FALSE);
+        return;
     }
 
     /* Titlebar drag */
