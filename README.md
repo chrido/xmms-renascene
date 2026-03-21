@@ -2,6 +2,14 @@
 
 A modernized version of the classic [XMMS](https://en.wikipedia.org/wiki/XMMS) (X Multimedia System) music player, rebuilt with GTK 4 and GStreamer while preserving the original Winamp 2.x skin compatibility.
 
+## Download
+
+Pre-built Flatpak bundles are available from the [latest release](https://gitlab.com/cschalle/xmms-resuscitated/-/releases). Install with:
+
+```sh
+flatpak install xmms-resuscitated.flatpak
+```
+
 ## Features
 
 - **Winamp-compatible skins** — load classic `.wsz`/`.zip` skin archives or directories
