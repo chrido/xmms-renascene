@@ -17,8 +17,10 @@ flatpak install xmms-resuscitated.flatpak
 - **Spectrum analyzer** visualization
 - **Playlist editor** with drag-and-drop support
 - **MPRIS2 D-Bus interface** for media key integration
-- **Spotify playlist browsing** via Spotify Web API
+- **Spotify integration** — browse playlists, stream tracks, and control playback via the Spotify Web API (no setup required, client ID is built-in)
+- **Unified output device picker** — seamlessly switch between local audio, network devices, and Spotify Connect devices
 - **Skin browser** for switching between installed skins
+- **Flatpak support** — available as a portable Flatpak bundle
 - Wide audio format support via GStreamer (MP3, OGG, FLAC, WAV, AAC, and more)
 
 ## Dependencies
