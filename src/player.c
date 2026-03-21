@@ -3,6 +3,9 @@
 Player *player = NULL;
 
 static GstBus *bus = NULL;
+static gboolean spotify_mode = FALSE;
+static gint64 spotify_position_ms = 0;
+static gint64 spotify_duration_ms = 0;
 
 static gboolean
 bus_callback(GstBus *b, GstMessage *msg, gpointer data)
@@ -157,11 +160,25 @@ player_play(const gchar *uri)
     /* Handle Spotify URIs via Spotify Web API */
     if (g_str_has_prefix(uri, "spotify:")) {
         gst_element_set_state(player->pipeline, GST_STATE_NULL);
-        spotify_play_track(uri, NULL, 0);
-        player->state = PLAYER_PLAYING;
-        player->has_duration = FALSE;
+        spotify_mode = TRUE;
+        spotify_position_ms = 0;
+
+        /* Get duration from playlist entry */
+        PlaylistEntry *entry = playlist_get_entry(playlist_get_position());
+        spotify_duration_ms = entry ? entry->length : 0;
+
+        if (spotify_play_track(uri, NULL, 0)) {
+            player->state = PLAYER_PLAYING;
+            player->duration = spotify_duration_ms * GST_MSECOND;
+            player->has_duration = (spotify_duration_ms > 0);
+        } else {
+            player->state = PLAYER_STOPPED;
+            spotify_mode = FALSE;
+        }
         return;
     }
+
+    spotify_mode = FALSE;
 
     gst_element_set_state(player->pipeline, GST_STATE_NULL);
 
@@ -182,6 +199,11 @@ player_stop(void)
     if (!player || !player->pipeline)
         return;
 
+    if (spotify_mode) {
+        spotify_pause();
+        spotify_mode = FALSE;
+    }
+
     gst_element_set_state(player->pipeline, GST_STATE_NULL);
     player->state = PLAYER_STOPPED;
     player->has_duration = FALSE;
@@ -193,7 +215,11 @@ player_pause(void)
     if (!player || !player->pipeline)
         return;
 
-    gst_element_set_state(player->pipeline, GST_STATE_PAUSED);
+    if (spotify_mode)
+        spotify_pause();
+    else
+        gst_element_set_state(player->pipeline, GST_STATE_PAUSED);
+
     player->state = PLAYER_PAUSED;
 }
 
@@ -203,7 +229,11 @@ player_unpause(void)
     if (!player || !player->pipeline)
         return;
 
-    gst_element_set_state(player->pipeline, GST_STATE_PLAYING);
+    if (spotify_mode)
+        spotify_play();
+    else
+        gst_element_set_state(player->pipeline, GST_STATE_PLAYING);
+
     player->state = PLAYER_PLAYING;
 }
 
@@ -237,6 +267,9 @@ player_get_state(void)
 gint64
 player_get_position(void)
 {
+    if (spotify_mode)
+        return spotify_position_ms;
+
     if (!player || !player->pipeline)
         return 0;
 
@@ -249,6 +282,9 @@ player_get_position(void)
 gint64
 player_get_duration(void)
 {
+    if (spotify_mode)
+        return spotify_duration_ms;
+
     if (!player || !player->pipeline)
         return 0;
 
@@ -318,9 +354,32 @@ player_set_equalizer(gfloat preamp, gfloat *bands)
     }
 }
 
+static gint spotify_poll_counter = 0;
+
 void
 player_update(void)
 {
+    if (spotify_mode && player && player->state == PLAYER_PLAYING) {
+        /* Poll Spotify every ~2 seconds (player_update called ~10x/sec) */
+        if (++spotify_poll_counter >= 20) {
+            spotify_poll_counter = 0;
+            SpotifyPlaybackState state;
+            if (spotify_get_playback_state(&state)) {
+                spotify_position_ms = state.progress_ms;
+                spotify_duration_ms = state.duration_ms;
+                player->duration = state.duration_ms * GST_MSECOND;
+                player->has_duration = (state.duration_ms > 0);
+                if (!state.is_playing)
+                    player->state = PLAYER_PAUSED;
+                spotify_playback_state_clear(&state);
+            }
+        } else {
+            /* Estimate position between polls */
+            spotify_position_ms += 100; /* ~100ms per update tick */
+        }
+        return;
+    }
+
     /* Called from main loop timeout to update duration cache */
     if (player && player->state != PLAYER_STOPPED && !player->has_duration) {
         player_get_duration();

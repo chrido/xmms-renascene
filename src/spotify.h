@@ -34,12 +34,24 @@ void spotify_get_playlist_tracks(const gchar *playlist_id,
                                   SpotifyTracksCb cb, gpointer data);
 
 /* Playback control via Web API */
-void spotify_play_track(const gchar *track_uri, const gchar *context_uri,
-                        gint offset);
+gboolean spotify_play_track(const gchar *track_uri, const gchar *context_uri,
+                             gint offset);
 void spotify_play(void);
 void spotify_pause(void);
 void spotify_next(void);
 void spotify_previous(void);
+
+/* Playback state polling */
+typedef struct {
+    gboolean is_playing;
+    gint64   progress_ms;
+    gint64   duration_ms;
+    gchar   *track_name;
+    gchar   *artist_name;
+} SpotifyPlaybackState;
+
+gboolean spotify_get_playback_state(SpotifyPlaybackState *state);
+void     spotify_playback_state_clear(SpotifyPlaybackState *state);
 
 /* Free helpers */
 void spotify_playlist_free(SpotifyPlaylist *p);

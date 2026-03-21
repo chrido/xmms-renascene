@@ -507,7 +507,15 @@ spotify_api_get(const gchar *endpoint)
     g_object_unref(msg);
 
     if (status != 200) {
-        if (response) g_bytes_unref(response);
+        if (response) {
+            gsize elen;
+            const gchar *ebody = g_bytes_get_data(response, &elen);
+            g_warning("Spotify API %s returned %u: %.*s",
+                      endpoint, status, (int)MIN(elen, 300), ebody);
+            g_bytes_unref(response);
+        } else {
+            g_warning("Spotify API %s returned %u (no body)", endpoint, status);
+        }
         return NULL;
     }
 
@@ -540,8 +548,19 @@ spotify_api_put(const gchar *endpoint, const gchar *body)
     guint status = soup_message_get_status(msg);
     g_object_unref(msg);
 
+    if (status < 200 || status >= 300) {
+        if (response) {
+            gsize elen;
+            const gchar *ebody = g_bytes_get_data(response, &elen);
+            g_warning("Spotify PUT %s returned %u: %.*s",
+                      endpoint, status, (int)MIN(elen, 300), ebody);
+            g_bytes_unref(response);
+        }
+        return FALSE;
+    }
+
     if (response) g_bytes_unref(response);
-    return (status >= 200 && status < 300);
+    return TRUE;
 }
 
 static gboolean
@@ -766,9 +785,66 @@ spotify_get_playlist_tracks(const gchar *playlist_id,
         cb(result, data);
 }
 
+/* ---- Device management ---- */
+
+/* Get the first available Spotify device ID, or NULL */
+static gchar *
+spotify_get_device_id(void)
+{
+    GBytes *response = spotify_api_get("/me/player/devices");
+    if (!response)
+        return NULL;
+
+    gsize len;
+    const gchar *body = g_bytes_get_data(response, &len);
+    JsonParser *parser = json_parser_new();
+
+    if (!json_parser_load_from_data(parser, body, len, NULL)) {
+        g_object_unref(parser);
+        g_bytes_unref(response);
+        return NULL;
+    }
+
+    JsonObject *root = json_node_get_object(json_parser_get_root(parser));
+    JsonArray *devices = json_object_get_array_member(root, "devices");
+    gchar *device_id = NULL;
+
+    if (devices) {
+        guint count = json_array_get_length(devices);
+        /* Prefer active device, fall back to first available */
+        for (guint i = 0; i < count; i++) {
+            JsonObject *dev = json_array_get_object_element(devices, i);
+            gboolean is_active = json_object_get_boolean_member(dev, "is_active");
+            const gchar *id = json_object_get_string_member(dev, "id");
+            if (is_active && id) {
+                g_free(device_id);
+                device_id = g_strdup(id);
+                break;
+            }
+            if (!device_id && id)
+                device_id = g_strdup(id);
+        }
+    }
+
+    g_object_unref(parser);
+    g_bytes_unref(response);
+    return device_id;
+}
+
+/* Transfer playback to a device, activating it */
+static gboolean
+spotify_transfer_playback(const gchar *device_id)
+{
+    gchar *body = g_strdup_printf("{\"device_ids\":[\"%s\"],\"play\":false}",
+                                  device_id);
+    gboolean ok = spotify_api_put("/me/player", body);
+    g_free(body);
+    return ok;
+}
+
 /* ---- Playback control ---- */
 
-void
+gboolean
 spotify_play_track(const gchar *track_uri, const gchar *context_uri,
                    gint offset)
 {
@@ -787,11 +863,104 @@ spotify_play_track(const gchar *track_uri, const gchar *context_uri,
         body = g_strdup("{}");
     }
 
-    spotify_api_put("/me/player/play", body);
+    gboolean ok = spotify_api_put("/me/player/play", body);
+
+    if (!ok) {
+        /* No active device — try to find and activate one */
+        gchar *device_id = spotify_get_device_id();
+        if (device_id) {
+            g_message("No active Spotify device, transferring to %s", device_id);
+            if (spotify_transfer_playback(device_id)) {
+                /* Wait for device activation */
+                g_usleep(1500000);
+                /* Retry with device_id parameter */
+                gchar *endpoint = g_strdup_printf(
+                    "/me/player/play?device_id=%s", device_id);
+                ok = spotify_api_put(endpoint, body);
+                g_free(endpoint);
+                if (ok)
+                    g_message("Spotify playback started after device transfer");
+                else
+                    g_warning("Spotify retry after transfer also failed");
+            } else {
+                g_warning("Failed to transfer playback to device %s", device_id);
+            }
+            g_free(device_id);
+        }
+
+        if (!ok)
+            g_warning("Spotify play failed — open Spotify on a device first");
+    }
+
     g_free(body);
+    return ok;
 }
 
 void spotify_play(void)  { spotify_api_put("/me/player/play", NULL); }
 void spotify_pause(void) { spotify_api_put("/me/player/pause", NULL); }
 void spotify_next(void)  { spotify_api_post("/me/player/next", NULL); }
 void spotify_previous(void) { spotify_api_post("/me/player/previous", NULL); }
+
+/* ---- Playback state ---- */
+
+void
+spotify_playback_state_clear(SpotifyPlaybackState *state)
+{
+    g_free(state->track_name);
+    g_free(state->artist_name);
+    memset(state, 0, sizeof(*state));
+}
+
+gboolean
+spotify_get_playback_state(SpotifyPlaybackState *state)
+{
+    memset(state, 0, sizeof(*state));
+
+    GBytes *response = spotify_api_get("/me/player");
+    if (!response)
+        return FALSE;
+
+    gsize len;
+    const gchar *body = g_bytes_get_data(response, &len);
+    JsonParser *parser = json_parser_new();
+
+    if (!json_parser_load_from_data(parser, body, len, NULL)) {
+        g_object_unref(parser);
+        g_bytes_unref(response);
+        return FALSE;
+    }
+
+    JsonObject *root = json_node_get_object(json_parser_get_root(parser));
+
+    state->is_playing = json_object_get_boolean_member(root, "is_playing");
+    state->progress_ms = json_object_get_int_member(root, "progress_ms");
+
+    /* Track info from "item" */
+    const gchar *item_key = json_object_has_member(root, "item")
+                            ? "item" : "track";
+    if (json_object_has_member(root, item_key)) {
+        JsonNode *item_node = json_object_get_member(root, item_key);
+        if (item_node && !json_node_is_null(item_node)) {
+            JsonObject *item = json_node_get_object(item_node);
+            if (item) {
+                state->duration_ms = json_object_get_int_member(item, "duration_ms");
+                if (json_object_has_member(item, "name"))
+                    state->track_name = g_strdup(
+                        json_object_get_string_member(item, "name"));
+
+                if (json_object_has_member(item, "artists")) {
+                    JsonArray *artists = json_object_get_array_member(item, "artists");
+                    if (artists && json_array_get_length(artists) > 0) {
+                        JsonObject *artist = json_array_get_object_element(artists, 0);
+                        state->artist_name = g_strdup(
+                            json_object_get_string_member(artist, "name"));
+                    }
+                }
+            }
+        }
+    }
+
+    g_object_unref(parser);
+    g_bytes_unref(response);
+    return TRUE;
+}
