@@ -269,23 +269,163 @@ spotify_is_authenticated(void)
     return ensure_token();
 }
 
+/* ---- Setup wizard ---- */
+
+static void
+on_setup_open_dashboard(GtkButton *button, gpointer data)
+{
+    (void)button;
+    GtkWindow *parent = GTK_WINDOW(data);
+    GtkUriLauncher *launcher = gtk_uri_launcher_new(
+        "https://developer.spotify.com/dashboard");
+    gtk_uri_launcher_launch(launcher, parent, NULL, NULL, NULL);
+    g_object_unref(launcher);
+}
+
+static void
+on_setup_copy_uri(GtkButton *button, gpointer data)
+{
+    (void)data;
+    GdkClipboard *clipboard = gtk_widget_get_clipboard(GTK_WIDGET(button));
+    gdk_clipboard_set_text(clipboard, REDIRECT_URI);
+}
+
+typedef struct {
+    GtkWidget *dialog;
+    GtkWidget *entry;
+    GtkWindow *parent;
+    gboolean   accepted;
+} SetupContext;
+
+static void
+on_setup_connect(GtkButton *button, gpointer data)
+{
+    (void)button;
+    SetupContext *ctx = data;
+
+    GtkEntryBuffer *buf = gtk_entry_get_buffer(GTK_ENTRY(ctx->entry));
+    const gchar *text = gtk_entry_buffer_get_text(buf);
+
+    if (!text || !text[0])
+        return;
+
+    /* Save client_id */
+    g_free(client_id);
+    client_id = g_strdup(text);
+    save_spotify_config();
+
+    ctx->accepted = TRUE;
+    gtk_window_destroy(GTK_WINDOW(ctx->dialog));
+}
+
+static gboolean
+show_setup_wizard(GtkWindow *parent)
+{
+    SetupContext ctx = { .dialog = NULL, .entry = NULL,
+                         .parent = parent, .accepted = FALSE };
+
+    ctx.dialog = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(ctx.dialog), "Spotify Setup");
+    gtk_window_set_default_size(GTK_WINDOW(ctx.dialog), 480, -1);
+    gtk_window_set_resizable(GTK_WINDOW(ctx.dialog), FALSE);
+    gtk_window_set_modal(GTK_WINDOW(ctx.dialog), TRUE);
+    gtk_window_set_transient_for(GTK_WINDOW(ctx.dialog), parent);
+
+    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_margin_start(vbox, 20);
+    gtk_widget_set_margin_end(vbox, 20);
+    gtk_widget_set_margin_top(vbox, 20);
+    gtk_widget_set_margin_bottom(vbox, 20);
+    gtk_window_set_child(GTK_WINDOW(ctx.dialog), vbox);
+
+    /* Title */
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title),
+        "<big><b>Connect XMMS to Spotify</b></big>");
+    gtk_box_append(GTK_BOX(vbox), title);
+
+    /* Step 1 */
+    GtkWidget *step1_label = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(step1_label),
+        "<b>Step 1:</b> Create a Spotify Developer app\n"
+        "(select <i>Web API</i> when asked which API to use)");
+    gtk_label_set_xalign(GTK_LABEL(step1_label), 0.0);
+    gtk_box_append(GTK_BOX(vbox), step1_label);
+
+    GtkWidget *dash_btn = gtk_button_new_with_label(
+        "Open Spotify Developer Dashboard");
+    g_signal_connect(dash_btn, "clicked",
+                     G_CALLBACK(on_setup_open_dashboard), parent);
+    gtk_box_append(GTK_BOX(vbox), dash_btn);
+
+    /* Step 2 */
+    GtkWidget *step2_label = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(step2_label),
+        "<b>Step 2:</b> Add this Redirect URI to your app settings:");
+    gtk_label_set_xalign(GTK_LABEL(step2_label), 0.0);
+    gtk_box_append(GTK_BOX(vbox), step2_label);
+
+    GtkWidget *uri_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(vbox), uri_box);
+
+    GtkWidget *uri_label = gtk_label_new(REDIRECT_URI);
+    gtk_label_set_selectable(GTK_LABEL(uri_label), TRUE);
+    gtk_widget_set_hexpand(uri_label, TRUE);
+    gtk_label_set_xalign(GTK_LABEL(uri_label), 0.0);
+    gtk_box_append(GTK_BOX(uri_box), uri_label);
+
+    GtkWidget *copy_btn = gtk_button_new_with_label("Copy");
+    g_signal_connect(copy_btn, "clicked",
+                     G_CALLBACK(on_setup_copy_uri), NULL);
+    gtk_box_append(GTK_BOX(uri_box), copy_btn);
+
+    /* Step 3 */
+    GtkWidget *step3_label = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(step3_label),
+        "<b>Step 3:</b> Paste your Client ID below:");
+    gtk_label_set_xalign(GTK_LABEL(step3_label), 0.0);
+    gtk_box_append(GTK_BOX(vbox), step3_label);
+
+    ctx.entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(ctx.entry),
+                                    "e.g. 1a2b3c4d5e6f7g8h9i0j...");
+    gtk_box_append(GTK_BOX(vbox), ctx.entry);
+
+    /* Buttons */
+    GtkWidget *btn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_halign(btn_box, GTK_ALIGN_END);
+    gtk_widget_set_margin_top(btn_box, 6);
+    gtk_box_append(GTK_BOX(vbox), btn_box);
+
+    GtkWidget *cancel_btn = gtk_button_new_with_label("Cancel");
+    g_signal_connect_swapped(cancel_btn, "clicked",
+                             G_CALLBACK(gtk_window_destroy), ctx.dialog);
+    gtk_box_append(GTK_BOX(btn_box), cancel_btn);
+
+    GtkWidget *connect_btn = gtk_button_new_with_label("Connect to Spotify");
+    gtk_widget_add_css_class(connect_btn, "suggested-action");
+    g_signal_connect(connect_btn, "clicked",
+                     G_CALLBACK(on_setup_connect), &ctx);
+    gtk_box_append(GTK_BOX(btn_box), connect_btn);
+
+    gtk_window_present(GTK_WINDOW(ctx.dialog));
+
+    /* Run a nested main loop until the dialog is closed */
+    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    g_signal_connect_swapped(ctx.dialog, "destroy",
+                             G_CALLBACK(g_main_loop_quit), loop);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+
+    return ctx.accepted;
+}
+
 void
 spotify_authenticate(GtkWindow *parent)
 {
     if (!client_id || !client_id[0]) {
-        GtkAlertDialog *dialog = gtk_alert_dialog_new(
-            "Spotify client_id not configured.\n\n"
-            "1. Go to developer.spotify.com/dashboard\n"
-            "2. Create an app with redirect URI:\n"
-            "   http://127.0.0.1:8391/callback\n"
-            "3. Add your client_id to:\n"
-            "   ~/.config/xmms/spotify.conf\n\n"
-            "Example:\n"
-            "[spotify]\n"
-            "client_id=your_client_id_here");
-        gtk_alert_dialog_show(dialog, parent);
-        g_object_unref(dialog);
-        return;
+        if (!show_setup_wizard(parent))
+            return;
     }
 
     /* Generate PKCE verifier and challenge */
@@ -486,6 +626,7 @@ spotify_get_playlists(SpotifyPlaylistsCb cb, gpointer data)
 
         gsize len;
         const gchar *body = g_bytes_get_data(response, &len);
+
         JsonParser *parser = json_parser_new();
 
         if (!json_parser_load_from_data(parser, body, len, NULL)) {
@@ -505,9 +646,14 @@ spotify_get_playlists(SpotifyPlaylistsCb cb, gpointer data)
             pl->name = g_strdup(json_object_get_string_member(item, "name"));
             pl->uri = g_strdup(json_object_get_string_member(item, "uri"));
 
-            JsonObject *tracks_obj = json_object_get_object_member(item, "tracks");
-            if (tracks_obj)
-                pl->total_tracks = json_object_get_int_member(tracks_obj, "total");
+            /* Track count: "tracks" (old API) or "items" (Feb 2026 API) */
+            const gchar *count_key = json_object_has_member(item, "tracks")
+                                     ? "tracks" : "items";
+            if (json_object_has_member(item, count_key)) {
+                JsonObject *count_obj = json_object_get_object_member(item, count_key);
+                if (count_obj && json_object_has_member(count_obj, "total"))
+                    pl->total_tracks = json_object_get_int_member(count_obj, "total");
+            }
 
             result = g_list_prepend(result, pl);
         }
@@ -535,9 +681,7 @@ spotify_get_playlist_tracks(const gchar *playlist_id,
 
     while (TRUE) {
         gchar *endpoint = g_strdup_printf(
-            "/playlists/%s/tracks?limit=100&offset=%d"
-            "&fields=total,items(track(id,name,uri,duration_ms,"
-            "artists(name),album(name)))",
+            "/playlists/%s/items?limit=100&offset=%d",
             playlist_id, offset);
         GBytes *response = spotify_api_get(endpoint);
         g_free(endpoint);
@@ -547,6 +691,7 @@ spotify_get_playlist_tracks(const gchar *playlist_id,
 
         gsize len;
         const gchar *body = g_bytes_get_data(response, &len);
+
         JsonParser *parser = json_parser_new();
 
         if (!json_parser_load_from_data(parser, body, len, NULL)) {
@@ -566,7 +711,18 @@ spotify_get_playlist_tracks(const gchar *playlist_id,
 
         for (guint i = 0; i < count; i++) {
             JsonObject *item = json_array_get_object_element(items, i);
-            JsonObject *track = json_object_get_object_member(item, "track");
+            if (!item)
+                continue;
+
+            /* Feb 2026 API uses "item", older uses "track" */
+            const gchar *track_key = json_object_has_member(item, "track")
+                                     ? "track" : "item";
+            if (!json_object_has_member(item, track_key))
+                continue;
+            JsonNode *track_node = json_object_get_member(item, track_key);
+            if (!track_node || json_node_is_null(track_node))
+                continue;
+            JsonObject *track = json_node_get_object(track_node);
             if (!track)
                 continue;
 
