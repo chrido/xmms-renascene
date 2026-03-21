@@ -197,14 +197,13 @@ mainwin_queue_draw(void)
 static void
 draw_mainwin_titlebar(cairo_t *cr, gboolean focused)
 {
-    /* titlebar.bmp: top row = focused, bottom = unfocused
-       Each 275x14. Skip first 27 columns (button graphic source area)
-       to avoid showing raw button graphics in the background.
-       SKIN_MAIN already provides a clean gradient there.
-       PButtons draw the actual button icons at their positions. */
+    /* titlebar.bmp layout: source x=0-26 holds button graphics (not background),
+       source x=27+ holds the actual titlebar strip (275 pixels wide).
+       Draw source (27,y) to dest (0,0) covering full window width.
+       PButtons draw button icons on top at their screen positions. */
     gint ty = focused ? 0 : 15;
     skin_draw_pixmap(cr, SKIN_TITLEBAR,
-                     27, ty, 27, 0, MAINWIN_WIDTH - 27, 14);
+                     27, ty, 0, 0, MAINWIN_WIDTH, 14);
 }
 
 void
@@ -429,10 +428,10 @@ create_mainwin_widgets(void)
                                   0, 0, 0, 9,
                                   mainwin_menubtn_pushed, SKIN_TITLEBAR);
     mainwin_minimize = pbutton_new(&mainwin_wlist, 244, 3, 9, 9,
-                                   18, 0, 18, 9,
+                                   9, 0, 9, 9,
                                    mainwin_minimize_pushed, SKIN_TITLEBAR);
     mainwin_shade = pbutton_new(&mainwin_wlist, 254, 3, 9, 9,
-                                 9, 0, 9, 9,
+                                 0, 18, 9, 18,
                                  mainwin_shade_pushed, SKIN_TITLEBAR);
     mainwin_close = pbutton_new(&mainwin_wlist, 264, 3, 9, 9,
                                  18, 0, 18, 9,
