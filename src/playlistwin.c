@@ -56,12 +56,12 @@ draw_playlist_entries(cairo_t *cr)
         const gchar *title = playlist_get_title(idx);
         if (title) {
             gchar *display = g_strdup_printf("%d. %s", idx + 1, title);
-            cairo_move_to(cr, list_x + 2, y + 9);
 
-            /* Clip to list area */
+            /* Clip to list area (leave room for duration) */
             cairo_save(cr);
-            cairo_rectangle(cr, list_x, y, list_w, PLWIN_ENTRY_HEIGHT);
+            cairo_rectangle(cr, list_x, y, list_w - 40, PLWIN_ENTRY_HEIGHT);
             cairo_clip(cr);
+            cairo_move_to(cr, list_x + 2, y + 9);
             cairo_show_text(cr, display);
             cairo_restore(cr);
 
