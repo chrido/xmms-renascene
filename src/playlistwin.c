@@ -275,7 +275,7 @@ void
 playlistwin_create(GtkApplication *app)
 {
     playlistwin = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(playlistwin), "XMMS Playlist");
+    gtk_window_set_title(GTK_WINDOW(playlistwin), "XMMS Resuscitated - Playlist");
     gtk_window_set_decorated(GTK_WINDOW(playlistwin), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(playlistwin), FALSE);
 

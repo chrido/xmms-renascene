@@ -226,9 +226,9 @@ auth_callback_handler(SoupServer *server, SoupServerMessage *msg,
     g_object_unref(token_msg);
 
     const gchar *html = ctx->success
-        ? "<html><body><h2>XMMS: Spotify connected!</h2>"
+        ? "<html><body><h2>XMMS Resuscitated: Spotify connected!</h2>"
           "<p>You can close this tab.</p></body></html>"
-        : "<html><body><h2>XMMS: Authentication failed</h2></body></html>";
+        : "<html><body><h2>XMMS Resuscitated: Authentication failed</h2></body></html>";
 
     soup_server_message_set_status(msg, 200, NULL);
     soup_server_message_set_response(msg, "text/html",
@@ -341,7 +341,7 @@ show_setup_wizard(GtkWindow *parent)
     /* Title */
     GtkWidget *title = gtk_label_new(NULL);
     gtk_label_set_markup(GTK_LABEL(title),
-        "<big><b>Connect XMMS to Spotify</b></big>");
+        "<big><b>Connect XMMS Resuscitated to Spotify</b></big>");
     gtk_box_append(GTK_BOX(vbox), title);
 
     /* Step 1 */

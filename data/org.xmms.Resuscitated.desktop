@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=XMMS
+Name=XMMS Resuscitated
 Comment=X Multimedia System - Music Player
 Exec=xmms %F
-Icon=org.xmms.XMMS
+Icon=org.xmms.Resuscitated
 Terminal=false
 Type=Application
 Categories=Audio;Music;Player;AudioVideo;

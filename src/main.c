@@ -507,7 +507,7 @@ create_mainwin_widgets(void)
     /* Song info text */
     mainwin_info = textbox_new(&mainwin_wlist, 111, 27, 153,
                                 TRUE, SKIN_TEXT);
-    textbox_set_text(mainwin_info, "XMMS 2.0");
+    textbox_set_text(mainwin_info, "XMMS Resuscitated");
 
     /* Bitrate / frequency text */
     mainwin_rate_text = textbox_new(&mainwin_wlist, 111, 43, 15,
@@ -700,7 +700,7 @@ activate(GtkApplication *app, gpointer data)
 
     /* Create main window */
     mainwin = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(mainwin), "XMMS");
+    gtk_window_set_title(GTK_WINDOW(mainwin), "XMMS Resuscitated");
     gtk_window_set_resizable(GTK_WINDOW(mainwin), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(mainwin), FALSE);
 
@@ -819,7 +819,7 @@ main(int argc, char *argv[])
 {
     /* gst_init is called later in player_init via gst_is_initialized check */
 
-    GtkApplication *app = gtk_application_new("org.xmms.XMMS",
+    GtkApplication *app = gtk_application_new("org.xmms.Resuscitated",
                                                G_APPLICATION_HANDLES_COMMAND_LINE);
 
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);

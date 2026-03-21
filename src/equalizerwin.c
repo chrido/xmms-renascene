@@ -244,7 +244,7 @@ void
 equalizerwin_create(GtkApplication *app)
 {
     equalizerwin = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(equalizerwin), "XMMS Equalizer");
+    gtk_window_set_title(GTK_WINDOW(equalizerwin), "XMMS Resuscitated - Equalizer");
     gtk_window_set_decorated(GTK_WINDOW(equalizerwin), FALSE);
     gtk_window_set_resizable(GTK_WINDOW(equalizerwin), FALSE);
 

@@ -1,9 +1,9 @@
-%global app_id org.xmms.XMMS
+%global app_id org.xmms.Resuscitated
 
-Name:           xmms
+Name:           xmms-resuscitated
 Version:        2.0.0
 Release:        1%{?dist}
-Summary:        Music player with Winamp-compatible skinning
+Summary:        XMMS Resuscitated - Music player with Winamp-compatible skinning
 
 License:        GPL-2.0-or-later
 URL:            https://github.com/xmms
@@ -28,10 +28,10 @@ Recommends:     gstreamer1-plugins-bad-free%{?_isa}
 Recommends:     gstreamer1-plugins-ugly-free%{?_isa}
 
 %description
-XMMS (X Multimedia System) is a music player that supports Winamp-compatible
-skins for a fully customizable user interface. It uses GStreamer for audio
-playback, supporting a wide range of audio formats including MP3, OGG, FLAC,
-WAV, and more.
+XMMS Resuscitated is a modernized version of the classic X Multimedia System
+music player. It supports Winamp-compatible skins for a fully customizable
+user interface and uses GStreamer for audio playback, supporting a wide range
+of audio formats including MP3, OGG, FLAC, WAV, and more.
 
 Features include a 10-band equalizer, spectrum analyzer visualization,
 playlist management, MPRIS2 media key integration, and Spotify playlist
@@ -60,8 +60,8 @@ appstream-util validate-relax --nonet %{buildroot}%{_datadir}/metainfo/%{app_id}
 %{_datadir}/metainfo/%{app_id}.metainfo.xml
 
 %changelog
-* Sat Mar 21 2026 XMMS Contributors <xmms@xmms.org> - 2.0.0-1
-- Modernized release using GTK 4 and GStreamer
+* Sat Mar 21 2026 XMMS Resuscitated Contributors <xmms@xmms.org> - 2.0.0-1
+- Initial release of XMMS Resuscitated using GTK 4 and GStreamer
 - Winamp-compatible skin support with Cairo rendering
 - 10-band equalizer with spectrum analyzer visualization
 - MPRIS2 D-Bus interface for media key integration

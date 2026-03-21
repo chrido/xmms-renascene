@@ -134,9 +134,9 @@ handle_root_get_property(GDBusConnection *conn, const gchar *sender,
     if (g_strcmp0(property, "HasTrackList") == 0)
         return g_variant_new_boolean(FALSE);
     if (g_strcmp0(property, "Identity") == 0)
-        return g_variant_new_string("XMMS");
+        return g_variant_new_string("XMMS Resuscitated");
     if (g_strcmp0(property, "DesktopEntry") == 0)
-        return g_variant_new_string("org.xmms.XMMS");
+        return g_variant_new_string("org.xmms.Resuscitated");
     if (g_strcmp0(property, "SupportedUriSchemes") == 0) {
         const gchar *schemes[] = { "file", "http", "https", NULL };
         return g_variant_new_strv(schemes, -1);
@@ -291,7 +291,7 @@ mpris_init(void)
 
     bus_name_id = g_bus_own_name(
         G_BUS_TYPE_SESSION,
-        "org.mpris.MediaPlayer2.xmms",
+        "org.mpris.MediaPlayer2.xmms_resuscitated",
         G_BUS_NAME_OWNER_FLAGS_NONE,
         on_bus_acquired, NULL, NULL, NULL, NULL);
 }

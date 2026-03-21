@@ -1,4 +1,4 @@
-project('xmms', 'c',
+project('xmms-resuscitated', 'c',
   version: '2.0.0',
   license: 'GPL-2.0-or-later',
   meson_version: '>= 0.59',
@@ -56,11 +56,11 @@ executable('xmms',
   install: true,
 )
 
-install_data('data/org.xmms.XMMS.desktop',
+install_data('data/org.xmms.Resuscitated.desktop',
   install_dir: get_option('datadir') / 'applications',
 )
 
-install_data('data/org.xmms.XMMS.metainfo.xml',
+install_data('data/org.xmms.Resuscitated.metainfo.xml',
   install_dir: get_option('datadir') / 'metainfo',
 )
 
