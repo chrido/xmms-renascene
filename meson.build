@@ -63,3 +63,7 @@ install_data('data/org.xmms.XMMS.desktop',
 install_data('data/org.xmms.XMMS.metainfo.xml',
   install_dir: get_option('datadir') / 'metainfo',
 )
+
+install_data('data/xmms.1',
+  install_dir: get_option('mandir') / 'man1',
+)

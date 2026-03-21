@@ -77,5 +77,6 @@ extern GtkWidget *mainwin_drawing_area;
 
 void mainwin_queue_draw(void);
 void draw_main_window(cairo_t *cr);
+void save_config(void);
 
 #endif /* XMMS_H */

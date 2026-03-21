@@ -1,0 +1,73 @@
+.TH XMMS 1 "March 2026" "xmms 2.0.0" "User Commands"
+.SH NAME
+xmms \- X Multimedia System music player
+.SH SYNOPSIS
+.B xmms
+.RI [ files .\|.\|.]
+.SH DESCRIPTION
+.B xmms
+is a music player with Winamp\-compatible skinning support. It uses GStreamer
+for audio playback, supporting a wide range of audio formats including MP3,
+OGG Vorbis, FLAC, WAV, AAC, and more.
+.PP
+Features include a 10\-band equalizer, spectrum analyzer visualization,
+playlist editor, MPRIS2 media key integration, and Spotify playlist browsing.
+.SH OPTIONS
+Files or directories passed on the command line are added to the playlist.
+.SH KEYBOARD SHORTCUTS
+.TP
+.B z
+Previous track
+.TP
+.B x
+Play
+.TP
+.B c
+Pause
+.TP
+.B v
+Stop
+.TP
+.B b
+Next track
+.TP
+.BR Alt + e
+Toggle playlist window
+.TP
+.BR Alt + g
+Toggle equalizer window
+.TP
+.BR Alt + s
+Open skin browser
+.TP
+.B Arrow Up/Down
+Volume up/down
+.TP
+.B Arrow Left/Right
+Seek backward/forward 5 seconds
+.SH SKINS
+.B xmms
+supports Winamp 2.x compatible skins. Skins can be placed in:
+.TP
+.I ~/.config/xmms/Skins/
+User skin directory
+.TP
+.I /usr/share/xmms/Skins/
+System skin directory
+.PP
+Skins can be zip, wsz, tar, tar.gz, or tar.bz2 archives.
+.SH FILES
+.TP
+.I ~/.config/xmms/config
+User configuration file
+.TP
+.I ~/.config/xmms/spotify.conf
+Spotify API credentials
+.SH AUTHORS
+Originally written by Peter Alm, Thomas Nilsson, Olle Hallnas, and
+Havard Kvalen. Modernized for GTK 4 and GStreamer.
+.SH LICENSE
+GNU General Public License version 2 or later.
+.SH SEE ALSO
+.BR gst\-inspect\-1.0 (1),
+.BR gst\-launch\-1.0 (1)

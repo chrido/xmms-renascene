@@ -608,7 +608,7 @@ load_config(void)
     g_free(config_dir);
 }
 
-static void
+void
 save_config(void)
 {
     gchar *config_dir = xmms_get_config_dir();

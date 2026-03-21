@@ -161,6 +161,8 @@ on_skin_selected(GtkListBox *listbox, GtkListBoxRow *row, gpointer data)
         cfg.skin = g_strdup(node->path);
     }
 
+    save_config();
+
     /* Redraw all windows */
     mainwin_queue_draw();
     playlistwin_update();
