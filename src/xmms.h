@@ -20,6 +20,7 @@
 #include "skinwin.h"
 #include "spotify.h"
 #include "spotifywin.h"
+#include "outputwin.h"
 
 typedef enum {
     TIMER_ELAPSED,
@@ -31,6 +32,7 @@ typedef struct {
     gint scale_factor;
     gchar *skin;
     gint timer_mode;
+    gchar *output_device;
 } Config;
 
 extern Config cfg;

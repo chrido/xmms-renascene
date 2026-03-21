@@ -53,6 +53,19 @@ typedef struct {
 gboolean spotify_get_playback_state(SpotifyPlaybackState *state);
 void     spotify_playback_state_clear(SpotifyPlaybackState *state);
 
+/* Device management */
+typedef struct {
+    gchar    *id;
+    gchar    *name;
+    gchar    *type;      /* e.g. "Computer", "Smartphone", "Speaker" */
+    gboolean  is_active;
+} SpotifyDevice;
+
+GList   *spotify_get_devices(void);
+gboolean spotify_set_device(const gchar *device_id);
+void     spotify_device_free(SpotifyDevice *dev);
+void     spotify_device_list_free(GList *list);
+
 /* Free helpers */
 void spotify_playlist_free(SpotifyPlaylist *p);
 void spotify_track_free(SpotifyTrack *t);

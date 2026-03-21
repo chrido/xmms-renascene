@@ -143,12 +143,20 @@ mainwin_menu_spotify_cb(GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
+mainwin_menu_output_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    outputwin_show(GTK_WINDOW(mainwin));
+}
+
+static void
 mainwin_menubtn_pushed(void)
 {
     /* Build a popover menu */
     GMenu *menu = g_menu_new();
     g_menu_append(menu, "Skin Browser...", "win.skin-browser");
     g_menu_append(menu, "Spotify Playlists...", "win.spotify");
+    g_menu_append(menu, "Output Device...", "win.output");
 
     GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
     gtk_widget_set_parent(popover, mainwin_drawing_area);
@@ -592,6 +600,10 @@ load_config(void)
         gchar *skin = g_key_file_get_string(kf, "xmms", "skin", NULL);
         if (skin && skin[0]) cfg.skin = skin;
         else g_free(skin);
+
+        gchar *output = g_key_file_get_string(kf, "xmms", "output_device", NULL);
+        if (output && output[0]) cfg.output_device = output;
+        else g_free(output);
     }
     g_key_file_free(kf);
     g_free(config_file);
@@ -612,6 +624,10 @@ save_config(void)
     g_key_file_set_integer(kf, "xmms", "scale_factor", cfg.scale_factor);
     if (cfg.skin)
         g_key_file_set_string(kf, "xmms", "skin", cfg.skin);
+
+    const gchar *output_dev = player_get_output_device();
+    if (output_dev)
+        g_key_file_set_string(kf, "xmms", "output_device", output_dev);
 
     g_key_file_save_to_file(kf, config_file, NULL);
     g_key_file_free(kf);
@@ -694,6 +710,10 @@ activate(GtkApplication *app, gpointer data)
     player_init();
     spotify_init();
 
+    /* Apply saved output device */
+    if (cfg.output_device)
+        player_set_output_device(cfg.output_device);
+
     /* Load custom skin if configured */
     if (cfg.skin)
         skin_load(cfg.skin);
@@ -708,6 +728,7 @@ activate(GtkApplication *app, gpointer data)
     static const GActionEntry win_actions[] = {
         { "skin-browser", mainwin_menu_skin_cb, NULL, NULL, NULL },
         { "spotify", mainwin_menu_spotify_cb, NULL, NULL, NULL },
+        { "output", mainwin_menu_output_cb, NULL, NULL, NULL },
     };
     g_action_map_add_action_entries(G_ACTION_MAP(mainwin), win_actions,
                                     G_N_ELEMENTS(win_actions), NULL);

@@ -680,6 +680,69 @@ spotify_transfer_playback(const gchar *device_id)
     return ok;
 }
 
+/* ---- Public device API ---- */
+
+void
+spotify_device_free(SpotifyDevice *dev)
+{
+    if (!dev) return;
+    g_free(dev->id);
+    g_free(dev->name);
+    g_free(dev->type);
+    g_free(dev);
+}
+
+void
+spotify_device_list_free(GList *list)
+{
+    g_list_free_full(list, (GDestroyNotify)spotify_device_free);
+}
+
+GList *
+spotify_get_devices(void)
+{
+    GBytes *response = spotify_api_get("/me/player/devices");
+    if (!response)
+        return NULL;
+
+    gsize len;
+    const gchar *body = g_bytes_get_data(response, &len);
+    JsonParser *parser = json_parser_new();
+
+    if (!json_parser_load_from_data(parser, body, len, NULL)) {
+        g_object_unref(parser);
+        g_bytes_unref(response);
+        return NULL;
+    }
+
+    JsonObject *root = json_node_get_object(json_parser_get_root(parser));
+    JsonArray *devices = json_object_get_array_member(root, "devices");
+    GList *result = NULL;
+
+    if (devices) {
+        guint count = json_array_get_length(devices);
+        for (guint i = 0; i < count; i++) {
+            JsonObject *dev_obj = json_array_get_object_element(devices, i);
+            SpotifyDevice *dev = g_new0(SpotifyDevice, 1);
+            dev->id = g_strdup(json_object_get_string_member(dev_obj, "id"));
+            dev->name = g_strdup(json_object_get_string_member(dev_obj, "name"));
+            dev->type = g_strdup(json_object_get_string_member(dev_obj, "type"));
+            dev->is_active = json_object_get_boolean_member(dev_obj, "is_active");
+            result = g_list_prepend(result, dev);
+        }
+    }
+
+    g_object_unref(parser);
+    g_bytes_unref(response);
+    return g_list_reverse(result);
+}
+
+gboolean
+spotify_set_device(const gchar *device_id)
+{
+    return spotify_transfer_playback(device_id);
+}
+
 /* ---- Playback control ---- */
 
 gboolean

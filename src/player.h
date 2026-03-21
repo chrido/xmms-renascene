@@ -53,4 +53,18 @@ void player_update(void);
 /* Get visualization data (PCM) */
 gboolean player_get_vis_data(gfloat *data, gint num_samples);
 
+/* Output device selection */
+typedef struct {
+    gchar *id;          /* device path/name for GstDeviceMonitor */
+    gchar *display_name;
+    gchar *class_name;  /* e.g. "Audio/Sink" */
+    gboolean is_network;
+} OutputDevice;
+
+GList *player_get_output_devices(void);
+void   player_set_output_device(const gchar *device_id);
+const gchar *player_get_output_device(void);
+void   output_device_free(OutputDevice *dev);
+void   output_device_list_free(GList *list);
+
 #endif /* PLAYER_H */

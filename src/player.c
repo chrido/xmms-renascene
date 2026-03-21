@@ -4,6 +4,7 @@ Player *player = NULL;
 
 static GstBus *bus = NULL;
 static gboolean spotify_mode = FALSE;
+static gchar *current_output_device = NULL;
 static gint64 spotify_position_ms = 0;
 static gint64 spotify_duration_ms = 0;
 
@@ -396,4 +397,213 @@ player_get_vis_data(gfloat *data, gint num_samples)
     memcpy(data, player->vis_data, count * sizeof(gfloat));
     player->vis_data_valid = FALSE;
     return TRUE;
+}
+
+/* ---- Output device management ---- */
+
+void
+output_device_free(OutputDevice *dev)
+{
+    if (!dev) return;
+    g_free(dev->id);
+    g_free(dev->display_name);
+    g_free(dev->class_name);
+    g_free(dev);
+}
+
+void
+output_device_list_free(GList *list)
+{
+    g_list_free_full(list, (GDestroyNotify)output_device_free);
+}
+
+GList *
+player_get_output_devices(void)
+{
+    GList *result = NULL;
+    GstDeviceMonitor *monitor = gst_device_monitor_new();
+
+    GstCaps *caps = gst_caps_new_empty_simple("audio/x-raw");
+    gst_device_monitor_add_filter(monitor, "Audio/Sink", caps);
+    gst_caps_unref(caps);
+
+    if (!gst_device_monitor_start(monitor)) {
+        g_warning("Failed to start GstDeviceMonitor");
+        gst_object_unref(monitor);
+        return NULL;
+    }
+
+    GList *devices = gst_device_monitor_get_devices(monitor);
+    GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+    for (GList *l = devices; l; l = l->next) {
+        GstDevice *gst_dev = l->data;
+        GstStructure *props = gst_device_get_properties(gst_dev);
+
+        if (!props) {
+            gst_object_unref(gst_dev);
+            continue;
+        }
+
+        /* Skip raw ALSA devices — PipeWire already wraps them */
+        const gchar *struct_name = gst_structure_get_name(props);
+        if (g_strcmp0(struct_name, "alsa-proplist") == 0) {
+            gst_structure_free(props);
+            gst_object_unref(gst_dev);
+            continue;
+        }
+
+        /* Use node.name as the stable unique ID */
+        const gchar *node_name = gst_structure_get_string(props, "node.name");
+        if (!node_name) {
+            gst_structure_free(props);
+            gst_object_unref(gst_dev);
+            continue;
+        }
+
+        /* Deduplicate: prefer pipewire-proplist over pulse-proplist */
+        if (g_hash_table_contains(seen, node_name)) {
+            gst_structure_free(props);
+            gst_object_unref(gst_dev);
+            continue;
+        }
+        g_hash_table_add(seen, g_strdup(node_name));
+
+        OutputDevice *dev = g_new0(OutputDevice, 1);
+        dev->id = g_strdup(node_name);
+        dev->display_name = gst_device_get_display_name(gst_dev);
+        dev->class_name = gst_device_get_device_class(gst_dev);
+
+        const gchar *is_net = gst_structure_get_string(props, "node.network");
+        dev->is_network = (g_strcmp0(is_net, "true") == 0);
+
+        gst_structure_free(props);
+        result = g_list_prepend(result, dev);
+        gst_object_unref(gst_dev);
+    }
+    g_list_free(devices);
+    g_hash_table_unref(seen);
+
+    gst_device_monitor_stop(monitor);
+    gst_object_unref(monitor);
+
+    return g_list_reverse(result);
+}
+
+static void
+player_rebuild_audio_sink(void)
+{
+    if (!player || !player->pipeline)
+        return;
+
+    /* Remember current state */
+    GstState cur_state;
+    gst_element_get_state(player->pipeline, &cur_state, NULL, 0);
+
+    gst_element_set_state(player->pipeline, GST_STATE_NULL);
+
+    /* Build the new sink element */
+    GstElement *sink;
+    if (current_output_device) {
+        /* Find the specific device via GstDeviceMonitor */
+        GstDeviceMonitor *monitor = gst_device_monitor_new();
+        GstCaps *caps = gst_caps_new_empty_simple("audio/x-raw");
+        gst_device_monitor_add_filter(monitor, "Audio/Sink", caps);
+        gst_caps_unref(caps);
+
+        sink = NULL;
+        if (gst_device_monitor_start(monitor)) {
+            GList *devices = gst_device_monitor_get_devices(monitor);
+            for (GList *l = devices; l; l = l->next) {
+                GstDevice *gst_dev = l->data;
+                GstStructure *props = gst_device_get_properties(gst_dev);
+                gboolean match = FALSE;
+
+                if (props) {
+                    const gchar *node_name = gst_structure_get_string(props, "node.name");
+                    const gchar *obj_path = gst_structure_get_string(props, "object.path");
+                    if ((node_name && g_strcmp0(node_name, current_output_device) == 0) ||
+                        (obj_path && g_strcmp0(obj_path, current_output_device) == 0))
+                        match = TRUE;
+                    gst_structure_free(props);
+                }
+
+                if (match) {
+                    sink = gst_device_create_element(gst_dev, "sink");
+                    gst_object_unref(gst_dev);
+                    /* Free remaining devices */
+                    for (GList *r = l->next; r; r = r->next)
+                        gst_object_unref(r->data);
+                    break;
+                }
+                gst_object_unref(gst_dev);
+            }
+            g_list_free(devices);
+            gst_device_monitor_stop(monitor);
+        }
+        gst_object_unref(monitor);
+
+        if (!sink) {
+            g_warning("Output device '%s' not found, falling back to auto",
+                      current_output_device);
+            sink = gst_element_factory_make("autoaudiosink", "sink");
+        }
+    } else {
+        sink = gst_element_factory_make("autoaudiosink", "sink");
+    }
+
+    /* Rebuild the audio-sink bin: convert -> equalizer -> spectrum -> sink */
+    GstElement *bin = gst_bin_new("audio-sink-bin");
+    GstElement *convert = gst_element_factory_make("audioconvert", "convert");
+
+    player->equalizer = gst_element_factory_make("equalizer-10bands", "eq");
+    player->spectrum = gst_element_factory_make("spectrum", "spectrum");
+
+    if (player->spectrum) {
+        g_object_set(player->spectrum,
+                     "bands", 75,
+                     "threshold", -80,
+                     "post-messages", TRUE,
+                     "interval", (guint64)(50 * GST_MSECOND),
+                     "message-magnitude", TRUE,
+                     NULL);
+    }
+
+    if (player->equalizer && player->spectrum) {
+        gst_bin_add_many(GST_BIN(bin), convert, player->equalizer,
+                         player->spectrum, sink, NULL);
+        gst_element_link_many(convert, player->equalizer,
+                              player->spectrum, sink, NULL);
+    } else if (player->equalizer) {
+        gst_bin_add_many(GST_BIN(bin), convert, player->equalizer,
+                         sink, NULL);
+        gst_element_link_many(convert, player->equalizer, sink, NULL);
+    } else {
+        gst_bin_add_many(GST_BIN(bin), convert, sink, NULL);
+        gst_element_link_many(convert, sink, NULL);
+    }
+
+    GstPad *pad = gst_element_get_static_pad(convert, "sink");
+    gst_element_add_pad(bin, gst_ghost_pad_new("sink", pad));
+    gst_object_unref(pad);
+
+    g_object_set(player->pipeline, "audio-sink", bin, NULL);
+
+    /* Restore state if we were playing */
+    if (cur_state == GST_STATE_PLAYING || cur_state == GST_STATE_PAUSED)
+        gst_element_set_state(player->pipeline, cur_state);
+}
+
+void
+player_set_output_device(const gchar *device_id)
+{
+    g_free(current_output_device);
+    current_output_device = g_strdup(device_id);
+    player_rebuild_audio_sink();
+}
+
+const gchar *
+player_get_output_device(void)
+{
+    return current_output_device;
 }
