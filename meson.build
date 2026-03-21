@@ -12,6 +12,8 @@ gnome = import('gnome')
 gtk4 = dependency('gtk4', version: '>= 4.6')
 gstreamer = dependency('gstreamer-1.0', version: '>= 1.16')
 libarchive = dependency('libarchive', version: '>= 3.0', required: false)
+libsoup = dependency('libsoup-3.0', version: '>= 3.0')
+json_glib = dependency('json-glib-1.0', version: '>= 1.6')
 
 conf_data = configuration_data()
 conf_data.set_quoted('PACKAGE', meson.project_name())
@@ -40,11 +42,13 @@ sources = files(
   'src/equalizerwin.c',
   'src/mpris.c',
   'src/skinwin.c',
+  'src/spotify.c',
+  'src/spotifywin.c',
 )
 
 executable('xmms',
   sources, resources,
-  dependencies: [gtk4, gstreamer, libarchive],
+  dependencies: [gtk4, gstreamer, libarchive, libsoup, json_glib],
   include_directories: [
     include_directories('src'),
     include_directories('.'),     # for config.h

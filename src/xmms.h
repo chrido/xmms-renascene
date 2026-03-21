@@ -18,6 +18,8 @@
 #include "equalizerwin.h"
 #include "mpris.h"
 #include "skinwin.h"
+#include "spotify.h"
+#include "spotifywin.h"
 
 typedef enum {
     TIMER_ELAPSED,

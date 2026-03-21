@@ -154,6 +154,15 @@ player_play(const gchar *uri)
     if (!player || !player->pipeline)
         return;
 
+    /* Handle Spotify URIs via Spotify Web API */
+    if (g_str_has_prefix(uri, "spotify:")) {
+        gst_element_set_state(player->pipeline, GST_STATE_NULL);
+        spotify_play_track(uri, NULL, 0);
+        player->state = PLAYER_PLAYING;
+        player->has_duration = FALSE;
+        return;
+    }
+
     gst_element_set_state(player->pipeline, GST_STATE_NULL);
 
     g_object_set(player->pipeline, "uri", uri, NULL);

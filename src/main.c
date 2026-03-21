@@ -126,7 +126,41 @@ mainwin_pl_pushed(gboolean toggled)
 static void mainwin_close_pushed(void) { exit(0); }
 static void mainwin_minimize_pushed(void) { gtk_window_minimize(GTK_WINDOW(mainwin)); }
 static void mainwin_shade_pushed(void) { /* TODO */ }
-static void mainwin_menubtn_pushed(void) { skinwin_show(); }
+static void
+mainwin_menu_skin_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    skinwin_show();
+}
+
+static void
+mainwin_menu_spotify_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    spotifywin_show(GTK_WINDOW(mainwin));
+}
+
+static void
+mainwin_menubtn_pushed(void)
+{
+    /* Build a popover menu */
+    GMenu *menu = g_menu_new();
+    g_menu_append(menu, "Skin Browser...", "win.skin-browser");
+    g_menu_append(menu, "Spotify Playlists...", "win.spotify");
+
+    GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+    gtk_widget_set_parent(popover, mainwin_drawing_area);
+
+    GdkRectangle rect = { 6, 3, 9, 9 };
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 2;
+    rect.x *= scale; rect.y *= scale;
+    rect.width *= scale; rect.height *= scale;
+    gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
+
+    gtk_popover_popup(GTK_POPOVER(popover));
+    g_object_unref(menu);
+}
 
 /* ---- Volume/Balance/Position callbacks ---- */
 
@@ -668,6 +702,7 @@ activate(GtkApplication *app, gpointer data)
     playlist_init();
     skin_init();
     player_init();
+    spotify_init();
 
     /* Load custom skin if configured */
     if (cfg.skin)
@@ -678,6 +713,14 @@ activate(GtkApplication *app, gpointer data)
     gtk_window_set_title(GTK_WINDOW(mainwin), "XMMS");
     gtk_window_set_resizable(GTK_WINDOW(mainwin), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(mainwin), FALSE);
+
+    /* Menu actions */
+    static const GActionEntry win_actions[] = {
+        { "skin-browser", mainwin_menu_skin_cb, NULL, NULL, NULL },
+        { "spotify", mainwin_menu_spotify_cb, NULL, NULL, NULL },
+    };
+    g_action_map_add_action_entries(G_ACTION_MAP(mainwin), win_actions,
+                                    G_N_ELEMENTS(win_actions), NULL);
 
     /* Drawing area */
     mainwin_drawing_area = gtk_drawing_area_new();
@@ -743,6 +786,7 @@ shutdown_cb(GtkApplication *app, gpointer data)
 
     save_config();
     mpris_free();
+    spotify_free();
     player_stop();
     player_free();
     playlist_free();

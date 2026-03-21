@@ -48,6 +48,17 @@ playlist_add_uri(const gchar *uri)
 }
 
 void
+playlist_add_spotify(const gchar *spotify_uri, const gchar *title,
+                      gint duration_ms)
+{
+    PlaylistEntry *entry = g_new0(PlaylistEntry, 1);
+    entry->filename = g_strdup(spotify_uri);
+    entry->title = g_strdup(title);
+    entry->length = duration_ms;
+    playlist = g_list_append(playlist, entry);
+}
+
+void
 playlist_add_dir(const gchar *dir)
 {
     GDir *d = g_dir_open(dir, 0, NULL);
