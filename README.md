@@ -23,6 +23,20 @@ flatpak install xmms-resuscitated.flatpak
 - **Flatpak support** — available as a portable Flatpak bundle
 - Wide audio format support via GStreamer (MP3, OGG, FLAC, WAV, AAC, and more)
 
+## Screenshots
+
+### Main Player
+![XMMS Main Player](screenshots/xmms.png)
+
+### Playlist Editor
+![Playlist Editor](screenshots/xmmsplaylist.png)
+
+### Spotify Integration
+![Spotify Integration Menu](screenshots/spotifyintegration.png)
+
+### Spotify Playlist Chooser
+![Spotify Playlist Chooser](screenshots/spotifyplaylistchooserxmms.png)
+
 ## Dependencies
 
 - GTK 4 (>= 4.6)
