@@ -353,6 +353,13 @@ skin_init(void)
 {
     skin = g_new0(Skin, 1);
     memcpy(skin->vis_color, default_viscolor, sizeof(default_viscolor));
+
+    /* Default playlist editor colors (green text on black background) */
+    skin->pledit_normal    = (GdkRGBA){ 0.0, 1.0, 0.0, 1.0 };
+    skin->pledit_current   = (GdkRGBA){ 1.0, 1.0, 1.0, 1.0 };
+    skin->pledit_normalbg  = (GdkRGBA){ 0.0, 0.0, 0.0, 1.0 };
+    skin->pledit_selectedbg = (GdkRGBA){ 0.0, 0.0, 0.4, 1.0 };
+
     load_default_pixmaps();
     skin->id = 1;
 }
