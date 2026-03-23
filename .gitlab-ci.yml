@@ -2,23 +2,29 @@ stages:
   - build
   - release
 
-flatpak:
-  image: 'quay.io/gnome_infrastructure/gnome-runtime-images:gnome-48'
+.flatpak_build:
+  image: 'registry.fedoraproject.org/fedora:44'
   stage: build
   variables:
     MANIFEST_PATH: "org.xmms.Resuscitated.yml"
     FLATPAK_MODULE: "xmms-resuscitated"
     APP_ID: "org.xmms.Resuscitated"
-    BUNDLE: "xmms-resuscitated.flatpak"
+  before_script:
+    - dnf install -y flatpak flatpak-builder
+    - flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
   script:
+    # Auto-increment version using pipeline number
+    - VERSION_BASE=$(grep -oP "version:\s*'\K[^']+" meson.build)
+    - NEW_VERSION="${VERSION_BASE}.${CI_PIPELINE_IID}"
+    - sed -i "s/version: '${VERSION_BASE}'/version: '${NEW_VERSION}'/" meson.build
+    - echo "Building version ${NEW_VERSION} for ${ARCH}"
+    # Install runtime and SDK for the target architecture
+    - flatpak install -y --noninteractive flathub
+      org.gnome.Platform/${ARCH}/48 org.gnome.Sdk/${ARCH}/48
+    # Build and bundle
     - flatpak-builder --user --disable-rofiles-fuse --force-clean
-      --repo=repo flatpak_app ${MANIFEST_PATH}
-    - flatpak build-bundle repo ${BUNDLE} ${APP_ID}
-  artifacts:
-    name: 'xmms-resuscitated-flatpak'
-    paths:
-      - "${BUNDLE}"
-    expire_in: 7 days
+      --arch=${ARCH} --repo=repo flatpak_app ${MANIFEST_PATH}
+    - flatpak build-bundle --arch=${ARCH} repo ${BUNDLE} ${APP_ID}
   rules:
     - changes:
         - src/**/*
@@ -28,11 +34,38 @@ flatpak:
         - org.xmms.Resuscitated.yml
         - .gitlab-ci.yml
 
+flatpak-x86_64:
+  extends: .flatpak_build
+  variables:
+    ARCH: "x86_64"
+    BUNDLE: "xmms-resuscitated-x86_64.flatpak"
+  artifacts:
+    name: 'xmms-resuscitated-x86_64'
+    paths:
+      - "xmms-resuscitated-x86_64.flatpak"
+    expire_in: 7 days
+
+flatpak-aarch64:
+  extends: .flatpak_build
+  variables:
+    ARCH: "aarch64"
+    BUNDLE: "xmms-resuscitated-aarch64.flatpak"
+  before_script:
+    - dnf install -y flatpak flatpak-builder qemu-user-static
+    - flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+  artifacts:
+    name: 'xmms-resuscitated-aarch64'
+    paths:
+      - "xmms-resuscitated-aarch64.flatpak"
+    expire_in: 7 days
+
 release:
   image: 'registry.gitlab.com/gitlab-org/release-cli:latest'
   stage: release
   needs:
-    - job: flatpak
+    - job: flatpak-x86_64
+      artifacts: true
+    - job: flatpak-aarch64
       artifacts: true
   script:
     - echo "Creating release for ${CI_COMMIT_SHORT_SHA}"
@@ -42,8 +75,10 @@ release:
     description: 'Flatpak build from commit ${CI_COMMIT_SHORT_SHA}'
     assets:
       links:
-        - name: 'xmms-resuscitated.flatpak'
-          url: '${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/xmms-resuscitated.flatpak?job=flatpak'
+        - name: 'xmms-resuscitated-x86_64.flatpak'
+          url: '${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/xmms-resuscitated-x86_64.flatpak?job=flatpak-x86_64'
+        - name: 'xmms-resuscitated-aarch64.flatpak'
+          url: '${CI_PROJECT_URL}/-/jobs/artifacts/${CI_COMMIT_REF_NAME}/raw/xmms-resuscitated-aarch64.flatpak?job=flatpak-aarch64'
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
