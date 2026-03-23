@@ -34,6 +34,9 @@ flatpak install xmms-resuscitated.flatpak
 ### Spotify Integration
 ![Spotify Integration Menu](screenshots/spotifyintegration.png)
 
+### Spotify Playlist Chooser
+![Spotify Playlist Chooser](screenshots/spotifyplaylistchooserxmms.png)
+
 ## Dependencies
 
 - GTK 4 (>= 4.6)
