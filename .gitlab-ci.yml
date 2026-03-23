@@ -14,17 +14,15 @@ stages:
     - flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
   script:
     # Auto-increment version using pipeline number
-    - VERSION_BASE=$(grep -oP "version:\s*'\K[^']+" meson.build)
-    - NEW_VERSION="${VERSION_BASE}.${CI_PIPELINE_IID}"
-    - sed -i "s/version: '${VERSION_BASE}'/version: '${NEW_VERSION}'/" meson.build
-    - echo "Building version ${NEW_VERSION} for ${ARCH}"
+    - "VERSION_BASE=$(grep -oP \"version:\\s*'\\K[^']+\" meson.build)"
+    - "NEW_VERSION=${VERSION_BASE}.${CI_PIPELINE_IID}"
+    - "sed -i \"s/version: '${VERSION_BASE}'/version: '${NEW_VERSION}'/\" meson.build"
+    - "echo Building version ${NEW_VERSION} for ${ARCH}"
     # Install runtime and SDK for the target architecture
-    - flatpak install -y --noninteractive flathub
-      org.gnome.Platform/${ARCH}/48 org.gnome.Sdk/${ARCH}/48
+    - "flatpak install -y --noninteractive flathub org.gnome.Platform/${ARCH}/48 org.gnome.Sdk/${ARCH}/48"
     # Build and bundle
-    - flatpak-builder --user --disable-rofiles-fuse --force-clean
-      --arch=${ARCH} --repo=repo flatpak_app ${MANIFEST_PATH}
-    - flatpak build-bundle --arch=${ARCH} repo ${BUNDLE} ${APP_ID}
+    - "flatpak-builder --user --disable-rofiles-fuse --force-clean --arch=${ARCH} --repo=repo flatpak_app ${MANIFEST_PATH}"
+    - "flatpak build-bundle --arch=${ARCH} repo ${BUNDLE} ${APP_ID}"
   rules:
     - changes:
         - src/**/*
