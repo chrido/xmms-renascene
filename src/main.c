@@ -360,6 +360,30 @@ mainwin_menu_vis_off_cb(GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
+mainwin_menu_vis_normal_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_analyzer_mode = VIS_ANALYZER_NORMAL;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_fire_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_analyzer_mode = VIS_ANALYZER_FIRE;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_vlines_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_analyzer_mode = VIS_ANALYZER_VLINES;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
 mainwin_menu_vis_bars_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
@@ -376,6 +400,30 @@ mainwin_menu_vis_lines_cb(GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
+mainwin_menu_vis_scope_dot_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_scope_mode = VIS_SCOPE_DOT;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_scope_line_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_scope_mode = VIS_SCOPE_LINE;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_scope_solid_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_scope_mode = VIS_SCOPE_SOLID;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
 mainwin_menu_vis_peaks_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
@@ -384,18 +432,82 @@ mainwin_menu_vis_peaks_cb(GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
-mainwin_menu_vis_falloff_slow_cb(GSimpleAction *action, GVariant *param, gpointer data)
+mainwin_menu_vis_afalloff_slowest_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    cfg.vis_falloff = 0.015;
+    cfg.vis_analyzer_falloff = VIS_FALLOFF_SLOWEST;
     mainwin_apply_visualization_preferences();
 }
 
 static void
-mainwin_menu_vis_falloff_fast_cb(GSimpleAction *action, GVariant *param, gpointer data)
+mainwin_menu_vis_afalloff_slow_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    cfg.vis_falloff = 0.08;
+    cfg.vis_analyzer_falloff = VIS_FALLOFF_SLOW;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_afalloff_medium_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_analyzer_falloff = VIS_FALLOFF_MEDIUM;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_afalloff_fast_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_analyzer_falloff = VIS_FALLOFF_FAST;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_afalloff_fastest_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_analyzer_falloff = VIS_FALLOFF_FASTEST;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_pfalloff_slowest_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_peaks_falloff = VIS_FALLOFF_SLOWEST;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_pfalloff_slow_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_peaks_falloff = VIS_FALLOFF_SLOW;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_pfalloff_medium_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_peaks_falloff = VIS_FALLOFF_MEDIUM;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_pfalloff_fast_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_peaks_falloff = VIS_FALLOFF_FAST;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_pfalloff_fastest_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_peaks_falloff = VIS_FALLOFF_FASTEST;
     mainwin_apply_visualization_preferences();
 }
 
@@ -420,6 +532,30 @@ mainwin_menu_vis_refresh_quarter_cb(GSimpleAction *action, GVariant *param, gpoi
 {
     (void)action; (void)param; (void)data;
     cfg.vis_refresh_divisor = 4;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_refresh_eighth_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_refresh_divisor = 8;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_vu_normal_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_vu_mode = VIS_VU_NORMAL;
+    mainwin_apply_visualization_preferences();
+}
+
+static void
+mainwin_menu_vis_vu_smooth_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.vis_vu_mode = VIS_VU_SMOOTH;
     mainwin_apply_visualization_preferences();
 }
 
@@ -450,7 +586,6 @@ mainwin_menubtn_pushed(void)
     /* Build a popover menu */
     GMenu *menu = g_menu_new();
     GMenu *options = g_menu_new();
-    GMenu *vis = g_menu_new();
     GMenu *shade = g_menu_new();
     g_menu_append(options, "Preferences", "win.preferences");
     g_menu_append(menu, "Skin Browser...", "win.skin-browser");
@@ -466,18 +601,6 @@ mainwin_menubtn_pushed(void)
     g_menu_append_submenu(menu, "Options", G_MENU_MODEL(options));
     g_menu_append(menu, "Spotify Playlists...", "win.spotify");
     g_menu_append(menu, "Output Device...", "win.output");
-    g_menu_append(vis, "Analyzer", "win.vis-analyzer");
-    g_menu_append(vis, "Scope", "win.vis-scope");
-    g_menu_append(vis, "Off", "win.vis-off");
-    g_menu_append(vis, "Analyzer Bars", "win.vis-bars");
-    g_menu_append(vis, "Analyzer Lines", "win.vis-lines");
-    g_menu_append(vis, "Toggle Peaks", "win.vis-peaks");
-    g_menu_append(vis, "Slow Falloff", "win.vis-falloff-slow");
-    g_menu_append(vis, "Fast Falloff", "win.vis-falloff-fast");
-    g_menu_append(vis, "Refresh Full", "win.vis-refresh-full");
-    g_menu_append(vis, "Refresh Half", "win.vis-refresh-half");
-    g_menu_append(vis, "Refresh Quarter", "win.vis-refresh-quarter");
-    g_menu_append_submenu(menu, "Visualization", G_MENU_MODEL(vis));
     g_menu_append(shade, "WindowShade Mode", "win.windowshade");
     g_menu_append(shade, "Playlist WindowShade Mode", "win.playlist-shade");
     g_menu_append(shade, "Equalizer WindowShade Mode", "win.equalizer-shade");
@@ -495,7 +618,6 @@ mainwin_menubtn_pushed(void)
 
     gtk_popover_popup(GTK_POPOVER(popover));
     g_object_unref(options);
-    g_object_unref(vis);
     g_object_unref(shade);
     g_object_unref(menu);
 }
@@ -865,12 +987,21 @@ mainwin_apply_visualization_preferences(void)
 
     vis_set_mode(mainwin_vis, CLAMP(cfg.vis_mode,
                                     VIS_MODE_ANALYZER, VIS_MODE_OFF));
+    vis_set_analyzer_mode(mainwin_vis, CLAMP(cfg.vis_analyzer_mode,
+                                             VIS_ANALYZER_NORMAL,
+                                             VIS_ANALYZER_VLINES));
     vis_set_analyzer_style(mainwin_vis,
                            cfg.vis_analyzer_style == VIS_ANALYZER_LINES ?
                            VIS_ANALYZER_LINES : VIS_ANALYZER_BARS);
+    vis_set_scope_mode(mainwin_vis, CLAMP(cfg.vis_scope_mode,
+                                          VIS_SCOPE_DOT, VIS_SCOPE_SOLID));
     vis_set_peaks_enabled(mainwin_vis, cfg.vis_peaks_enabled);
-    vis_set_falloff(mainwin_vis, (gfloat)CLAMP(cfg.vis_falloff, 0.001, 0.25));
-    vis_update_divisor = CLAMP(cfg.vis_refresh_divisor, 1, 4);
+    vis_set_falloff(mainwin_vis,
+                    CLAMP(cfg.vis_analyzer_falloff,
+                          VIS_FALLOFF_SLOWEST, VIS_FALLOFF_FASTEST),
+                    CLAMP(cfg.vis_peaks_falloff,
+                          VIS_FALLOFF_SLOWEST, VIS_FALLOFF_FASTEST));
+    vis_update_divisor = CLAMP(cfg.vis_refresh_divisor, 1, 8);
     mainwin_queue_draw();
 }
 
@@ -907,6 +1038,9 @@ draw_main_window(cairo_t *cr)
             ((Widget *)mainwin_minimize)->draw((Widget *)mainwin_minimize, cr);
         if (mainwin_shade)
             ((Widget *)mainwin_shade)->draw((Widget *)mainwin_shade, cr);
+        vis_draw_windowshade(mainwin_vis, cr, 79, 5,
+                             cfg.vis_vu_mode == VIS_VU_SMOOTH ?
+                             VIS_VU_SMOOTH : VIS_VU_NORMAL);
         if (mainwin_close)
             ((Widget *)mainwin_close)->draw((Widget *)mainwin_close, cr);
         return;
@@ -1301,7 +1435,9 @@ mainwin_update_cb(gpointer data)
         if (++vis_update_counter >= vis_update_divisor) {
             vis_update_counter = 0;
             if (player_get_vis_data(vis_data, 75))
-                vis_set_data(mainwin_vis, vis_data, 75);
+                vis_tick(mainwin_vis, vis_data, 75);
+            else
+                vis_tick(mainwin_vis, NULL, 0);
         }
 
         /* Update playlist window */
@@ -1479,9 +1615,14 @@ load_config(void)
     cfg.mainwin_font = g_strdup("Skin bitmap font");
     cfg.title_format = g_strdup("%p - %t");
     cfg.vis_mode = VIS_MODE_ANALYZER;
+    cfg.vis_analyzer_mode = VIS_ANALYZER_NORMAL;
     cfg.vis_analyzer_style = VIS_ANALYZER_BARS;
+    cfg.vis_scope_mode = VIS_SCOPE_LINE;
     cfg.vis_peaks_enabled = TRUE;
     cfg.vis_falloff = 0.04;
+    cfg.vis_analyzer_falloff = VIS_FALLOFF_MEDIUM;
+    cfg.vis_peaks_falloff = VIS_FALLOFF_SLOW;
+    cfg.vis_vu_mode = VIS_VU_NORMAL;
     cfg.vis_refresh_divisor = 1;
 
     if (startup_reset) {
@@ -1600,20 +1741,43 @@ load_config(void)
         if (g_key_file_has_key(kf, "xmms", "vis_mode", NULL))
             cfg.vis_mode = CLAMP(g_key_file_get_integer(kf, "xmms", "vis_mode", NULL),
                                  VIS_MODE_ANALYZER, VIS_MODE_OFF);
+        if (g_key_file_has_key(kf, "xmms", "vis_analyzer_mode", NULL))
+            cfg.vis_analyzer_mode =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_analyzer_mode", NULL),
+                      VIS_ANALYZER_NORMAL, VIS_ANALYZER_VLINES);
         if (g_key_file_has_key(kf, "xmms", "vis_analyzer_style", NULL))
             cfg.vis_analyzer_style =
                 CLAMP(g_key_file_get_integer(kf, "xmms", "vis_analyzer_style", NULL),
                       VIS_ANALYZER_BARS, VIS_ANALYZER_LINES);
+        if (g_key_file_has_key(kf, "xmms", "vis_scope_mode", NULL))
+            cfg.vis_scope_mode =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_scope_mode", NULL),
+                      VIS_SCOPE_DOT, VIS_SCOPE_SOLID);
         if (g_key_file_has_key(kf, "xmms", "vis_peaks_enabled", NULL))
             cfg.vis_peaks_enabled =
                 g_key_file_get_boolean(kf, "xmms", "vis_peaks_enabled", NULL);
         if (g_key_file_has_key(kf, "xmms", "vis_falloff", NULL))
             cfg.vis_falloff = CLAMP(g_key_file_get_double(kf, "xmms", "vis_falloff", NULL),
                                     0.001, 0.25);
+        if (g_key_file_has_key(kf, "xmms", "vis_analyzer_falloff", NULL))
+            cfg.vis_analyzer_falloff =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_analyzer_falloff", NULL),
+                      VIS_FALLOFF_SLOWEST, VIS_FALLOFF_FASTEST);
+        else if (g_key_file_has_key(kf, "xmms", "vis_falloff", NULL))
+            cfg.vis_analyzer_falloff = cfg.vis_falloff >= 0.08 ? VIS_FALLOFF_FAST :
+                cfg.vis_falloff <= 0.015 ? VIS_FALLOFF_SLOW : VIS_FALLOFF_MEDIUM;
+        if (g_key_file_has_key(kf, "xmms", "vis_peaks_falloff", NULL))
+            cfg.vis_peaks_falloff =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_peaks_falloff", NULL),
+                      VIS_FALLOFF_SLOWEST, VIS_FALLOFF_FASTEST);
+        if (g_key_file_has_key(kf, "xmms", "vis_vu_mode", NULL))
+            cfg.vis_vu_mode =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_vu_mode", NULL),
+                      VIS_VU_NORMAL, VIS_VU_SMOOTH);
         if (g_key_file_has_key(kf, "xmms", "vis_refresh_divisor", NULL))
             cfg.vis_refresh_divisor =
                 CLAMP(g_key_file_get_integer(kf, "xmms", "vis_refresh_divisor", NULL),
-                      1, 4);
+                      1, 8);
 
         session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                       config_file, cfg.player_x, cfg.player_y,
@@ -1693,11 +1857,20 @@ save_config(void)
         g_key_file_set_string(kf, "xmms", "title_format",
                               cfg.title_format);
     g_key_file_set_integer(kf, "xmms", "vis_mode", cfg.vis_mode);
+    g_key_file_set_integer(kf, "xmms", "vis_analyzer_mode",
+                           cfg.vis_analyzer_mode);
     g_key_file_set_integer(kf, "xmms", "vis_analyzer_style",
                            cfg.vis_analyzer_style);
+    g_key_file_set_integer(kf, "xmms", "vis_scope_mode",
+                           cfg.vis_scope_mode);
     g_key_file_set_boolean(kf, "xmms", "vis_peaks_enabled",
                            cfg.vis_peaks_enabled);
     g_key_file_set_double(kf, "xmms", "vis_falloff", cfg.vis_falloff);
+    g_key_file_set_integer(kf, "xmms", "vis_analyzer_falloff",
+                           cfg.vis_analyzer_falloff);
+    g_key_file_set_integer(kf, "xmms", "vis_peaks_falloff",
+                           cfg.vis_peaks_falloff);
+    g_key_file_set_integer(kf, "xmms", "vis_vu_mode", cfg.vis_vu_mode);
     g_key_file_set_integer(kf, "xmms", "vis_refresh_divisor",
                            cfg.vis_refresh_divisor);
 
@@ -1879,14 +2052,31 @@ activate(GtkApplication *app, gpointer data)
         { "vis-analyzer", mainwin_menu_vis_analyzer_cb, NULL, NULL, NULL },
         { "vis-scope", mainwin_menu_vis_scope_cb, NULL, NULL, NULL },
         { "vis-off", mainwin_menu_vis_off_cb, NULL, NULL, NULL },
+        { "vis-normal", mainwin_menu_vis_normal_cb, NULL, NULL, NULL },
+        { "vis-fire", mainwin_menu_vis_fire_cb, NULL, NULL, NULL },
+        { "vis-vlines", mainwin_menu_vis_vlines_cb, NULL, NULL, NULL },
         { "vis-bars", mainwin_menu_vis_bars_cb, NULL, NULL, NULL },
         { "vis-lines", mainwin_menu_vis_lines_cb, NULL, NULL, NULL },
         { "vis-peaks", mainwin_menu_vis_peaks_cb, NULL, NULL, NULL },
-        { "vis-falloff-slow", mainwin_menu_vis_falloff_slow_cb, NULL, NULL, NULL },
-        { "vis-falloff-fast", mainwin_menu_vis_falloff_fast_cb, NULL, NULL, NULL },
+        { "vis-scope-dot", mainwin_menu_vis_scope_dot_cb, NULL, NULL, NULL },
+        { "vis-scope-line", mainwin_menu_vis_scope_line_cb, NULL, NULL, NULL },
+        { "vis-scope-solid", mainwin_menu_vis_scope_solid_cb, NULL, NULL, NULL },
+        { "vis-afalloff-slowest", mainwin_menu_vis_afalloff_slowest_cb, NULL, NULL, NULL },
+        { "vis-afalloff-slow", mainwin_menu_vis_afalloff_slow_cb, NULL, NULL, NULL },
+        { "vis-afalloff-medium", mainwin_menu_vis_afalloff_medium_cb, NULL, NULL, NULL },
+        { "vis-afalloff-fast", mainwin_menu_vis_afalloff_fast_cb, NULL, NULL, NULL },
+        { "vis-afalloff-fastest", mainwin_menu_vis_afalloff_fastest_cb, NULL, NULL, NULL },
+        { "vis-pfalloff-slowest", mainwin_menu_vis_pfalloff_slowest_cb, NULL, NULL, NULL },
+        { "vis-pfalloff-slow", mainwin_menu_vis_pfalloff_slow_cb, NULL, NULL, NULL },
+        { "vis-pfalloff-medium", mainwin_menu_vis_pfalloff_medium_cb, NULL, NULL, NULL },
+        { "vis-pfalloff-fast", mainwin_menu_vis_pfalloff_fast_cb, NULL, NULL, NULL },
+        { "vis-pfalloff-fastest", mainwin_menu_vis_pfalloff_fastest_cb, NULL, NULL, NULL },
         { "vis-refresh-full", mainwin_menu_vis_refresh_full_cb, NULL, NULL, NULL },
         { "vis-refresh-half", mainwin_menu_vis_refresh_half_cb, NULL, NULL, NULL },
         { "vis-refresh-quarter", mainwin_menu_vis_refresh_quarter_cb, NULL, NULL, NULL },
+        { "vis-refresh-eighth", mainwin_menu_vis_refresh_eighth_cb, NULL, NULL, NULL },
+        { "vis-vu-normal", mainwin_menu_vis_vu_normal_cb, NULL, NULL, NULL },
+        { "vis-vu-smooth", mainwin_menu_vis_vu_smooth_cb, NULL, NULL, NULL },
         { "windowshade", mainwin_menu_windowshade_cb, NULL, NULL, NULL },
         { "playlist-shade", mainwin_menu_playlist_shade_cb, NULL, NULL, NULL },
         { "equalizer-shade", mainwin_menu_equalizer_shade_cb, NULL, NULL, NULL },

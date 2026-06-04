@@ -96,6 +96,31 @@ typedef enum {
     VIS_ANALYZER_LINES
 } VisAnalyzerStyle;
 
+typedef enum {
+    VIS_ANALYZER_NORMAL,
+    VIS_ANALYZER_FIRE,
+    VIS_ANALYZER_VLINES
+} VisAnalyzerMode;
+
+typedef enum {
+    VIS_SCOPE_DOT,
+    VIS_SCOPE_LINE,
+    VIS_SCOPE_SOLID
+} VisScopeMode;
+
+typedef enum {
+    VIS_FALLOFF_SLOWEST,
+    VIS_FALLOFF_SLOW,
+    VIS_FALLOFF_MEDIUM,
+    VIS_FALLOFF_FAST,
+    VIS_FALLOFF_FASTEST
+} VisFalloffSpeed;
+
+typedef enum {
+    VIS_VU_NORMAL,
+    VIS_VU_SMOOTH
+} VisVUMode;
+
 typedef struct {
     Widget w;
     gfloat data[75];
@@ -103,8 +128,11 @@ typedef struct {
     gfloat peak_speed[75];
     VisMode mode;
     VisAnalyzerStyle analyzer_style;
+    VisAnalyzerMode analyzer_mode;
+    VisScopeMode scope_mode;
     gboolean peaks_enabled;
-    gfloat falloff;
+    VisFalloffSpeed analyzer_falloff;
+    VisFalloffSpeed peaks_falloff;
 } Vis;
 
 /* Mono/Stereo indicator */
@@ -174,10 +202,16 @@ void textbox_set_text(TextBox *tb, const gchar *text);
 void number_set_value(Number *n, gint value);
 void monostereo_set_channels(MonoStereo *ms, gint nch);
 void vis_set_data(Vis *vis, gfloat *data, gint num);
+void vis_tick(Vis *vis, gfloat *data, gint num);
 void vis_set_mode(Vis *vis, VisMode mode);
 void vis_set_analyzer_style(Vis *vis, VisAnalyzerStyle style);
+void vis_set_analyzer_mode(Vis *vis, VisAnalyzerMode mode);
+void vis_set_scope_mode(Vis *vis, VisScopeMode mode);
 void vis_set_peaks_enabled(Vis *vis, gboolean enabled);
-void vis_set_falloff(Vis *vis, gfloat falloff);
+void vis_set_falloff(Vis *vis, VisFalloffSpeed analyzer_falloff,
+                     VisFalloffSpeed peaks_falloff);
+void vis_draw_windowshade(Vis *vis, cairo_t *cr, gint x, gint y,
+                          VisVUMode vu_mode);
 void playstatus_set_status(PlayStatus *ps, gint status);
 void hslider_set_position(HSlider *hs, gint pos);
 void tbutton_set_toggled(TButton *tb, gboolean toggled);

@@ -58,9 +58,14 @@ typedef struct {
     gchar *mainwin_font;
     gchar *title_format;
     gint vis_mode;
+    gint vis_analyzer_mode;
     gint vis_analyzer_style;
+    gint vis_scope_mode;
     gboolean vis_peaks_enabled;
     gdouble vis_falloff;
+    gint vis_analyzer_falloff;
+    gint vis_peaks_falloff;
+    gint vis_vu_mode;
     gint vis_refresh_divisor;
 } Config;
 

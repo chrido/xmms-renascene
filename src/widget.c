@@ -553,10 +553,84 @@ number_set_value(Number *n, gint value)
 
 /* ---- Visualization ---- */
 
+static const gfloat vis_afalloff_speeds[] = {
+    0.34f / 16.0f, 0.5f / 16.0f, 1.0f / 16.0f,
+    1.3f / 16.0f, 1.6f / 16.0f
+};
+static const gfloat vis_pfalloff_speeds[] = {
+    1.2f, 1.3f, 1.4f, 1.5f, 1.6f
+};
+static const guint8 vis_scope_colors[] = {
+    21, 21, 20, 20, 19, 19, 18, 19, 19, 20, 20, 21, 21
+};
+static const guint8 vis_svis_scope_colors[] = { 20, 19, 18, 19, 20 };
+static const guint8 vis_svis_vu_normal_colors[] = { 17, 17, 17, 12, 12, 12, 2, 2 };
+
+static gint
+vis_level(gfloat value)
+{
+    return CLAMP((gint)(value * 16.0f + 0.5f), 0, 16);
+}
+
+static void
+vis_set_skin_color(cairo_t *cr, gint color_idx)
+{
+    color_idx = CLAMP(color_idx, 0, 23);
+    cairo_set_source_rgb(cr,
+        skin->vis_color[color_idx][0] / 255.0,
+        skin->vis_color[color_idx][1] / 255.0,
+        skin->vis_color[color_idx][2] / 255.0);
+}
+
+static void
+vis_draw_pixel(cairo_t *cr, Widget *w, gint x, gint y, gint color_idx)
+{
+    if (x < 0 || x >= w->width || y < 0 || y >= 16)
+        return;
+    vis_set_skin_color(cr, color_idx);
+    cairo_rectangle(cr, w->x + x, w->y + y, 1, 1);
+    cairo_fill(cr);
+}
+
+static gint
+vis_analyzer_color(Vis *vis, gint row, gint height)
+{
+    switch (vis->analyzer_mode) {
+    case VIS_ANALYZER_FIRE:
+        return (16 - height + row) + 2;
+    case VIS_ANALYZER_VLINES:
+        return 18 - height;
+    case VIS_ANALYZER_NORMAL:
+    default:
+        return row + 2;
+    }
+}
+
+static void
+vis_decay(Vis *vis)
+{
+    VisFalloffSpeed af = CLAMP(vis->analyzer_falloff,
+                               VIS_FALLOFF_SLOWEST, VIS_FALLOFF_FASTEST);
+    VisFalloffSpeed pf = CLAMP(vis->peaks_falloff,
+                               VIS_FALLOFF_SLOWEST, VIS_FALLOFF_FASTEST);
+
+    for (gint i = 0; i < 75; i++) {
+        if (vis->data[i] > 0.0f)
+            vis->data[i] = MAX(0.0f, vis->data[i] - vis_afalloff_speeds[af]);
+        if (vis->peak[i] > 0.0f) {
+            vis->peak[i] = MAX(0.0f, vis->peak[i] - vis->peak_speed[i]);
+            vis->peak_speed[i] *= vis_pfalloff_speeds[pf];
+            if (vis->peak[i] < vis->data[i])
+                vis->peak[i] = vis->data[i];
+        }
+    }
+}
+
 static void
 vis_draw(Widget *w, cairo_t *cr)
 {
     Vis *vis = (Vis *)w;
+    gint levels[75] = { 0 };
 
     /* Draw visualization background from skin */
     cairo_save(cr);
@@ -571,60 +645,79 @@ vis_draw(Widget *w, cairo_t *cr)
     });
     cairo_paint(cr);
 
+    for (gint y = 1; y < 16; y += 2) {
+        for (gint x = 0; x < w->width && x < 76; x += 2)
+            vis_draw_pixel(cr, w, x, y, 1);
+    }
+
     if (vis->mode == VIS_MODE_OFF) {
         cairo_restore(cr);
         return;
     }
 
+    for (gint i = 0; i < 75; i++)
+        levels[i] = vis_level(vis->data[i]);
+
     if (vis->mode == VIS_MODE_SCOPE) {
-        cairo_set_source_rgb(cr,
-            skin->vis_color[18][0] / 255.0,
-            skin->vis_color[18][1] / 255.0,
-            skin->vis_color[18][2] / 255.0);
-        cairo_set_line_width(cr, 1.0);
-        for (gint i = 0; i < 75 && i < w->width; i++) {
-            gdouble y = w->y + 8.0 - (vis->data[i] - 0.5) * 14.0;
-            if (i == 0)
-                cairo_move_to(cr, w->x + i, y);
-            else
-                cairo_line_to(cr, w->x + i, y);
+        for (gint x = 0; x < 75 && x < w->width; x++) {
+            gint h = CLAMP(levels[x], 0, 15);
+            switch (vis->scope_mode) {
+            case VIS_SCOPE_DOT:
+                vis_draw_pixel(cr, w, x, 15 - h,
+                               vis_scope_colors[CLAMP(h, 0, 12)]);
+                break;
+            case VIS_SCOPE_LINE:
+                if (x < 74 && x + 1 < w->width) {
+                    gint y1 = 15 - h;
+                    gint y2 = 15 - CLAMP(levels[x + 1], 0, 15);
+                    gint start = MIN(y1, y2);
+                    gint end = MAX(y1, y2);
+                    for (gint y = start; y <= end; y++)
+                        vis_draw_pixel(cr, w, x, y,
+                                       vis_scope_colors[CLAMP(y - 3, 0, 12)]);
+                } else {
+                    gint y = 15 - h;
+                    vis_draw_pixel(cr, w, x, y,
+                                   vis_scope_colors[CLAMP(y, 0, 12)]);
+                }
+                break;
+            case VIS_SCOPE_SOLID: {
+                gint y1 = 15 - h;
+                gint y2 = 9;
+                gint color = vis_scope_colors[CLAMP(h, 0, 12)];
+                for (gint y = MIN(y1, y2); y <= MAX(y1, y2); y++)
+                    vis_draw_pixel(cr, w, x, y, color);
+                break;
+            }
+            }
         }
-        cairo_stroke(cr);
         cairo_restore(cr);
         return;
     }
 
-    /* Draw analyzer bars */
-    for (gint i = 0; i < 75 && i < w->width; i++) {
-        gint h = (gint)(vis->data[i] * 16.0);
-        if (h <= 0) continue;
-        if (h > 16) h = 16;
-
-        gint y_step = vis->analyzer_style == VIS_ANALYZER_LINES ? 2 : 1;
-        for (gint y = 16 - h; y < 16; y += y_step) {
-            gint color_idx = (16 - y) + 2;
-            if (color_idx >= 24) color_idx = 23;
-            if (color_idx < 2) color_idx = 2;
-
-            cairo_set_source_rgb(cr,
-                skin->vis_color[color_idx][0] / 255.0,
-                skin->vis_color[color_idx][1] / 255.0,
-                skin->vis_color[color_idx][2] / 255.0);
-            cairo_rectangle(cr, w->x + i, w->y + y, 1, 1);
-            cairo_fill(cr);
+    for (gint x = 0; x < 75 && x < w->width; x++) {
+        gint h = 0;
+        if (vis->analyzer_style == VIS_ANALYZER_BARS) {
+            if (x % 4 == 3)
+                continue;
+            h = levels[x >> 2];
+        } else {
+            h = levels[x];
         }
 
-        /* Draw peak */
-        if (vis->peaks_enabled && vis->peak[i] > 0) {
-            gint peak_y = 16 - (gint)(vis->peak[i] * 16.0);
-            if (peak_y >= 0 && peak_y < 16) {
-                cairo_set_source_rgb(cr,
-                    skin->vis_color[23][0] / 255.0,
-                    skin->vis_color[23][1] / 255.0,
-                    skin->vis_color[23][2] / 255.0);
-                cairo_rectangle(cr, w->x + i, w->y + peak_y, 1, 1);
-                cairo_fill(cr);
-            }
+        if (h <= 0)
+            continue;
+
+        h = CLAMP(h, 0, 16);
+        for (gint y = 16 - h; y < 16; y++)
+            vis_draw_pixel(cr, w, x, y, vis_analyzer_color(vis, y, h));
+
+        if (vis->peaks_enabled) {
+            gint peak_idx = vis->analyzer_style == VIS_ANALYZER_BARS ?
+                x >> 2 : x;
+            gint peak_y = 16 - vis_level(vis->peak[peak_idx]);
+            if (peak_y >= 0 && peak_y < 16)
+                vis_draw_pixel(cr, w, x, peak_y, 23);
         }
     }
 
@@ -641,8 +734,11 @@ vis_new(GList **list, gint x, gint y, gint w)
     vis->w.draw = vis_draw;
     vis->mode = VIS_MODE_ANALYZER;
     vis->analyzer_style = VIS_ANALYZER_BARS;
+    vis->analyzer_mode = VIS_ANALYZER_NORMAL;
+    vis->scope_mode = VIS_SCOPE_LINE;
     vis->peaks_enabled = TRUE;
-    vis->falloff = 0.03f;
+    vis->analyzer_falloff = VIS_FALLOFF_MEDIUM;
+    vis->peaks_falloff = VIS_FALLOFF_SLOW;
     widget_list_add(list, (Widget *)vis);
     return vis;
 }
@@ -650,14 +746,30 @@ vis_new(GList **list, gint x, gint y, gint w)
 void
 vis_set_data(Vis *vis, gfloat *data, gint num)
 {
+    if (!vis)
+        return;
+
     gint count = MIN(num, 75);
     for (gint i = 0; i < count; i++) {
-        vis->data[i] = data[i];
-        if (data[i] > vis->peak[i])
+        data[i] = CLAMP(data[i], 0.0f, 1.0f);
+        if (data[i] > vis->data[i])
+            vis->data[i] = data[i];
+        if (data[i] > vis->peak[i]) {
             vis->peak[i] = data[i];
-        else
-            vis->peak[i] = MAX(0.0f, vis->peak[i] - vis->falloff);
+            vis->peak_speed[i] = 0.01f / 16.0f;
+        }
     }
+}
+
+void
+vis_tick(Vis *vis, gfloat *data, gint num)
+{
+    if (!vis)
+        return;
+    if (data)
+        vis_set_data(vis, data, num);
+    vis_decay(vis);
+    widget_queue_draw((Widget *)vis);
 }
 
 void
@@ -679,6 +791,24 @@ vis_set_analyzer_style(Vis *vis, VisAnalyzerStyle style)
 }
 
 void
+vis_set_analyzer_mode(Vis *vis, VisAnalyzerMode mode)
+{
+    if (!vis)
+        return;
+    vis->analyzer_mode = CLAMP(mode, VIS_ANALYZER_NORMAL, VIS_ANALYZER_VLINES);
+    widget_queue_draw((Widget *)vis);
+}
+
+void
+vis_set_scope_mode(Vis *vis, VisScopeMode mode)
+{
+    if (!vis)
+        return;
+    vis->scope_mode = CLAMP(mode, VIS_SCOPE_DOT, VIS_SCOPE_SOLID);
+    widget_queue_draw((Widget *)vis);
+}
+
+void
 vis_set_peaks_enabled(Vis *vis, gboolean enabled)
 {
     if (!vis)
@@ -690,11 +820,67 @@ vis_set_peaks_enabled(Vis *vis, gboolean enabled)
 }
 
 void
-vis_set_falloff(Vis *vis, gfloat falloff)
+vis_set_falloff(Vis *vis, VisFalloffSpeed analyzer_falloff,
+                VisFalloffSpeed peaks_falloff)
 {
     if (!vis)
         return;
-    vis->falloff = CLAMP(falloff, 0.005f, 0.2f);
+    vis->analyzer_falloff = CLAMP(analyzer_falloff,
+                                  VIS_FALLOFF_SLOWEST,
+                                  VIS_FALLOFF_FASTEST);
+    vis->peaks_falloff = CLAMP(peaks_falloff,
+                               VIS_FALLOFF_SLOWEST,
+                               VIS_FALLOFF_FASTEST);
+}
+
+void
+vis_draw_windowshade(Vis *vis, cairo_t *cr, gint x, gint y, VisVUMode vu_mode)
+{
+    if (!vis)
+        return;
+
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, 38, 5);
+    cairo_clip(cr);
+    vis_set_skin_color(cr, 0);
+    cairo_paint(cr);
+
+    if (vis->mode == VIS_MODE_OFF) {
+        cairo_restore(cr);
+        return;
+    }
+
+    if (vis->mode == VIS_MODE_SCOPE) {
+        for (gint sx = 0; sx < 38; sx++) {
+            gint h = CLAMP(vis_level(vis->data[sx * 2]) / 3, 0, 4);
+            vis_set_skin_color(cr, vis_svis_scope_colors[h]);
+            cairo_rectangle(cr, x + sx, y + 4 - h, 1, 1);
+            cairo_fill(cr);
+        }
+        cairo_restore(cr);
+        return;
+    }
+
+    for (gint row = 0; row < 2; row++) {
+        gint level = CLAMP((gint)(vis->data[row] * 37.0f + 0.5f), 0, 37);
+        if (vu_mode == VIS_VU_SMOOTH) {
+            for (gint sx = 0; sx < level && sx < 38; sx++) {
+                vis_set_skin_color(cr, 17 - ((sx * 15) / 37));
+                cairo_rectangle(cr, x + sx, y + row * 3, 1, 1);
+                cairo_rectangle(cr, x + sx, y + row * 3 + 1, 1, 1);
+                cairo_fill(cr);
+            }
+        } else {
+            gint bars = CLAMP((level * 7) / 37, 0, 7);
+            for (gint sx = 0; sx < bars; sx++) {
+                vis_set_skin_color(cr, vis_svis_vu_normal_colors[sx]);
+                cairo_rectangle(cr, x + sx * 5, y + row * 3, 3, 2);
+                cairo_fill(cr);
+            }
+        }
+    }
+
+    cairo_restore(cr);
 }
 
 /* ---- MonoStereo ---- */

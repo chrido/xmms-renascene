@@ -23,10 +23,15 @@ static GtkWidget *playlist_font_entry = NULL;
 static GtkWidget *mainwin_font_entry = NULL;
 static GtkWidget *title_format_entry = NULL;
 static GtkWidget *vis_mode_combo = NULL;
+static GtkWidget *vis_analyzer_mode_combo = NULL;
 static GtkWidget *vis_style_combo = NULL;
+static GtkWidget *vis_scope_mode_combo = NULL;
 static GtkWidget *vis_peaks_check = NULL;
 static GtkWidget *vis_falloff_combo = NULL;
+static GtkWidget *vis_peaks_falloff_combo = NULL;
+static GtkWidget *vis_vu_mode_combo = NULL;
 static GtkWidget *vis_refresh_combo = NULL;
+static gboolean prefs_loading_controls = FALSE;
 
 static GtkWidget *
 label_new_left(const gchar *text)
@@ -88,6 +93,58 @@ combo_set_active_id(GtkWidget *combo, const gchar *id)
         gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
 }
 
+static const gchar *
+falloff_id(gint speed)
+{
+    switch (speed) {
+    case VIS_FALLOFF_SLOWEST:
+        return "slowest";
+    case VIS_FALLOFF_SLOW:
+        return "slow";
+    case VIS_FALLOFF_FAST:
+        return "fast";
+    case VIS_FALLOFF_FASTEST:
+        return "fastest";
+    case VIS_FALLOFF_MEDIUM:
+    default:
+        return "medium";
+    }
+}
+
+static gint
+falloff_from_id(const gchar *id)
+{
+    if (g_strcmp0(id, "slowest") == 0)
+        return VIS_FALLOFF_SLOWEST;
+    if (g_strcmp0(id, "slow") == 0)
+        return VIS_FALLOFF_SLOW;
+    if (g_strcmp0(id, "fast") == 0)
+        return VIS_FALLOFF_FAST;
+    if (g_strcmp0(id, "fastest") == 0)
+        return VIS_FALLOFF_FASTEST;
+    return VIS_FALLOFF_MEDIUM;
+}
+
+static void
+update_visualization_control_sensitivity(void)
+{
+    const gchar *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_mode_combo));
+    gboolean analyzer = g_strcmp0(mode, "scope") != 0 &&
+        g_strcmp0(mode, "off") != 0;
+    gboolean scope = g_strcmp0(mode, "scope") == 0;
+    gboolean enabled = g_strcmp0(mode, "off") != 0;
+    gboolean peaks = gtk_check_button_get_active(GTK_CHECK_BUTTON(vis_peaks_check));
+
+    gtk_widget_set_sensitive(vis_analyzer_mode_combo, analyzer);
+    gtk_widget_set_sensitive(vis_style_combo, analyzer);
+    gtk_widget_set_sensitive(vis_peaks_check, analyzer);
+    gtk_widget_set_sensitive(vis_falloff_combo, analyzer);
+    gtk_widget_set_sensitive(vis_peaks_falloff_combo, analyzer && peaks);
+    gtk_widget_set_sensitive(vis_scope_mode_combo, scope);
+    gtk_widget_set_sensitive(vis_vu_mode_combo, analyzer);
+    gtk_widget_set_sensitive(vis_refresh_combo, enabled);
+}
+
 static void
 populate_output_combo(void)
 {
@@ -110,6 +167,8 @@ populate_output_combo(void)
 static void
 set_controls_from_config(void)
 {
+    prefs_loading_controls = TRUE;
+
     populate_output_combo();
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(volume_spin), player_get_volume());
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(balance_spin), player_get_balance());
@@ -152,17 +211,70 @@ set_controls_from_config(void)
     combo_set_active_id(vis_mode_combo,
                         cfg.vis_mode == VIS_MODE_SCOPE ? "scope" :
                         cfg.vis_mode == VIS_MODE_OFF ? "off" : "analyzer");
+    combo_set_active_id(vis_analyzer_mode_combo,
+                        cfg.vis_analyzer_mode == VIS_ANALYZER_FIRE ? "fire" :
+                        cfg.vis_analyzer_mode == VIS_ANALYZER_VLINES ?
+                        "vlines" : "normal");
     combo_set_active_id(vis_style_combo,
                         cfg.vis_analyzer_style == VIS_ANALYZER_LINES ?
                         "lines" : "bars");
+    combo_set_active_id(vis_scope_mode_combo,
+                        cfg.vis_scope_mode == VIS_SCOPE_DOT ? "dot" :
+                        cfg.vis_scope_mode == VIS_SCOPE_SOLID ?
+                        "solid" : "line");
     gtk_check_button_set_active(GTK_CHECK_BUTTON(vis_peaks_check),
                                 cfg.vis_peaks_enabled);
-    combo_set_active_id(vis_falloff_combo,
-                        cfg.vis_falloff >= 0.08 ? "fast" :
-                        cfg.vis_falloff <= 0.015 ? "slow" : "medium");
+    combo_set_active_id(vis_falloff_combo, falloff_id(cfg.vis_analyzer_falloff));
+    combo_set_active_id(vis_peaks_falloff_combo,
+                        falloff_id(cfg.vis_peaks_falloff));
+    combo_set_active_id(vis_vu_mode_combo,
+                        cfg.vis_vu_mode == VIS_VU_SMOOTH ?
+                        "smooth" : "normal");
     combo_set_active_id(vis_refresh_combo,
+                        cfg.vis_refresh_divisor >= 8 ? "eighth" :
                         cfg.vis_refresh_divisor >= 4 ? "quarter" :
                         cfg.vis_refresh_divisor >= 2 ? "half" : "full");
+    update_visualization_control_sensitivity();
+
+    prefs_loading_controls = FALSE;
+}
+
+static void
+apply_visualization_controls(void)
+{
+    const gchar *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_mode_combo));
+    cfg.vis_mode = g_strcmp0(mode, "scope") == 0 ? VIS_MODE_SCOPE :
+        g_strcmp0(mode, "off") == 0 ? VIS_MODE_OFF : VIS_MODE_ANALYZER;
+    const gchar *analyzer_mode =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_analyzer_mode_combo));
+    cfg.vis_analyzer_mode = g_strcmp0(analyzer_mode, "fire") == 0 ?
+        VIS_ANALYZER_FIRE : g_strcmp0(analyzer_mode, "vlines") == 0 ?
+        VIS_ANALYZER_VLINES : VIS_ANALYZER_NORMAL;
+    const gchar *style = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_style_combo));
+    cfg.vis_analyzer_style = g_strcmp0(style, "lines") == 0 ?
+        VIS_ANALYZER_LINES : VIS_ANALYZER_BARS;
+    const gchar *scope_mode =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_scope_mode_combo));
+    cfg.vis_scope_mode = g_strcmp0(scope_mode, "dot") == 0 ?
+        VIS_SCOPE_DOT : g_strcmp0(scope_mode, "solid") == 0 ?
+        VIS_SCOPE_SOLID : VIS_SCOPE_LINE;
+    cfg.vis_peaks_enabled =
+        gtk_check_button_get_active(GTK_CHECK_BUTTON(vis_peaks_check));
+    const gchar *falloff =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_falloff_combo));
+    cfg.vis_analyzer_falloff = falloff_from_id(falloff);
+    const gchar *peaks_falloff =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_peaks_falloff_combo));
+    cfg.vis_peaks_falloff = falloff_from_id(peaks_falloff);
+    const gchar *vu_mode =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_vu_mode_combo));
+    cfg.vis_vu_mode = g_strcmp0(vu_mode, "smooth") == 0 ?
+        VIS_VU_SMOOTH : VIS_VU_NORMAL;
+    const gchar *refresh =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_refresh_combo));
+    cfg.vis_refresh_divisor = g_strcmp0(refresh, "eighth") == 0 ? 8 :
+        g_strcmp0(refresh, "quarter") == 0 ? 4 :
+        g_strcmp0(refresh, "half") == 0 ? 2 : 1;
 }
 
 static void
@@ -170,7 +282,10 @@ apply_preferences(void)
 {
     const gchar *output_id =
         gtk_combo_box_get_active_id(GTK_COMBO_BOX(output_combo));
-    player_set_output_device(g_strcmp0(output_id, "auto") == 0 ? NULL : output_id);
+    const gchar *new_output_id =
+        g_strcmp0(output_id, "auto") == 0 ? NULL : output_id;
+    if (g_strcmp0(player_get_output_device(), new_output_id) != 0)
+        player_set_output_device(new_output_id);
 
     cfg.volume = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(volume_spin));
     cfg.balance = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(balance_spin));
@@ -227,22 +342,7 @@ apply_preferences(void)
         cfg.title_format = g_strdup("%p - %t");
     }
 
-    const gchar *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_mode_combo));
-    cfg.vis_mode = g_strcmp0(mode, "scope") == 0 ? VIS_MODE_SCOPE :
-        g_strcmp0(mode, "off") == 0 ? VIS_MODE_OFF : VIS_MODE_ANALYZER;
-    const gchar *style = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_style_combo));
-    cfg.vis_analyzer_style = g_strcmp0(style, "lines") == 0 ?
-        VIS_ANALYZER_LINES : VIS_ANALYZER_BARS;
-    cfg.vis_peaks_enabled =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(vis_peaks_check));
-    const gchar *falloff =
-        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_falloff_combo));
-    cfg.vis_falloff = g_strcmp0(falloff, "fast") == 0 ? 0.08 :
-        g_strcmp0(falloff, "slow") == 0 ? 0.015 : 0.04;
-    const gchar *refresh =
-        gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_refresh_combo));
-    cfg.vis_refresh_divisor = g_strcmp0(refresh, "quarter") == 0 ? 4 :
-        g_strcmp0(refresh, "half") == 0 ? 2 : 1;
+    apply_visualization_controls();
 
     playlistwin_set_detached(cfg.playlist_detached);
     equalizerwin_set_detached(cfg.equalizer_detached);
@@ -257,6 +357,19 @@ apply_clicked(GtkButton *button, gpointer data)
 {
     (void)button; (void)data;
     apply_preferences();
+}
+
+static void
+visualization_control_changed(GtkWidget *widget, gpointer data)
+{
+    (void)widget; (void)data;
+    if (prefs_loading_controls)
+        return;
+
+    update_visualization_control_sensitivity();
+    apply_visualization_controls();
+    mainwin_apply_visualization_preferences();
+    save_config();
 }
 
 static void
@@ -331,9 +444,11 @@ static GtkWidget *
 create_visualization_page(void)
 {
     GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    GtkWidget *box = frame_box_new("Visualization Plugins", page);
+    GtkWidget *box = frame_box_new("Visualization", page);
     GtkWidget *grid = grid_new();
     gtk_box_append(GTK_BOX(box), grid);
+    gtk_box_append(GTK_BOX(box),
+                   label_new_left("Controls that do not affect the selected visualization mode are disabled."));
 
     vis_mode_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_mode_combo), "analyzer", "Analyzer");
@@ -341,25 +456,66 @@ create_visualization_page(void)
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_mode_combo), "off", "Off");
     grid_attach_label(grid, "Visualization mode:", vis_mode_combo, 0);
 
+    vis_analyzer_mode_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_analyzer_mode_combo), "normal", "Analyzer normal");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_analyzer_mode_combo), "fire", "Analyzer fire");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_analyzer_mode_combo), "vlines", "Analyzer vertical lines");
+    grid_attach_label(grid, "Analyzer mode:", vis_analyzer_mode_combo, 1);
+
     vis_style_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_style_combo), "bars", "Analyzer bars");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_style_combo), "lines", "Analyzer lines");
-    grid_attach_label(grid, "Analyzer style:", vis_style_combo, 1);
+    grid_attach_label(grid, "Analyzer style:", vis_style_combo, 2);
+
+    vis_scope_mode_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_scope_mode_combo), "dot", "Dot scope");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_scope_mode_combo), "line", "Line scope");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_scope_mode_combo), "solid", "Solid scope");
+    grid_attach_label(grid, "Scope mode:", vis_scope_mode_combo, 3);
 
     vis_peaks_check = check_new("Show analyzer peaks");
-    gtk_grid_attach(GTK_GRID(grid), vis_peaks_check, 1, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), vis_peaks_check, 1, 4, 1, 1);
 
     vis_falloff_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_falloff_combo), "slowest", "Slowest");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_falloff_combo), "slow", "Slow");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_falloff_combo), "medium", "Medium");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_falloff_combo), "fast", "Fast");
-    grid_attach_label(grid, "Analyzer falloff:", vis_falloff_combo, 3);
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_falloff_combo), "fastest", "Fastest");
+    grid_attach_label(grid, "Analyzer falloff:", vis_falloff_combo, 5);
+
+    vis_peaks_falloff_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_peaks_falloff_combo), "slowest", "Slowest");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_peaks_falloff_combo), "slow", "Slow");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_peaks_falloff_combo), "medium", "Medium");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_peaks_falloff_combo), "fast", "Fast");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_peaks_falloff_combo), "fastest", "Fastest");
+    grid_attach_label(grid, "Peaks falloff:", vis_peaks_falloff_combo, 6);
+
+    vis_vu_mode_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_vu_mode_combo), "normal", "Normal");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_vu_mode_combo), "smooth", "Smooth");
+    grid_attach_label(grid, "WindowShade VU mode:", vis_vu_mode_combo, 7);
 
     vis_refresh_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_refresh_combo), "full", "Full");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_refresh_combo), "half", "Half");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_refresh_combo), "quarter", "Quarter");
-    grid_attach_label(grid, "Refresh rate:", vis_refresh_combo, 4);
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_refresh_combo), "eighth", "Eighth");
+    grid_attach_label(grid, "Refresh rate:", vis_refresh_combo, 8);
+
+    GtkWidget *vis_controls[] = {
+        vis_mode_combo, vis_analyzer_mode_combo, vis_style_combo,
+        vis_scope_mode_combo, vis_falloff_combo, vis_peaks_falloff_combo,
+        vis_vu_mode_combo, vis_refresh_combo
+    };
+    for (guint i = 0; i < G_N_ELEMENTS(vis_controls); i++) {
+        g_signal_connect(vis_controls[i], "changed",
+                         G_CALLBACK(visualization_control_changed), NULL);
+    }
+    g_signal_connect(vis_peaks_check, "toggled",
+                     G_CALLBACK(visualization_control_changed), NULL);
+
     return page;
 }
 
