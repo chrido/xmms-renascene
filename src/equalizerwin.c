@@ -32,12 +32,15 @@ static GtkWidget *eqwin_drawing_area = NULL;
 static GtkWidget *eqwin_floating_window = NULL;
 static GtkWidget *eq_presets_popover = NULL;
 static GList *eqwin_wlist = NULL;
+static HSlider *eqwin_volume = NULL;
+static HSlider *eqwin_balance = NULL;
 
 static gboolean eq_active = TRUE;
 static gboolean eq_auto = FALSE;
 static gboolean eq_shaded = FALSE;
 static EqControl eq_pressed_control = EQ_CONTROL_NONE;
 static gboolean eq_pressed_inside = FALSE;
+static Widget *eq_pressed_widget = NULL;
 static gfloat eq_preamp = 0.0;
 static gfloat eq_bands[10] = { 0 };
 
@@ -50,6 +53,7 @@ static void eqwin_queue_draw(void);
 static void eqwin_attach_widget(void);
 static void eqwin_detach_widget(void);
 static void eqwin_show_presets_menu(void);
+static void eqwin_update_shaded_sliders(void);
 
 static gboolean
 eqwin_point_in_rect(gint x, gint y, gint rx, gint ry, gint rw, gint rh)
@@ -139,6 +143,16 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
     cairo_scale(cr, (double)width / EQWIN_WIDTH,
                     (double)height / equalizerwin_height());
 
+    if (eq_shaded) {
+        skin_draw_pixmap(cr, SKIN_EQ_EX, 0, 0, 0, 0, EQWIN_WIDTH, 14);
+        skin_draw_pixmap(cr, SKIN_EQ_EX, -1, 3, EQWIN_DETACH_BTN_X,
+                         EQWIN_DETACH_BTN_Y, 9, 9);
+        skin_draw_pixmap(cr, SKIN_EQ_EX, 11, 38, 264, 3, 9, 9);
+        eqwin_update_shaded_sliders();
+        widget_list_draw(eqwin_wlist, cr);
+        return;
+    }
+
     /* Draw EQ background from skin */
     skin_draw_pixmap(cr, SKIN_EQMAIN,
                      0, 0, 0, 0, EQWIN_WIDTH, EQWIN_HEIGHT);
@@ -148,9 +162,6 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
     if (skin->pixmaps[SKIN_EQMAIN].current_height >= 148)
         skin_draw_pixmap(cr, SKIN_EQMAIN,
                          0, 134, 0, 0, EQWIN_WIDTH, 14);
-
-    if (eq_shaded)
-        return;
 
     eqwin_draw_toggle_button(cr, eq_active,
                              eq_pressed_control == EQ_CONTROL_ON &&
@@ -203,6 +214,77 @@ apply_eq(void)
     }
 }
 
+static gint
+eqwin_volume_frame_cb(gint pos)
+{
+    if (eqwin_volume) {
+        if (pos < 32)
+            eqwin_volume->knob_nx = eqwin_volume->knob_px = 1;
+        else if (pos < 63)
+            eqwin_volume->knob_nx = eqwin_volume->knob_px = 4;
+        else
+            eqwin_volume->knob_nx = eqwin_volume->knob_px = 7;
+    }
+    return 1;
+}
+
+static void
+eqwin_volume_motion_cb(gint pos)
+{
+    gint volume = CLAMP((pos * 100 + 47) / 94, 0, 100);
+    player_set_volume(volume);
+    cfg.volume = volume;
+}
+
+static void
+eqwin_volume_release_cb(gint pos)
+{
+    eqwin_volume_motion_cb(pos);
+}
+
+static gint
+eqwin_balance_frame_cb(gint pos)
+{
+    if (eqwin_balance) {
+        if (pos < 13)
+            eqwin_balance->knob_nx = eqwin_balance->knob_px = 11;
+        else if (pos < 26)
+            eqwin_balance->knob_nx = eqwin_balance->knob_px = 14;
+        else
+            eqwin_balance->knob_nx = eqwin_balance->knob_px = 17;
+    }
+    return 1;
+}
+
+static void
+eqwin_balance_motion_cb(gint pos)
+{
+    pos = MIN(pos, 38);
+    gint balance = CLAMP(((pos - 19) * 100 + (pos >= 19 ? 9 : -9)) / 19,
+                         -100, 100);
+    player_set_balance(balance);
+    cfg.balance = balance;
+}
+
+static void
+eqwin_balance_release_cb(gint pos)
+{
+    eqwin_balance_motion_cb(pos);
+}
+
+static void
+eqwin_update_shaded_sliders(void)
+{
+    if (eqwin_volume && !eqwin_volume->pressed)
+        hslider_set_position(eqwin_volume,
+                             CLAMP((player_get_volume() * 94 + 50) / 100,
+                                   0, 94));
+    if (eqwin_balance && !eqwin_balance->pressed)
+        hslider_set_position(eqwin_balance,
+                             CLAMP(19 + (player_get_balance() * 19) / 100,
+                                   0, 39));
+}
+
 /* ---- Event handling ---- */
 
 static void
@@ -226,10 +308,44 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
     if (eq_shaded && sy >= 14)
         return;
 
+    /* Titlebar close button (x=264, y=3, 9x9) */
+    if (sx >= 264 && sx < 273 && sy >= 3 && sy < 12) {
+        equalizerwin_show(FALSE);
+        return;
+    }
+
     if (button == 1 &&
         eqwin_point_in_rect(sx, sy, EQWIN_DETACH_BTN_X, EQWIN_DETACH_BTN_Y,
                             EQWIN_DETACH_BTN_W, EQWIN_DETACH_BTN_H)) {
-        equalizerwin_set_detached(!cfg.equalizer_detached);
+        equalizerwin_set_shaded(!eq_shaded);
+        return;
+    }
+
+    if (eq_shaded) {
+        Widget *widget = widget_list_find(eqwin_wlist, sx, sy);
+        if (widget && widget->button_press) {
+            eq_pressed_widget = widget;
+            widget->button_press(widget, sx, sy, button);
+            eqwin_queue_draw();
+        } else if (button == 1 && sy < 14) {
+            GtkWidget *move_window = cfg.equalizer_detached ?
+                eqwin_floating_window : mainwin;
+            GdkSurface *surface = move_window ?
+                gtk_native_get_surface(GTK_NATIVE(move_window)) : NULL;
+            if (surface && GDK_IS_TOPLEVEL(surface)) {
+                GdkDevice *device = gtk_gesture_get_device(GTK_GESTURE(gesture));
+                guint32 timestamp = gtk_event_controller_get_current_event_time(
+                    GTK_EVENT_CONTROLLER(gesture));
+                graphene_point_t point = GRAPHENE_POINT_INIT(x, y);
+                graphene_point_t translated = point;
+                if (!cfg.equalizer_detached && mainwin &&
+                    !gtk_widget_compute_point(eqwin_drawing_area, mainwin,
+                                              &point, &translated))
+                    translated = point;
+                gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), device,
+                                        button, translated.x, translated.y, timestamp);
+            }
+        }
         return;
     }
 
@@ -260,12 +376,6 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
             eqwin_queue_draw();
             return;
         }
-    }
-
-    /* Titlebar close button (x=264, y=3, 9x9) */
-    if (sx >= 264 && sx < 273 && sy >= 3 && sy < 12) {
-        equalizerwin_show(FALSE);
-        return;
     }
 
     /* Titlebar drag */
@@ -300,7 +410,16 @@ eqwin_click_released(GtkGestureClick *gesture, int n_press,
     if (scale < 1) scale = 1;
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
-    (void)gesture;
+    gint button = gtk_gesture_single_get_current_button(
+        GTK_GESTURE_SINGLE(gesture));
+
+    if (eq_pressed_widget) {
+        if (eq_pressed_widget->button_release)
+            eq_pressed_widget->button_release(eq_pressed_widget, sx, sy, button);
+        eq_pressed_widget = NULL;
+        eqwin_queue_draw();
+        return;
+    }
 
     if (eq_pressed_control != EQ_CONTROL_NONE) {
         EqControl released_control = eqwin_control_at(sx, sy);
@@ -337,6 +456,12 @@ eqwin_motion(GtkEventControllerMotion *controller,
     if (scale < 1) scale = 1;
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
+
+    if (eq_pressed_widget && eq_pressed_widget->motion) {
+        eq_pressed_widget->motion(eq_pressed_widget, sx, sy);
+        eqwin_queue_draw();
+        return;
+    }
 
     if (eq_pressed_control != EQ_CONTROL_NONE) {
         gboolean was_inside = eq_pressed_inside;
@@ -582,6 +707,28 @@ equalizerwin_create(GtkApplication *app)
     gtk_widget_set_visible(eqwin_drawing_area, FALSE);
     equalizerwin = eqwin_drawing_area;
 
+    eqwin_volume = hslider_new(&eqwin_wlist, 61, 4, 97, 8,
+                               1, 30, 1, 30,
+                               3, 7,
+                               4, 61,
+                               0, 94,
+                               eqwin_volume_frame_cb,
+                               eqwin_volume_motion_cb,
+                               eqwin_volume_release_cb,
+                               SKIN_EQ_EX);
+    eqwin_balance = hslider_new(&eqwin_wlist, 164, 4, 42, 8,
+                                11, 30, 11, 30,
+                                3, 7,
+                                4, 164,
+                                0, 39,
+                                eqwin_balance_frame_cb,
+                                eqwin_balance_motion_cb,
+                                eqwin_balance_release_cb,
+                                SKIN_EQ_EX);
+    ((Widget *)eqwin_volume)->visible = FALSE;
+    ((Widget *)eqwin_balance)->visible = FALSE;
+    eqwin_update_shaded_sliders();
+
     /* Click events */
     GtkGesture *click = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
@@ -674,6 +821,12 @@ void
 equalizerwin_set_shaded(gboolean shaded)
 {
     eq_shaded = shaded;
+    if (eqwin_volume)
+        ((Widget *)eqwin_volume)->visible = shaded;
+    if (eqwin_balance)
+        ((Widget *)eqwin_balance)->visible = shaded;
+    if (shaded)
+        eqwin_update_shaded_sliders();
     if (eqwin_drawing_area) {
         gint scale = cfg.scale_factor;
         if (scale < 1) scale = 2;
@@ -691,6 +844,14 @@ gboolean
 equalizerwin_is_shaded(void)
 {
     return eq_shaded;
+}
+
+void
+equalizerwin_sync_volume_balance(void)
+{
+    eqwin_update_shaded_sliders();
+    if (eq_shaded)
+        eqwin_queue_draw();
 }
 
 gint

@@ -739,6 +739,7 @@ draw_playlist_frame(cairo_t *cr)
         skin_draw_pixmap(cr, src, 127, y, (i * 25) + 25, 0, 25, 20);
         skin_draw_pixmap(cr, src, 127, y, (i * 25) + (w / 2) + 50, 0, 25, 20);
     }
+
     if (c & 1) {
         skin_draw_pixmap(cr, src, 127, y, ((c / 2) * 25) + 25, 0, 12, 20);
         skin_draw_pixmap(cr, src, 127, y, (w / 2) + ((c / 2) * 25) + 50, 0, 13, 20);
@@ -789,6 +790,19 @@ draw_playlist_frame(cairo_t *cr)
                                  177, 149, 99, PLWIN_BUTTON_Y);
     draw_playlist_pressed_button(cr, PLWIN_BUTTON_LIST,
                                  227, 149, w - 46, PLWIN_BUTTON_Y);
+}
+
+static void
+draw_playlist_shaded_frame(cairo_t *cr)
+{
+    gint w = PLWIN_WIDTH;
+
+    skin_draw_pixmap(cr, SKIN_PLEDIT, 72, 42, 0, 0, 25, 14);
+    gint c = (w - 75) / 25;
+    for (gint i = 0; i < c; i++)
+        skin_draw_pixmap(cr, SKIN_PLEDIT, 72, 57,
+                         (i * 25) + 25, 0, 25, 14);
+    skin_draw_pixmap(cr, SKIN_PLEDIT, 99, 42, w - 50, 0, 50, 14);
 }
 
 static gboolean
@@ -914,12 +928,14 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
     cairo_scale(cr, (double)width / PLWIN_WIDTH,
                     (double)height / playlistwin_height());
 
-    /* Draw assembled playlist frame from skin pieces */
-    draw_playlist_frame(cr);
     if (plwin_shaded) {
+        draw_playlist_shaded_frame(cr);
         widget_list_draw(plwin_wlist, cr);
         return;
     }
+
+    /* Draw assembled playlist frame from skin pieces */
+    draw_playlist_frame(cr);
 
     /* Draw entries */
     draw_playlist_entries(cr);
@@ -1011,7 +1027,7 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
     if (button == 1 &&
         sx >= PLWIN_DETACH_BTN_X && sx < PLWIN_DETACH_BTN_X + PLWIN_DETACH_BTN_W &&
         sy >= PLWIN_DETACH_BTN_Y && sy < PLWIN_DETACH_BTN_Y + PLWIN_DETACH_BTN_H) {
-        playlistwin_set_detached(!cfg.playlist_detached);
+        playlistwin_set_shaded(!plwin_shaded);
         return;
     }
 

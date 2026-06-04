@@ -11,6 +11,7 @@ void equalizerwin_set_detached(gboolean detached);
 gboolean equalizerwin_is_detached(void);
 void equalizerwin_set_shaded(gboolean shaded);
 gboolean equalizerwin_is_shaded(void);
+void equalizerwin_sync_volume_balance(void);
 gint equalizerwin_height(void);
 void equalizerwin_set_state(gboolean active, gboolean automatic,
                             gint preamp_pos, const gint band_pos[10]);

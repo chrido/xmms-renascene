@@ -16,13 +16,16 @@ static PButton *mainwin_fwd, *mainwin_eject;
 static TButton *mainwin_shuffle, *mainwin_repeat, *mainwin_eq, *mainwin_pl;
 static TextBox *mainwin_info;
 static TextBox *mainwin_rate_text, *mainwin_freq_text;
-/* Shaded mode time text - TODO */
+static TextBox *mainwin_stime_min, *mainwin_stime_sec;
 static HSlider *mainwin_volume, *mainwin_balance, *mainwin_position;
+static HSlider *mainwin_sposition;
 static MonoStereo *mainwin_monostereo;
 static PlayStatus *mainwin_playstatus;
 static Number *mainwin_minus_num, *mainwin_10min_num, *mainwin_min_num;
 static Number *mainwin_10sec_num, *mainwin_sec_num;
 static Vis *mainwin_vis;
+static SButton *mainwin_srew, *mainwin_splay, *mainwin_spause;
+static SButton *mainwin_sstop, *mainwin_sfwd, *mainwin_seject;
 
 static Widget *pressed_widget = NULL;
 
@@ -58,6 +61,26 @@ static const GOptionEntry app_option_entries[] = {
       "Show the playlist window on startup", NULL },
     { "equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the equalizer window on startup", NULL },
+    { "dock-playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Dock the playlist to the main window on startup", NULL },
+    { "undock-playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Detach the playlist into its own window on startup", NULL },
+    { "dock-equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Dock the equalizer to the main window on startup", NULL },
+    { "undock-equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Detach the equalizer into its own window on startup", NULL },
+    { "shade-main", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start the main window in WindowShade mode", NULL },
+    { "unshade-main", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start the main window in normal mode", NULL },
+    { "shade-playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start the playlist in WindowShade mode", NULL },
+    { "unshade-playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start the playlist in normal mode", NULL },
+    { "shade-equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start the equalizer in WindowShade mode", NULL },
+    { "unshade-equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start the equalizer in normal mode", NULL },
     { "reset", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Start with default settings and an empty playlist", NULL },
     { "playlist-menu-add", 0, 0, G_OPTION_ARG_NONE, NULL,
@@ -795,6 +818,8 @@ mainwin_volume_motioncb(gint pos)
 {
     gint vol = (gint)((pos * 100.0) / 51.0);
     player_set_volume(vol);
+    cfg.volume = CLAMP(vol, 0, 100);
+    equalizerwin_sync_volume_balance();
 }
 
 static void
@@ -814,6 +839,8 @@ mainwin_balance_motioncb(gint pos)
 {
     gint bal = (gint)(((pos - 12) * 100.0) / 12.0);
     player_set_balance(bal);
+    cfg.balance = CLAMP(bal, -100, 100);
+    equalizerwin_sync_volume_balance();
 }
 
 static void
@@ -837,6 +864,63 @@ mainwin_position_releasecb(gint pos)
         gint64 target = (gint64)((pos * dur) / 219.0);
         player_seek(target);
     }
+}
+
+static gint
+mainwin_sposition_framecb(gint pos)
+{
+    if (mainwin_sposition) {
+        if (pos < 6)
+            mainwin_sposition->knob_nx = mainwin_sposition->knob_px = 17;
+        else if (pos < 9)
+            mainwin_sposition->knob_nx = mainwin_sposition->knob_px = 20;
+        else
+            mainwin_sposition->knob_nx = mainwin_sposition->knob_px = 23;
+    }
+    return 1;
+}
+
+static void
+mainwin_update_shaded_time(gint64 time_ms, gint64 dur)
+{
+    if (!mainwin_stime_min || !mainwin_stime_sec)
+        return;
+
+    gint64 seconds = MAX((gint64)0, time_ms / 1000);
+    if (seconds > 99 * 60)
+        seconds /= 60;
+
+    gchar *mins = g_strdup_printf("%c%02" G_GINT64_FORMAT,
+                                  cfg.timer_mode == TIMER_REMAINING && dur > 0 ? '-' : ' ',
+                                  seconds / 60);
+    gchar *secs = g_strdup_printf("%02" G_GINT64_FORMAT, seconds % 60);
+
+    textbox_set_text(mainwin_stime_min, mins);
+    textbox_set_text(mainwin_stime_sec, secs);
+
+    g_free(secs);
+    g_free(mins);
+}
+
+static void
+mainwin_sposition_motioncb(gint pos)
+{
+    gint64 dur = player_get_duration();
+    if (dur <= 0)
+        return;
+
+    gint64 time_ms = (dur * (pos - 1)) / 12;
+    if (cfg.timer_mode == TIMER_REMAINING)
+        time_ms = dur - time_ms;
+    mainwin_update_shaded_time(time_ms, dur);
+}
+
+static void
+mainwin_sposition_releasecb(gint pos)
+{
+    gint64 dur = player_get_duration();
+    if (dur > 0)
+        player_seek((dur * (pos - 1)) / 12);
 }
 
 /* ---- Drawing ---- */
@@ -903,6 +987,26 @@ mainwin_set_shaded(gboolean shaded)
         mainwin_shade->ny = shaded ? 27 : 18;
         mainwin_shade->py = shaded ? 27 : 18;
     }
+    if (mainwin_srew)
+        ((Widget *)mainwin_srew)->visible = shaded;
+    if (mainwin_splay)
+        ((Widget *)mainwin_splay)->visible = shaded;
+    if (mainwin_spause)
+        ((Widget *)mainwin_spause)->visible = shaded;
+    if (mainwin_sstop)
+        ((Widget *)mainwin_sstop)->visible = shaded;
+    if (mainwin_sfwd)
+        ((Widget *)mainwin_sfwd)->visible = shaded;
+    if (mainwin_seject)
+        ((Widget *)mainwin_seject)->visible = shaded;
+    if (mainwin_stime_min)
+        ((Widget *)mainwin_stime_min)->visible = shaded;
+    if (mainwin_stime_sec)
+        ((Widget *)mainwin_stime_sec)->visible = shaded;
+    if (mainwin_sposition)
+        ((Widget *)mainwin_sposition)->visible =
+            shaded && player_get_state() != PLAYER_STOPPED &&
+            player_get_duration() > 0;
 
     if (mainwin_drawing_area) {
         gint scale = cfg.scale_factor;
@@ -1001,6 +1105,7 @@ mainwin_apply_preferences(void)
     playlist_set_no_advance(cfg.no_playlist_advance);
     player_set_volume(cfg.volume);
     player_set_balance(cfg.balance);
+    equalizerwin_sync_volume_balance();
     mainwin_set_sticky(cfg.sticky);
     mainwin_set_easy_move(cfg.easy_move);
     mainwin_set_doublesize(cfg.doublesize);
@@ -1020,17 +1125,10 @@ draw_main_window(cairo_t *cr)
 {
     if (mainwin_shaded) {
         draw_mainwin_titlebar(cr, TRUE);
-        if (mainwin_menubtn)
-            ((Widget *)mainwin_menubtn)->draw((Widget *)mainwin_menubtn, cr);
-        if (mainwin_minimize)
-            ((Widget *)mainwin_minimize)->draw((Widget *)mainwin_minimize, cr);
-        if (mainwin_shade)
-            ((Widget *)mainwin_shade)->draw((Widget *)mainwin_shade, cr);
         vis_draw_windowshade(mainwin_vis, cr, 79, 5,
                              cfg.vis_vu_mode == VIS_VU_SMOOTH ?
                              VIS_VU_SMOOTH : VIS_VU_NORMAL);
-        if (mainwin_close)
-            ((Widget *)mainwin_close)->draw((Widget *)mainwin_close, cr);
+        widget_list_draw(mainwin_wlist, cr);
         return;
     }
 
@@ -1302,6 +1400,8 @@ mainwin_update_time_display(void)
     else
         time_ms = player_get_position();
 
+    mainwin_update_shaded_time(time_ms, dur);
+
     gint secs = (gint)(time_ms / 1000);
     gint mins = secs / 60;
     secs %= 60;
@@ -1329,7 +1429,14 @@ mainwin_update_position_slider(void)
     if (dur > 0) {
         gint slider_pos = (gint)((pos * 219.0) / dur);
         hslider_set_position(mainwin_position, slider_pos);
+        if (mainwin_sposition && !mainwin_sposition->pressed)
+            hslider_set_position(mainwin_sposition,
+                                 CLAMP(1 + (gint)((pos * 12.0) / dur), 1, 13));
     }
+
+    if (mainwin_sposition)
+        ((Widget *)mainwin_sposition)->visible =
+            mainwin_shaded && player_get_state() != PLAYER_STOPPED && dur > 0;
 }
 
 static void
@@ -1439,6 +1546,12 @@ mainwin_update_cb(gpointer data)
         number_set_value(mainwin_min_num, 10);
         number_set_value(mainwin_10sec_num, 10);
         number_set_value(mainwin_sec_num, 10);
+        if (mainwin_sposition)
+            ((Widget *)mainwin_sposition)->visible = FALSE;
+        if (mainwin_stime_min)
+            textbox_set_text(mainwin_stime_min, "   ");
+        if (mainwin_stime_sec)
+            textbox_set_text(mainwin_stime_sec, "  ");
     }
 
     /* Emit MPRIS playback status change */
@@ -1490,6 +1603,25 @@ create_mainwin_widgets(void)
     mainwin_eject = pbutton_new(&mainwin_wlist, 136, 89, 22, 16,
                                  114, 0, 114, 16,
                                  mainwin_eject_pushed, SKIN_CBUTTONS);
+
+    mainwin_srew = sbutton_new(&mainwin_wlist, 169, 4, 8, 7,
+                               playlist_prev);
+    mainwin_splay = sbutton_new(&mainwin_wlist, 177, 4, 10, 7,
+                                mainwin_play_pushed);
+    mainwin_spause = sbutton_new(&mainwin_wlist, 187, 4, 10, 7,
+                                 player_toggle_pause);
+    mainwin_sstop = sbutton_new(&mainwin_wlist, 197, 4, 9, 7,
+                                mainwin_stop_pushed);
+    mainwin_sfwd = sbutton_new(&mainwin_wlist, 206, 4, 8, 7,
+                               playlist_next);
+    mainwin_seject = sbutton_new(&mainwin_wlist, 216, 4, 9, 7,
+                                 mainwin_eject_pushed);
+    ((Widget *)mainwin_srew)->visible = FALSE;
+    ((Widget *)mainwin_splay)->visible = FALSE;
+    ((Widget *)mainwin_spause)->visible = FALSE;
+    ((Widget *)mainwin_sstop)->visible = FALSE;
+    ((Widget *)mainwin_sfwd)->visible = FALSE;
+    ((Widget *)mainwin_seject)->visible = FALSE;
 
     /* Toggle buttons - from shufrep.bmp */
     mainwin_shuffle = tbutton_new(&mainwin_wlist, 164, 89, 46, 15,
@@ -1551,12 +1683,30 @@ create_mainwin_widgets(void)
                                     mainwin_position_releasecb,
                                     SKIN_POSBAR);
 
+    mainwin_sposition = hslider_new(&mainwin_wlist, 226, 4, 17, 7,
+                                    17, 36, 17, 36,
+                                    3, 7,
+                                    1, 36,
+                                    1, 13,
+                                    mainwin_sposition_framecb,
+                                    mainwin_sposition_motioncb,
+                                    mainwin_sposition_releasecb,
+                                    SKIN_TITLEBAR);
+    ((Widget *)mainwin_sposition)->visible = FALSE;
+
     /* Time display numbers */
     mainwin_minus_num = number_new(&mainwin_wlist, 36, 26, SKIN_NUMBERS);
     mainwin_10min_num = number_new(&mainwin_wlist, 48, 26, SKIN_NUMBERS);
     mainwin_min_num   = number_new(&mainwin_wlist, 60, 26, SKIN_NUMBERS);
     mainwin_10sec_num = number_new(&mainwin_wlist, 78, 26, SKIN_NUMBERS);
     mainwin_sec_num   = number_new(&mainwin_wlist, 90, 26, SKIN_NUMBERS);
+
+    mainwin_stime_min = textbox_new(&mainwin_wlist, 130, 4, 15,
+                                    FALSE, SKIN_TEXT);
+    mainwin_stime_sec = textbox_new(&mainwin_wlist, 147, 4, 10,
+                                    FALSE, SKIN_TEXT);
+    ((Widget *)mainwin_stime_min)->visible = FALSE;
+    ((Widget *)mainwin_stime_sec)->visible = FALSE;
 
     /* Mono/Stereo indicator */
     mainwin_monostereo = monostereo_new(&mainwin_wlist, 212, 41,
@@ -2191,6 +2341,32 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
     startup_reset = g_variant_dict_contains(options, "reset");
     g_application_activate(app);
 
+    if (g_variant_dict_contains(options, "dock-playlist"))
+        playlistwin_set_detached(FALSE);
+    if (g_variant_dict_contains(options, "undock-playlist"))
+        playlistwin_set_detached(TRUE);
+    if (g_variant_dict_contains(options, "dock-equalizer"))
+        equalizerwin_set_detached(FALSE);
+    if (g_variant_dict_contains(options, "undock-equalizer"))
+        equalizerwin_set_detached(TRUE);
+
+    if (g_variant_dict_contains(options, "shade-main"))
+        mainwin_set_shaded(TRUE);
+    if (g_variant_dict_contains(options, "unshade-main"))
+        mainwin_set_shaded(FALSE);
+    if (g_variant_dict_contains(options, "shade-playlist")) {
+        show_playlist = TRUE;
+        playlistwin_set_shaded(TRUE);
+    }
+    if (g_variant_dict_contains(options, "unshade-playlist"))
+        playlistwin_set_shaded(FALSE);
+    if (g_variant_dict_contains(options, "shade-equalizer")) {
+        show_equalizer = TRUE;
+        equalizerwin_set_shaded(TRUE);
+    }
+    if (g_variant_dict_contains(options, "unshade-equalizer"))
+        equalizerwin_set_shaded(FALSE);
+
     if (show_equalizer)
         equalizerwin_show(TRUE);
     if (show_playlist || playlist_menu)
@@ -2203,6 +2379,16 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
         const gchar *arg = argv[i];
         if (g_strcmp0(arg, "--playlist") == 0 ||
             g_strcmp0(arg, "--equalizer") == 0 ||
+            g_strcmp0(arg, "--dock-playlist") == 0 ||
+            g_strcmp0(arg, "--undock-playlist") == 0 ||
+            g_strcmp0(arg, "--dock-equalizer") == 0 ||
+            g_strcmp0(arg, "--undock-equalizer") == 0 ||
+            g_strcmp0(arg, "--shade-main") == 0 ||
+            g_strcmp0(arg, "--unshade-main") == 0 ||
+            g_strcmp0(arg, "--shade-playlist") == 0 ||
+            g_strcmp0(arg, "--unshade-playlist") == 0 ||
+            g_strcmp0(arg, "--shade-equalizer") == 0 ||
+            g_strcmp0(arg, "--unshade-equalizer") == 0 ||
             g_strcmp0(arg, "--reset") == 0 ||
             g_strcmp0(arg, "--playlist-menu-add") == 0 ||
             g_strcmp0(arg, "--playlist-menu-remove") == 0 ||
