@@ -28,6 +28,9 @@ static GtkWidget *plwin_floating_window = NULL;
 static GtkWidget *plwin_url_window = NULL;
 static GtkWidget *plwin_url_entry = NULL;
 static GList *plwin_wlist = NULL;
+static TextBox *plwin_time_min = NULL;
+static TextBox *plwin_time_sec = NULL;
+static TextBox *plwin_info = NULL;
 
 typedef enum {
     PLWIN_BUTTON_NONE,
@@ -53,6 +56,7 @@ static gint plwin_scrollbar_drag_offset = 0;
 static gdouble plwin_scroll_delta = 0.0;
 static PlwinButton plwin_pressed_button = PLWIN_BUTTON_NONE;
 static gboolean plwin_pressed_inside = FALSE;
+static Widget *plwin_pressed_widget = NULL;
 
 /* Forward declarations */
 static void plwin_queue_draw(void);
@@ -63,6 +67,8 @@ static gboolean plwin_scrollbar_geometry(gint *thumb_y, gint *thumb_h);
 static void plwin_scrollbar_set_from_y(gint y);
 static void plwin_activate_button(PlwinButton button);
 static void plwin_close_menu(void);
+static void plwin_update_info(void);
+static void plwin_open_files(gboolean replace);
 
 typedef enum {
     PLWIN_ACTION_ADD_URL,
@@ -118,10 +124,127 @@ plwin_max_scroll_offset(void)
     return MAX(0, playlist_get_length() - plwin_visible_entries());
 }
 
+static gchar *
+plwin_format_duration(gint64 milliseconds, gboolean more)
+{
+    if (milliseconds <= 0 && more)
+        return g_strdup("?");
+
+    gint64 seconds = MAX((gint64)0, milliseconds / 1000);
+    if (seconds > 3600)
+        return g_strdup_printf("%" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT "%s",
+                               seconds / 3600, (seconds / 60) % 60,
+                               seconds % 60, more ? "+" : "");
+    return g_strdup_printf("%" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT "%s",
+                           seconds / 60, seconds % 60, more ? "+" : "");
+}
+
+static void
+plwin_update_info(void)
+{
+    if (!plwin_info)
+        return;
+
+    gint64 total = 0;
+    gint64 selected = 0;
+    gboolean total_more = FALSE;
+    gboolean selected_more = FALSE;
+
+    for (gint i = 0; i < playlist_get_length(); i++) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (!entry)
+            continue;
+
+        if (entry->length >= 0)
+            total += entry->length;
+        else
+            total_more = TRUE;
+
+        if (entry->selected || i == plwin_selected) {
+            if (entry->length >= 0)
+                selected += entry->length;
+            else
+                selected_more = TRUE;
+        }
+    }
+
+    gchar *selected_text = plwin_format_duration(selected, selected_more);
+    gchar *total_text = plwin_format_duration(total, total_more);
+    gchar *text = g_strconcat(selected_text, "/", total_text, NULL);
+
+    textbox_set_text(plwin_info, text);
+
+    g_free(text);
+    g_free(total_text);
+    g_free(selected_text);
+}
+
+static void
+plwin_update_time(void)
+{
+    if (!plwin_time_min || !plwin_time_sec)
+        return;
+
+    PlayerState state = player_get_state();
+    if (state == PLAYER_STOPPED) {
+        textbox_set_text(plwin_time_min, "   ");
+        textbox_set_text(plwin_time_sec, "  ");
+        return;
+    }
+
+    gint64 time = player_get_position();
+    gint64 length = player_get_duration();
+    if (cfg.timer_mode == TIMER_REMAINING && length > 0)
+        time = length - time;
+    time = MAX((gint64)0, time / 1000);
+    if (time > 99 * 60)
+        time /= 60;
+
+    gchar *mins = g_strdup_printf("%c%02" G_GINT64_FORMAT,
+                                  cfg.timer_mode == TIMER_REMAINING && length > 0 ? '-' : ' ',
+                                  time / 60);
+    gchar *secs = g_strdup_printf("%02" G_GINT64_FORMAT, time % 60);
+
+    textbox_set_text(plwin_time_min, mins);
+    textbox_set_text(plwin_time_sec, secs);
+
+    g_free(secs);
+    g_free(mins);
+}
+
 static void
 plwin_set_scroll_offset(gint offset)
 {
     plwin_scroll_offset = CLAMP(offset, 0, plwin_max_scroll_offset());
+}
+
+static void
+plwin_play_pushed(void)
+{
+    if (player_get_state() == PLAYER_PAUSED)
+        player_unpause();
+    else if (player_get_state() == PLAYER_STOPPED)
+        playlist_play();
+}
+
+static void
+plwin_eject_pushed(void)
+{
+    plwin_open_files(TRUE);
+}
+
+static void
+plwin_scroll_up_pushed(void)
+{
+    plwin_set_scroll_offset(plwin_scroll_offset - 3);
+    plwin_queue_draw();
+}
+
+static void
+plwin_scroll_down_pushed(void)
+{
+    plwin_set_scroll_offset(plwin_scroll_offset + 3);
+    plwin_queue_draw();
 }
 
 static gboolean
@@ -509,6 +632,14 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         return;
     }
 
+    Widget *widget = button == 1 ? widget_list_find(plwin_wlist, sx, sy) : NULL;
+    if (widget && widget->button_press) {
+        plwin_pressed_widget = widget;
+        widget->button_press(widget, sx, sy, button);
+        plwin_queue_draw();
+        return;
+    }
+
     if (button == 1 &&
         sx >= PLWIN_DETACH_BTN_X && sx < PLWIN_DETACH_BTN_X + PLWIN_DETACH_BTN_W &&
         sy >= PLWIN_DETACH_BTN_Y && sy < PLWIN_DETACH_BTN_Y + PLWIN_DETACH_BTN_H) {
@@ -530,6 +661,7 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         gint entry_idx = (sy - list_y) / PLWIN_ENTRY_HEIGHT + plwin_scroll_offset;
         if (entry_idx < playlist_get_length()) {
             plwin_selected = entry_idx;
+            plwin_update_info();
             if (n_press == 2 && button == 1) {
                 /* Double click - play this entry */
                 playlist_set_position(entry_idx);
@@ -578,6 +710,8 @@ plwin_click_released(GtkGestureClick *gesture, int n_press,
     if (scale < 1) scale = 1;
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
+    gint button = gtk_gesture_single_get_current_button(
+        GTK_GESTURE_SINGLE(gesture));
 
     if (plwin_menu.open && plwin_menu.pressed) {
         gint item = plwin_menu_item_at(sx, sy);
@@ -588,6 +722,15 @@ plwin_click_released(GtkGestureClick *gesture, int n_press,
         plwin_queue_draw();
         if (activate)
             plwin_menu_action_activate(action);
+        return;
+    }
+
+    if (plwin_pressed_widget) {
+        if (plwin_pressed_widget->button_release)
+            plwin_pressed_widget->button_release(plwin_pressed_widget,
+                                                 sx, sy, button);
+        plwin_pressed_widget = NULL;
+        plwin_queue_draw();
         return;
     }
 
@@ -628,6 +771,11 @@ plwin_motion(GtkEventControllerMotion *controller,
         return;
     }
 
+    if (plwin_pressed_widget && plwin_pressed_widget->motion) {
+        plwin_pressed_widget->motion(plwin_pressed_widget, sx, sy);
+        return;
+    }
+
     if (plwin_pressed_button != PLWIN_BUTTON_NONE) {
         gboolean was_inside = plwin_pressed_inside;
         plwin_pressed_inside = plwin_button_at(sx, sy) == plwin_pressed_button;
@@ -664,6 +812,8 @@ plwin_scroll(GtkEventControllerScroll *controller,
 static void
 plwin_queue_draw(void)
 {
+    plwin_update_info();
+    plwin_update_time();
     if (plwin_drawing_area)
         gtk_widget_queue_draw(plwin_drawing_area);
 }
@@ -1243,6 +1393,33 @@ playlistwin_create(GtkApplication *app)
         draw_playlist_window, NULL, NULL);
     gtk_widget_set_visible(plwin_drawing_area, FALSE);
     playlistwin = plwin_drawing_area;
+
+    plwin_time_min = textbox_new(&plwin_wlist, PLWIN_WIDTH - 82,
+                                 PLWIN_HEIGHT - 15, 15, FALSE, SKIN_TEXT);
+    plwin_time_sec = textbox_new(&plwin_wlist, PLWIN_WIDTH - 64,
+                                 PLWIN_HEIGHT - 15, 10, FALSE, SKIN_TEXT);
+    plwin_info = textbox_new(&plwin_wlist, PLWIN_WIDTH - 143,
+                             PLWIN_HEIGHT - 28, 85, FALSE, SKIN_TEXT);
+
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 144, PLWIN_HEIGHT - 16,
+                8, 7, playlist_prev);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 138, PLWIN_HEIGHT - 16,
+                10, 7, plwin_play_pushed);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 128, PLWIN_HEIGHT - 16,
+                10, 7, player_toggle_pause);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 118, PLWIN_HEIGHT - 16,
+                9, 7, player_stop);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 109, PLWIN_HEIGHT - 16,
+                8, 7, playlist_next);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 100, PLWIN_HEIGHT - 16,
+                9, 7, plwin_eject_pushed);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 14, PLWIN_HEIGHT - 35,
+                8, 5, plwin_scroll_up_pushed);
+    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 14, PLWIN_HEIGHT - 30,
+                8, 5, plwin_scroll_down_pushed);
+
+    plwin_update_info();
+    plwin_update_time();
 
     /* Click events */
     GtkGesture *click = gtk_gesture_click_new();
