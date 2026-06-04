@@ -22,6 +22,7 @@
 #define PLWIN_BUTTON_SRC_W  22
 #define PLWIN_MENU_BORDER_W 3
 #define PLWIN_MENU_W        (PLWIN_MENU_BORDER_W + PLWIN_BUTTON_SRC_W)
+#define PLWIN_FONT_SIZE     9.0
 
 GtkWidget *playlistwin = NULL;
 static GtkWidget *plwin_drawing_area = NULL;
@@ -145,6 +146,52 @@ static gint
 plwin_max_scroll_offset(void)
 {
     return MAX(0, playlist_get_length() - plwin_visible_entries());
+}
+
+static void
+plwin_set_playlist_font(cairo_t *cr)
+{
+    /* Original XMMS defaults to -adobe-helvetica-bold-r-*-*-10-*. */
+    cairo_select_font_face(cr, "Helvetica", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, PLWIN_FONT_SIZE);
+}
+
+static gchar *
+plwin_normalize_playlist_text(const gchar *text)
+{
+    gchar *normalized = g_strdup(text ? text : "");
+    gchar *pos;
+
+    while ((pos = strchr(normalized, '_')) != NULL)
+        *pos = ' ';
+
+    while ((pos = strstr(normalized, "%20")) != NULL) {
+        gchar *tail = pos + 3;
+        *(pos++) = ' ';
+        memmove(pos, tail, strlen(tail) + 1);
+    }
+
+    return normalized;
+}
+
+static void
+plwin_ellipsize_to_width(cairo_t *cr, gchar *text, gint width)
+{
+    gint len = strlen(text);
+    cairo_text_extents_t ext;
+
+    while (len > 4) {
+        cairo_text_extents(cr, text, &ext);
+        if (ext.width <= width)
+            return;
+
+        len--;
+        text[len - 3] = '.';
+        text[len - 2] = '.';
+        text[len - 1] = '.';
+        text[len] = '\0';
+    }
 }
 
 static gchar *
@@ -329,9 +376,10 @@ draw_playlist_entries(cairo_t *cr)
     cairo_fill(cr);
 
     /* Entries */
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
-                           CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 9);
+    plwin_set_playlist_font(cr);
+    cairo_font_extents_t font_ext;
+    cairo_font_extents(cr, &font_ext);
+    gint baseline = (gint)(font_ext.ascent + 0.999);
 
     for (gint i = 0; i < visible && (i + plwin_scroll_offset) < total; i++) {
         gint idx = i + plwin_scroll_offset;
@@ -351,29 +399,29 @@ draw_playlist_entries(cairo_t *cr)
         else
             gdk_cairo_set_source_rgba(cr, &skin->pledit_normal);
 
-        const gchar *title = playlist_get_title(idx);
-        if (title) {
-            gchar *display = g_strdup_printf("%d. %s", idx + 1, title);
-
-            /* Clip to list area (leave room for duration) */
-            cairo_save(cr);
-            cairo_rectangle(cr, list_x, y, list_w - 40, PLWIN_ENTRY_HEIGHT);
-            cairo_clip(cr);
-            cairo_move_to(cr, list_x + 2, y + 9);
-            cairo_show_text(cr, display);
-            cairo_restore(cr);
-
-            g_free(display);
-        }
-
-        /* Duration */
+        gint text_w = list_w;
         if (entry && entry->length > 0) {
             gchar *dur = time_to_string(entry->length);
             cairo_text_extents_t ext;
             cairo_text_extents(cr, dur, &ext);
-            cairo_move_to(cr, list_x + list_w - ext.width - 4, y + 9);
+            cairo_move_to(cr, list_x + list_w - ext.width - 2,
+                          y + baseline);
             cairo_show_text(cr, dur);
+            text_w = list_w - ext.width - 5;
             g_free(dur);
+        }
+
+        const gchar *title = playlist_get_title(idx);
+        if (title) {
+            gchar *normalized = plwin_normalize_playlist_text(title);
+            gchar *display = g_strdup_printf("%d. %s", idx + 1, normalized);
+
+            plwin_ellipsize_to_width(cr, display, text_w);
+            cairo_move_to(cr, list_x, y + baseline);
+            cairo_show_text(cr, display);
+
+            g_free(display);
+            g_free(normalized);
         }
     }
 
@@ -1966,6 +2014,8 @@ playlistwin_set_shaded(gboolean shaded)
     if (plwin_drawing_area) {
         gint scale = cfg.scale_factor;
         if (scale < 1) scale = 2;
+        gtk_drawing_area_set_content_width(
+            GTK_DRAWING_AREA(plwin_drawing_area), PLWIN_WIDTH * scale);
         gtk_drawing_area_set_content_height(
             GTK_DRAWING_AREA(plwin_drawing_area),
             playlistwin_height() * scale);

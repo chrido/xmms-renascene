@@ -35,6 +35,11 @@ typedef struct {
     gchar *output_device;
     gint volume;
     gint balance;
+    gboolean no_playlist_advance;
+    gboolean always_on_top;
+    gboolean sticky;
+    gboolean doublesize;
+    gboolean easy_move;
     gboolean playlist_visible;
     gboolean playlist_detached;
     gboolean shuffle;

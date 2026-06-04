@@ -41,6 +41,8 @@ void playlist_set_shuffle(gboolean enabled);
 void playlist_set_repeat(gboolean enabled);
 gboolean playlist_get_shuffle(void);
 gboolean playlist_get_repeat(void);
+void playlist_set_no_advance(gboolean enabled);
+gboolean playlist_get_no_advance(void);
 
 GList *playlist_get_entries(void);
 

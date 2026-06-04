@@ -35,6 +35,26 @@ static gint vis_update_counter = 0;
 
 static gint mainwin_current_height(void);
 static void mainwin_set_shaded(gboolean shaded);
+static void mainwin_update_time_display(void);
+static void mainwin_apply_scale_factor(void);
+static void mainwin_reload_skin(void);
+static void mainwin_set_doublesize(gboolean enabled);
+static void mainwin_set_always_on_top(gboolean enabled);
+static void mainwin_set_sticky(gboolean enabled);
+static void mainwin_set_easy_move(gboolean enabled);
+static void mainwin_show_message(const gchar *title, const gchar *message);
+
+typedef enum {
+    MAINWIN_PROMPT_PLAY_LOCATION,
+    MAINWIN_PROMPT_JUMP_TIME,
+    MAINWIN_PROMPT_JUMP_FILE
+} MainwinPromptAction;
+
+typedef struct {
+    GtkWidget *window;
+    GtkWidget *entry;
+    MainwinPromptAction action;
+} MainwinPrompt;
 
 static const GOptionEntry app_option_entries[] = {
     { "playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
@@ -58,6 +78,7 @@ static const GOptionEntry app_option_entries[] = {
 
 /* Forward declarations */
 static void open_files_cb(GObject *source, GAsyncResult *result, gpointer data);
+static void open_directory_cb(GObject *source, GAsyncResult *result, gpointer data);
 
 static gchar *
 playlist_state_file(void)
@@ -237,6 +258,94 @@ mainwin_menu_output_cb(GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
+mainwin_menu_prefs_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_show_message("Preferences",
+                         "The full XMMS preferences window is not implemented yet.");
+}
+
+static void
+mainwin_menu_reload_skin_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_reload_skin();
+}
+
+static void
+mainwin_menu_repeat_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    playlist_repeat_toggle();
+    tbutton_set_toggled(mainwin_repeat, playlist_get_repeat());
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_shuffle_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    playlist_shuffle_toggle();
+    tbutton_set_toggled(mainwin_shuffle, playlist_get_shuffle());
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_no_advance_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    playlist_set_no_advance(!playlist_get_no_advance());
+}
+
+static void
+mainwin_menu_time_elapsed_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.timer_mode = TIMER_ELAPSED;
+    mainwin_update_time_display();
+    playlistwin_update();
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_time_remaining_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    cfg.timer_mode = TIMER_REMAINING;
+    mainwin_update_time_display();
+    playlistwin_update();
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_always_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_set_always_on_top(!cfg.always_on_top);
+}
+
+static void
+mainwin_menu_sticky_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_set_sticky(!cfg.sticky);
+}
+
+static void
+mainwin_menu_doublesize_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_set_doublesize(!cfg.doublesize);
+}
+
+static void
+mainwin_menu_easy_move_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_set_easy_move(!cfg.easy_move);
+}
+
+static void
 mainwin_menu_vis_analyzer_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
@@ -347,9 +456,22 @@ mainwin_menubtn_pushed(void)
 {
     /* Build a popover menu */
     GMenu *menu = g_menu_new();
+    GMenu *options = g_menu_new();
     GMenu *vis = g_menu_new();
     GMenu *shade = g_menu_new();
+    g_menu_append(options, "Preferences", "win.preferences");
     g_menu_append(menu, "Skin Browser...", "win.skin-browser");
+    g_menu_append(options, "Reload Skin", "win.reload-skin");
+    g_menu_append(options, "Repeat", "win.repeat");
+    g_menu_append(options, "Shuffle", "win.shuffle");
+    g_menu_append(options, "No Playlist Advance", "win.no-advance");
+    g_menu_append(options, "Time Elapsed", "win.time-elapsed");
+    g_menu_append(options, "Time Remaining", "win.time-remaining");
+    g_menu_append(options, "Always On Top", "win.always-on-top");
+    g_menu_append(options, "Sticky", "win.sticky");
+    g_menu_append(options, "DoubleSize", "win.doublesize");
+    g_menu_append(options, "Easy Move", "win.easy-move");
+    g_menu_append_submenu(menu, "Options", G_MENU_MODEL(options));
     g_menu_append(menu, "Spotify Playlists...", "win.spotify");
     g_menu_append(menu, "Output Device...", "win.output");
     g_menu_append(vis, "Analyzer", "win.vis-analyzer");
@@ -380,9 +502,182 @@ mainwin_menubtn_pushed(void)
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
 
     gtk_popover_popup(GTK_POPOVER(popover));
+    g_object_unref(options);
     g_object_unref(vis);
     g_object_unref(shade);
     g_object_unref(menu);
+}
+
+static void
+mainwin_dialog_close_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+    gtk_window_destroy(GTK_WINDOW(data));
+}
+
+static void
+mainwin_show_message(const gchar *title, const gchar *message)
+{
+    GtkWidget *window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(window), title);
+    gtk_window_set_transient_for(GTK_WINDOW(window), GTK_WINDOW(mainwin));
+    gtk_window_set_modal(GTK_WINDOW(window), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(box, 12);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 12);
+    gtk_widget_set_margin_end(box, 12);
+    gtk_window_set_child(GTK_WINDOW(window), box);
+
+    gtk_box_append(GTK_BOX(box), gtk_label_new(message));
+    GtkWidget *ok = gtk_button_new_with_label("OK");
+    g_signal_connect(ok, "clicked",
+                     G_CALLBACK(mainwin_dialog_close_clicked), window);
+    gtk_box_append(GTK_BOX(box), ok);
+    gtk_window_present(GTK_WINDOW(window));
+}
+
+static gint64
+mainwin_parse_time_ms(const gchar *text)
+{
+    if (!text || !text[0])
+        return -1;
+
+    gchar **parts = g_strsplit(text, ":", 3);
+    gint64 result = -1;
+    if (parts[0] && parts[1] && !parts[2]) {
+        gint64 minutes = g_ascii_strtoll(parts[0], NULL, 10);
+        gint64 seconds = g_ascii_strtoll(parts[1], NULL, 10);
+        result = (minutes * 60 + seconds) * 1000;
+    } else if (parts[0] && !parts[1]) {
+        result = g_ascii_strtoll(parts[0], NULL, 10) * 1000;
+    }
+    g_strfreev(parts);
+    return result;
+}
+
+static void
+mainwin_prompt_free(MainwinPrompt *prompt)
+{
+    g_free(prompt);
+}
+
+static void
+mainwin_prompt_destroyed(GtkWidget *widget, gpointer data)
+{
+    (void)widget;
+    mainwin_prompt_free(data);
+}
+
+static void
+mainwin_prompt_accept(GtkButton *button, gpointer data)
+{
+    (void)button;
+    MainwinPrompt *prompt = data;
+    const gchar *text = gtk_editable_get_text(GTK_EDITABLE(prompt->entry));
+
+    switch (prompt->action) {
+    case MAINWIN_PROMPT_PLAY_LOCATION:
+        if (text && text[0]) {
+            playlist_add_uri(text);
+            playlist_set_position(playlist_get_length() - 1);
+            playlist_play();
+        }
+        break;
+    case MAINWIN_PROMPT_JUMP_TIME: {
+        gint64 ms = mainwin_parse_time_ms(text);
+        if (ms >= 0)
+            player_seek(ms);
+        break;
+    }
+    case MAINWIN_PROMPT_JUMP_FILE:
+        if (text && text[0]) {
+            for (gint i = 0; i < playlist_get_length(); i++) {
+                const gchar *title = playlist_get_title(i);
+                const gchar *filename = playlist_get_filename(i);
+                if ((title && g_strrstr(title, text)) ||
+                    (filename && g_strrstr(filename, text))) {
+                    playlist_set_position(i);
+                    playlist_play();
+                    playlistwin_show(TRUE);
+                    break;
+                }
+            }
+        }
+        break;
+    }
+
+    gtk_window_destroy(GTK_WINDOW(prompt->window));
+}
+
+static void
+mainwin_show_prompt(const gchar *title, const gchar *placeholder,
+                    MainwinPromptAction action)
+{
+    MainwinPrompt *prompt = g_new0(MainwinPrompt, 1);
+    prompt->action = action;
+    prompt->window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(prompt->window), title);
+    gtk_window_set_transient_for(GTK_WINDOW(prompt->window), GTK_WINDOW(mainwin));
+    gtk_window_set_modal(GTK_WINDOW(prompt->window), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(prompt->window), FALSE);
+    g_signal_connect(prompt->window, "destroy",
+                     G_CALLBACK(mainwin_prompt_destroyed), prompt);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(box, 12);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 12);
+    gtk_widget_set_margin_end(box, 12);
+    gtk_window_set_child(GTK_WINDOW(prompt->window), box);
+
+    prompt->entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(prompt->entry), placeholder);
+    gtk_box_append(GTK_BOX(box), prompt->entry);
+
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(box), buttons);
+    GtkWidget *cancel = gtk_button_new_with_label("Cancel");
+    GtkWidget *ok = gtk_button_new_with_label("OK");
+    g_signal_connect(cancel, "clicked",
+                     G_CALLBACK(mainwin_dialog_close_clicked), prompt->window);
+    g_signal_connect(ok, "clicked", G_CALLBACK(mainwin_prompt_accept), prompt);
+    gtk_box_append(GTK_BOX(buttons), cancel);
+    gtk_box_append(GTK_BOX(buttons), ok);
+
+    gtk_window_present(GTK_WINDOW(prompt->window));
+}
+
+static void
+mainwin_show_file_info(void)
+{
+    gint pos = playlist_get_position();
+    PlaylistEntry *entry = playlist_get_entry(pos);
+    if (!entry) {
+        mainwin_show_message("File Info", "No playlist entry is playing.");
+        return;
+    }
+
+    gchar *duration = entry->length > 0 ? time_to_string(entry->length) :
+        g_strdup("unknown");
+    gchar *message = g_strdup_printf("Title: %s\nLocation: %s\nLength: %s",
+                                     entry->title ? entry->title : "",
+                                     entry->filename ? entry->filename : "",
+                                     duration);
+    mainwin_show_message("File Info", message);
+    g_free(message);
+    g_free(duration);
+}
+
+static void
+mainwin_open_directory(void)
+{
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Open Directory");
+    gtk_file_dialog_select_folder(dialog, GTK_WINDOW(mainwin), NULL,
+                                  open_directory_cb, NULL);
 }
 
 /* ---- Volume/Balance/Position callbacks ---- */
@@ -519,6 +814,64 @@ mainwin_set_shaded(gboolean shaded)
     mainwin_queue_draw();
 }
 
+static void
+mainwin_apply_scale_factor(void)
+{
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+
+    if (mainwin_drawing_area) {
+        gtk_drawing_area_set_content_width(
+            GTK_DRAWING_AREA(mainwin_drawing_area), MAINWIN_WIDTH * scale);
+        gtk_drawing_area_set_content_height(
+            GTK_DRAWING_AREA(mainwin_drawing_area),
+            mainwin_current_height() * scale);
+    }
+    playlistwin_set_shaded(playlistwin_is_shaded());
+    equalizerwin_set_shaded(equalizerwin_is_shaded());
+    mainwin_update_attached_size();
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_reload_skin(void)
+{
+    if (cfg.skin)
+        skin_load(cfg.skin);
+    mainwin_queue_draw();
+    playlistwin_update();
+}
+
+static void
+mainwin_set_doublesize(gboolean enabled)
+{
+    cfg.doublesize = enabled;
+    cfg.scale_factor = enabled ? 2 : 1;
+    mainwin_apply_scale_factor();
+}
+
+static void
+mainwin_set_always_on_top(gboolean enabled)
+{
+    cfg.always_on_top = enabled;
+    if (enabled && mainwin)
+        gtk_window_present(GTK_WINDOW(mainwin));
+}
+
+static void
+mainwin_set_sticky(gboolean enabled)
+{
+    cfg.sticky = enabled;
+    if (enabled && mainwin)
+        gtk_window_present(GTK_WINDOW(mainwin));
+}
+
+static void
+mainwin_set_easy_move(gboolean enabled)
+{
+    cfg.easy_move = enabled;
+}
+
 void
 draw_main_window(cairo_t *cr)
 {
@@ -592,7 +945,7 @@ mainwin_click_pressed(GtkGestureClick *gesture, int n_press,
 
     if (pressed_widget && pressed_widget->button_press) {
         pressed_widget->button_press(pressed_widget, sx, sy, button);
-    } else if (sy < 14) {
+    } else if (button == 1 && (sy < 14 || cfg.easy_move)) {
         /* Titlebar drag */
         GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(mainwin));
         if (surface && GDK_IS_TOPLEVEL(surface)) {
@@ -640,6 +993,158 @@ mainwin_motion(GtkEventControllerMotion *controller,
 
     if (pressed_widget && pressed_widget->motion)
         pressed_widget->motion(pressed_widget, sx, sy);
+}
+
+static gboolean
+mainwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
+                    guint keycode, GdkModifierType state, gpointer data)
+{
+    (void)controller; (void)keycode; (void)data;
+
+    guint key = gdk_keyval_to_lower(keyval);
+    gboolean ctrl = (state & GDK_CONTROL_MASK) != 0;
+    gboolean shift = (state & GDK_SHIFT_MASK) != 0;
+    gboolean alt = (state & GDK_ALT_MASK) != 0;
+
+    if (!ctrl && !shift && !alt) {
+        switch (key) {
+        case GDK_KEY_z:
+            playlist_prev();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_x:
+            mainwin_play_pushed();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_c:
+            mainwin_pause_pushed();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_v:
+            mainwin_stop_pushed();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_b:
+            playlist_next();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_l:
+            mainwin_eject_pushed();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_j:
+            mainwin_show_prompt("Jump to File", "Title or filename",
+                                MAINWIN_PROMPT_JUMP_FILE);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_r:
+            playlist_repeat_toggle();
+            tbutton_set_toggled(mainwin_repeat, playlist_get_repeat());
+            mainwin_queue_draw();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_s:
+            playlist_shuffle_toggle();
+            tbutton_set_toggled(mainwin_shuffle, playlist_get_shuffle());
+            mainwin_queue_draw();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_F5:
+            mainwin_reload_skin();
+            return GDK_EVENT_STOP;
+        default:
+            break;
+        }
+    }
+
+    if (shift && !ctrl && !alt && key == GDK_KEY_l) {
+        mainwin_open_directory();
+        return GDK_EVENT_STOP;
+    }
+
+    if (alt && !ctrl && !shift) {
+        switch (key) {
+        case GDK_KEY_s:
+            skinwin_show();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_w:
+            gtk_window_present(GTK_WINDOW(mainwin));
+            return GDK_EVENT_STOP;
+        case GDK_KEY_e:
+            playlistwin_show(!playlistwin_is_visible());
+            return GDK_EVENT_STOP;
+        case GDK_KEY_g:
+            equalizerwin_show(!equalizerwin_is_visible());
+            return GDK_EVENT_STOP;
+        default:
+            break;
+        }
+    }
+
+    if (ctrl && !alt) {
+        if (shift && key == GDK_KEY_w) {
+            playlistwin_set_shaded(!playlistwin_is_shaded());
+            return GDK_EVENT_STOP;
+        }
+
+        if (shift)
+            return GDK_EVENT_PROPAGATE;
+
+        switch (key) {
+        case GDK_KEY_p:
+            mainwin_show_message("Preferences",
+                                 "Preferences are not implemented yet.");
+            return GDK_EVENT_STOP;
+        case GDK_KEY_l:
+            mainwin_show_prompt("Play Location", "https://...",
+                                MAINWIN_PROMPT_PLAY_LOCATION);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_n:
+            playlist_set_no_advance(!playlist_get_no_advance());
+            return GDK_EVENT_STOP;
+        case GDK_KEY_e:
+            cfg.timer_mode = TIMER_ELAPSED;
+            mainwin_update_time_display();
+            playlistwin_update();
+            mainwin_queue_draw();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_r:
+            cfg.timer_mode = TIMER_REMAINING;
+            mainwin_update_time_display();
+            playlistwin_update();
+            mainwin_queue_draw();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_a:
+            mainwin_set_always_on_top(!cfg.always_on_top);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_s:
+            mainwin_set_sticky(!cfg.sticky);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_w:
+            mainwin_set_shaded(!mainwin_shaded);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_d:
+            mainwin_set_doublesize(!cfg.doublesize);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_3:
+            mainwin_show_file_info();
+            return GDK_EVENT_STOP;
+        case GDK_KEY_j:
+            mainwin_show_prompt("Jump to Time", "seconds or mm:ss",
+                                MAINWIN_PROMPT_JUMP_TIME);
+            return GDK_EVENT_STOP;
+        case GDK_KEY_z:
+            if (playlist_get_length() > 0) {
+                playlist_set_position(0);
+                playlist_play();
+            }
+            return GDK_EVENT_STOP;
+        case GDK_KEY_v:
+            mainwin_show_message("Visualization Plugins",
+                                 "Visualization plugins are not implemented yet.");
+            return GDK_EVENT_STOP;
+        default:
+            break;
+        }
+    }
+
+    if (ctrl && alt && !shift && key == GDK_KEY_w) {
+        equalizerwin_set_shaded(!equalizerwin_is_shaded());
+        return GDK_EVENT_STOP;
+    }
+
+    return GDK_EVENT_PROPAGATE;
 }
 
 /* ---- Update timer ---- */
@@ -925,6 +1430,11 @@ load_config(void)
     cfg.timer_mode = TIMER_ELAPSED;
     cfg.volume = 100;
     cfg.balance = 0;
+    cfg.no_playlist_advance = FALSE;
+    cfg.always_on_top = FALSE;
+    cfg.sticky = FALSE;
+    cfg.doublesize = TRUE;
+    cfg.easy_move = FALSE;
     cfg.playlist_visible = FALSE;
     cfg.playlist_detached = FALSE;
     cfg.shuffle = FALSE;
@@ -968,6 +1478,23 @@ load_config(void)
             cfg.volume = CLAMP(g_key_file_get_integer(kf, "xmms", "volume", NULL), 0, 100);
         if (g_key_file_has_key(kf, "xmms", "balance", NULL))
             cfg.balance = CLAMP(g_key_file_get_integer(kf, "xmms", "balance", NULL), -100, 100);
+        if (g_key_file_has_key(kf, "xmms", "no_playlist_advance", NULL))
+            cfg.no_playlist_advance =
+                g_key_file_get_boolean(kf, "xmms", "no_playlist_advance", NULL);
+        if (g_key_file_has_key(kf, "xmms", "always_on_top", NULL))
+            cfg.always_on_top =
+                g_key_file_get_boolean(kf, "xmms", "always_on_top", NULL);
+        if (g_key_file_has_key(kf, "xmms", "sticky", NULL))
+            cfg.sticky =
+                g_key_file_get_boolean(kf, "xmms", "sticky", NULL);
+        if (g_key_file_has_key(kf, "xmms", "doublesize", NULL))
+            cfg.doublesize =
+                g_key_file_get_boolean(kf, "xmms", "doublesize", NULL);
+        else
+            cfg.doublesize = cfg.scale_factor > 1;
+        if (g_key_file_has_key(kf, "xmms", "easy_move", NULL))
+            cfg.easy_move =
+                g_key_file_get_boolean(kf, "xmms", "easy_move", NULL);
         if (g_key_file_has_key(kf, "xmms", "playlist_visible", NULL))
             cfg.playlist_visible =
                 g_key_file_get_boolean(kf, "xmms", "playlist_visible", NULL);
@@ -1017,6 +1544,7 @@ load_config(void)
                       config_file, cfg.player_x, cfg.player_y,
                       cfg.scale_factor);
     }
+    cfg.scale_factor = cfg.doublesize ? 2 : 1;
     g_key_file_free(kf);
     g_free(config_file);
     g_free(config_dir);
@@ -1037,6 +1565,13 @@ save_config(void)
     g_key_file_set_integer(kf, "xmms", "timer_mode", cfg.timer_mode);
     g_key_file_set_integer(kf, "xmms", "volume", player_get_volume());
     g_key_file_set_integer(kf, "xmms", "balance", player_get_balance());
+    g_key_file_set_boolean(kf, "xmms", "no_playlist_advance",
+                           playlist_get_no_advance());
+    g_key_file_set_boolean(kf, "xmms", "always_on_top",
+                           cfg.always_on_top);
+    g_key_file_set_boolean(kf, "xmms", "sticky", cfg.sticky);
+    g_key_file_set_boolean(kf, "xmms", "doublesize", cfg.doublesize);
+    g_key_file_set_boolean(kf, "xmms", "easy_move", cfg.easy_move);
     g_key_file_set_boolean(kf, "xmms", "playlist_visible",
                            playlistwin_is_visible());
     g_key_file_set_boolean(kf, "xmms", "playlist_detached",
@@ -1105,6 +1640,26 @@ open_files_cb(GObject *source, GAsyncResult *result, gpointer data)
     }
     g_object_unref(files);
     playlist_play();
+}
+
+static void
+open_directory_cb(GObject *source, GAsyncResult *result, gpointer data)
+{
+    (void)data;
+    GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
+    GFile *folder = gtk_file_dialog_select_folder_finish(dlg, result, NULL);
+    if (!folder)
+        return;
+
+    gchar *path = g_file_get_path(folder);
+    if (path) {
+        playlist_clear();
+        playlist_add_dir(path);
+        if (playlist_get_length() > 0)
+            playlist_play();
+        g_free(path);
+    }
+    g_object_unref(folder);
 }
 
 static gboolean
@@ -1180,6 +1735,7 @@ activate(GtkApplication *app, gpointer data)
     playlist_set_position(cfg.playlist_position);
     playlist_set_shuffle(cfg.shuffle);
     playlist_set_repeat(cfg.repeat);
+    playlist_set_no_advance(cfg.no_playlist_advance);
     skin_init();
     player_init();
     player_set_volume(cfg.volume);
@@ -1205,7 +1761,18 @@ activate(GtkApplication *app, gpointer data)
 
     /* Menu actions */
     static const GActionEntry win_actions[] = {
+        { "preferences", mainwin_menu_prefs_cb, NULL, NULL, NULL },
         { "skin-browser", mainwin_menu_skin_cb, NULL, NULL, NULL },
+        { "reload-skin", mainwin_menu_reload_skin_cb, NULL, NULL, NULL },
+        { "repeat", mainwin_menu_repeat_cb, NULL, NULL, NULL },
+        { "shuffle", mainwin_menu_shuffle_cb, NULL, NULL, NULL },
+        { "no-advance", mainwin_menu_no_advance_cb, NULL, NULL, NULL },
+        { "time-elapsed", mainwin_menu_time_elapsed_cb, NULL, NULL, NULL },
+        { "time-remaining", mainwin_menu_time_remaining_cb, NULL, NULL, NULL },
+        { "always-on-top", mainwin_menu_always_cb, NULL, NULL, NULL },
+        { "sticky", mainwin_menu_sticky_cb, NULL, NULL, NULL },
+        { "doublesize", mainwin_menu_doublesize_cb, NULL, NULL, NULL },
+        { "easy-move", mainwin_menu_easy_move_cb, NULL, NULL, NULL },
         { "spotify", mainwin_menu_spotify_cb, NULL, NULL, NULL },
         { "output", mainwin_menu_output_cb, NULL, NULL, NULL },
         { "vis-analyzer", mainwin_menu_vis_analyzer_cb, NULL, NULL, NULL },
@@ -1250,6 +1817,10 @@ activate(GtkApplication *app, gpointer data)
     g_signal_connect(motion, "motion", G_CALLBACK(mainwin_motion), NULL);
     gtk_widget_add_controller(mainwin_drawing_area, motion);
 
+    GtkEventController *key = gtk_event_controller_key_new();
+    g_signal_connect(key, "key-pressed", G_CALLBACK(mainwin_key_pressed), NULL);
+    gtk_widget_add_controller(mainwin, key);
+
     /* Drag and drop */
     GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST,
                                                GDK_ACTION_COPY);
@@ -1292,6 +1863,9 @@ activate(GtkApplication *app, gpointer data)
     /* Update timer */
     update_timeout_tag = g_timeout_add(100, mainwin_update_cb, NULL);
 
+    mainwin_set_always_on_top(cfg.always_on_top);
+    mainwin_set_sticky(cfg.sticky);
+    mainwin_set_easy_move(cfg.easy_move);
     gtk_window_present(GTK_WINDOW(mainwin));
     if (cfg.equalizer_visible)
         equalizerwin_show(TRUE);

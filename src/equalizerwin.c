@@ -677,6 +677,8 @@ equalizerwin_set_shaded(gboolean shaded)
     if (eqwin_drawing_area) {
         gint scale = cfg.scale_factor;
         if (scale < 1) scale = 2;
+        gtk_drawing_area_set_content_width(
+            GTK_DRAWING_AREA(eqwin_drawing_area), EQWIN_WIDTH * scale);
         gtk_drawing_area_set_content_height(
             GTK_DRAWING_AREA(eqwin_drawing_area),
             equalizerwin_height() * scale);

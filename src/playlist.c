@@ -6,6 +6,7 @@ static gint playlist_position = -1;
 static GList *shuffle_list = NULL;
 static gboolean shuffle = FALSE;
 static gboolean repeat = FALSE;
+static gboolean no_advance = FALSE;
 
 static void
 playlist_refresh_position(PlaylistEntry *current)
@@ -423,6 +424,11 @@ playlist_play(void)
 void
 playlist_eof_reached(void)
 {
+    if (no_advance) {
+        player_stop();
+        return;
+    }
+
     gint next = get_next_position();
     if (next >= 0) {
         playlist_position = next;
@@ -472,6 +478,18 @@ gboolean
 playlist_get_repeat(void)
 {
     return repeat;
+}
+
+void
+playlist_set_no_advance(gboolean enabled)
+{
+    no_advance = enabled;
+}
+
+gboolean
+playlist_get_no_advance(void)
+{
+    return no_advance;
 }
 
 GList *
