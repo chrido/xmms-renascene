@@ -226,6 +226,11 @@ draw_playlist_frame(cairo_t *cr)
 
     /* Bottom right corner */
     skin_draw_pixmap(cr, src, 126, 72, w - 150, h - 38, 150, 38);
+
+    /* The original playlist overlays blank time text fields here. */
+    cairo_set_source_rgb(cr, 10.0 / 255.0, 18.0 / 255.0, 26.0 / 255.0);
+    cairo_rectangle(cr, w - 82, h - 15, 28, 9);
+    cairo_fill(cr);
 }
 
 static void

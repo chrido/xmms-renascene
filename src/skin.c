@@ -505,13 +505,20 @@ skin_draw_pixmap(cairo_t *cr, SkinIndex index,
     if (width <= 0 || height <= 0)
         return;
 
+    cairo_surface_t *source_rect =
+        cairo_surface_create_for_rectangle(surface, xsrc, ysrc, width, height);
+
     cairo_save(cr);
     cairo_rectangle(cr, xdest, ydest, width, height);
     cairo_clip(cr);
-    cairo_set_source_surface(cr, surface, xdest - xsrc, ydest - ysrc);
-    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+    cairo_set_source_surface(cr, source_rect, xdest, ydest);
+    cairo_pattern_t *pattern = cairo_get_source(cr);
+    cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+    cairo_pattern_set_filter(pattern, CAIRO_FILTER_NEAREST);
     cairo_paint(cr);
     cairo_restore(cr);
+
+    cairo_surface_destroy(source_rect);
 }
 
 cairo_surface_t *
