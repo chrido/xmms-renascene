@@ -35,6 +35,7 @@ static GList *plwin_wlist = NULL;
 static TextBox *plwin_time_min = NULL;
 static TextBox *plwin_time_sec = NULL;
 static TextBox *plwin_info = NULL;
+static TextBox *plwin_sinfo = NULL;
 
 typedef enum {
     PLWIN_BUTTON_NONE,
@@ -74,6 +75,7 @@ static void plwin_scrollbar_set_from_y(gint y);
 static void plwin_activate_button(PlwinButton button);
 static void plwin_close_menu(void);
 static void plwin_update_info(void);
+static void plwin_update_shaded_info(void);
 static void plwin_open_files(gboolean replace);
 static void plwin_remove_selected(void);
 static void plwin_show_context_menu(gint x, gint y);
@@ -247,6 +249,60 @@ plwin_update_info(void)
     g_free(text);
     g_free(total_text);
     g_free(selected_text);
+}
+
+static void
+plwin_update_shaded_info(void)
+{
+    if (!plwin_sinfo)
+        return;
+
+    gint pos = playlist_get_position();
+    if (pos < 0) {
+        textbox_set_text(plwin_sinfo, "");
+        return;
+    }
+
+    const gchar *title = playlist_get_title(pos);
+    if (!title) {
+        textbox_set_text(plwin_sinfo, "");
+        return;
+    }
+
+    PlaylistEntry *entry = playlist_get_entry(pos);
+    gchar *normalized = plwin_normalize_playlist_text(title);
+    gchar *posstr = g_strdup_printf("%d. ", pos + 1);
+    gchar *timestr = NULL;
+    gint max_len = (PLWIN_WIDTH - 35) / 5 - (gint)strlen(posstr);
+
+    if (entry && entry->length >= 0) {
+        timestr = time_to_string(entry->length);
+        max_len -= (gint)strlen(timestr) + 1;
+    } else {
+        timestr = g_strdup("");
+    }
+
+    max_len = MAX(0, max_len);
+    if ((gint)strlen(normalized) > max_len) {
+        gint title_len = MAX(0, max_len - 3);
+        gchar *short_title = g_strndup(normalized, title_len);
+        gchar *info = g_strdup_printf("%s%s...%s%s",
+                                      posstr, short_title,
+                                      timestr[0] ? " " : "", timestr);
+        textbox_set_text(plwin_sinfo, info);
+        g_free(info);
+        g_free(short_title);
+    } else {
+        gchar *info = g_strdup_printf("%s%s%s%s",
+                                      posstr, normalized,
+                                      timestr[0] ? " " : "", timestr);
+        textbox_set_text(plwin_sinfo, info);
+        g_free(info);
+    }
+
+    g_free(timestr);
+    g_free(posstr);
+    g_free(normalized);
 }
 
 static void
@@ -644,8 +700,10 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
 
     /* Draw assembled playlist frame from skin pieces */
     draw_playlist_frame(cr);
-    if (plwin_shaded)
+    if (plwin_shaded) {
+        widget_list_draw(plwin_wlist, cr);
         return;
+    }
 
     /* Draw entries */
     draw_playlist_entries(cr);
@@ -947,6 +1005,7 @@ static void
 plwin_queue_draw(void)
 {
     plwin_update_info();
+    plwin_update_shaded_info();
     plwin_update_time();
     if (plwin_drawing_area)
         gtk_widget_queue_draw(plwin_drawing_area);
@@ -1880,6 +1939,9 @@ playlistwin_create(GtkApplication *app)
                                  PLWIN_HEIGHT - 15, 10, FALSE, SKIN_TEXT);
     plwin_info = textbox_new(&plwin_wlist, PLWIN_WIDTH - 143,
                              PLWIN_HEIGHT - 28, 85, FALSE, SKIN_TEXT);
+    plwin_sinfo = textbox_new(&plwin_wlist, 4, 4,
+                              PLWIN_WIDTH - 35, FALSE, SKIN_TEXT);
+    ((Widget *)plwin_sinfo)->visible = FALSE;
 
     sbutton_new(&plwin_wlist, PLWIN_WIDTH - 144, PLWIN_HEIGHT - 16,
                 8, 7, playlist_prev);
@@ -1899,6 +1961,7 @@ playlistwin_create(GtkApplication *app)
                 8, 5, plwin_scroll_down_pushed);
 
     plwin_update_info();
+    plwin_update_shaded_info();
     plwin_update_time();
 
     /* Click events */
@@ -2011,6 +2074,15 @@ void
 playlistwin_set_shaded(gboolean shaded)
 {
     plwin_shaded = shaded;
+    if (plwin_time_min)
+        ((Widget *)plwin_time_min)->visible = !shaded;
+    if (plwin_time_sec)
+        ((Widget *)plwin_time_sec)->visible = !shaded;
+    if (plwin_info)
+        ((Widget *)plwin_info)->visible = !shaded;
+    if (plwin_sinfo)
+        ((Widget *)plwin_sinfo)->visible = shaded;
+
     if (plwin_drawing_area) {
         gint scale = cfg.scale_factor;
         if (scale < 1) scale = 2;
