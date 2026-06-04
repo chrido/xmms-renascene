@@ -64,6 +64,8 @@ static gdouble plwin_scroll_delta = 0.0;
 static PlwinButton plwin_pressed_button = PLWIN_BUTTON_NONE;
 static gboolean plwin_pressed_inside = FALSE;
 static Widget *plwin_pressed_widget = NULL;
+static gboolean plwin_search_active = FALSE;
+static gchar *plwin_search_query = NULL;
 
 /* Forward declarations */
 static void plwin_queue_draw(void);
@@ -79,6 +81,11 @@ static void plwin_update_shaded_info(void);
 static void plwin_open_files(gboolean replace);
 static void plwin_remove_selected(void);
 static void plwin_show_context_menu(gint x, gint y);
+static void plwin_move_selection(gint delta);
+static void plwin_play_selected(void);
+static void plwin_search_start(void);
+static void plwin_search_stop(void);
+static gboolean plwin_search_key(guint keyval, GdkModifierType state);
 
 typedef enum {
     PLWIN_ACTION_ADD_URL,
@@ -352,6 +359,174 @@ plwin_set_scroll_offset(gint offset)
 }
 
 static void
+plwin_ensure_visible(gint idx)
+{
+    gint visible = plwin_visible_entries();
+    if (idx < 0 || visible <= 0)
+        return;
+
+    if (idx < plwin_scroll_offset)
+        plwin_set_scroll_offset(idx);
+    else if (idx >= plwin_scroll_offset + visible)
+        plwin_set_scroll_offset(idx - visible + 1);
+}
+
+static void
+plwin_select_single(gint idx)
+{
+    gint total = playlist_get_length();
+    if (total <= 0) {
+        plwin_selected = -1;
+        return;
+    }
+
+    idx = CLAMP(idx, 0, total - 1);
+    for (gint i = 0; i < total; i++) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (entry)
+            entry->selected = (i == idx);
+    }
+    plwin_selected = idx;
+    plwin_selection_anchor = idx;
+    plwin_ensure_visible(idx);
+}
+
+static void
+plwin_move_selection(gint delta)
+{
+    gint total = playlist_get_length();
+    if (total <= 0)
+        return;
+
+    gint idx = plwin_selected >= 0 ? plwin_selected : playlist_get_position();
+    if (idx < 0)
+        idx = delta > 0 ? -1 : 0;
+
+    plwin_select_single(CLAMP(idx + delta, 0, total - 1));
+    plwin_queue_draw();
+}
+
+static void
+plwin_play_selected(void)
+{
+    if (plwin_selected >= 0 && plwin_selected < playlist_get_length())
+        playlist_set_position(plwin_selected);
+    playlist_play();
+}
+
+static gboolean
+plwin_entry_matches_query(PlaylistEntry *entry, const gchar *query_folded)
+{
+    if (!entry || !query_folded || query_folded[0] == '\0')
+        return FALSE;
+
+    const gchar *text = entry->title ? entry->title : entry->filename;
+    if (!text)
+        return FALSE;
+
+    gchar *text_folded = g_utf8_casefold(text, -1);
+    gboolean matches = strstr(text_folded, query_folded) != NULL;
+    g_free(text_folded);
+    return matches;
+}
+
+static void
+plwin_search_update_match(void)
+{
+    if (!plwin_search_query || plwin_search_query[0] == '\0') {
+        plwin_queue_draw();
+        return;
+    }
+
+    gint total = playlist_get_length();
+    if (total <= 0) {
+        plwin_queue_draw();
+        return;
+    }
+
+    gchar *query_folded = g_utf8_casefold(plwin_search_query, -1);
+    gint start = plwin_selected >= 0 ? plwin_selected : playlist_get_position();
+    if (start < 0)
+        start = 0;
+
+    for (gint pass = 0; pass < 2; pass++) {
+        gint begin = pass == 0 ? start : 0;
+        gint end = pass == 0 ? total : start;
+        for (gint i = begin; i < end; i++) {
+            if (plwin_entry_matches_query(playlist_get_entry(i), query_folded)) {
+                plwin_select_single(i);
+                g_free(query_folded);
+                plwin_queue_draw();
+                return;
+            }
+        }
+    }
+
+    g_free(query_folded);
+    plwin_queue_draw();
+}
+
+static void
+plwin_search_start(void)
+{
+    plwin_close_menu();
+    plwin_search_active = TRUE;
+    g_clear_pointer(&plwin_search_query, g_free);
+    plwin_search_query = g_strdup("");
+    plwin_queue_draw();
+}
+
+static void
+plwin_search_stop(void)
+{
+    plwin_search_active = FALSE;
+    g_clear_pointer(&plwin_search_query, g_free);
+    plwin_queue_draw();
+}
+
+static gboolean
+plwin_search_key(guint keyval, GdkModifierType state)
+{
+    if (!plwin_search_active)
+        return FALSE;
+
+    if (keyval == GDK_KEY_Escape || keyval == GDK_KEY_Return ||
+        keyval == GDK_KEY_KP_Enter) {
+        plwin_search_stop();
+        return TRUE;
+    }
+
+    if (keyval == GDK_KEY_BackSpace) {
+        if (plwin_search_query && plwin_search_query[0] != '\0') {
+            gchar *prev = g_utf8_find_prev_char(plwin_search_query,
+                                                plwin_search_query +
+                                                strlen(plwin_search_query));
+            if (prev)
+                *prev = '\0';
+        }
+        plwin_search_update_match();
+        return TRUE;
+    }
+
+    if (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_META_MASK))
+        return TRUE;
+
+    gunichar ch = gdk_keyval_to_unicode(keyval);
+    if (ch && g_unichar_isprint(ch)) {
+        gchar utf8[7] = { 0 };
+        g_unichar_to_utf8(ch, utf8);
+        gchar *next = g_strconcat(plwin_search_query ? plwin_search_query : "",
+                                  utf8, NULL);
+        g_free(plwin_search_query);
+        plwin_search_query = next;
+        plwin_search_update_match();
+        return TRUE;
+    }
+
+    return TRUE;
+}
+
+static void
 plwin_play_pushed(void)
 {
     if (player_get_state() == PLAYER_PAUSED)
@@ -498,6 +673,38 @@ draw_playlist_entries(cairo_t *cr)
                          PLWIN_SCROLLBAR_X, thumb_y,
                          PLWIN_SCROLLBAR_W, thumb_h);
     }
+}
+
+static void
+draw_playlist_search(cairo_t *cr)
+{
+    if (!plwin_search_active)
+        return;
+
+    gint x = 10;
+    gint y = PLWIN_HEIGHT - 48;
+    gint w = PLWIN_WIDTH - 20;
+    gint h = 14;
+
+    gdk_cairo_set_source_rgba(cr, &skin->pledit_normalbg);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+
+    gdk_cairo_set_source_rgba(cr, &skin->pledit_selectedbg);
+    cairo_rectangle(cr, x + 0.5, y + 0.5, w - 1, h - 1);
+    cairo_stroke(cr);
+
+    plwin_set_playlist_font(cr);
+    gdk_cairo_set_source_rgba(cr, &skin->pledit_normal);
+
+    gchar *display = g_strdup_printf("/%s", plwin_search_query ?
+                                     plwin_search_query : "");
+    plwin_ellipsize_to_width(cr, display, w - 6);
+    cairo_text_extents_t ext;
+    cairo_text_extents(cr, display, &ext);
+    cairo_move_to(cr, x + 3, y + (h - ext.height) / 2 - ext.y_bearing);
+    cairo_show_text(cr, display);
+    g_free(display);
 }
 
 static void
@@ -720,8 +927,8 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
     /* Draw all custom widgets */
     widget_list_draw(plwin_wlist, cr);
 
+    draw_playlist_search(cr);
     draw_playlist_menu(cr);
-
 }
 
 /* ---- Event handling ---- */
@@ -998,11 +1205,34 @@ static gboolean
 plwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
                   guint keycode, GdkModifierType state, gpointer data)
 {
-    (void)controller; (void)keycode; (void)state; (void)data;
+    (void)controller; (void)keycode; (void)data;
+
+    if (plwin_search_key(keyval, state))
+        return GDK_EVENT_STOP;
 
     if (keyval == GDK_KEY_Delete) {
         plwin_remove_selected();
         return GDK_EVENT_STOP;
+    }
+
+    if (state & (GDK_CONTROL_MASK | GDK_ALT_MASK | GDK_META_MASK))
+        return GDK_EVENT_PROPAGATE;
+
+    switch (keyval) {
+    case GDK_KEY_j:
+        plwin_move_selection(1);
+        return GDK_EVENT_STOP;
+    case GDK_KEY_k:
+        plwin_move_selection(-1);
+        return GDK_EVENT_STOP;
+    case GDK_KEY_p:
+        plwin_play_selected();
+        return GDK_EVENT_STOP;
+    case GDK_KEY_slash:
+        plwin_search_start();
+        return GDK_EVENT_STOP;
+    default:
+        break;
     }
 
     return GDK_EVENT_PROPAGATE;
