@@ -188,11 +188,11 @@ set_controls_from_config(void)
     gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_visible_check),
                                 playlistwin_is_visible());
     gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_detached_check),
-                                cfg.playlist_detached);
+                                !cfg.playlist_detached);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(equalizer_visible_check),
                                 equalizerwin_is_visible());
     gtk_check_button_set_active(GTK_CHECK_BUTTON(equalizer_detached_check),
-                                cfg.equalizer_detached);
+                                !cfg.equalizer_detached);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(convert_underscore_check),
                                 cfg.convert_underscore);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(convert_twenty_check),
@@ -304,11 +304,11 @@ apply_preferences(void)
     cfg.playlist_visible =
         gtk_check_button_get_active(GTK_CHECK_BUTTON(playlist_visible_check));
     cfg.playlist_detached =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(playlist_detached_check));
+        !gtk_check_button_get_active(GTK_CHECK_BUTTON(playlist_detached_check));
     cfg.equalizer_visible =
         gtk_check_button_get_active(GTK_CHECK_BUTTON(equalizer_visible_check));
     cfg.equalizer_detached =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(equalizer_detached_check));
+        !gtk_check_button_get_active(GTK_CHECK_BUTTON(equalizer_detached_check));
     cfg.convert_underscore =
         gtk_check_button_get_active(GTK_CHECK_BUTTON(convert_underscore_check));
     cfg.convert_twenty =
@@ -542,9 +542,9 @@ create_options_page(void)
     doublesize_check = check_new("Double size");
     easy_move_check = check_new("Easy move");
     playlist_visible_check = check_new("Show playlist");
-    playlist_detached_check = check_new("Detach playlist");
+    playlist_detached_check = check_new("Dock playlist");
     equalizer_visible_check = check_new("Show equalizer");
-    equalizer_detached_check = check_new("Detach equalizer");
+    equalizer_detached_check = check_new("Dock equalizer");
     convert_twenty_check = check_new("Convert %20 to space");
     convert_underscore_check = check_new("Convert underscore to space");
     show_numbers_check = check_new("Show numbers in playlist");
