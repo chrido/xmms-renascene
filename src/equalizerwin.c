@@ -7,13 +7,36 @@
 #define EQWIN_DETACH_BTN_Y 3
 #define EQWIN_DETACH_BTN_W 13
 #define EQWIN_DETACH_BTN_H 10
+#define EQWIN_ON_X 14
+#define EQWIN_ON_Y 18
+#define EQWIN_ON_W 25
+#define EQWIN_ON_H 12
+#define EQWIN_AUTO_X 39
+#define EQWIN_AUTO_Y 18
+#define EQWIN_AUTO_W 33
+#define EQWIN_AUTO_H 12
+#define EQWIN_PRESETS_X 217
+#define EQWIN_PRESETS_Y 18
+#define EQWIN_PRESETS_W 44
+#define EQWIN_PRESETS_H 12
+
+typedef enum {
+    EQ_CONTROL_NONE,
+    EQ_CONTROL_ON,
+    EQ_CONTROL_AUTO,
+    EQ_CONTROL_PRESETS
+} EqControl;
 
 GtkWidget *equalizerwin = NULL;
 static GtkWidget *eqwin_drawing_area = NULL;
 static GtkWidget *eqwin_floating_window = NULL;
+static GtkWidget *eq_presets_popover = NULL;
 static GList *eqwin_wlist = NULL;
 
 static gboolean eq_active = TRUE;
+static gboolean eq_auto = FALSE;
+static EqControl eq_pressed_control = EQ_CONTROL_NONE;
+static gboolean eq_pressed_inside = FALSE;
 static gfloat eq_preamp = 0.0;
 static gfloat eq_bands[10] = { 0 };
 
@@ -25,22 +48,57 @@ static gint eq_dragging = -1; /* -1=none, 0=preamp, 1-10=bands */
 static void eqwin_queue_draw(void);
 static void eqwin_attach_widget(void);
 static void eqwin_detach_widget(void);
+static void eqwin_show_presets_menu(void);
+
+static gboolean
+eqwin_point_in_rect(gint x, gint y, gint rx, gint ry, gint rw, gint rh)
+{
+    return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+}
+
+static EqControl
+eqwin_control_at(gint x, gint y)
+{
+    if (eqwin_point_in_rect(x, y, EQWIN_ON_X, EQWIN_ON_Y,
+                            EQWIN_ON_W, EQWIN_ON_H))
+        return EQ_CONTROL_ON;
+    if (eqwin_point_in_rect(x, y, EQWIN_AUTO_X, EQWIN_AUTO_Y,
+                            EQWIN_AUTO_W, EQWIN_AUTO_H))
+        return EQ_CONTROL_AUTO;
+    if (eqwin_point_in_rect(x, y, EQWIN_PRESETS_X, EQWIN_PRESETS_Y,
+                            EQWIN_PRESETS_W, EQWIN_PRESETS_H))
+        return EQ_CONTROL_PRESETS;
+    return EQ_CONTROL_NONE;
+}
+
+static void
+eqwin_draw_toggle_button(cairo_t *cr, gboolean selected, gboolean pressed,
+                         gint nux, gint nuy, gint pux, gint puy,
+                         gint nsx, gint nsy, gint psx, gint psy,
+                         gint dx, gint dy, gint w, gint h)
+{
+    gint sx, sy;
+
+    if (selected) {
+        sx = pressed ? psx : nsx;
+        sy = pressed ? psy : nsy;
+    } else {
+        sx = pressed ? pux : nux;
+        sy = pressed ? puy : nuy;
+    }
+
+    skin_draw_pixmap(cr, SKIN_EQMAIN, sx, sy, dx, dy, w, h);
+}
 
 /* ---- EQ drawing ---- */
 
 static void
 draw_eq_slider(cairo_t *cr, gint x, gint pos)
 {
-    /* Slider track */
     gint track_x = x;
     gint track_y = 38;
     gint track_h = 63;
 
-    /* Draw track background from skin */
-    skin_draw_pixmap(cr, SKIN_EQMAIN,
-                     13, 164, track_x, track_y, 14, track_h);
-
-    /* Draw knob at position */
     gint knob_y = track_y + (pos * (track_h - 11)) / 100;
     skin_draw_pixmap(cr, SKIN_EQMAIN,
                      0, 164, track_x, knob_y, 14, 11);
@@ -53,17 +111,6 @@ draw_eq_graph(cairo_t *cr)
     gint graph_x = 86, graph_y = 17;
     gint graph_w = 113, graph_h = 19;
 
-    /* Background - source is at y=132 in eqmain, only available in full skins */
-    if (skin->pixmaps[SKIN_EQMAIN].current_height >= 151) {
-        skin_draw_pixmap(cr, SKIN_EQMAIN,
-                         66, 132, graph_x, graph_y, graph_w, graph_h);
-    } else {
-        cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
-        cairo_rectangle(cr, graph_x, graph_y, graph_w, graph_h);
-        cairo_fill(cr);
-    }
-
-    /* Draw response curve */
     cairo_set_source_rgb(cr, 0.0, 1.0, 0.0);
     cairo_set_line_width(cr, 1.0);
 
@@ -101,14 +148,23 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
         skin_draw_pixmap(cr, SKIN_EQMAIN,
                          0, 134, 0, 0, EQWIN_WIDTH, 14);
 
-    /* On/Off button state */
-    if (eq_active) {
-        skin_draw_pixmap(cr, SKIN_EQMAIN,
-                         69, 119, 14, 18, 25, 12);
-    } else {
-        skin_draw_pixmap(cr, SKIN_EQMAIN,
-                         187, 119, 14, 18, 25, 12);
-    }
+    eqwin_draw_toggle_button(cr, eq_active,
+                             eq_pressed_control == EQ_CONTROL_ON &&
+                             eq_pressed_inside,
+                             10, 119, 128, 119, 69, 119, 187, 119,
+                             EQWIN_ON_X, EQWIN_ON_Y,
+                             EQWIN_ON_W, EQWIN_ON_H);
+    eqwin_draw_toggle_button(cr, eq_auto,
+                             eq_pressed_control == EQ_CONTROL_AUTO &&
+                             eq_pressed_inside,
+                             35, 119, 153, 119, 94, 119, 212, 119,
+                             EQWIN_AUTO_X, EQWIN_AUTO_Y,
+                             EQWIN_AUTO_W, EQWIN_AUTO_H);
+    skin_draw_pixmap(cr, SKIN_EQMAIN,
+                     224, (eq_pressed_control == EQ_CONTROL_PRESETS &&
+                           eq_pressed_inside) ? 176 : 164,
+                     EQWIN_PRESETS_X, EQWIN_PRESETS_Y,
+                     EQWIN_PRESETS_W, EQWIN_PRESETS_H);
 
     /* Preamp slider */
     draw_eq_slider(cr, 21, eq_preamp_pos);
@@ -159,16 +215,16 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
         GTK_GESTURE_SINGLE(gesture));
 
     if (button == 1 &&
-        sx >= EQWIN_DETACH_BTN_X && sx < EQWIN_DETACH_BTN_X + EQWIN_DETACH_BTN_W &&
-        sy >= EQWIN_DETACH_BTN_Y && sy < EQWIN_DETACH_BTN_Y + EQWIN_DETACH_BTN_H) {
+        eqwin_point_in_rect(sx, sy, EQWIN_DETACH_BTN_X, EQWIN_DETACH_BTN_Y,
+                            EQWIN_DETACH_BTN_W, EQWIN_DETACH_BTN_H)) {
         equalizerwin_set_detached(!cfg.equalizer_detached);
         return;
     }
 
-    /* On/Off button (14,18 size 25x12) */
-    if (sx >= 14 && sx < 39 && sy >= 18 && sy < 30) {
-        eq_active = !eq_active;
-        apply_eq();
+    EqControl control = eqwin_control_at(sx, sy);
+    if (control != EQ_CONTROL_NONE) {
+        eq_pressed_control = control;
+        eq_pressed_inside = TRUE;
         eqwin_queue_draw();
         return;
     }
@@ -226,7 +282,36 @@ static void
 eqwin_click_released(GtkGestureClick *gesture, int n_press,
                      double x, double y, gpointer data)
 {
-    (void)gesture; (void)n_press; (void)x; (void)y; (void)data;
+    (void)n_press; (void)data;
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+    gint sx = (gint)(x / scale);
+    gint sy = (gint)(y / scale);
+    (void)gesture;
+
+    if (eq_pressed_control != EQ_CONTROL_NONE) {
+        EqControl released_control = eqwin_control_at(sx, sy);
+        EqControl pressed_control = eq_pressed_control;
+        gboolean activate = released_control == pressed_control;
+
+        eq_pressed_control = EQ_CONTROL_NONE;
+        eq_pressed_inside = FALSE;
+
+        if (activate) {
+            if (pressed_control == EQ_CONTROL_ON) {
+                eq_active = !eq_active;
+                apply_eq();
+            } else if (pressed_control == EQ_CONTROL_AUTO) {
+                eq_auto = !eq_auto;
+            } else if (pressed_control == EQ_CONTROL_PRESETS) {
+                eqwin_show_presets_menu();
+            }
+        }
+        eqwin_queue_draw();
+        return;
+    }
+
     eq_dragging = -1;
 }
 
@@ -236,12 +321,21 @@ eqwin_motion(GtkEventControllerMotion *controller,
 {
     (void)controller; (void)data;
 
-    if (eq_dragging < 0)
-        return;
-
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 1;
+    gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
+
+    if (eq_pressed_control != EQ_CONTROL_NONE) {
+        gboolean was_inside = eq_pressed_inside;
+        eq_pressed_inside = eqwin_control_at(sx, sy) == eq_pressed_control;
+        if (was_inside != eq_pressed_inside)
+            eqwin_queue_draw();
+        return;
+    }
+
+    if (eq_dragging < 0)
+        return;
     gint pos = CLAMP((sy - 38) * 100 / 63, 0, 100);
 
     if (eq_dragging == 0) {
@@ -261,6 +355,99 @@ eqwin_queue_draw(void)
 {
     if (eqwin_drawing_area)
         gtk_widget_queue_draw(eqwin_drawing_area);
+}
+
+static void
+eqwin_apply_preset(gint preset)
+{
+    eq_preamp_pos = 50;
+    for (gint i = 0; i < 10; i++)
+        eq_slider_pos[i] = 50;
+
+    switch (preset) {
+    case 1: /* Bass boost */
+        eq_slider_pos[0] = 25;
+        eq_slider_pos[1] = 30;
+        eq_slider_pos[2] = 40;
+        break;
+    case 2: /* Treble boost */
+        eq_slider_pos[7] = 40;
+        eq_slider_pos[8] = 30;
+        eq_slider_pos[9] = 25;
+        break;
+    case 3: /* Rock */
+        eq_slider_pos[0] = 30;
+        eq_slider_pos[1] = 35;
+        eq_slider_pos[4] = 60;
+        eq_slider_pos[5] = 60;
+        eq_slider_pos[8] = 35;
+        eq_slider_pos[9] = 30;
+        break;
+    default:
+        break;
+    }
+
+    apply_eq();
+    eqwin_queue_draw();
+}
+
+static void
+eqwin_preset_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+    eqwin_apply_preset(GPOINTER_TO_INT(data));
+    if (eq_presets_popover) {
+        gtk_popover_popdown(GTK_POPOVER(eq_presets_popover));
+        gtk_widget_unparent(eq_presets_popover);
+        eq_presets_popover = NULL;
+    }
+}
+
+static void
+eqwin_show_presets_menu(void)
+{
+    if (!eqwin_drawing_area)
+        return;
+
+    if (eq_presets_popover) {
+        gtk_popover_popdown(GTK_POPOVER(eq_presets_popover));
+        gtk_widget_unparent(eq_presets_popover);
+        eq_presets_popover = NULL;
+    }
+
+    eq_presets_popover = gtk_popover_new();
+    gtk_widget_set_parent(eq_presets_popover, eqwin_drawing_area);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_popover_set_child(GTK_POPOVER(eq_presets_popover), box);
+
+    static const struct {
+        const gchar *label;
+        gint preset;
+    } presets[] = {
+        { "Flat", 0 },
+        { "Bass Boost", 1 },
+        { "Treble Boost", 2 },
+        { "Rock", 3 },
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS(presets); i++) {
+        GtkWidget *button = gtk_button_new_with_label(presets[i].label);
+        g_signal_connect(button, "clicked",
+                         G_CALLBACK(eqwin_preset_clicked),
+                         GINT_TO_POINTER(presets[i].preset));
+        gtk_box_append(GTK_BOX(box), button);
+    }
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+    GdkRectangle rect = {
+        EQWIN_PRESETS_X * scale,
+        (EQWIN_PRESETS_Y + EQWIN_PRESETS_H) * scale,
+        EQWIN_PRESETS_W * scale,
+        1
+    };
+    gtk_popover_set_pointing_to(GTK_POPOVER(eq_presets_popover), &rect);
+    gtk_popover_popup(GTK_POPOVER(eq_presets_popover));
 }
 
 static gboolean
