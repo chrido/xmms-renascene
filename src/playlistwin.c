@@ -105,6 +105,10 @@ draw_playlist_frame(cairo_t *cr)
     SkinIndex src = SKIN_PLEDIT;
     gint y = 0; /* focused titlebar; would be 21 for unfocused */
 
+    gdk_cairo_set_source_rgba(cr, &skin->pledit_normalbg);
+    cairo_rectangle(cr, 0, 0, w, h);
+    cairo_fill(cr);
+
     /* Titlebar left corner */
     skin_draw_pixmap(cr, src, 0, y, 0, 0, 25, 20);
 
@@ -126,9 +130,12 @@ draw_playlist_frame(cairo_t *cr)
     skin_draw_pixmap(cr, src, 153, y, w - 25, 0, 25, 20);
 
     /* Left and right sides */
-    for (gint i = 0; i < (h - 58) / 29; i++) {
-        skin_draw_pixmap(cr, src, 0, 42, 0, (i * 29) + 20, 12, 29);
-        skin_draw_pixmap(cr, src, 32, 42, w - 19, (i * 29) + 20, 19, 29);
+    const gint side_src_y = 52;
+    const gint side_y = 20;
+    const gint side_h = h - 58;
+    for (gint ydest = side_y; ydest < side_y + side_h; ydest++) {
+        skin_draw_pixmap(cr, src, 0, side_src_y, 0, ydest, 12, 1);
+        skin_draw_pixmap(cr, src, 32, side_src_y, w - 19, ydest, 19, 1);
     }
 
     /* Bottom left corner (menu buttons) */

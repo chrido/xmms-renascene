@@ -709,6 +709,7 @@ activate(GtkApplication *app, gpointer data)
         return;
     }
     app_initialized = TRUE;
+    g_application_hold(G_APPLICATION(app));
 
     load_config();
     playlist_init();

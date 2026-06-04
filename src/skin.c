@@ -124,6 +124,12 @@ load_default_pixmaps(void)
 
         if (resource_names[i]) {
             sp->def_surface = surface_from_resource(resource_names[i]);
+            if (sp->def_surface) {
+                sp->width = cairo_image_surface_get_width(sp->def_surface);
+                sp->height = cairo_image_surface_get_height(sp->def_surface);
+                sp->current_width = sp->width;
+                sp->current_height = sp->height;
+            }
         }
         sp->surface = NULL;
     }
@@ -475,6 +481,28 @@ skin_draw_pixmap(cairo_t *cr, SkinIndex index,
     cairo_surface_t *surface = sp->surface ? sp->surface : sp->def_surface;
 
     if (!surface)
+        return;
+
+    gint surface_width = cairo_image_surface_get_width(surface);
+    gint surface_height = cairo_image_surface_get_height(surface);
+
+    if (xsrc < 0) {
+        xdest -= xsrc;
+        width += xsrc;
+        xsrc = 0;
+    }
+    if (ysrc < 0) {
+        ydest -= ysrc;
+        height += ysrc;
+        ysrc = 0;
+    }
+    if (xsrc >= surface_width || ysrc >= surface_height)
+        return;
+    if (xsrc + width > surface_width)
+        width = surface_width - xsrc;
+    if (ysrc + height > surface_height)
+        height = surface_height - ysrc;
+    if (width <= 0 || height <= 0)
         return;
 
     cairo_save(cr);
