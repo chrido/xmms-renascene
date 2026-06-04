@@ -88,7 +88,8 @@ typedef struct {
 typedef enum {
     VIS_MODE_ANALYZER,
     VIS_MODE_SCOPE,
-    VIS_MODE_OFF
+    VIS_MODE_OFF,
+    VIS_MODE_MILKDROP
 } VisMode;
 
 typedef enum {
@@ -133,6 +134,8 @@ typedef struct {
     gboolean peaks_enabled;
     VisFalloffSpeed analyzer_falloff;
     VisFalloffSpeed peaks_falloff;
+    gfloat milkdrop_phase;
+    gfloat milkdrop_energy;
 } Vis;
 
 /* Mono/Stereo indicator */

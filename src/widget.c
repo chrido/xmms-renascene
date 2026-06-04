@@ -627,6 +627,56 @@ vis_decay(Vis *vis)
 }
 
 static void
+vis_draw_milkdrop(Vis *vis, cairo_t *cr)
+{
+    Widget *w = (Widget *)vis;
+    const gfloat cx = (w->width - 1) * 0.5f;
+    const gfloat cy = 7.5f;
+    gfloat phase = vis->milkdrop_phase;
+    gfloat energy = CLAMP(vis->milkdrop_energy, 0.0f, 1.0f);
+    gfloat rot = phase * (0.35f + energy * 0.25f);
+    gfloat s = sinf(rot);
+    gfloat c = cosf(rot);
+
+    for (gint y = 0; y < 16; y++) {
+        for (gint x = 0; x < w->width && x < 76; x++) {
+            gfloat nx = (x - cx) / MAX(cx, 1.0f);
+            gfloat ny = (y - cy) / 8.0f;
+            gfloat rx = nx * c - ny * s;
+            gfloat ry = nx * s + ny * c;
+            gfloat r = sqrtf(rx * rx + ry * ry);
+            gfloat angle = atan2f(ry, rx);
+            gfloat warp = sinf(angle * 5.0f + phase * 1.7f) * 0.18f +
+                sinf(r * 12.0f - phase * 2.4f) * 0.16f;
+            gfloat tunnel = sinf((r + warp) * 18.0f - phase * 3.0f);
+            gfloat plasma = sinf((rx - ry) * 7.0f + phase) +
+                cosf((rx + ry) * 5.0f - phase * 1.3f);
+            gint color = 3 + (gint)((tunnel + plasma + 4.0f + energy * 2.0f) * 2.6f);
+            color = CLAMP(color, 2, 22);
+            vis_draw_pixel(cr, w, x, y, color);
+        }
+    }
+
+    for (gint x = 0; x < w->width && x < 75; x++) {
+        gfloat sample = vis->data[x];
+        gint y = CLAMP((gint)(7.5f + sinf(x * 0.19f + phase * 2.0f) * 3.0f -
+                              sample * 6.0f), 0, 15);
+        vis_draw_pixel(cr, w, x, y, 23);
+        if (y + 1 < 16)
+            vis_draw_pixel(cr, w, x, y + 1, 18);
+    }
+
+    for (gint i = 0; i < 28; i++) {
+        gfloat a = phase * 0.9f + i * (G_PI * 2.0f / 28.0f);
+        gfloat radius = 2.0f + energy * 7.0f +
+            sinf(phase * 1.4f + i * 0.7f) * 1.4f;
+        gint x = CLAMP((gint)(cx + cosf(a) * radius * 3.4f), 0, w->width - 1);
+        gint y = CLAMP((gint)(cy + sinf(a) * radius), 0, 15);
+        vis_draw_pixel(cr, w, x, y, 21 + (i % 3));
+    }
+}
+
+static void
 vis_draw(Widget *w, cairo_t *cr)
 {
     Vis *vis = (Vis *)w;
@@ -691,6 +741,12 @@ vis_draw(Widget *w, cairo_t *cr)
             }
             }
         }
+        cairo_restore(cr);
+        return;
+    }
+
+    if (vis->mode == VIS_MODE_MILKDROP) {
+        vis_draw_milkdrop(vis, cr);
         cairo_restore(cr);
         return;
     }
@@ -769,6 +825,14 @@ vis_tick(Vis *vis, gfloat *data, gint num)
     if (data)
         vis_set_data(vis, data, num);
     vis_decay(vis);
+    gfloat energy = 0.0f;
+    for (gint i = 0; i < 32; i++)
+        energy += vis->data[i];
+    energy /= 32.0f;
+    vis->milkdrop_energy = vis->milkdrop_energy * 0.88f + energy * 0.12f;
+    vis->milkdrop_phase = fmodf(vis->milkdrop_phase +
+                                0.08f + vis->milkdrop_energy * 0.08f,
+                                (gfloat)(G_PI * 2.0));
     widget_queue_draw((Widget *)vis);
 }
 
@@ -777,7 +841,7 @@ vis_set_mode(Vis *vis, VisMode mode)
 {
     if (!vis)
         return;
-    vis->mode = mode;
+    vis->mode = CLAMP(mode, VIS_MODE_ANALYZER, VIS_MODE_MILKDROP);
     widget_queue_draw((Widget *)vis);
 }
 

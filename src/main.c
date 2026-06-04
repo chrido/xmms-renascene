@@ -986,7 +986,7 @@ mainwin_apply_visualization_preferences(void)
         return;
 
     vis_set_mode(mainwin_vis, CLAMP(cfg.vis_mode,
-                                    VIS_MODE_ANALYZER, VIS_MODE_OFF));
+                                    VIS_MODE_ANALYZER, VIS_MODE_MILKDROP));
     vis_set_analyzer_mode(mainwin_vis, CLAMP(cfg.vis_analyzer_mode,
                                              VIS_ANALYZER_NORMAL,
                                              VIS_ANALYZER_VLINES));
@@ -1740,7 +1740,7 @@ load_config(void)
         }
         if (g_key_file_has_key(kf, "xmms", "vis_mode", NULL))
             cfg.vis_mode = CLAMP(g_key_file_get_integer(kf, "xmms", "vis_mode", NULL),
-                                 VIS_MODE_ANALYZER, VIS_MODE_OFF);
+                                 VIS_MODE_ANALYZER, VIS_MODE_MILKDROP);
         if (g_key_file_has_key(kf, "xmms", "vis_analyzer_mode", NULL))
             cfg.vis_analyzer_mode =
                 CLAMP(g_key_file_get_integer(kf, "xmms", "vis_analyzer_mode", NULL),

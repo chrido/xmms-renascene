@@ -15,6 +15,8 @@ gstreamer_pbutils = dependency('gstreamer-pbutils-1.0', version: '>= 1.16')
 libarchive = dependency('libarchive', version: '>= 3.0', required: false)
 libsoup = dependency('libsoup-3.0', version: '>= 3.0')
 json_glib = dependency('json-glib-1.0', version: '>= 1.6')
+cc = meson.get_compiler('c')
+libm = cc.find_library('m', required: false)
 
 conf_data = configuration_data()
 conf_data.set_quoted('PACKAGE', meson.project_name())
@@ -51,7 +53,7 @@ sources = files(
 
 executable('xmms',
   sources, resources,
-  dependencies: [gtk4, gstreamer, gstreamer_pbutils, libarchive, libsoup, json_glib],
+  dependencies: [gtk4, gstreamer, gstreamer_pbutils, libarchive, libsoup, json_glib, libm],
   include_directories: [
     include_directories('src'),
     include_directories('.'),     # for config.h

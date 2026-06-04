@@ -129,8 +129,7 @@ static void
 update_visualization_control_sensitivity(void)
 {
     const gchar *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_mode_combo));
-    gboolean analyzer = g_strcmp0(mode, "scope") != 0 &&
-        g_strcmp0(mode, "off") != 0;
+    gboolean analyzer = g_strcmp0(mode, "analyzer") == 0;
     gboolean scope = g_strcmp0(mode, "scope") == 0;
     gboolean enabled = g_strcmp0(mode, "off") != 0;
     gboolean peaks = gtk_check_button_get_active(GTK_CHECK_BUTTON(vis_peaks_check));
@@ -210,6 +209,7 @@ set_controls_from_config(void)
 
     combo_set_active_id(vis_mode_combo,
                         cfg.vis_mode == VIS_MODE_SCOPE ? "scope" :
+                        cfg.vis_mode == VIS_MODE_MILKDROP ? "milkdrop" :
                         cfg.vis_mode == VIS_MODE_OFF ? "off" : "analyzer");
     combo_set_active_id(vis_analyzer_mode_combo,
                         cfg.vis_analyzer_mode == VIS_ANALYZER_FIRE ? "fire" :
@@ -244,6 +244,7 @@ apply_visualization_controls(void)
 {
     const gchar *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_mode_combo));
     cfg.vis_mode = g_strcmp0(mode, "scope") == 0 ? VIS_MODE_SCOPE :
+        g_strcmp0(mode, "milkdrop") == 0 ? VIS_MODE_MILKDROP :
         g_strcmp0(mode, "off") == 0 ? VIS_MODE_OFF : VIS_MODE_ANALYZER;
     const gchar *analyzer_mode =
         gtk_combo_box_get_active_id(GTK_COMBO_BOX(vis_analyzer_mode_combo));
@@ -453,6 +454,7 @@ create_visualization_page(void)
     vis_mode_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_mode_combo), "analyzer", "Analyzer");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_mode_combo), "scope", "Scope");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_mode_combo), "milkdrop", "MilkDrop-inspired");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(vis_mode_combo), "off", "Off");
     grid_attach_label(grid, "Visualization mode:", vis_mode_combo, 0);
 
