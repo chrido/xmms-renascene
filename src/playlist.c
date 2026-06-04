@@ -1,5 +1,6 @@
 #include "xmms.h"
 #include <sys/stat.h>
+#include <gst/pbutils/pbutils.h>
 
 static GList *playlist = NULL;
 static gint playlist_position = -1;
@@ -7,6 +8,29 @@ static GList *shuffle_list = NULL;
 static gboolean shuffle = FALSE;
 static gboolean repeat = FALSE;
 static gboolean no_advance = FALSE;
+static gboolean duration_index_running = FALSE;
+static gboolean duration_index_rescan_requested = FALSE;
+
+typedef struct {
+    gint index;
+    gchar *uri;
+} DurationIndexItem;
+
+typedef struct {
+    GPtrArray *items;
+} DurationIndexJob;
+
+typedef struct {
+    gint index;
+    gchar *uri;
+    gint64 length;
+} DurationIndexResult;
+
+static void playlist_index_item_free(gpointer data);
+static void playlist_index_job_free(DurationIndexJob *job);
+static gpointer playlist_duration_index_thread(gpointer data);
+static gboolean playlist_duration_index_result_cb(gpointer data);
+static gboolean playlist_duration_index_finished_cb(gpointer data);
 
 static void
 playlist_refresh_position(PlaylistEntry *current)
@@ -43,6 +67,104 @@ playlist_sort_by_title_cmpfunc(gconstpointer a, gconstpointer b)
     const gchar *ta = (ea && ea->title) ? ea->title : "";
     const gchar *tb = (eb && eb->title) ? eb->title : "";
     return g_ascii_strcasecmp(ta, tb);
+}
+
+static void
+playlist_index_item_free(gpointer data)
+{
+    DurationIndexItem *item = data;
+    g_free(item->uri);
+    g_free(item);
+}
+
+static void
+playlist_index_job_free(DurationIndexJob *job)
+{
+    if (!job)
+        return;
+    g_ptr_array_free(job->items, TRUE);
+    g_free(job);
+}
+
+static gboolean
+playlist_duration_index_result_cb(gpointer data)
+{
+    DurationIndexResult *result = data;
+    PlaylistEntry *entry = playlist_get_entry(result->index);
+
+    if (entry && entry->filename &&
+        g_strcmp0(entry->filename, result->uri) == 0 &&
+        result->length > 0 &&
+        entry->length != result->length) {
+        entry->length = result->length;
+        playlistwin_update();
+    }
+
+    g_free(result->uri);
+    g_free(result);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean
+playlist_duration_index_finished_cb(gpointer data)
+{
+    (void)data;
+    duration_index_running = FALSE;
+
+    if (duration_index_rescan_requested) {
+        duration_index_rescan_requested = FALSE;
+        playlist_index_missing_durations();
+    } else {
+        playlistwin_update();
+    }
+
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer
+playlist_duration_index_thread(gpointer data)
+{
+    DurationIndexJob *job = data;
+
+    if (!gst_is_initialized())
+        gst_init(NULL, NULL);
+
+    GError *error = NULL;
+    GstDiscoverer *discoverer = gst_discoverer_new(5 * GST_SECOND, &error);
+    if (!discoverer) {
+        g_warning("Could not create duration indexer: %s",
+                  error ? error->message : "unknown error");
+        g_clear_error(&error);
+        playlist_index_job_free(job);
+        g_idle_add(playlist_duration_index_finished_cb, NULL);
+        return NULL;
+    }
+
+    for (guint i = 0; i < job->items->len; i++) {
+        DurationIndexItem *item = g_ptr_array_index(job->items, i);
+        GstDiscovererInfo *info =
+            gst_discoverer_discover_uri(discoverer, item->uri, &error);
+        if (!info) {
+            g_clear_error(&error);
+            continue;
+        }
+
+        GstClockTime duration = gst_discoverer_info_get_duration(info);
+        if (GST_CLOCK_TIME_IS_VALID(duration) && duration > 0) {
+            DurationIndexResult *result = g_new0(DurationIndexResult, 1);
+            result->index = item->index;
+            result->uri = g_strdup(item->uri);
+            result->length = (gint64)(duration / GST_MSECOND);
+            g_idle_add(playlist_duration_index_result_cb, result);
+        }
+
+        gst_discoverer_info_unref(info);
+    }
+
+    g_object_unref(discoverer);
+    playlist_index_job_free(job);
+    g_idle_add(playlist_duration_index_finished_cb, NULL);
+    return NULL;
 }
 
 static gint
@@ -182,6 +304,7 @@ playlist_add_uri(const gchar *uri)
     }
 
     playlist = g_list_append(playlist, entry);
+    playlist_index_missing_durations();
 }
 
 void
@@ -254,6 +377,8 @@ playlist_remove(gint pos)
         playlist_position--;
     else if (pos == playlist_position)
         playlist_position = -1;
+    if (duration_index_running)
+        duration_index_rescan_requested = TRUE;
 }
 
 void
@@ -264,6 +389,43 @@ playlist_clear(void)
     playlist_position = -1;
     g_list_free(shuffle_list);
     shuffle_list = NULL;
+    if (duration_index_running)
+        duration_index_rescan_requested = TRUE;
+}
+
+void
+playlist_index_missing_durations(void)
+{
+    if (duration_index_running) {
+        duration_index_rescan_requested = TRUE;
+        return;
+    }
+
+    DurationIndexJob *job = g_new0(DurationIndexJob, 1);
+    job->items = g_ptr_array_new_with_free_func(playlist_index_item_free);
+
+    gint index = 0;
+    for (GList *l = playlist; l; l = l->next, index++) {
+        PlaylistEntry *entry = l->data;
+        if (!entry || entry->length >= 0 || !entry->filename ||
+            g_str_has_prefix(entry->filename, "spotify:"))
+            continue;
+
+        DurationIndexItem *item = g_new0(DurationIndexItem, 1);
+        item->index = index;
+        item->uri = g_strdup(entry->filename);
+        g_ptr_array_add(job->items, item);
+    }
+
+    if (job->items->len == 0) {
+        playlist_index_job_free(job);
+        return;
+    }
+
+    duration_index_running = TRUE;
+    GThread *thread = g_thread_new("playlist-duration-index",
+                                   playlist_duration_index_thread, job);
+    g_thread_unref(thread);
 }
 
 gint
@@ -290,6 +452,14 @@ playlist_get_title(gint pos)
 {
     PlaylistEntry *entry = playlist_get_entry(pos);
     return entry ? entry->title : NULL;
+}
+
+void
+playlist_set_length(gint pos, gint64 length_ms)
+{
+    PlaylistEntry *entry = playlist_get_entry(pos);
+    if (entry && length_ms >= 0)
+        entry->length = length_ms;
 }
 
 gint
@@ -584,10 +754,27 @@ playlist_load(const gchar *filename)
     g_free(contents);
 
     gchar *base_dir = g_path_get_dirname(filename);
+    gint64 pending_length = -1;
+    gchar *pending_title = NULL;
 
     for (int i = 0; lines[i]; i++) {
         gchar *line = g_strstrip(lines[i]);
-        if (line[0] == '\0' || line[0] == '#')
+        if (line[0] == '\0')
+            continue;
+
+        if (g_str_has_prefix(line, "#EXTINF:")) {
+            gchar *comma = strchr(line, ',');
+            if (comma) {
+                *comma = '\0';
+                gint seconds = atoi(line + 8);
+                pending_length = seconds >= 0 ? (gint64)seconds * 1000 : -1;
+                g_free(pending_title);
+                pending_title = g_strdup(comma + 1);
+            }
+            continue;
+        }
+
+        if (line[0] == '#')
             continue;
 
         if (g_str_has_prefix(line, "file://") ||
@@ -602,20 +789,39 @@ playlist_load(const gchar *filename)
             playlist_add(path);
             g_free(path);
         }
+
+        PlaylistEntry *entry = g_list_last(playlist) ?
+            g_list_last(playlist)->data : NULL;
+        if (entry) {
+            if (pending_length >= 0)
+                entry->length = pending_length;
+            if (pending_title && pending_title[0]) {
+                g_free(entry->title);
+                entry->title = g_strdup(pending_title);
+            }
+        }
+        pending_length = -1;
+        g_clear_pointer(&pending_title, g_free);
     }
 
     g_strfreev(lines);
     g_free(base_dir);
+    g_free(pending_title);
     return TRUE;
 }
 
 gboolean
 playlist_save(const gchar *filename)
 {
-    GString *str = g_string_new("");
+    GString *str = g_string_new("#EXTM3U\n");
 
     for (GList *l = playlist; l; l = l->next) {
         PlaylistEntry *entry = l->data;
+        if (entry->length >= 0) {
+            g_string_append_printf(str, "#EXTINF:%" G_GINT64_FORMAT ",%s\n",
+                                   entry->length / 1000,
+                                   entry->title ? entry->title : "");
+        }
         g_string_append(str, entry->filename);
         g_string_append_c(str, '\n');
     }

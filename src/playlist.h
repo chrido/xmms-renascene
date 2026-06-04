@@ -20,11 +20,13 @@ void playlist_add_spotify(const gchar *spotify_uri, const gchar *title,
                            gint duration_ms);
 void playlist_remove(gint pos);
 void playlist_clear(void);
+void playlist_index_missing_durations(void);
 
 gint playlist_get_length(void);
 PlaylistEntry *playlist_get_entry(gint pos);
 const gchar *playlist_get_filename(gint pos);
 const gchar *playlist_get_title(gint pos);
+void playlist_set_length(gint pos, gint64 length_ms);
 
 gint playlist_get_position(void);
 void playlist_set_position(gint pos);

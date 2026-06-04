@@ -1271,6 +1271,12 @@ mainwin_update_cb(gpointer data)
         const gchar *title = playlist_get_title(pos);
         if (title) {
             textbox_set_text(mainwin_info, title);
+            gint64 duration = player_get_duration();
+            if (duration > 0) {
+                PlaylistEntry *entry = playlist_get_entry(pos);
+                if (entry && entry->length != duration)
+                    playlist_set_length(pos, duration);
+            }
 
             /* Update MPRIS metadata only when track changes */
             if (pos != prev_playlist_pos) {

@@ -11,6 +11,7 @@ project('xmms-resuscitated', 'c',
 gnome = import('gnome')
 gtk4 = dependency('gtk4', version: '>= 4.6')
 gstreamer = dependency('gstreamer-1.0', version: '>= 1.16')
+gstreamer_pbutils = dependency('gstreamer-pbutils-1.0', version: '>= 1.16')
 libarchive = dependency('libarchive', version: '>= 3.0', required: false)
 libsoup = dependency('libsoup-3.0', version: '>= 3.0')
 json_glib = dependency('json-glib-1.0', version: '>= 1.6')
@@ -50,7 +51,7 @@ sources = files(
 
 executable('xmms',
   sources, resources,
-  dependencies: [gtk4, gstreamer, libarchive, libsoup, json_glib],
+  dependencies: [gtk4, gstreamer, gstreamer_pbutils, libarchive, libsoup, json_glib],
   include_directories: [
     include_directories('src'),
     include_directories('.'),     # for config.h
