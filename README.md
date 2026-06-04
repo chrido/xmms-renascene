@@ -94,10 +94,11 @@ Pass files or directories on the command line to add them to the playlist:
 xmms ~/Music/*.mp3
 ```
 
-Start with the playlist window opened on top:
+Start with the playlist or equalizer opened:
 
 ```sh
 xmms --playlist
+xmms --equalizer
 ```
 
 ## Skins
