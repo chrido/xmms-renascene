@@ -33,12 +33,17 @@ typedef struct {
     gchar *skin;
     gint timer_mode;
     gchar *output_device;
+    gboolean playlist_visible;
+    gboolean playlist_detached;
+    gboolean equalizer_visible;
+    gboolean equalizer_detached;
 } Config;
 
 extern Config cfg;
 
 extern GtkWidget *mainwin;
 extern GtkWidget *mainwin_drawing_area;
+extern GtkWidget *mainwin_container;
 
 #define MAINWIN_WIDTH   275
 #define MAINWIN_HEIGHT  116
@@ -46,6 +51,7 @@ extern GtkWidget *mainwin_drawing_area;
 #define PLAYER_WIDTH  MAINWIN_WIDTH
 
 void mainwin_queue_draw(void);
+void mainwin_update_attached_size(void);
 void draw_main_window(cairo_t *cr);
 void save_config(void);
 

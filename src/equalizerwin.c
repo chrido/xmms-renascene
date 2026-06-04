@@ -3,9 +3,14 @@
 
 #define EQWIN_WIDTH  275
 #define EQWIN_HEIGHT 116
+#define EQWIN_DETACH_BTN_X 250
+#define EQWIN_DETACH_BTN_Y 3
+#define EQWIN_DETACH_BTN_W 13
+#define EQWIN_DETACH_BTN_H 10
 
 GtkWidget *equalizerwin = NULL;
 static GtkWidget *eqwin_drawing_area = NULL;
+static GtkWidget *eqwin_floating_window = NULL;
 static GList *eqwin_wlist = NULL;
 
 static gboolean eq_active = TRUE;
@@ -18,6 +23,8 @@ static gint eq_preamp_pos = 50;
 static gint eq_dragging = -1; /* -1=none, 0=preamp, 1-10=bands */
 
 static void eqwin_queue_draw(void);
+static void eqwin_attach_widget(void);
+static void eqwin_detach_widget(void);
 
 /* ---- EQ drawing ---- */
 
@@ -151,6 +158,13 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
     gint button = gtk_gesture_single_get_current_button(
         GTK_GESTURE_SINGLE(gesture));
 
+    if (button == 1 &&
+        sx >= EQWIN_DETACH_BTN_X && sx < EQWIN_DETACH_BTN_X + EQWIN_DETACH_BTN_W &&
+        sy >= EQWIN_DETACH_BTN_Y && sy < EQWIN_DETACH_BTN_Y + EQWIN_DETACH_BTN_H) {
+        equalizerwin_set_detached(!cfg.equalizer_detached);
+        return;
+    }
+
     /* On/Off button (14,18 size 25x12) */
     if (sx >= 14 && sx < 39 && sy >= 18 && sy < 30) {
         eq_active = !eq_active;
@@ -188,13 +202,22 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
 
     /* Titlebar drag */
     if (sy < 14) {
-        GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(equalizerwin));
+        GtkWidget *move_window = cfg.equalizer_detached ?
+            eqwin_floating_window : mainwin;
+        GdkSurface *surface = move_window ?
+            gtk_native_get_surface(GTK_NATIVE(move_window)) : NULL;
         if (surface && GDK_IS_TOPLEVEL(surface)) {
             GdkDevice *device = gtk_gesture_get_device(GTK_GESTURE(gesture));
             guint32 timestamp = gtk_event_controller_get_current_event_time(
                 GTK_EVENT_CONTROLLER(gesture));
+            graphene_point_t point = GRAPHENE_POINT_INIT(x, y);
+            graphene_point_t translated = point;
+            if (!cfg.equalizer_detached && mainwin &&
+                !gtk_widget_compute_point(eqwin_drawing_area, mainwin,
+                                          &point, &translated))
+                translated = point;
             gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), device,
-                                    button, x, y, timestamp);
+                                    button, translated.x, translated.y, timestamp);
         }
     }
 }
@@ -240,13 +263,81 @@ eqwin_queue_draw(void)
         gtk_widget_queue_draw(eqwin_drawing_area);
 }
 
+static gboolean
+eqwin_floating_close_cb(GtkWindow *window, gpointer data)
+{
+    (void)window; (void)data;
+    equalizerwin_show(FALSE);
+    return TRUE;
+}
+
+static void
+eqwin_ensure_floating_window(void)
+{
+    if (eqwin_floating_window)
+        return;
+
+    eqwin_floating_window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(eqwin_floating_window),
+                         "XMMS Resuscitated - Equalizer");
+    gtk_window_set_decorated(GTK_WINDOW(eqwin_floating_window), FALSE);
+    gtk_window_set_resizable(GTK_WINDOW(eqwin_floating_window), FALSE);
+    if (mainwin) {
+        gtk_window_set_transient_for(GTK_WINDOW(eqwin_floating_window),
+                                     GTK_WINDOW(mainwin));
+        gtk_window_set_destroy_with_parent(GTK_WINDOW(eqwin_floating_window),
+                                           TRUE);
+    }
+    g_signal_connect(eqwin_floating_window, "close-request",
+                     G_CALLBACK(eqwin_floating_close_cb), NULL);
+}
+
+static void
+eqwin_attach_widget(void)
+{
+    if (!eqwin_drawing_area || !mainwin_container)
+        return;
+
+    GtkWidget *parent = gtk_widget_get_parent(eqwin_drawing_area);
+    if (parent == mainwin_container)
+        return;
+
+    g_object_ref(eqwin_drawing_area);
+    if (parent == eqwin_floating_window)
+        gtk_window_set_child(GTK_WINDOW(eqwin_floating_window), NULL);
+    else if (parent)
+        gtk_widget_unparent(eqwin_drawing_area);
+
+    gtk_box_insert_child_after(GTK_BOX(mainwin_container), eqwin_drawing_area,
+                               mainwin_drawing_area);
+    g_object_unref(eqwin_drawing_area);
+}
+
+static void
+eqwin_detach_widget(void)
+{
+    if (!eqwin_drawing_area)
+        return;
+
+    eqwin_ensure_floating_window();
+    GtkWidget *parent = gtk_widget_get_parent(eqwin_drawing_area);
+    if (parent == eqwin_floating_window)
+        return;
+
+    g_object_ref(eqwin_drawing_area);
+    if (parent == mainwin_container)
+        gtk_box_remove(GTK_BOX(mainwin_container), eqwin_drawing_area);
+    else if (parent)
+        gtk_widget_unparent(eqwin_drawing_area);
+
+    gtk_window_set_child(GTK_WINDOW(eqwin_floating_window), eqwin_drawing_area);
+    g_object_unref(eqwin_drawing_area);
+}
+
 void
 equalizerwin_create(GtkApplication *app)
 {
-    equalizerwin = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(equalizerwin), "XMMS Resuscitated - Equalizer");
-    gtk_window_set_decorated(GTK_WINDOW(equalizerwin), FALSE);
-    gtk_window_set_resizable(GTK_WINDOW(equalizerwin), FALSE);
+    (void)app;
 
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 2;
@@ -259,8 +350,8 @@ equalizerwin_create(GtkApplication *app)
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(eqwin_drawing_area),
         draw_equalizer_window, NULL, NULL);
-
-    gtk_window_set_child(GTK_WINDOW(equalizerwin), eqwin_drawing_area);
+    gtk_widget_set_visible(eqwin_drawing_area, FALSE);
+    equalizerwin = eqwin_drawing_area;
 
     /* Click events */
     GtkGesture *click = gtk_gesture_click_new();
@@ -276,16 +367,80 @@ equalizerwin_create(GtkApplication *app)
     gtk_widget_add_controller(eqwin_drawing_area, motion);
 }
 
+GtkWidget *
+equalizerwin_get_widget(void)
+{
+    return eqwin_drawing_area;
+}
+
 void
 equalizerwin_show(gboolean show)
 {
-    if (!equalizerwin)
+    if (!eqwin_drawing_area)
         return;
-    gtk_widget_set_visible(equalizerwin, show);
+    cfg.equalizer_visible = show;
+    if (cfg.equalizer_detached) {
+        eqwin_detach_widget();
+        gtk_widget_set_visible(eqwin_drawing_area, TRUE);
+        if (show)
+            gtk_window_present(GTK_WINDOW(eqwin_floating_window));
+        else if (eqwin_floating_window)
+            gtk_widget_set_visible(eqwin_floating_window, FALSE);
+    } else {
+        eqwin_attach_widget();
+        if (eqwin_floating_window)
+            gtk_widget_set_visible(eqwin_floating_window, FALSE);
+        gtk_widget_set_visible(eqwin_drawing_area, show);
+    }
+    mainwin_update_attached_size();
+    eqwin_queue_draw();
 }
 
 gboolean
 equalizerwin_is_visible(void)
 {
-    return equalizerwin && gtk_widget_get_visible(equalizerwin);
+    if (!eqwin_drawing_area)
+        return FALSE;
+    if (cfg.equalizer_detached)
+        return eqwin_floating_window &&
+            gtk_widget_get_visible(eqwin_floating_window);
+    return gtk_widget_get_visible(eqwin_drawing_area);
+}
+
+void
+equalizerwin_set_detached(gboolean detached)
+{
+    if (!eqwin_drawing_area) {
+        cfg.equalizer_detached = detached;
+        return;
+    }
+
+    gboolean visible = equalizerwin_is_visible();
+    cfg.equalizer_detached = detached;
+    if (detached) {
+        eqwin_detach_widget();
+        gtk_widget_set_visible(eqwin_drawing_area, TRUE);
+        if (visible)
+            gtk_window_present(GTK_WINDOW(eqwin_floating_window));
+    } else {
+        if (eqwin_floating_window)
+            gtk_widget_set_visible(eqwin_floating_window, FALSE);
+        eqwin_attach_widget();
+        gtk_widget_set_visible(eqwin_drawing_area, visible);
+    }
+    cfg.equalizer_visible = visible;
+    mainwin_update_attached_size();
+    eqwin_queue_draw();
+}
+
+gboolean
+equalizerwin_is_detached(void)
+{
+    return cfg.equalizer_detached;
+}
+
+gint
+equalizerwin_height(void)
+{
+    return EQWIN_HEIGHT;
 }

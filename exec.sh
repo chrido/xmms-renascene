@@ -24,6 +24,7 @@ if [ "${1:-}" = "screenshot" ]; then
         exec xvfb-run -a -s "$xvfb_server_args" \
             env -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
                 GDK_BACKEND=x11 GSK_RENDERER=cairo NO_AT_BRIDGE=1 \
+                XMMS_NON_UNIQUE=1 \
                 XMMS_EXEC_SKIP_BUILD=1 \
                 XMMS_SCREENSHOT_UNDER_XVFB=1 ./exec.sh screenshot "$@"
     fi

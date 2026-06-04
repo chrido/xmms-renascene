@@ -11,9 +11,14 @@
 #define PLWIN_SCROLLBAR_X  (PLWIN_WIDTH - 16)
 #define PLWIN_SCROLLBAR_W  8
 #define PLWIN_SCROLL_THUMB_H 18
+#define PLWIN_DETACH_BTN_X 250
+#define PLWIN_DETACH_BTN_Y 3
+#define PLWIN_DETACH_BTN_W 13
+#define PLWIN_DETACH_BTN_H 10
 
 GtkWidget *playlistwin = NULL;
 static GtkWidget *plwin_drawing_area = NULL;
+static GtkWidget *plwin_floating_window = NULL;
 static GList *plwin_wlist = NULL;
 
 static gint plwin_scroll_offset = 0;
@@ -280,6 +285,13 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         return;
     }
 
+    if (button == 1 &&
+        sx >= PLWIN_DETACH_BTN_X && sx < PLWIN_DETACH_BTN_X + PLWIN_DETACH_BTN_W &&
+        sy >= PLWIN_DETACH_BTN_Y && sy < PLWIN_DETACH_BTN_Y + PLWIN_DETACH_BTN_H) {
+        playlistwin_set_detached(!cfg.playlist_detached);
+        return;
+    }
+
     if (sx >= list_x && sx < list_x + list_w &&
         sy >= list_y && sy < list_y + list_h) {
         gint entry_idx = (sy - list_y) / PLWIN_ENTRY_HEIGHT + plwin_scroll_offset;
@@ -303,13 +315,22 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
 
     /* Titlebar drag */
     if (sy < 20) {
-        GdkSurface *surface = gtk_native_get_surface(GTK_NATIVE(playlistwin));
+        GtkWidget *move_window = cfg.playlist_detached ?
+            plwin_floating_window : mainwin;
+        GdkSurface *surface = move_window ?
+            gtk_native_get_surface(GTK_NATIVE(move_window)) : NULL;
         if (surface && GDK_IS_TOPLEVEL(surface)) {
             GdkDevice *device = gtk_gesture_get_device(GTK_GESTURE(gesture));
             guint32 timestamp = gtk_event_controller_get_current_event_time(
                 GTK_EVENT_CONTROLLER(gesture));
+            graphene_point_t point = GRAPHENE_POINT_INIT(x, y);
+            graphene_point_t translated = point;
+            if (!cfg.playlist_detached && mainwin &&
+                !gtk_widget_compute_point(plwin_drawing_area, mainwin,
+                                          &point, &translated))
+                translated = point;
             gdk_toplevel_begin_move(GDK_TOPLEVEL(surface), device,
-                                    button, x, y, timestamp);
+                                    button, translated.x, translated.y, timestamp);
         }
     }
 }
@@ -392,13 +413,80 @@ plwin_drop_cb(GtkDropTarget *target, const GValue *value,
     return TRUE;
 }
 
+static gboolean
+plwin_floating_close_cb(GtkWindow *window, gpointer data)
+{
+    (void)window; (void)data;
+    playlistwin_show(FALSE);
+    return TRUE;
+}
+
+static void
+plwin_ensure_floating_window(void)
+{
+    if (plwin_floating_window)
+        return;
+
+    plwin_floating_window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(plwin_floating_window),
+                         "XMMS Resuscitated - Playlist");
+    gtk_window_set_decorated(GTK_WINDOW(plwin_floating_window), FALSE);
+    gtk_window_set_resizable(GTK_WINDOW(plwin_floating_window), FALSE);
+    if (mainwin) {
+        gtk_window_set_transient_for(GTK_WINDOW(plwin_floating_window),
+                                     GTK_WINDOW(mainwin));
+        gtk_window_set_destroy_with_parent(GTK_WINDOW(plwin_floating_window),
+                                           TRUE);
+    }
+    g_signal_connect(plwin_floating_window, "close-request",
+                     G_CALLBACK(plwin_floating_close_cb), NULL);
+}
+
+static void
+plwin_attach_widget(void)
+{
+    if (!plwin_drawing_area || !mainwin_container)
+        return;
+
+    GtkWidget *parent = gtk_widget_get_parent(plwin_drawing_area);
+    if (parent == mainwin_container)
+        return;
+
+    g_object_ref(plwin_drawing_area);
+    if (parent == plwin_floating_window)
+        gtk_window_set_child(GTK_WINDOW(plwin_floating_window), NULL);
+    else if (parent)
+        gtk_widget_unparent(plwin_drawing_area);
+
+    gtk_box_append(GTK_BOX(mainwin_container), plwin_drawing_area);
+    g_object_unref(plwin_drawing_area);
+}
+
+static void
+plwin_detach_widget(void)
+{
+    if (!plwin_drawing_area)
+        return;
+
+    plwin_ensure_floating_window();
+    GtkWidget *parent = gtk_widget_get_parent(plwin_drawing_area);
+    if (parent == plwin_floating_window)
+        return;
+
+    g_object_ref(plwin_drawing_area);
+    if (parent == mainwin_container)
+        gtk_box_remove(GTK_BOX(mainwin_container), plwin_drawing_area);
+    else if (parent)
+        gtk_widget_unparent(plwin_drawing_area);
+
+    gtk_window_set_child(GTK_WINDOW(plwin_floating_window), plwin_drawing_area);
+    g_object_unref(plwin_drawing_area);
+}
+
 void
 playlistwin_create(GtkApplication *app)
 {
-    playlistwin = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(playlistwin), "XMMS Resuscitated - Playlist");
-    gtk_window_set_decorated(GTK_WINDOW(playlistwin), FALSE);
-    gtk_window_set_resizable(GTK_WINDOW(playlistwin), FALSE);
+    (void)app;
 
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 2;
@@ -411,8 +499,8 @@ playlistwin_create(GtkApplication *app)
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(plwin_drawing_area),
         draw_playlist_window, NULL, NULL);
-
-    gtk_window_set_child(GTK_WINDOW(playlistwin), plwin_drawing_area);
+    gtk_widget_set_visible(plwin_drawing_area, FALSE);
+    playlistwin = plwin_drawing_area;
 
     /* Click events */
     GtkGesture *click = gtk_gesture_click_new();
@@ -440,26 +528,87 @@ playlistwin_create(GtkApplication *app)
                               GTK_EVENT_CONTROLLER(drop));
 }
 
+GtkWidget *
+playlistwin_get_widget(void)
+{
+    return plwin_drawing_area;
+}
+
 void
 playlistwin_show(gboolean show)
 {
-    if (!playlistwin)
+    if (!plwin_drawing_area)
         return;
-    if (show)
-        gtk_window_present(GTK_WINDOW(playlistwin));
-    else
-        gtk_widget_set_visible(playlistwin, FALSE);
+    cfg.playlist_visible = show;
+    if (cfg.playlist_detached) {
+        plwin_detach_widget();
+        gtk_widget_set_visible(plwin_drawing_area, TRUE);
+        if (show)
+            gtk_window_present(GTK_WINDOW(plwin_floating_window));
+        else if (plwin_floating_window)
+            gtk_widget_set_visible(plwin_floating_window, FALSE);
+    } else {
+        plwin_attach_widget();
+        if (plwin_floating_window)
+            gtk_widget_set_visible(plwin_floating_window, FALSE);
+        gtk_widget_set_visible(plwin_drawing_area, show);
+    }
+    mainwin_update_attached_size();
+    plwin_queue_draw();
 }
 
 gboolean
 playlistwin_is_visible(void)
 {
-    return playlistwin && gtk_widget_get_visible(playlistwin);
+    if (!plwin_drawing_area)
+        return FALSE;
+    if (cfg.playlist_detached)
+        return plwin_floating_window &&
+            gtk_widget_get_visible(plwin_floating_window);
+    return gtk_widget_get_visible(plwin_drawing_area);
+}
+
+void
+playlistwin_set_detached(gboolean detached)
+{
+    if (!plwin_drawing_area) {
+        cfg.playlist_detached = detached;
+        return;
+    }
+
+    gboolean visible = playlistwin_is_visible();
+    cfg.playlist_detached = detached;
+    if (detached) {
+        plwin_detach_widget();
+        gtk_widget_set_visible(plwin_drawing_area, TRUE);
+        if (visible)
+            gtk_window_present(GTK_WINDOW(plwin_floating_window));
+    } else {
+        if (plwin_floating_window)
+            gtk_widget_set_visible(plwin_floating_window, FALSE);
+        plwin_attach_widget();
+        gtk_widget_set_visible(plwin_drawing_area, visible);
+    }
+    cfg.playlist_visible = visible;
+    mainwin_update_attached_size();
+    plwin_queue_draw();
+}
+
+gboolean
+playlistwin_is_detached(void)
+{
+    return cfg.playlist_detached;
+}
+
+gint
+playlistwin_height(void)
+{
+    return PLWIN_HEIGHT;
 }
 
 void
 playlistwin_update(void)
 {
-    if (playlistwin && gtk_widget_get_visible(playlistwin))
+    if (playlistwin_is_visible())
         plwin_queue_draw();
 }

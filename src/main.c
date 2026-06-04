@@ -1,9 +1,11 @@
 #include "xmms.h"
+#include <stdarg.h>
 
 Config cfg;
 
 GtkWidget *mainwin = NULL;
 GtkWidget *mainwin_drawing_area = NULL;
+GtkWidget *mainwin_container = NULL;
 
 static GList *mainwin_wlist = NULL;
 
@@ -35,6 +37,28 @@ static const GOptionEntry app_option_entries[] = {
 
 /* Forward declarations */
 static void open_files_cb(GObject *source, GAsyncResult *result, gpointer data);
+
+static gboolean
+session_debug_enabled(void)
+{
+    const gchar *debug = g_getenv("XMMS_DEBUG_SESSION");
+    return debug && debug[0] && g_strcmp0(debug, "0") != 0;
+}
+
+static void
+session_debug(const gchar *format, ...)
+{
+    if (!session_debug_enabled())
+        return;
+
+    va_list args;
+    va_start(args, format);
+    gchar *message = g_strdup_vprintf(format, args);
+    va_end(args);
+
+    g_printerr("xmms-session: %s\n", message);
+    g_free(message);
+}
 
 /* ---- Callbacks ---- */
 
@@ -242,6 +266,26 @@ mainwin_queue_draw(void)
 {
     if (mainwin_drawing_area)
         gtk_widget_queue_draw(mainwin_drawing_area);
+}
+
+void
+mainwin_update_attached_size(void)
+{
+    if (!mainwin)
+        return;
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 2;
+
+    gint height = MAINWIN_HEIGHT;
+    if (equalizerwin_is_visible() && !equalizerwin_is_detached())
+        height += equalizerwin_height();
+    if (playlistwin_is_visible() && !playlistwin_is_detached())
+        height += playlistwin_height();
+
+    gtk_window_set_default_size(GTK_WINDOW(mainwin),
+                                MAINWIN_WIDTH * scale, height * scale);
+    gtk_widget_queue_resize(mainwin);
 }
 
 static void
@@ -591,6 +635,10 @@ load_config(void)
     cfg.player_y = 100;
     cfg.scale_factor = 2;
     cfg.timer_mode = TIMER_ELAPSED;
+    cfg.playlist_visible = FALSE;
+    cfg.playlist_detached = FALSE;
+    cfg.equalizer_visible = FALSE;
+    cfg.equalizer_detached = FALSE;
 
     /* Try loading config file */
     gchar *config_dir = xmms_get_config_dir();
@@ -610,6 +658,29 @@ load_config(void)
         gchar *output = g_key_file_get_string(kf, "xmms", "output_device", NULL);
         if (output && output[0]) cfg.output_device = output;
         else g_free(output);
+
+        if (g_key_file_has_key(kf, "xmms", "playlist_visible", NULL))
+            cfg.playlist_visible =
+                g_key_file_get_boolean(kf, "xmms", "playlist_visible", NULL);
+        if (g_key_file_has_key(kf, "xmms", "playlist_detached", NULL))
+            cfg.playlist_detached =
+                g_key_file_get_boolean(kf, "xmms", "playlist_detached", NULL);
+        if (g_key_file_has_key(kf, "xmms", "equalizer_visible", NULL))
+            cfg.equalizer_visible =
+                g_key_file_get_boolean(kf, "xmms", "equalizer_visible", NULL);
+        if (g_key_file_has_key(kf, "xmms", "equalizer_detached", NULL))
+            cfg.equalizer_detached =
+                g_key_file_get_boolean(kf, "xmms", "equalizer_detached", NULL);
+
+        session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
+                      config_file, cfg.player_x, cfg.player_y,
+                      cfg.scale_factor, cfg.playlist_visible,
+                      cfg.playlist_detached, cfg.equalizer_visible,
+                      cfg.equalizer_detached);
+    } else {
+        session_debug("no config at %s; using defaults: player=(%d,%d) scale=%d",
+                      config_file, cfg.player_x, cfg.player_y,
+                      cfg.scale_factor);
     }
     g_key_file_free(kf);
     g_free(config_file);
@@ -628,6 +699,14 @@ save_config(void)
     g_key_file_set_integer(kf, "xmms", "player_x", cfg.player_x);
     g_key_file_set_integer(kf, "xmms", "player_y", cfg.player_y);
     g_key_file_set_integer(kf, "xmms", "scale_factor", cfg.scale_factor);
+    g_key_file_set_boolean(kf, "xmms", "playlist_visible",
+                           playlistwin_is_visible());
+    g_key_file_set_boolean(kf, "xmms", "playlist_detached",
+                           cfg.playlist_detached);
+    g_key_file_set_boolean(kf, "xmms", "equalizer_visible",
+                           equalizerwin_is_visible());
+    g_key_file_set_boolean(kf, "xmms", "equalizer_detached",
+                           cfg.equalizer_detached);
     if (cfg.skin)
         g_key_file_set_string(kf, "xmms", "skin", cfg.skin);
 
@@ -636,6 +715,11 @@ save_config(void)
         g_key_file_set_string(kf, "xmms", "output_device", output_dev);
 
     g_key_file_save_to_file(kf, config_file, NULL);
+    session_debug("saved config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
+                  config_file, cfg.player_x, cfg.player_y,
+                  cfg.scale_factor, playlistwin_is_visible(),
+                  cfg.playlist_detached, equalizerwin_is_visible(),
+                  cfg.equalizer_detached);
     g_key_file_free(kf);
     g_free(config_file);
     g_free(config_dir);
@@ -664,6 +748,23 @@ open_files_cb(GObject *source, GAsyncResult *result, gpointer data)
     }
     g_object_unref(files);
     playlist_play();
+}
+
+static gboolean
+mainwin_save_state_cb(GtkApplicationWindow *window, GVariantDict *dict,
+                      gpointer data)
+{
+    (void)window; (void)data;
+    g_variant_dict_insert(dict, "window-kind", "s", "player");
+    g_variant_dict_insert(dict, "playlist-visible", "b",
+                          playlistwin_is_visible());
+    g_variant_dict_insert(dict, "playlist-detached", "b",
+                          cfg.playlist_detached);
+    g_variant_dict_insert(dict, "equalizer-visible", "b",
+                          equalizerwin_is_visible());
+    g_variant_dict_insert(dict, "equalizer-detached", "b",
+                          cfg.equalizer_detached);
+    return FALSE;
 }
 
 /* ---- Drag and drop ---- */
@@ -730,6 +831,9 @@ activate(GtkApplication *app, gpointer data)
     gtk_window_set_title(GTK_WINDOW(mainwin), "XMMS Resuscitated");
     gtk_window_set_resizable(GTK_WINDOW(mainwin), FALSE);
     gtk_window_set_decorated(GTK_WINDOW(mainwin), FALSE);
+    if (g_signal_lookup("save-state", GTK_TYPE_APPLICATION_WINDOW))
+        g_signal_connect(mainwin, "save-state",
+                         G_CALLBACK(mainwin_save_state_cb), NULL);
 
     /* Menu actions */
     static const GActionEntry win_actions[] = {
@@ -751,8 +855,6 @@ activate(GtkApplication *app, gpointer data)
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(mainwin_drawing_area),
         mainwin_draw_func, NULL, NULL);
-
-    gtk_window_set_child(GTK_WINDOW(mainwin), mainwin_drawing_area);
 
     /* Event controllers */
     GtkGesture *click = gtk_gesture_click_new();
@@ -776,9 +878,19 @@ activate(GtkApplication *app, gpointer data)
     /* Create widgets */
     create_mainwin_widgets();
 
-    /* Create playlist and equalizer windows */
-    playlistwin_create(app);
+    /* Attach auxiliary panels below the player in the same toplevel. */
     equalizerwin_create(app);
+    playlistwin_create(app);
+    mainwin_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_halign(mainwin_drawing_area, GTK_ALIGN_START);
+    gtk_widget_set_halign(equalizerwin_get_widget(), GTK_ALIGN_START);
+    gtk_widget_set_halign(playlistwin_get_widget(), GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(mainwin_container), mainwin_drawing_area);
+    gtk_box_append(GTK_BOX(mainwin_container), equalizerwin_get_widget());
+    gtk_box_append(GTK_BOX(mainwin_container), playlistwin_get_widget());
+    gtk_window_set_child(GTK_WINDOW(mainwin), mainwin_container);
+
+    /* Create additional windows */
 
     /* Initialize MPRIS D-Bus interface */
     mpris_init();
@@ -790,6 +902,10 @@ activate(GtkApplication *app, gpointer data)
     update_timeout_tag = g_timeout_add(100, mainwin_update_cb, NULL);
 
     gtk_window_present(GTK_WINDOW(mainwin));
+    if (cfg.equalizer_visible)
+        equalizerwin_show(TRUE);
+    if (cfg.playlist_visible)
+        playlistwin_show(TRUE);
 }
 
 static void
@@ -797,6 +913,7 @@ shutdown_cb(GtkApplication *app, gpointer data)
 {
     (void)app; (void)data;
 
+    session_debug("shutdown: saving fallback config");
     if (update_timeout_tag) {
         g_source_remove(update_timeout_tag);
         update_timeout_tag = 0;
@@ -852,15 +969,147 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
     return 0;
 }
 
+static void
+session_state_save(GVariantDict *dict)
+{
+    cfg.playlist_visible = playlistwin_is_visible();
+    cfg.equalizer_visible = equalizerwin_is_visible();
+    g_variant_dict_insert(dict, "playlist-visible", "b", cfg.playlist_visible);
+    g_variant_dict_insert(dict, "playlist-detached", "b", cfg.playlist_detached);
+    g_variant_dict_insert(dict, "equalizer-visible", "b", cfg.equalizer_visible);
+    g_variant_dict_insert(dict, "equalizer-detached", "b", cfg.equalizer_detached);
+    session_debug("save-state: playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
+                  cfg.playlist_visible, cfg.playlist_detached,
+                  cfg.equalizer_visible, cfg.equalizer_detached);
+}
+
+static void
+session_state_restore(GVariant *state)
+{
+    gboolean playlist_visible;
+    gboolean playlist_detached;
+    gboolean equalizer_visible;
+    gboolean equalizer_detached;
+
+    if (!state)
+        return;
+
+    if (g_variant_lookup(state, "playlist-visible", "b", &playlist_visible))
+        cfg.playlist_visible = playlist_visible;
+    if (g_variant_lookup(state, "playlist-detached", "b", &playlist_detached))
+        cfg.playlist_detached = playlist_detached;
+    if (g_variant_lookup(state, "equalizer-visible", "b", &equalizer_visible))
+        cfg.equalizer_visible = equalizer_visible;
+    if (g_variant_lookup(state, "equalizer-detached", "b", &equalizer_detached))
+        cfg.equalizer_detached = equalizer_detached;
+    session_debug("restore-state: playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
+                  cfg.playlist_visible, cfg.playlist_detached,
+                  cfg.equalizer_visible, cfg.equalizer_detached);
+}
+
+static void
+query_end_cb(GtkApplication *app, gpointer data)
+{
+    (void)app; (void)data;
+    session_debug("query-end: saving fallback config");
+    save_config();
+}
+
+static gboolean
+save_state_cb(GtkApplication *app, GVariantDict *dict, gpointer data)
+{
+    (void)app; (void)data;
+    session_debug("application save-state signal");
+    session_state_save(dict);
+    save_config();
+    return FALSE;
+}
+
+static gboolean
+restore_state_cb(GtkApplication *app, gint reason, GVariant *state,
+                 gpointer data)
+{
+    (void)app; (void)reason; (void)data;
+    session_debug("application restore-state signal: reason=%d", reason);
+    session_state_restore(state);
+    return FALSE;
+}
+
+static void
+restore_window_cb(GtkApplication *app, gint reason, GVariant *state,
+                  gpointer data)
+{
+    (void)reason; (void)data;
+    const gchar *window_kind = NULL;
+
+    session_debug("application restore-window signal: reason=%d", reason);
+    session_state_restore(state);
+    if (!app_initialized)
+        activate(app, NULL);
+
+    if (state)
+        g_variant_lookup(state, "window-kind", "&s", &window_kind);
+    session_debug("restore-window: window-kind=%s playlist_visible=%d",
+                  window_kind ? window_kind : "(none)", cfg.playlist_visible);
+
+    if (cfg.equalizer_visible)
+        equalizerwin_show(TRUE);
+    if (g_strcmp0(window_kind, "playlist") == 0 || cfg.playlist_visible)
+        playlistwin_show(TRUE);
+    else if (mainwin)
+        gtk_window_present(GTK_WINDOW(mainwin));
+}
+
+static void
+setup_session_management(GtkApplication *app)
+{
+    GObjectClass *klass = G_OBJECT_GET_CLASS(app);
+    gboolean has_register_session =
+        g_object_class_find_property(klass, "register-session") != NULL;
+    gboolean has_support_save =
+        g_object_class_find_property(klass, "support-save") != NULL;
+    gboolean has_query_end =
+        g_signal_lookup("query-end", GTK_TYPE_APPLICATION) != 0;
+    gboolean has_save_state =
+        g_signal_lookup("save-state", GTK_TYPE_APPLICATION) != 0;
+    gboolean has_restore_state =
+        g_signal_lookup("restore-state", GTK_TYPE_APPLICATION) != 0;
+    gboolean has_restore_window =
+        g_signal_lookup("restore-window", GTK_TYPE_APPLICATION) != 0;
+
+    session_debug("gtk session support: register-session=%d support-save=%d query-end=%d save-state=%d restore-state=%d restore-window=%d",
+                  has_register_session, has_support_save, has_query_end,
+                  has_save_state, has_restore_state, has_restore_window);
+    session_debug("window positions are restored only by a session manager; normal close/reopen cannot read moved GTK4/Wayland coordinates");
+
+    if (has_register_session)
+        g_object_set(app, "register-session", TRUE, NULL);
+    if (has_support_save)
+        g_object_set(app, "support-save", TRUE, NULL);
+
+    if (has_query_end)
+        g_signal_connect(app, "query-end", G_CALLBACK(query_end_cb), NULL);
+    if (has_save_state)
+        g_signal_connect(app, "save-state", G_CALLBACK(save_state_cb), NULL);
+    if (has_restore_state)
+        g_signal_connect(app, "restore-state", G_CALLBACK(restore_state_cb), NULL);
+    if (has_restore_window)
+        g_signal_connect(app, "restore-window", G_CALLBACK(restore_window_cb), NULL);
+}
+
 int
 main(int argc, char *argv[])
 {
     /* gst_init is called later in player_init via gst_is_initialized check */
 
-    GtkApplication *app = gtk_application_new("org.xmms.Resuscitated",
-                                               G_APPLICATION_HANDLES_COMMAND_LINE);
+    GApplicationFlags flags = G_APPLICATION_HANDLES_COMMAND_LINE;
+    if (g_getenv("XMMS_NON_UNIQUE"))
+        flags |= G_APPLICATION_NON_UNIQUE;
+    GtkApplication *app = gtk_application_new("org.xmms.Resuscitated", flags);
     g_application_add_main_option_entries(G_APPLICATION(app),
                                           app_option_entries);
+    (void)app_option_entries;
+    setup_session_management(app);
 
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     g_signal_connect(app, "shutdown", G_CALLBACK(shutdown_cb), NULL);
