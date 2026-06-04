@@ -35,6 +35,7 @@ static GList *eqwin_wlist = NULL;
 
 static gboolean eq_active = TRUE;
 static gboolean eq_auto = FALSE;
+static gboolean eq_shaded = FALSE;
 static EqControl eq_pressed_control = EQ_CONTROL_NONE;
 static gboolean eq_pressed_inside = FALSE;
 static gfloat eq_preamp = 0.0;
@@ -136,7 +137,7 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 1;
     cairo_scale(cr, (double)width / EQWIN_WIDTH,
-                    (double)height / EQWIN_HEIGHT);
+                    (double)height / equalizerwin_height());
 
     /* Draw EQ background from skin */
     skin_draw_pixmap(cr, SKIN_EQMAIN,
@@ -147,6 +148,9 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
     if (skin->pixmaps[SKIN_EQMAIN].current_height >= 148)
         skin_draw_pixmap(cr, SKIN_EQMAIN,
                          0, 134, 0, 0, EQWIN_WIDTH, 14);
+
+    if (eq_shaded)
+        return;
 
     eqwin_draw_toggle_button(cr, eq_active,
                              eq_pressed_control == EQ_CONTROL_ON &&
@@ -213,6 +217,14 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
     gint sy = (gint)(y / scale);
     gint button = gtk_gesture_single_get_current_button(
         GTK_GESTURE_SINGLE(gesture));
+
+    if (button == 1 && n_press == 2 && sy < 14) {
+        equalizerwin_set_shaded(!eq_shaded);
+        return;
+    }
+
+    if (eq_shaded && sy >= 14)
+        return;
 
     if (button == 1 &&
         eqwin_point_in_rect(sx, sy, EQWIN_DETACH_BTN_X, EQWIN_DETACH_BTN_Y,
@@ -563,7 +575,7 @@ equalizerwin_create(GtkApplication *app)
     gtk_drawing_area_set_content_width(
         GTK_DRAWING_AREA(eqwin_drawing_area), EQWIN_WIDTH * scale);
     gtk_drawing_area_set_content_height(
-        GTK_DRAWING_AREA(eqwin_drawing_area), EQWIN_HEIGHT * scale);
+        GTK_DRAWING_AREA(eqwin_drawing_area), equalizerwin_height() * scale);
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(eqwin_drawing_area),
         draw_equalizer_window, NULL, NULL);
@@ -658,8 +670,29 @@ equalizerwin_is_detached(void)
     return cfg.equalizer_detached;
 }
 
+void
+equalizerwin_set_shaded(gboolean shaded)
+{
+    eq_shaded = shaded;
+    if (eqwin_drawing_area) {
+        gint scale = cfg.scale_factor;
+        if (scale < 1) scale = 2;
+        gtk_drawing_area_set_content_height(
+            GTK_DRAWING_AREA(eqwin_drawing_area),
+            equalizerwin_height() * scale);
+    }
+    mainwin_update_attached_size();
+    eqwin_queue_draw();
+}
+
+gboolean
+equalizerwin_is_shaded(void)
+{
+    return eq_shaded;
+}
+
 gint
 equalizerwin_height(void)
 {
-    return EQWIN_HEIGHT;
+    return eq_shaded ? 14 : EQWIN_HEIGHT;
 }

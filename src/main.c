@@ -10,7 +10,7 @@ GtkWidget *mainwin_container = NULL;
 static GList *mainwin_wlist = NULL;
 
 /* Main window widgets */
-static PButton *mainwin_menubtn, *mainwin_minimize, *mainwin_close;
+static PButton *mainwin_menubtn, *mainwin_minimize, *mainwin_shade, *mainwin_close;
 static PButton *mainwin_rew, *mainwin_play, *mainwin_pause, *mainwin_stop;
 static PButton *mainwin_fwd, *mainwin_eject;
 static TButton *mainwin_shuffle, *mainwin_repeat, *mainwin_eq, *mainwin_pl;
@@ -29,6 +29,12 @@ static Widget *pressed_widget = NULL;
 static guint update_timeout_tag = 0;
 static gboolean app_initialized = FALSE;
 static gboolean startup_reset = FALSE;
+static gboolean mainwin_shaded = FALSE;
+static gint vis_update_divisor = 1;
+static gint vis_update_counter = 0;
+
+static gint mainwin_current_height(void);
+static void mainwin_set_shaded(gboolean shaded);
 
 static const GOptionEntry app_option_entries[] = {
     { "playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
@@ -208,6 +214,7 @@ static void mainwin_close_pushed(void) {
     if (app) g_application_quit(app);
 }
 static void mainwin_minimize_pushed(void) { gtk_window_minimize(GTK_WINDOW(mainwin)); }
+static void mainwin_shade_pushed(void) { mainwin_set_shaded(!mainwin_shaded); }
 static void
 mainwin_menu_skin_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
@@ -230,13 +237,137 @@ mainwin_menu_output_cb(GSimpleAction *action, GVariant *param, gpointer data)
 }
 
 static void
+mainwin_menu_vis_analyzer_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_mode(mainwin_vis, VIS_MODE_ANALYZER);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_vis_scope_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_mode(mainwin_vis, VIS_MODE_SCOPE);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_vis_off_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_mode(mainwin_vis, VIS_MODE_OFF);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_vis_bars_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_analyzer_style(mainwin_vis, VIS_ANALYZER_BARS);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_vis_lines_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_analyzer_style(mainwin_vis, VIS_ANALYZER_LINES);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_vis_peaks_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    static gboolean enabled = TRUE;
+    (void)action; (void)param; (void)data;
+    enabled = !enabled;
+    vis_set_peaks_enabled(mainwin_vis, enabled);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_menu_vis_falloff_slow_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_falloff(mainwin_vis, 0.015f);
+}
+
+static void
+mainwin_menu_vis_falloff_fast_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_set_falloff(mainwin_vis, 0.08f);
+}
+
+static void
+mainwin_menu_vis_refresh_full_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_update_divisor = 1;
+}
+
+static void
+mainwin_menu_vis_refresh_half_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_update_divisor = 2;
+}
+
+static void
+mainwin_menu_vis_refresh_quarter_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    vis_update_divisor = 4;
+}
+
+static void
+mainwin_menu_windowshade_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    mainwin_set_shaded(!mainwin_shaded);
+}
+
+static void
+mainwin_menu_playlist_shade_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    playlistwin_set_shaded(!playlistwin_is_shaded());
+}
+
+static void
+mainwin_menu_equalizer_shade_cb(GSimpleAction *action, GVariant *param, gpointer data)
+{
+    (void)action; (void)param; (void)data;
+    equalizerwin_set_shaded(!equalizerwin_is_shaded());
+}
+
+static void
 mainwin_menubtn_pushed(void)
 {
     /* Build a popover menu */
     GMenu *menu = g_menu_new();
+    GMenu *vis = g_menu_new();
+    GMenu *shade = g_menu_new();
     g_menu_append(menu, "Skin Browser...", "win.skin-browser");
     g_menu_append(menu, "Spotify Playlists...", "win.spotify");
     g_menu_append(menu, "Output Device...", "win.output");
+    g_menu_append(vis, "Analyzer", "win.vis-analyzer");
+    g_menu_append(vis, "Scope", "win.vis-scope");
+    g_menu_append(vis, "Off", "win.vis-off");
+    g_menu_append(vis, "Analyzer Bars", "win.vis-bars");
+    g_menu_append(vis, "Analyzer Lines", "win.vis-lines");
+    g_menu_append(vis, "Toggle Peaks", "win.vis-peaks");
+    g_menu_append(vis, "Slow Falloff", "win.vis-falloff-slow");
+    g_menu_append(vis, "Fast Falloff", "win.vis-falloff-fast");
+    g_menu_append(vis, "Refresh Full", "win.vis-refresh-full");
+    g_menu_append(vis, "Refresh Half", "win.vis-refresh-half");
+    g_menu_append(vis, "Refresh Quarter", "win.vis-refresh-quarter");
+    g_menu_append_submenu(menu, "Visualization", G_MENU_MODEL(vis));
+    g_menu_append(shade, "WindowShade Mode", "win.windowshade");
+    g_menu_append(shade, "Playlist WindowShade Mode", "win.playlist-shade");
+    g_menu_append(shade, "Equalizer WindowShade Mode", "win.equalizer-shade");
+    g_menu_append_submenu(menu, "WindowShade", G_MENU_MODEL(shade));
 
     GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
     gtk_widget_set_parent(popover, mainwin_drawing_area);
@@ -249,6 +380,8 @@ mainwin_menubtn_pushed(void)
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
 
     gtk_popover_popup(GTK_POPOVER(popover));
+    g_object_unref(vis);
+    g_object_unref(shade);
     g_object_unref(menu);
 }
 
@@ -327,7 +460,7 @@ mainwin_update_attached_size(void)
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 2;
 
-    gint height = MAINWIN_HEIGHT;
+    gint height = mainwin_current_height();
     if (equalizerwin_is_visible() && !equalizerwin_is_detached())
         height += equalizerwin_height();
     if (playlistwin_is_visible() && !playlistwin_is_detached())
@@ -359,9 +492,49 @@ draw_mainwin_titlebar(cairo_t *cr, gboolean focused)
                      27, ty, 0, 0, MAINWIN_WIDTH, 14);
 }
 
+static gint
+mainwin_current_height(void)
+{
+    return mainwin_shaded ? 14 : MAINWIN_HEIGHT;
+}
+
+static void
+mainwin_set_shaded(gboolean shaded)
+{
+    mainwin_shaded = shaded;
+    if (mainwin_shade) {
+        mainwin_shade->ny = shaded ? 27 : 18;
+        mainwin_shade->py = shaded ? 27 : 18;
+    }
+
+    if (mainwin_drawing_area) {
+        gint scale = cfg.scale_factor;
+        if (scale < 1) scale = 2;
+        gtk_drawing_area_set_content_height(
+            GTK_DRAWING_AREA(mainwin_drawing_area),
+            mainwin_current_height() * scale);
+    }
+
+    mainwin_update_attached_size();
+    mainwin_queue_draw();
+}
+
 void
 draw_main_window(cairo_t *cr)
 {
+    if (mainwin_shaded) {
+        draw_mainwin_titlebar(cr, TRUE);
+        if (mainwin_menubtn)
+            ((Widget *)mainwin_menubtn)->draw((Widget *)mainwin_menubtn, cr);
+        if (mainwin_minimize)
+            ((Widget *)mainwin_minimize)->draw((Widget *)mainwin_minimize, cr);
+        if (mainwin_shade)
+            ((Widget *)mainwin_shade)->draw((Widget *)mainwin_shade, cr);
+        if (mainwin_close)
+            ((Widget *)mainwin_close)->draw((Widget *)mainwin_close, cr);
+        return;
+    }
+
     /* Draw main background */
     skin_draw_pixmap(cr, SKIN_MAIN,
                      0, 0, 0, 0, MAINWIN_WIDTH, MAINWIN_HEIGHT);
@@ -384,7 +557,7 @@ mainwin_draw_func(GtkDrawingArea *area, cairo_t *cr,
     if (scale < 1) scale = 1;
 
     cairo_scale(cr, (double)width / MAINWIN_WIDTH,
-                    (double)height / PLAYER_HEIGHT);
+                    (double)height / mainwin_current_height());
 
     draw_main_window(cr);
 }
@@ -406,6 +579,14 @@ mainwin_click_pressed(GtkGestureClick *gesture, int n_press,
 
     gint button = gtk_gesture_single_get_current_button(
         GTK_GESTURE_SINGLE(gesture));
+
+    if (mainwin_shaded && sy >= 14)
+        return;
+
+    if (button == 1 && n_press == 2 && sy < 14) {
+        mainwin_set_shaded(!mainwin_shaded);
+        return;
+    }
 
     pressed_widget = widget_list_find(mainwin_wlist, sx, sy);
 
@@ -586,8 +767,11 @@ mainwin_update_cb(gpointer data)
 
         /* Visualization data */
         gfloat vis_data[75];
-        if (player_get_vis_data(vis_data, 75))
-            vis_set_data(mainwin_vis, vis_data, 75);
+        if (++vis_update_counter >= vis_update_divisor) {
+            vis_update_counter = 0;
+            if (player_get_vis_data(vis_data, 75))
+                vis_set_data(mainwin_vis, vis_data, 75);
+        }
 
         /* Update playlist window */
         playlistwin_update();
@@ -625,6 +809,9 @@ create_mainwin_widgets(void)
     mainwin_minimize = pbutton_new(&mainwin_wlist, 244, 3, 9, 9,
                                    9, 0, 9, 9,
                                    mainwin_minimize_pushed, SKIN_TITLEBAR);
+    mainwin_shade = pbutton_new(&mainwin_wlist, 254, 3, 9, 9,
+                                0, 18, 9, 18,
+                                mainwin_shade_pushed, SKIN_TITLEBAR);
     mainwin_close = pbutton_new(&mainwin_wlist, 264, 3, 9, 9,
                                  18, 0, 18, 9,
                                  mainwin_close_pushed, SKIN_TITLEBAR);
@@ -1021,6 +1208,20 @@ activate(GtkApplication *app, gpointer data)
         { "skin-browser", mainwin_menu_skin_cb, NULL, NULL, NULL },
         { "spotify", mainwin_menu_spotify_cb, NULL, NULL, NULL },
         { "output", mainwin_menu_output_cb, NULL, NULL, NULL },
+        { "vis-analyzer", mainwin_menu_vis_analyzer_cb, NULL, NULL, NULL },
+        { "vis-scope", mainwin_menu_vis_scope_cb, NULL, NULL, NULL },
+        { "vis-off", mainwin_menu_vis_off_cb, NULL, NULL, NULL },
+        { "vis-bars", mainwin_menu_vis_bars_cb, NULL, NULL, NULL },
+        { "vis-lines", mainwin_menu_vis_lines_cb, NULL, NULL, NULL },
+        { "vis-peaks", mainwin_menu_vis_peaks_cb, NULL, NULL, NULL },
+        { "vis-falloff-slow", mainwin_menu_vis_falloff_slow_cb, NULL, NULL, NULL },
+        { "vis-falloff-fast", mainwin_menu_vis_falloff_fast_cb, NULL, NULL, NULL },
+        { "vis-refresh-full", mainwin_menu_vis_refresh_full_cb, NULL, NULL, NULL },
+        { "vis-refresh-half", mainwin_menu_vis_refresh_half_cb, NULL, NULL, NULL },
+        { "vis-refresh-quarter", mainwin_menu_vis_refresh_quarter_cb, NULL, NULL, NULL },
+        { "windowshade", mainwin_menu_windowshade_cb, NULL, NULL, NULL },
+        { "playlist-shade", mainwin_menu_playlist_shade_cb, NULL, NULL, NULL },
+        { "equalizer-shade", mainwin_menu_equalizer_shade_cb, NULL, NULL, NULL },
     };
     g_action_map_add_action_entries(G_ACTION_MAP(mainwin), win_actions,
                                     G_N_ELEMENTS(win_actions), NULL);

@@ -571,13 +571,37 @@ vis_draw(Widget *w, cairo_t *cr)
     });
     cairo_paint(cr);
 
+    if (vis->mode == VIS_MODE_OFF) {
+        cairo_restore(cr);
+        return;
+    }
+
+    if (vis->mode == VIS_MODE_SCOPE) {
+        cairo_set_source_rgb(cr,
+            skin->vis_color[18][0] / 255.0,
+            skin->vis_color[18][1] / 255.0,
+            skin->vis_color[18][2] / 255.0);
+        cairo_set_line_width(cr, 1.0);
+        for (gint i = 0; i < 75 && i < w->width; i++) {
+            gdouble y = w->y + 8.0 - (vis->data[i] - 0.5) * 14.0;
+            if (i == 0)
+                cairo_move_to(cr, w->x + i, y);
+            else
+                cairo_line_to(cr, w->x + i, y);
+        }
+        cairo_stroke(cr);
+        cairo_restore(cr);
+        return;
+    }
+
     /* Draw analyzer bars */
     for (gint i = 0; i < 75 && i < w->width; i++) {
         gint h = (gint)(vis->data[i] * 16.0);
         if (h <= 0) continue;
         if (h > 16) h = 16;
 
-        for (gint y = 16 - h; y < 16; y++) {
+        gint y_step = vis->analyzer_style == VIS_ANALYZER_LINES ? 2 : 1;
+        for (gint y = 16 - h; y < 16; y += y_step) {
             gint color_idx = (16 - y) + 2;
             if (color_idx >= 24) color_idx = 23;
             if (color_idx < 2) color_idx = 2;
@@ -591,7 +615,7 @@ vis_draw(Widget *w, cairo_t *cr)
         }
 
         /* Draw peak */
-        if (vis->peak[i] > 0) {
+        if (vis->peaks_enabled && vis->peak[i] > 0) {
             gint peak_y = 16 - (gint)(vis->peak[i] * 16.0);
             if (peak_y >= 0 && peak_y < 16) {
                 cairo_set_source_rgb(cr,
@@ -615,6 +639,10 @@ vis_new(GList **list, gint x, gint y, gint w)
     vis->w.width = w; vis->w.height = 16;
     vis->w.visible = TRUE;
     vis->w.draw = vis_draw;
+    vis->mode = VIS_MODE_ANALYZER;
+    vis->analyzer_style = VIS_ANALYZER_BARS;
+    vis->peaks_enabled = TRUE;
+    vis->falloff = 0.03f;
     widget_list_add(list, (Widget *)vis);
     return vis;
 }
@@ -623,8 +651,50 @@ void
 vis_set_data(Vis *vis, gfloat *data, gint num)
 {
     gint count = MIN(num, 75);
-    for (gint i = 0; i < count; i++)
+    for (gint i = 0; i < count; i++) {
         vis->data[i] = data[i];
+        if (data[i] > vis->peak[i])
+            vis->peak[i] = data[i];
+        else
+            vis->peak[i] = MAX(0.0f, vis->peak[i] - vis->falloff);
+    }
+}
+
+void
+vis_set_mode(Vis *vis, VisMode mode)
+{
+    if (!vis)
+        return;
+    vis->mode = mode;
+    widget_queue_draw((Widget *)vis);
+}
+
+void
+vis_set_analyzer_style(Vis *vis, VisAnalyzerStyle style)
+{
+    if (!vis)
+        return;
+    vis->analyzer_style = style;
+    widget_queue_draw((Widget *)vis);
+}
+
+void
+vis_set_peaks_enabled(Vis *vis, gboolean enabled)
+{
+    if (!vis)
+        return;
+    vis->peaks_enabled = enabled;
+    if (!enabled)
+        memset(vis->peak, 0, sizeof(vis->peak));
+    widget_queue_draw((Widget *)vis);
+}
+
+void
+vis_set_falloff(Vis *vis, gfloat falloff)
+{
+    if (!vis)
+        return;
+    vis->falloff = CLAMP(falloff, 0.005f, 0.2f);
 }
 
 /* ---- MonoStereo ---- */

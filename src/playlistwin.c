@@ -1,5 +1,6 @@
 #include "xmms.h"
 #include "playlistwin.h"
+#include <glib/gstdio.h>
 
 #define PLWIN_WIDTH   275
 #define PLWIN_HEIGHT  232
@@ -28,6 +29,7 @@ static GtkWidget *plwin_floating_window = NULL;
 static GtkWidget *plwin_url_window = NULL;
 static GtkWidget *plwin_url_entry = NULL;
 static GtkWidget *plwin_sort_popover = NULL;
+static GtkWidget *plwin_context_popover = NULL;
 static GList *plwin_wlist = NULL;
 static TextBox *plwin_time_min = NULL;
 static TextBox *plwin_time_sec = NULL;
@@ -52,7 +54,9 @@ typedef enum {
 
 static gint plwin_scroll_offset = 0;
 static gint plwin_selected = -1;
+static gint plwin_selection_anchor = -1;
 static gboolean plwin_scrollbar_dragging = FALSE;
+static gboolean plwin_shaded = FALSE;
 static gint plwin_scrollbar_drag_offset = 0;
 static gdouble plwin_scroll_delta = 0.0;
 static PlwinButton plwin_pressed_button = PLWIN_BUTTON_NONE;
@@ -71,6 +75,7 @@ static void plwin_close_menu(void);
 static void plwin_update_info(void);
 static void plwin_open_files(gboolean replace);
 static void plwin_remove_selected(void);
+static void plwin_show_context_menu(gint x, gint y);
 
 typedef enum {
     PLWIN_ACTION_ADD_URL,
@@ -80,9 +85,12 @@ typedef enum {
     PLWIN_ACTION_REMOVE_SELECTED,
     PLWIN_ACTION_REMOVE_CROP,
     PLWIN_ACTION_REMOVE_ALL,
+    PLWIN_ACTION_REMOVE_DEAD,
+    PLWIN_ACTION_PHYSICALLY_DELETE,
     PLWIN_ACTION_SELECT_ALL,
     PLWIN_ACTION_SELECT_NONE,
     PLWIN_ACTION_SELECT_INVERT,
+    PLWIN_ACTION_READ_EXTENDED_INFO,
     PLWIN_ACTION_MISC_SORT,
     PLWIN_ACTION_MISC_FILE_INFO,
     PLWIN_ACTION_MISC_OPTIONS,
@@ -584,10 +592,12 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 1;
     cairo_scale(cr, (double)width / PLWIN_WIDTH,
-                    (double)height / PLWIN_HEIGHT);
+                    (double)height / playlistwin_height());
 
     /* Draw assembled playlist frame from skin pieces */
     draw_playlist_frame(cr);
+    if (plwin_shaded)
+        return;
 
     /* Draw entries */
     draw_playlist_entries(cr);
@@ -619,6 +629,25 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
     /* Check list area click */
     gint list_x = PLWIN_LIST_X, list_y = PLWIN_LIST_Y;
     gint list_w = PLWIN_LIST_W, list_h = PLWIN_LIST_H;
+
+    if (button == 3) {
+        if (sx >= list_x && sx < list_x + list_w &&
+            sy >= list_y && sy < list_y + list_h) {
+            gint entry_idx = (sy - list_y) / PLWIN_ENTRY_HEIGHT + plwin_scroll_offset;
+            if (entry_idx < playlist_get_length())
+                plwin_selected = entry_idx;
+        }
+        plwin_show_context_menu(sx, sy);
+        return;
+    }
+
+    if (plwin_shaded && sy >= 14)
+        return;
+
+    if (button == 1 && n_press == 2 && sy < 14) {
+        playlistwin_set_shaded(!plwin_shaded);
+        return;
+    }
 
     gint thumb_y, thumb_h;
     gboolean has_scrollbar = plwin_scrollbar_geometry(&thumb_y, &thumb_h);
@@ -677,6 +706,32 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         sy >= list_y && sy < list_y + list_h) {
         gint entry_idx = (sy - list_y) / PLWIN_ENTRY_HEIGHT + plwin_scroll_offset;
         if (entry_idx < playlist_get_length()) {
+            GdkModifierType state =
+                gtk_event_controller_get_current_event_state(
+                    GTK_EVENT_CONTROLLER(gesture));
+            PlaylistEntry *entry = playlist_get_entry(entry_idx);
+
+            if ((state & GDK_SHIFT_MASK) && plwin_selection_anchor >= 0) {
+                gint start = MIN(plwin_selection_anchor, entry_idx);
+                gint end = MAX(plwin_selection_anchor, entry_idx);
+                for (gint i = start; i <= end; i++) {
+                    PlaylistEntry *range_entry = playlist_get_entry(i);
+                    if (range_entry)
+                        range_entry->selected = TRUE;
+                }
+            } else if ((state & GDK_CONTROL_MASK) && entry) {
+                entry->selected = !entry->selected;
+                plwin_selection_anchor = entry_idx;
+            } else {
+                for (gint i = 0; i < playlist_get_length(); i++) {
+                    PlaylistEntry *other = playlist_get_entry(i);
+                    if (other)
+                        other->selected = FALSE;
+                }
+                if (entry)
+                    entry->selected = TRUE;
+                plwin_selection_anchor = entry_idx;
+            }
             plwin_selected = entry_idx;
             plwin_update_info();
             if (n_press == 2 && button == 1) {
@@ -891,6 +946,168 @@ plwin_remove_selected(void)
     plwin_selected = -1;
     plwin_set_scroll_offset(plwin_scroll_offset);
     plwin_queue_draw();
+}
+
+static gchar *
+plwin_entry_local_path(PlaylistEntry *entry)
+{
+    if (!entry || !entry->filename)
+        return NULL;
+
+    gchar *path = uri_to_filename(entry->filename);
+    if (path)
+        return path;
+
+    if (g_path_is_absolute(entry->filename))
+        return g_strdup(entry->filename);
+
+    return NULL;
+}
+
+static gboolean
+plwin_entry_is_selected(gint idx, PlaylistEntry *entry)
+{
+    return entry && (entry->selected || idx == plwin_selected);
+}
+
+static void
+plwin_read_extended_info(void)
+{
+    for (gint i = 0; i < playlist_get_length(); i++) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (!plwin_entry_is_selected(i, entry))
+            continue;
+
+        gchar *path = plwin_entry_local_path(entry);
+        if (path) {
+            gchar *title = format_title(path, NULL);
+            if (title && title[0]) {
+                g_free(entry->title);
+                entry->title = title;
+            } else {
+                g_free(title);
+            }
+            g_free(path);
+        }
+
+        if (i == playlist_get_position()) {
+            gint64 duration = player_get_duration();
+            if (duration > 0)
+                entry->length = duration;
+        }
+    }
+    plwin_update_info();
+    plwin_queue_draw();
+}
+
+static void
+plwin_remove_dead_files(void)
+{
+    for (gint i = playlist_get_length() - 1; i >= 0; i--) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        gchar *path = plwin_entry_local_path(entry);
+        if (path) {
+            if (!g_file_test(path, G_FILE_TEST_EXISTS))
+                playlist_remove(i);
+            g_free(path);
+        }
+    }
+    plwin_selected = -1;
+    plwin_set_scroll_offset(plwin_scroll_offset);
+    plwin_queue_draw();
+}
+
+static gint
+plwin_selected_local_file_count(void)
+{
+    gint count = 0;
+    for (gint i = 0; i < playlist_get_length(); i++) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (!plwin_entry_is_selected(i, entry))
+            continue;
+        gchar *path = plwin_entry_local_path(entry);
+        if (path) {
+            count++;
+            g_free(path);
+        }
+    }
+    return count;
+}
+
+static void
+plwin_physically_delete_confirmed(GtkButton *button, gpointer data)
+{
+    (void)button;
+    GtkWindow *window = GTK_WINDOW(data);
+
+    for (gint i = playlist_get_length() - 1; i >= 0; i--) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (!plwin_entry_is_selected(i, entry))
+            continue;
+
+        gchar *path = plwin_entry_local_path(entry);
+        if (path) {
+            if (g_remove(path) == 0)
+                playlist_remove(i);
+            else
+                g_warning("Failed to delete file: %s", path);
+            g_free(path);
+        }
+    }
+
+    gtk_window_destroy(window);
+    plwin_selected = -1;
+    plwin_set_scroll_offset(plwin_scroll_offset);
+    plwin_queue_draw();
+}
+
+static void
+plwin_dialog_cancel_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+    gtk_window_destroy(GTK_WINDOW(data));
+}
+
+static void
+plwin_physically_delete_selected(void)
+{
+    gint count = plwin_selected_local_file_count();
+    if (count == 0) {
+        g_message("No selected local files to delete");
+        return;
+    }
+
+    GtkWindow *parent = GTK_WINDOW(cfg.playlist_detached && plwin_floating_window ?
+                                  plwin_floating_window : mainwin);
+    GtkWidget *window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(window), "Delete Files");
+    gtk_window_set_transient_for(GTK_WINDOW(window), parent);
+    gtk_window_set_modal(GTK_WINDOW(window), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(box, 12);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 12);
+    gtk_widget_set_margin_end(box, 12);
+    gtk_window_set_child(GTK_WINDOW(window), box);
+
+    gchar *message = g_strdup_printf("Delete %d selected local file%s from disk?",
+                                     count, count == 1 ? "" : "s");
+    gtk_box_append(GTK_BOX(box), gtk_label_new(message));
+    g_free(message);
+
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(box), buttons);
+    GtkWidget *cancel = gtk_button_new_with_label("Cancel");
+    GtkWidget *delete = gtk_button_new_with_label("Delete");
+    g_signal_connect(cancel, "clicked",
+                     G_CALLBACK(plwin_dialog_cancel_clicked), window);
+    g_signal_connect(delete, "clicked",
+                     G_CALLBACK(plwin_physically_delete_confirmed), window);
+    gtk_box_append(GTK_BOX(buttons), cancel);
+    gtk_box_append(GTK_BOX(buttons), delete);
+    gtk_window_present(GTK_WINDOW(window));
 }
 
 static void
@@ -1111,6 +1328,67 @@ plwin_show_add_url_window(void)
 }
 
 static void
+plwin_context_button_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+    if (plwin_context_popover)
+        gtk_popover_popdown(GTK_POPOVER(plwin_context_popover));
+    plwin_menu_action_activate(GPOINTER_TO_INT(data));
+}
+
+static void
+plwin_context_add_button(GtkWidget *box, const gchar *label,
+                         PlwinAction action)
+{
+    GtkWidget *button = gtk_button_new_with_label(label);
+    gtk_widget_set_halign(button, GTK_ALIGN_FILL);
+    g_signal_connect(button, "clicked",
+                     G_CALLBACK(plwin_context_button_clicked),
+                     GINT_TO_POINTER(action));
+    gtk_box_append(GTK_BOX(box), button);
+}
+
+static void
+plwin_show_context_menu(gint x, gint y)
+{
+    if (!plwin_context_popover) {
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        plwin_context_add_button(box, "View File Info",
+                                 PLWIN_ACTION_MISC_FILE_INFO);
+        plwin_context_add_button(box, "Add File",
+                                 PLWIN_ACTION_ADD_FILE);
+        plwin_context_add_button(box, "Add Directory",
+                                 PLWIN_ACTION_ADD_DIR);
+        plwin_context_add_button(box, "Add URL",
+                                 PLWIN_ACTION_ADD_URL);
+        plwin_context_add_button(box, "Remove Selected",
+                                 PLWIN_ACTION_REMOVE_SELECTED);
+        plwin_context_add_button(box, "Remove Dead Files",
+                                 PLWIN_ACTION_REMOVE_DEAD);
+        plwin_context_add_button(box, "Physically Delete Files",
+                                 PLWIN_ACTION_PHYSICALLY_DELETE);
+        plwin_context_add_button(box, "Select All",
+                                 PLWIN_ACTION_SELECT_ALL);
+        plwin_context_add_button(box, "Select None",
+                                 PLWIN_ACTION_SELECT_NONE);
+        plwin_context_add_button(box, "Invert Selection",
+                                 PLWIN_ACTION_SELECT_INVERT);
+        plwin_context_add_button(box, "Read Extended Info",
+                                 PLWIN_ACTION_READ_EXTENDED_INFO);
+
+        plwin_context_popover = gtk_popover_new();
+        gtk_popover_set_child(GTK_POPOVER(plwin_context_popover), box);
+        gtk_widget_set_parent(plwin_context_popover, plwin_drawing_area);
+    }
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+    GdkRectangle rect = { x * scale, y * scale, scale, scale };
+    gtk_popover_set_pointing_to(GTK_POPOVER(plwin_context_popover), &rect);
+    gtk_popover_popup(GTK_POPOVER(plwin_context_popover));
+}
+
+static void
 plwin_sort_action_clicked(GtkButton *button, gpointer data)
 {
     (void)button;
@@ -1227,6 +1505,13 @@ plwin_menu_action_activate(PlwinAction action)
         plwin_open_folder();
         break;
     case PLWIN_ACTION_REMOVE_MISC:
+        plwin_show_context_menu(41, PLWIN_BUTTON_Y - PLWIN_BUTTON_H);
+        break;
+    case PLWIN_ACTION_REMOVE_DEAD:
+        plwin_remove_dead_files();
+        break;
+    case PLWIN_ACTION_PHYSICALLY_DELETE:
+        plwin_physically_delete_selected();
         break;
     case PLWIN_ACTION_REMOVE_SELECTED:
         plwin_remove_selected();
@@ -1255,6 +1540,9 @@ plwin_menu_action_activate(PlwinAction action)
         break;
     case PLWIN_ACTION_SELECT_INVERT:
         plwin_select_invert();
+        break;
+    case PLWIN_ACTION_READ_EXTENDED_INFO:
+        plwin_read_extended_info();
         break;
     case PLWIN_ACTION_MISC_SORT:
         plwin_show_sort_menu();
@@ -1416,6 +1704,10 @@ playlistwin_shutdown(void)
     if (plwin_sort_popover) {
         gtk_widget_unparent(plwin_sort_popover);
         plwin_sort_popover = NULL;
+    }
+    if (plwin_context_popover) {
+        gtk_widget_unparent(plwin_context_popover);
+        plwin_context_popover = NULL;
     }
 }
 
@@ -1667,10 +1959,31 @@ playlistwin_is_detached(void)
     return cfg.playlist_detached;
 }
 
+void
+playlistwin_set_shaded(gboolean shaded)
+{
+    plwin_shaded = shaded;
+    if (plwin_drawing_area) {
+        gint scale = cfg.scale_factor;
+        if (scale < 1) scale = 2;
+        gtk_drawing_area_set_content_height(
+            GTK_DRAWING_AREA(plwin_drawing_area),
+            playlistwin_height() * scale);
+    }
+    mainwin_update_attached_size();
+    plwin_queue_draw();
+}
+
+gboolean
+playlistwin_is_shaded(void)
+{
+    return plwin_shaded;
+}
+
 gint
 playlistwin_height(void)
 {
-    return PLWIN_HEIGHT;
+    return plwin_shaded ? 14 : PLWIN_HEIGHT;
 }
 
 void

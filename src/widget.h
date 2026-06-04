@@ -85,11 +85,26 @@ typedef struct {
 } Number;
 
 /* Visualization display */
+typedef enum {
+    VIS_MODE_ANALYZER,
+    VIS_MODE_SCOPE,
+    VIS_MODE_OFF
+} VisMode;
+
+typedef enum {
+    VIS_ANALYZER_BARS,
+    VIS_ANALYZER_LINES
+} VisAnalyzerStyle;
+
 typedef struct {
     Widget w;
     gfloat data[75];
     gfloat peak[75];
     gfloat peak_speed[75];
+    VisMode mode;
+    VisAnalyzerStyle analyzer_style;
+    gboolean peaks_enabled;
+    gfloat falloff;
 } Vis;
 
 /* Mono/Stereo indicator */
@@ -159,6 +174,10 @@ void textbox_set_text(TextBox *tb, const gchar *text);
 void number_set_value(Number *n, gint value);
 void monostereo_set_channels(MonoStereo *ms, gint nch);
 void vis_set_data(Vis *vis, gfloat *data, gint num);
+void vis_set_mode(Vis *vis, VisMode mode);
+void vis_set_analyzer_style(Vis *vis, VisAnalyzerStyle style);
+void vis_set_peaks_enabled(Vis *vis, gboolean enabled);
+void vis_set_falloff(Vis *vis, gfloat falloff);
 void playstatus_set_status(PlayStatus *ps, gint status);
 void hslider_set_position(HSlider *hs, gint pos);
 void tbutton_set_toggled(TButton *tb, gboolean toggled);

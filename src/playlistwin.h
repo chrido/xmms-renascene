@@ -9,6 +9,8 @@ void playlistwin_show(gboolean show);
 gboolean playlistwin_is_visible(void);
 void playlistwin_set_detached(gboolean detached);
 gboolean playlistwin_is_detached(void);
+void playlistwin_set_shaded(gboolean shaded);
+gboolean playlistwin_is_shaded(void);
 gint playlistwin_height(void);
 void playlistwin_update(void);
 void playlistwin_show_menu(const gchar *menu);
