@@ -33,10 +33,19 @@ typedef struct {
     gchar *skin;
     gint timer_mode;
     gchar *output_device;
+    gint volume;
+    gint balance;
     gboolean playlist_visible;
     gboolean playlist_detached;
+    gboolean shuffle;
+    gboolean repeat;
+    gint playlist_position;
     gboolean equalizer_visible;
     gboolean equalizer_detached;
+    gboolean equalizer_active;
+    gboolean equalizer_auto;
+    gint equalizer_preamp_pos;
+    gint equalizer_band_pos[10];
 } Config;
 
 extern Config cfg;

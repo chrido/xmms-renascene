@@ -37,8 +37,23 @@ void playlist_eof_reached(void);
 
 void playlist_shuffle_toggle(void);
 void playlist_repeat_toggle(void);
+void playlist_set_shuffle(gboolean enabled);
+void playlist_set_repeat(gboolean enabled);
+gboolean playlist_get_shuffle(void);
+gboolean playlist_get_repeat(void);
 
 GList *playlist_get_entries(void);
+
+void playlist_sort_by_title(void);
+void playlist_sort_by_filename(void);
+void playlist_sort_by_path(void);
+void playlist_sort_by_date(void);
+void playlist_sort_selected_by_title(void);
+void playlist_sort_selected_by_filename(void);
+void playlist_sort_selected_by_path(void);
+void playlist_sort_selected_by_date(void);
+void playlist_reverse(void);
+void playlist_random(void);
 
 gboolean playlist_load(const gchar *filename);
 gboolean playlist_save(const gchar *filename);

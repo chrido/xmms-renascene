@@ -357,6 +357,36 @@ eqwin_queue_draw(void)
         gtk_widget_queue_draw(eqwin_drawing_area);
 }
 
+void
+equalizerwin_set_state(gboolean active, gboolean automatic,
+                       gint preamp_pos, const gint band_pos[10])
+{
+    eq_active = active;
+    eq_auto = automatic;
+    eq_preamp_pos = CLAMP(preamp_pos, 0, 100);
+    for (gint i = 0; i < 10; i++)
+        eq_slider_pos[i] = CLAMP(band_pos[i], 0, 100);
+
+    apply_eq();
+    eqwin_queue_draw();
+}
+
+void
+equalizerwin_get_state(gboolean *active, gboolean *automatic,
+                       gint *preamp_pos, gint band_pos[10])
+{
+    if (active)
+        *active = eq_active;
+    if (automatic)
+        *automatic = eq_auto;
+    if (preamp_pos)
+        *preamp_pos = eq_preamp_pos;
+    if (band_pos) {
+        for (gint i = 0; i < 10; i++)
+            band_pos[i] = eq_slider_pos[i];
+    }
+}
+
 static void
 eqwin_apply_preset(gint preset)
 {

@@ -13,9 +13,13 @@ typedef struct {
     GstElement *pipeline;
     GstElement *equalizer;
     GstElement *spectrum;
+    GstElement *audio_convert;
     PlayerState state;
     gint64 duration;
     gboolean has_duration;
+    gint bitrate;    /* bits per second, -1 for VBR/unknown */
+    gint frequency;  /* Hz */
+    gint channels;
     gint volume;     /* 0-100 */
     gint balance;    /* -100 to 100 */
     gfloat vis_data[75];
@@ -36,6 +40,7 @@ void player_toggle_pause(void);
 gboolean player_is_playing(void);
 gboolean player_is_paused(void);
 PlayerState player_get_state(void);
+void player_get_song_info(gint *bitrate, gint *frequency, gint *channels);
 
 gint64 player_get_position(void);   /* in milliseconds */
 gint64 player_get_duration(void);   /* in milliseconds */
@@ -44,6 +49,7 @@ void player_seek(gint64 ms);
 void player_set_volume(gint percent);
 gint player_get_volume(void);
 void player_set_balance(gint balance);
+gint player_get_balance(void);
 
 void player_set_equalizer(gfloat preamp, gfloat *bands);
 

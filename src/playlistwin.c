@@ -27,6 +27,7 @@ static GtkWidget *plwin_drawing_area = NULL;
 static GtkWidget *plwin_floating_window = NULL;
 static GtkWidget *plwin_url_window = NULL;
 static GtkWidget *plwin_url_entry = NULL;
+static GtkWidget *plwin_sort_popover = NULL;
 static GList *plwin_wlist = NULL;
 static TextBox *plwin_time_min = NULL;
 static TextBox *plwin_time_sec = NULL;
@@ -69,6 +70,7 @@ static void plwin_activate_button(PlwinButton button);
 static void plwin_close_menu(void);
 static void plwin_update_info(void);
 static void plwin_open_files(gboolean replace);
+static void plwin_remove_selected(void);
 
 typedef enum {
     PLWIN_ACTION_ADD_URL,
@@ -90,6 +92,19 @@ typedef enum {
 } PlwinAction;
 
 static void plwin_menu_action_activate(PlwinAction action);
+
+typedef enum {
+    PLWIN_SORT_BY_TITLE,
+    PLWIN_SORT_BY_FILENAME,
+    PLWIN_SORT_BY_PATH,
+    PLWIN_SORT_BY_DATE,
+    PLWIN_SORT_SEL_BY_TITLE,
+    PLWIN_SORT_SEL_BY_FILENAME,
+    PLWIN_SORT_SEL_BY_PATH,
+    PLWIN_SORT_SEL_BY_DATE,
+    PLWIN_SORT_RANDOMIZE,
+    PLWIN_SORT_REVERSE
+} PlwinSortAction;
 
 typedef struct {
     PlwinAction action;
@@ -598,6 +613,8 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
     gint sy = (gint)(y / scale);
     gint button = gtk_gesture_single_get_current_button(
         GTK_GESTURE_SINGLE(gesture));
+    if (button == 1)
+        gtk_widget_grab_focus(plwin_drawing_area);
 
     /* Check list area click */
     gint list_x = PLWIN_LIST_X, list_y = PLWIN_LIST_Y;
@@ -805,6 +822,20 @@ plwin_scroll(GtkEventControllerScroll *controller,
     }
 
     return GDK_EVENT_STOP;
+}
+
+static gboolean
+plwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
+                  guint keycode, GdkModifierType state, gpointer data)
+{
+    (void)controller; (void)keycode; (void)state; (void)data;
+
+    if (keyval == GDK_KEY_Delete) {
+        plwin_remove_selected();
+        return GDK_EVENT_STOP;
+    }
+
+    return GDK_EVENT_PROPAGATE;
 }
 
 /* ---- Public API ---- */
@@ -1080,6 +1111,109 @@ plwin_show_add_url_window(void)
 }
 
 static void
+plwin_sort_action_clicked(GtkButton *button, gpointer data)
+{
+    (void)button;
+
+    switch (GPOINTER_TO_INT(data)) {
+    case PLWIN_SORT_BY_TITLE:
+        playlist_sort_by_title();
+        break;
+    case PLWIN_SORT_BY_FILENAME:
+        playlist_sort_by_filename();
+        break;
+    case PLWIN_SORT_BY_PATH:
+        playlist_sort_by_path();
+        break;
+    case PLWIN_SORT_BY_DATE:
+        playlist_sort_by_date();
+        break;
+    case PLWIN_SORT_SEL_BY_TITLE:
+        playlist_sort_selected_by_title();
+        break;
+    case PLWIN_SORT_SEL_BY_FILENAME:
+        playlist_sort_selected_by_filename();
+        break;
+    case PLWIN_SORT_SEL_BY_PATH:
+        playlist_sort_selected_by_path();
+        break;
+    case PLWIN_SORT_SEL_BY_DATE:
+        playlist_sort_selected_by_date();
+        break;
+    case PLWIN_SORT_RANDOMIZE:
+        playlist_random();
+        break;
+    case PLWIN_SORT_REVERSE:
+        playlist_reverse();
+        break;
+    }
+
+    if (plwin_sort_popover)
+        gtk_popover_popdown(GTK_POPOVER(plwin_sort_popover));
+    plwin_selected = -1;
+    plwin_set_scroll_offset(plwin_scroll_offset);
+    plwin_queue_draw();
+}
+
+static void
+plwin_sort_menu_add_button(GtkWidget *box, const gchar *label,
+                           PlwinSortAction action)
+{
+    GtkWidget *button = gtk_button_new_with_label(label);
+    gtk_widget_set_halign(button, GTK_ALIGN_FILL);
+    g_signal_connect(button, "clicked",
+                     G_CALLBACK(plwin_sort_action_clicked),
+                     GINT_TO_POINTER(action));
+    gtk_box_append(GTK_BOX(box), button);
+}
+
+static void
+plwin_show_sort_menu(void)
+{
+    if (!plwin_sort_popover) {
+        GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+
+        plwin_sort_menu_add_button(box, "Sort List: By Title",
+                                   PLWIN_SORT_BY_TITLE);
+        plwin_sort_menu_add_button(box, "Sort List: By Filename",
+                                   PLWIN_SORT_BY_FILENAME);
+        plwin_sort_menu_add_button(box, "Sort List: By Path + Filename",
+                                   PLWIN_SORT_BY_PATH);
+        plwin_sort_menu_add_button(box, "Sort List: By Date",
+                                   PLWIN_SORT_BY_DATE);
+        plwin_sort_menu_add_button(box, "Sort Selection: By Title",
+                                   PLWIN_SORT_SEL_BY_TITLE);
+        plwin_sort_menu_add_button(box, "Sort Selection: By Filename",
+                                   PLWIN_SORT_SEL_BY_FILENAME);
+        plwin_sort_menu_add_button(box, "Sort Selection: By Path + Filename",
+                                   PLWIN_SORT_SEL_BY_PATH);
+        plwin_sort_menu_add_button(box, "Sort Selection: By Date",
+                                   PLWIN_SORT_SEL_BY_DATE);
+        plwin_sort_menu_add_button(box, "Randomize List",
+                                   PLWIN_SORT_RANDOMIZE);
+        plwin_sort_menu_add_button(box, "Reverse List",
+                                   PLWIN_SORT_REVERSE);
+
+        plwin_sort_popover = gtk_popover_new();
+        gtk_popover_set_child(GTK_POPOVER(plwin_sort_popover), box);
+        gtk_widget_set_parent(plwin_sort_popover, plwin_drawing_area);
+        gtk_popover_set_position(GTK_POPOVER(plwin_sort_popover),
+                                 GTK_POS_TOP);
+    }
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+    GdkRectangle rect = {
+        (99 - 1) * scale,
+        (PLWIN_BUTTON_Y - 2 * PLWIN_BUTTON_H - 1) * scale,
+        PLWIN_MENU_W * scale,
+        PLWIN_BUTTON_H * scale
+    };
+    gtk_popover_set_pointing_to(GTK_POPOVER(plwin_sort_popover), &rect);
+    gtk_popover_popup(GTK_POPOVER(plwin_sort_popover));
+}
+
+static void
 plwin_menu_action_activate(PlwinAction action)
 {
     switch (action) {
@@ -1123,6 +1257,7 @@ plwin_menu_action_activate(PlwinAction action)
         plwin_select_invert();
         break;
     case PLWIN_ACTION_MISC_SORT:
+        plwin_show_sort_menu();
         break;
     case PLWIN_ACTION_MISC_FILE_INFO: {
         gint idx = plwin_selected >= 0 ? plwin_selected : playlist_get_position();
@@ -1278,6 +1413,10 @@ void
 playlistwin_shutdown(void)
 {
     plwin_close_menu();
+    if (plwin_sort_popover) {
+        gtk_widget_unparent(plwin_sort_popover);
+        plwin_sort_popover = NULL;
+    }
 }
 
 static gboolean
@@ -1391,6 +1530,7 @@ playlistwin_create(GtkApplication *app)
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(plwin_drawing_area),
         draw_playlist_window, NULL, NULL);
+    gtk_widget_set_focusable(plwin_drawing_area, TRUE);
     gtk_widget_set_visible(plwin_drawing_area, FALSE);
     playlistwin = plwin_drawing_area;
 
@@ -1439,6 +1579,10 @@ playlistwin_create(GtkApplication *app)
     g_signal_connect(scroll, "scroll", G_CALLBACK(plwin_scroll), NULL);
     gtk_widget_add_controller(plwin_drawing_area, scroll);
 
+    GtkEventController *key = gtk_event_controller_key_new();
+    g_signal_connect(key, "key-pressed", G_CALLBACK(plwin_key_pressed), NULL);
+    gtk_widget_add_controller(plwin_drawing_area, key);
+
     /* Drag and drop */
     GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST,
                                                GDK_ACTION_COPY);
@@ -1472,6 +1616,8 @@ playlistwin_show(gboolean show)
             gtk_widget_set_visible(plwin_floating_window, FALSE);
         gtk_widget_set_visible(plwin_drawing_area, show);
     }
+    if (show)
+        gtk_widget_grab_focus(plwin_drawing_area);
     mainwin_update_attached_size();
     mainwin_update_panel_toggles();
     plwin_queue_draw();

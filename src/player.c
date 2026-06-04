@@ -28,6 +28,9 @@ bus_callback(GstBus *b, GstMessage *msg, gpointer data)
         g_error_free(err);
         g_free(debug);
         player->state = PLAYER_STOPPED;
+        player->bitrate = 0;
+        player->frequency = 0;
+        player->channels = 0;
         break;
     }
 
@@ -38,7 +41,10 @@ bus_callback(GstBus *b, GstMessage *msg, gpointer data)
     case GST_MESSAGE_TAG: {
         GstTagList *tags = NULL;
         gst_message_parse_tag(msg, &tags);
-        /* Could extract title/artist here for display */
+        guint bitrate = 0;
+        if (gst_tag_list_get_uint(tags, GST_TAG_BITRATE, &bitrate) ||
+            gst_tag_list_get_uint(tags, GST_TAG_NOMINAL_BITRATE, &bitrate))
+            player->bitrate = (gint)bitrate;
         gst_tag_list_unref(tags);
         break;
     }
@@ -82,6 +88,9 @@ player_init(void)
     player->state = PLAYER_STOPPED;
     player->volume = 100;
     player->balance = 0;
+    player->bitrate = 0;
+    player->frequency = 0;
+    player->channels = 0;
 
     player->pipeline = gst_element_factory_make("playbin", "player");
     if (!player->pipeline) {
@@ -96,6 +105,7 @@ player_init(void)
         GstElement *sink = gst_element_factory_make("autoaudiosink", "sink");
         GstElement *bin = gst_bin_new("audio-sink-bin");
         GstElement *convert = gst_element_factory_make("audioconvert", "convert");
+        player->audio_convert = convert;
 
         if (player->spectrum) {
             g_object_set(player->spectrum,
@@ -163,6 +173,9 @@ player_play(const gchar *uri)
         gst_element_set_state(player->pipeline, GST_STATE_NULL);
         spotify_mode = TRUE;
         spotify_position_ms = 0;
+        player->bitrate = 0;
+        player->frequency = 0;
+        player->channels = 0;
 
         /* Get duration from playlist entry */
         PlaylistEntry *entry = playlist_get_entry(playlist_get_position());
@@ -184,6 +197,9 @@ player_play(const gchar *uri)
     gst_element_set_state(player->pipeline, GST_STATE_NULL);
 
     g_object_set(player->pipeline, "uri", uri, NULL);
+    player->bitrate = 0;
+    player->frequency = 0;
+    player->channels = 0;
 
     /* Apply current volume */
     gdouble vol = player->volume / 100.0;
@@ -208,6 +224,9 @@ player_stop(void)
     gst_element_set_state(player->pipeline, GST_STATE_NULL);
     player->state = PLAYER_STOPPED;
     player->has_duration = FALSE;
+    player->bitrate = 0;
+    player->frequency = 0;
+    player->channels = 0;
 }
 
 void
@@ -263,6 +282,47 @@ PlayerState
 player_get_state(void)
 {
     return player ? player->state : PLAYER_STOPPED;
+}
+
+void
+player_get_song_info(gint *bitrate, gint *frequency, gint *channels)
+{
+    if (bitrate)
+        *bitrate = player ? player->bitrate : 0;
+    if (frequency)
+        *frequency = player ? player->frequency : 0;
+    if (channels)
+        *channels = player ? player->channels : 0;
+}
+
+static void
+player_update_caps_info(void)
+{
+    if (!player || !player->audio_convert)
+        return;
+
+    GstPad *pad = gst_element_get_static_pad(player->audio_convert, "sink");
+    if (!pad)
+        return;
+
+    GstCaps *caps = gst_pad_get_current_caps(pad);
+    if (!caps)
+        caps = gst_pad_query_caps(pad, NULL);
+
+    if (caps && gst_caps_get_size(caps) > 0) {
+        const GstStructure *s = gst_caps_get_structure(caps, 0);
+        gint frequency = 0;
+        gint channels = 0;
+
+        if (gst_structure_get_int(s, "rate", &frequency))
+            player->frequency = frequency;
+        if (gst_structure_get_int(s, "channels", &channels))
+            player->channels = channels;
+    }
+
+    if (caps)
+        gst_caps_unref(caps);
+    gst_object_unref(pad);
 }
 
 gint64
@@ -338,6 +398,12 @@ player_set_balance(gint balance)
        but we can use a panning element if needed */
 }
 
+gint
+player_get_balance(void)
+{
+    return player ? player->balance : 0;
+}
+
 void
 player_set_equalizer(gfloat preamp, gfloat *bands)
 {
@@ -385,6 +451,8 @@ player_update(void)
     if (player && player->state != PLAYER_STOPPED && !player->has_duration) {
         player_get_duration();
     }
+    if (player && player->state != PLAYER_STOPPED)
+        player_update_caps_info();
 }
 
 gboolean
@@ -555,6 +623,7 @@ player_rebuild_audio_sink(void)
     /* Rebuild the audio-sink bin: convert -> equalizer -> spectrum -> sink */
     GstElement *bin = gst_bin_new("audio-sink-bin");
     GstElement *convert = gst_element_factory_make("audioconvert", "convert");
+    player->audio_convert = convert;
 
     player->equalizer = gst_element_factory_make("equalizer-10bands", "eq");
     player->spectrum = gst_element_factory_make("spectrum", "spectrum");

@@ -28,12 +28,15 @@ static Widget *pressed_widget = NULL;
 
 static guint update_timeout_tag = 0;
 static gboolean app_initialized = FALSE;
+static gboolean startup_reset = FALSE;
 
 static const GOptionEntry app_option_entries[] = {
     { "playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the playlist window on startup", NULL },
     { "equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the equalizer window on startup", NULL },
+    { "reset", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Start with default settings and an empty playlist", NULL },
     { "playlist-menu-add", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the playlist Add menu on startup", NULL },
     { "playlist-menu-remove", 0, 0, G_OPTION_ARG_NONE, NULL,
@@ -49,6 +52,15 @@ static const GOptionEntry app_option_entries[] = {
 
 /* Forward declarations */
 static void open_files_cb(GObject *source, GAsyncResult *result, gpointer data);
+
+static gchar *
+playlist_state_file(void)
+{
+    gchar *config_dir = xmms_get_config_dir();
+    gchar *playlist_file = g_build_filename(config_dir, "playlist.m3u", NULL);
+    g_free(config_dir);
+    return playlist_file;
+}
 
 static gboolean
 open_playlist_menu_idle(gpointer data)
@@ -492,6 +504,46 @@ mainwin_update_position_slider(void)
     }
 }
 
+static void
+mainwin_update_song_info_display(PlayerState state)
+{
+    if (state == PLAYER_STOPPED) {
+        textbox_set_text(mainwin_rate_text, "   ");
+        textbox_set_text(mainwin_freq_text, "  ");
+        monostereo_set_channels(mainwin_monostereo, 0);
+        return;
+    }
+
+    gint bitrate = 0;
+    gint frequency = 0;
+    gint channels = 0;
+    player_get_song_info(&bitrate, &frequency, &channels);
+
+    gchar text[8];
+    if (bitrate > 0) {
+        gint kbps = bitrate / 1000;
+        if (kbps < 1000)
+            g_snprintf(text, sizeof(text), "%3d", kbps);
+        else
+            g_snprintf(text, sizeof(text), "%2dH", kbps / 100);
+        textbox_set_text(mainwin_rate_text, text);
+    } else if (bitrate < 0) {
+        textbox_set_text(mainwin_rate_text, "VBR");
+    } else {
+        textbox_set_text(mainwin_rate_text, "   ");
+    }
+
+    if (frequency > 0) {
+        gint khz = (frequency + 500) / 1000;
+        g_snprintf(text, sizeof(text), "%2d", khz);
+        textbox_set_text(mainwin_freq_text, text);
+    } else {
+        textbox_set_text(mainwin_freq_text, "  ");
+    }
+
+    monostereo_set_channels(mainwin_monostereo, channels);
+}
+
 static gboolean
 mainwin_update_cb(gpointer data)
 {
@@ -506,6 +558,7 @@ mainwin_update_cb(gpointer data)
     if (state == PLAYER_PLAYING || state == PLAYER_PAUSED) {
         mainwin_update_time_display();
         mainwin_update_position_slider();
+        mainwin_update_song_info_display(state);
 
         /* Update title */
         gint pos = playlist_get_position();
@@ -540,6 +593,7 @@ mainwin_update_cb(gpointer data)
         playlistwin_update();
     } else {
         playstatus_set_status(mainwin_playstatus, 0);
+        mainwin_update_song_info_display(state);
 
         number_set_value(mainwin_minus_num, 10);
         number_set_value(mainwin_10min_num, 10);
@@ -682,10 +736,25 @@ load_config(void)
     cfg.player_y = 100;
     cfg.scale_factor = 2;
     cfg.timer_mode = TIMER_ELAPSED;
+    cfg.volume = 100;
+    cfg.balance = 0;
     cfg.playlist_visible = FALSE;
     cfg.playlist_detached = FALSE;
+    cfg.shuffle = FALSE;
+    cfg.repeat = FALSE;
+    cfg.playlist_position = -1;
     cfg.equalizer_visible = FALSE;
     cfg.equalizer_detached = FALSE;
+    cfg.equalizer_active = TRUE;
+    cfg.equalizer_auto = FALSE;
+    cfg.equalizer_preamp_pos = 50;
+    for (gint i = 0; i < 10; i++)
+        cfg.equalizer_band_pos[i] = 50;
+
+    if (startup_reset) {
+        session_debug("reset requested; skipping saved config");
+        return;
+    }
 
     /* Try loading config file */
     gchar *config_dir = xmms_get_config_dir();
@@ -706,18 +775,50 @@ load_config(void)
         if (output && output[0]) cfg.output_device = output;
         else g_free(output);
 
+        if (g_key_file_has_key(kf, "xmms", "timer_mode", NULL))
+            cfg.timer_mode = g_key_file_get_integer(kf, "xmms", "timer_mode", NULL);
+        if (g_key_file_has_key(kf, "xmms", "volume", NULL))
+            cfg.volume = CLAMP(g_key_file_get_integer(kf, "xmms", "volume", NULL), 0, 100);
+        if (g_key_file_has_key(kf, "xmms", "balance", NULL))
+            cfg.balance = CLAMP(g_key_file_get_integer(kf, "xmms", "balance", NULL), -100, 100);
         if (g_key_file_has_key(kf, "xmms", "playlist_visible", NULL))
             cfg.playlist_visible =
                 g_key_file_get_boolean(kf, "xmms", "playlist_visible", NULL);
         if (g_key_file_has_key(kf, "xmms", "playlist_detached", NULL))
             cfg.playlist_detached =
                 g_key_file_get_boolean(kf, "xmms", "playlist_detached", NULL);
+        if (g_key_file_has_key(kf, "xmms", "shuffle", NULL))
+            cfg.shuffle =
+                g_key_file_get_boolean(kf, "xmms", "shuffle", NULL);
+        if (g_key_file_has_key(kf, "xmms", "repeat", NULL))
+            cfg.repeat =
+                g_key_file_get_boolean(kf, "xmms", "repeat", NULL);
+        if (g_key_file_has_key(kf, "xmms", "playlist_position", NULL))
+            cfg.playlist_position =
+                g_key_file_get_integer(kf, "xmms", "playlist_position", NULL);
         if (g_key_file_has_key(kf, "xmms", "equalizer_visible", NULL))
             cfg.equalizer_visible =
                 g_key_file_get_boolean(kf, "xmms", "equalizer_visible", NULL);
         if (g_key_file_has_key(kf, "xmms", "equalizer_detached", NULL))
             cfg.equalizer_detached =
                 g_key_file_get_boolean(kf, "xmms", "equalizer_detached", NULL);
+        if (g_key_file_has_key(kf, "xmms", "equalizer_active", NULL))
+            cfg.equalizer_active =
+                g_key_file_get_boolean(kf, "xmms", "equalizer_active", NULL);
+        if (g_key_file_has_key(kf, "xmms", "equalizer_auto", NULL))
+            cfg.equalizer_auto =
+                g_key_file_get_boolean(kf, "xmms", "equalizer_auto", NULL);
+        if (g_key_file_has_key(kf, "xmms", "equalizer_preamp_pos", NULL))
+            cfg.equalizer_preamp_pos = CLAMP(
+                g_key_file_get_integer(kf, "xmms", "equalizer_preamp_pos", NULL),
+                0, 100);
+        for (gint i = 0; i < 10; i++) {
+            gchar *key = g_strdup_printf("equalizer_band_%d_pos", i);
+            if (g_key_file_has_key(kf, "xmms", key, NULL))
+                cfg.equalizer_band_pos[i] = CLAMP(
+                    g_key_file_get_integer(kf, "xmms", key, NULL), 0, 100);
+            g_free(key);
+        }
 
         session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                       config_file, cfg.player_x, cfg.player_y,
@@ -746,14 +847,33 @@ save_config(void)
     g_key_file_set_integer(kf, "xmms", "player_x", cfg.player_x);
     g_key_file_set_integer(kf, "xmms", "player_y", cfg.player_y);
     g_key_file_set_integer(kf, "xmms", "scale_factor", cfg.scale_factor);
+    g_key_file_set_integer(kf, "xmms", "timer_mode", cfg.timer_mode);
+    g_key_file_set_integer(kf, "xmms", "volume", player_get_volume());
+    g_key_file_set_integer(kf, "xmms", "balance", player_get_balance());
     g_key_file_set_boolean(kf, "xmms", "playlist_visible",
                            playlistwin_is_visible());
     g_key_file_set_boolean(kf, "xmms", "playlist_detached",
                            cfg.playlist_detached);
+    g_key_file_set_boolean(kf, "xmms", "shuffle", playlist_get_shuffle());
+    g_key_file_set_boolean(kf, "xmms", "repeat", playlist_get_repeat());
+    g_key_file_set_integer(kf, "xmms", "playlist_position",
+                           playlist_get_position());
     g_key_file_set_boolean(kf, "xmms", "equalizer_visible",
                            equalizerwin_is_visible());
     g_key_file_set_boolean(kf, "xmms", "equalizer_detached",
                            cfg.equalizer_detached);
+    gboolean eq_active, eq_auto;
+    gint eq_preamp_pos, eq_band_pos[10];
+    equalizerwin_get_state(&eq_active, &eq_auto, &eq_preamp_pos, eq_band_pos);
+    g_key_file_set_boolean(kf, "xmms", "equalizer_active", eq_active);
+    g_key_file_set_boolean(kf, "xmms", "equalizer_auto", eq_auto);
+    g_key_file_set_integer(kf, "xmms", "equalizer_preamp_pos",
+                           eq_preamp_pos);
+    for (gint i = 0; i < 10; i++) {
+        gchar *key = g_strdup_printf("equalizer_band_%d_pos", i);
+        g_key_file_set_integer(kf, "xmms", key, eq_band_pos[i]);
+        g_free(key);
+    }
     if (cfg.skin)
         g_key_file_set_string(kf, "xmms", "skin", cfg.skin);
 
@@ -762,12 +882,15 @@ save_config(void)
         g_key_file_set_string(kf, "xmms", "output_device", output_dev);
 
     g_key_file_save_to_file(kf, config_file, NULL);
+    gchar *playlist_file = playlist_state_file();
+    playlist_save(playlist_file);
     session_debug("saved config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                   config_file, cfg.player_x, cfg.player_y,
                   cfg.scale_factor, playlistwin_is_visible(),
                   cfg.playlist_detached, equalizerwin_is_visible(),
                   cfg.equalizer_detached);
     g_key_file_free(kf);
+    g_free(playlist_file);
     g_free(config_file);
     g_free(config_dir);
 }
@@ -861,8 +984,19 @@ activate(GtkApplication *app, gpointer data)
 
     load_config();
     playlist_init();
+    if (!startup_reset) {
+        gchar *playlist_file = playlist_state_file();
+        if (g_file_test(playlist_file, G_FILE_TEST_EXISTS))
+            playlist_load(playlist_file);
+        g_free(playlist_file);
+    }
+    playlist_set_position(cfg.playlist_position);
+    playlist_set_shuffle(cfg.shuffle);
+    playlist_set_repeat(cfg.repeat);
     skin_init();
     player_init();
+    player_set_volume(cfg.volume);
+    player_set_balance(cfg.balance);
     spotify_init();
 
     /* Apply saved output device */
@@ -924,9 +1058,18 @@ activate(GtkApplication *app, gpointer data)
 
     /* Create widgets */
     create_mainwin_widgets();
+    hslider_set_position(mainwin_volume,
+                         CLAMP((cfg.volume * 51 + 50) / 100, 0, 51));
+    hslider_set_position(mainwin_balance,
+                         CLAMP(12 + (cfg.balance * 12) / 100, 0, 24));
+    tbutton_set_toggled(mainwin_shuffle, cfg.shuffle);
+    tbutton_set_toggled(mainwin_repeat, cfg.repeat);
 
     /* Attach auxiliary panels below the player in the same toplevel. */
     equalizerwin_create(app);
+    equalizerwin_set_state(cfg.equalizer_active, cfg.equalizer_auto,
+                           cfg.equalizer_preamp_pos,
+                           cfg.equalizer_band_pos);
     playlistwin_create(app);
     mainwin_container = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_widget_set_halign(mainwin_drawing_area, GTK_ALIGN_START);
@@ -993,6 +1136,7 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
     const gchar *playlist_menu = playlist_menu_option(options);
     gboolean files_added = FALSE;
 
+    startup_reset = g_variant_dict_contains(options, "reset");
     g_application_activate(app);
 
     if (show_equalizer)
@@ -1007,6 +1151,7 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
         const gchar *arg = argv[i];
         if (g_strcmp0(arg, "--playlist") == 0 ||
             g_strcmp0(arg, "--equalizer") == 0 ||
+            g_strcmp0(arg, "--reset") == 0 ||
             g_strcmp0(arg, "--playlist-menu-add") == 0 ||
             g_strcmp0(arg, "--playlist-menu-remove") == 0 ||
             g_strcmp0(arg, "--playlist-menu-select") == 0 ||
@@ -1053,6 +1198,8 @@ session_state_restore(GVariant *state)
     gboolean equalizer_detached;
 
     if (!state)
+        return;
+    if (startup_reset)
         return;
 
     if (g_variant_lookup(state, "playlist-visible", "b", &playlist_visible))
@@ -1104,11 +1251,12 @@ restore_window_cb(GtkApplication *app, gint reason, GVariant *state,
     const gchar *window_kind = NULL;
 
     session_debug("application restore-window signal: reason=%d", reason);
-    session_state_restore(state);
+    if (!startup_reset)
+        session_state_restore(state);
     if (!app_initialized)
         activate(app, NULL);
 
-    if (state)
+    if (state && !startup_reset)
         g_variant_lookup(state, "window-kind", "&s", &window_kind);
     session_debug("restore-window: window-kind=%s playlist_visible=%d",
                   window_kind ? window_kind : "(none)", cfg.playlist_visible);

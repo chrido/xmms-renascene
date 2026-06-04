@@ -101,6 +101,12 @@ xmms --playlist
 xmms --equalizer
 ```
 
+Start once with defaults and an empty playlist, ignoring saved state:
+
+```sh
+xmms --reset
+```
+
 For UI screenshots, start with a playlist dropdown opened:
 
 ```sh
