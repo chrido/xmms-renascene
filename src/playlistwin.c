@@ -4,6 +4,13 @@
 #define PLWIN_WIDTH   275
 #define PLWIN_HEIGHT  232
 #define PLWIN_ENTRY_HEIGHT 11
+#define PLWIN_LIST_X  12
+#define PLWIN_LIST_Y  20
+#define PLWIN_LIST_W  (PLWIN_WIDTH - 32)
+#define PLWIN_LIST_H  (PLWIN_HEIGHT - 58)
+#define PLWIN_SCROLLBAR_X  (PLWIN_WIDTH - 16)
+#define PLWIN_SCROLLBAR_W  8
+#define PLWIN_SCROLL_THUMB_H 18
 
 GtkWidget *playlistwin = NULL;
 static GtkWidget *plwin_drawing_area = NULL;
@@ -11,18 +18,88 @@ static GList *plwin_wlist = NULL;
 
 static gint plwin_scroll_offset = 0;
 static gint plwin_selected = -1;
+static gboolean plwin_scrollbar_dragging = FALSE;
+static gint plwin_scrollbar_drag_offset = 0;
+static gdouble plwin_scroll_delta = 0.0;
 
 /* Forward declarations */
 static void plwin_queue_draw(void);
+static void plwin_set_scroll_offset(gint offset);
+static gint plwin_visible_entries(void);
+static gint plwin_max_scroll_offset(void);
+static gboolean plwin_scrollbar_geometry(gint *thumb_y, gint *thumb_h);
+static void plwin_scrollbar_set_from_y(gint y);
 
 /* ---- Playlist rendering ---- */
+
+static gint
+plwin_visible_entries(void)
+{
+    return PLWIN_LIST_H / PLWIN_ENTRY_HEIGHT;
+}
+
+static gint
+plwin_max_scroll_offset(void)
+{
+    return MAX(0, playlist_get_length() - plwin_visible_entries());
+}
+
+static void
+plwin_set_scroll_offset(gint offset)
+{
+    plwin_scroll_offset = CLAMP(offset, 0, plwin_max_scroll_offset());
+}
+
+static gboolean
+plwin_scrollbar_geometry(gint *thumb_y, gint *thumb_h)
+{
+    gint total = playlist_get_length();
+    gint visible = plwin_visible_entries();
+    if (total <= visible)
+        return FALSE;
+
+    gint track_h = PLWIN_LIST_H;
+    gint max_scroll = total - visible;
+    gint max_thumb_y = PLWIN_LIST_Y + track_h - PLWIN_SCROLL_THUMB_H;
+
+    if (thumb_h)
+        *thumb_h = PLWIN_SCROLL_THUMB_H;
+    if (thumb_y) {
+        *thumb_y = PLWIN_LIST_Y +
+            (plwin_scroll_offset * (track_h - PLWIN_SCROLL_THUMB_H)) /
+            max_scroll;
+        *thumb_y = CLAMP(*thumb_y, PLWIN_LIST_Y, max_thumb_y);
+    }
+    return TRUE;
+}
+
+static void
+plwin_scrollbar_set_from_y(gint y)
+{
+    gint total = playlist_get_length();
+    gint visible = plwin_visible_entries();
+    if (total <= visible)
+        return;
+
+    gint track_h = PLWIN_LIST_H;
+    gint max_scroll = total - visible;
+    gint max_thumb_pos = track_h - PLWIN_SCROLL_THUMB_H;
+    gint thumb_pos = CLAMP(y - PLWIN_LIST_Y - plwin_scrollbar_drag_offset,
+                           0, max_thumb_pos);
+
+    if (max_thumb_pos <= 0)
+        plwin_set_scroll_offset(0);
+    else
+        plwin_set_scroll_offset((thumb_pos * max_scroll +
+                                 max_thumb_pos / 2) / max_thumb_pos);
+}
 
 static void
 draw_playlist_entries(cairo_t *cr)
 {
-    gint list_x = 12, list_y = 20;
-    gint list_w = PLWIN_WIDTH - 32, list_h = PLWIN_HEIGHT - 58;
-    gint visible = list_h / PLWIN_ENTRY_HEIGHT;
+    gint list_x = PLWIN_LIST_X, list_y = PLWIN_LIST_Y;
+    gint list_w = PLWIN_LIST_W, list_h = PLWIN_LIST_H;
+    gint visible = plwin_visible_entries();
     gint total = playlist_get_length();
     gint current = playlist_get_position();
 
@@ -80,21 +157,13 @@ draw_playlist_entries(cairo_t *cr)
         }
     }
 
-    /* Scrollbar track */
-    gint sb_x = PLWIN_WIDTH - 20;
-    gint sb_h = list_h;
-    cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);
-    cairo_rectangle(cr, sb_x, list_y, 8, sb_h);
-    cairo_fill(cr);
-
     /* Scrollbar thumb */
-    if (total > visible) {
-        gint thumb_h = MAX(20, (visible * sb_h) / total);
-        gint thumb_y = list_y + (plwin_scroll_offset * (sb_h - thumb_h)) /
-                       (total - visible);
-        cairo_set_source_rgb(cr, 0.5, 0.5, 0.5);
-        cairo_rectangle(cr, sb_x, thumb_y, 8, thumb_h);
-        cairo_fill(cr);
+    gint thumb_y, thumb_h;
+    if (plwin_scrollbar_geometry(&thumb_y, &thumb_h)) {
+        skin_draw_pixmap(cr, SKIN_PLEDIT,
+                         plwin_scrollbar_dragging ? 52 : 61, 53,
+                         PLWIN_SCROLLBAR_X, thumb_y,
+                         PLWIN_SCROLLBAR_W, thumb_h);
     }
 }
 
@@ -191,8 +260,25 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         GTK_GESTURE_SINGLE(gesture));
 
     /* Check list area click */
-    gint list_x = 12, list_y = 20;
-    gint list_w = PLWIN_WIDTH - 32, list_h = PLWIN_HEIGHT - 58;
+    gint list_x = PLWIN_LIST_X, list_y = PLWIN_LIST_Y;
+    gint list_w = PLWIN_LIST_W, list_h = PLWIN_LIST_H;
+
+    gint thumb_y, thumb_h;
+    gboolean has_scrollbar = plwin_scrollbar_geometry(&thumb_y, &thumb_h);
+
+    if (button == 1 && has_scrollbar &&
+        sx >= PLWIN_SCROLLBAR_X && sx < PLWIN_SCROLLBAR_X + PLWIN_SCROLLBAR_W &&
+        sy >= list_y && sy < list_y + list_h) {
+        plwin_scrollbar_dragging = TRUE;
+        if (sy >= thumb_y && sy < thumb_y + thumb_h)
+            plwin_scrollbar_drag_offset = sy - thumb_y;
+        else {
+            plwin_scrollbar_drag_offset = thumb_h / 2;
+            plwin_scrollbar_set_from_y(sy);
+        }
+        plwin_queue_draw();
+        return;
+    }
 
     if (sx >= list_x && sx < list_x + list_w &&
         sy >= list_y && sy < list_y + list_h) {
@@ -229,19 +315,47 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
 }
 
 static void
+plwin_click_released(GtkGestureClick *gesture, int n_press,
+                     double x, double y, gpointer data)
+{
+    (void)gesture; (void)n_press; (void)x; (void)y; (void)data;
+
+    if (plwin_scrollbar_dragging) {
+        plwin_scrollbar_dragging = FALSE;
+        plwin_queue_draw();
+    }
+}
+
+static void
+plwin_motion(GtkEventControllerMotion *controller,
+             double x, double y, gpointer data)
+{
+    (void)controller; (void)x; (void)data;
+
+    if (!plwin_scrollbar_dragging)
+        return;
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+    plwin_scrollbar_set_from_y((gint)(y / scale));
+    plwin_queue_draw();
+}
+
+static gboolean
 plwin_scroll(GtkEventControllerScroll *controller,
              double dx, double dy, gpointer data)
 {
     (void)controller; (void)dx; (void)data;
 
-    gint list_h = PLWIN_HEIGHT - 58;
-    gint visible = list_h / PLWIN_ENTRY_HEIGHT;
-    gint total = playlist_get_length();
+    plwin_scroll_delta += dy * 3.0;
+    gint scroll_steps = (gint)plwin_scroll_delta;
+    if (scroll_steps != 0) {
+        plwin_set_scroll_offset(plwin_scroll_offset + scroll_steps);
+        plwin_scroll_delta -= scroll_steps;
+        plwin_queue_draw();
+    }
 
-    plwin_scroll_offset += (gint)(dy * 3);
-    plwin_scroll_offset = CLAMP(plwin_scroll_offset, 0,
-                                MAX(0, total - visible));
-    plwin_queue_draw();
+    return GDK_EVENT_STOP;
 }
 
 /* ---- Public API ---- */
@@ -304,8 +418,13 @@ playlistwin_create(GtkApplication *app)
     GtkGesture *click = gtk_gesture_click_new();
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
     g_signal_connect(click, "pressed", G_CALLBACK(plwin_click_pressed), NULL);
+    g_signal_connect(click, "released", G_CALLBACK(plwin_click_released), NULL);
     gtk_widget_add_controller(plwin_drawing_area,
                               GTK_EVENT_CONTROLLER(click));
+
+    GtkEventController *motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "motion", G_CALLBACK(plwin_motion), NULL);
+    gtk_widget_add_controller(plwin_drawing_area, motion);
 
     /* Scroll events */
     GtkEventController *scroll = gtk_event_controller_scroll_new(
