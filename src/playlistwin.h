@@ -11,5 +11,7 @@ void playlistwin_set_detached(gboolean detached);
 gboolean playlistwin_is_detached(void);
 gint playlistwin_height(void);
 void playlistwin_update(void);
+void playlistwin_show_menu(const gchar *menu);
+void playlistwin_shutdown(void);
 
 #endif /* PLAYLISTWIN_H */

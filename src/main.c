@@ -34,11 +34,47 @@ static const GOptionEntry app_option_entries[] = {
       "Show the playlist window on startup", NULL },
     { "equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the equalizer window on startup", NULL },
+    { "playlist-menu-add", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the playlist Add menu on startup", NULL },
+    { "playlist-menu-remove", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the playlist Remove menu on startup", NULL },
+    { "playlist-menu-select", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the playlist Select menu on startup", NULL },
+    { "playlist-menu-misc", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the playlist Misc menu on startup", NULL },
+    { "playlist-menu-list", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the playlist List menu on startup", NULL },
     { NULL }
 };
 
 /* Forward declarations */
 static void open_files_cb(GObject *source, GAsyncResult *result, gpointer data);
+
+static gboolean
+open_playlist_menu_idle(gpointer data)
+{
+    gchar *menu = data;
+    playlistwin_show(TRUE);
+    playlistwin_show_menu(menu);
+    g_free(menu);
+    return G_SOURCE_REMOVE;
+}
+
+static const gchar *
+playlist_menu_option(GVariantDict *options)
+{
+    if (g_variant_dict_contains(options, "playlist-menu-add"))
+        return "add";
+    if (g_variant_dict_contains(options, "playlist-menu-remove"))
+        return "remove";
+    if (g_variant_dict_contains(options, "playlist-menu-select"))
+        return "select";
+    if (g_variant_dict_contains(options, "playlist-menu-misc"))
+        return "misc";
+    if (g_variant_dict_contains(options, "playlist-menu-list"))
+        return "list";
+    return NULL;
+}
 
 static gboolean
 session_debug_enabled(void)
@@ -931,6 +967,7 @@ shutdown_cb(GtkApplication *app, gpointer data)
         update_timeout_tag = 0;
     }
 
+    playlistwin_shutdown();
     save_config();
     mpris_free();
     spotify_free();
@@ -953,20 +990,28 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
         g_application_command_line_get_options_dict(cmdline);
     gboolean show_playlist = g_variant_dict_contains(options, "playlist");
     gboolean show_equalizer = g_variant_dict_contains(options, "equalizer");
+    const gchar *playlist_menu = playlist_menu_option(options);
     gboolean files_added = FALSE;
 
     g_application_activate(app);
 
     if (show_equalizer)
         equalizerwin_show(TRUE);
-    if (show_playlist)
+    if (show_playlist || playlist_menu)
         playlistwin_show(TRUE);
+    if (playlist_menu)
+        g_idle_add(open_playlist_menu_idle, g_strdup(playlist_menu));
 
     /* Add any files from command line */
     for (gint i = 1; i < argc; i++) {
         const gchar *arg = argv[i];
         if (g_strcmp0(arg, "--playlist") == 0 ||
-            g_strcmp0(arg, "--equalizer") == 0)
+            g_strcmp0(arg, "--equalizer") == 0 ||
+            g_strcmp0(arg, "--playlist-menu-add") == 0 ||
+            g_strcmp0(arg, "--playlist-menu-remove") == 0 ||
+            g_strcmp0(arg, "--playlist-menu-select") == 0 ||
+            g_strcmp0(arg, "--playlist-menu-misc") == 0 ||
+            g_strcmp0(arg, "--playlist-menu-list") == 0)
             continue;
         if (arg[0] == '-')
             continue;

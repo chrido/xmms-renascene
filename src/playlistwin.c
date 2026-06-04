@@ -20,15 +20,13 @@
 #define PLWIN_BUTTON_W      25
 #define PLWIN_BUTTON_SRC_W  22
 #define PLWIN_MENU_BORDER_W 3
-#define PLWIN_MENU_W        (PLWIN_MENU_BORDER_W + PLWIN_BUTTON_SRC_W + PLWIN_MENU_BORDER_W)
+#define PLWIN_MENU_W        (PLWIN_MENU_BORDER_W + PLWIN_BUTTON_SRC_W)
 
 GtkWidget *playlistwin = NULL;
 static GtkWidget *plwin_drawing_area = NULL;
 static GtkWidget *plwin_floating_window = NULL;
 static GtkWidget *plwin_url_window = NULL;
 static GtkWidget *plwin_url_entry = NULL;
-static GtkWidget *plwin_menu_popover = NULL;
-static GtkWidget *plwin_menu_area = NULL;
 static GList *plwin_wlist = NULL;
 
 typedef enum {
@@ -99,42 +97,12 @@ typedef struct {
     PlwinButton button;
     const PlwinMenuItem *items;
     guint n_items;
+    gint x, y;
     gint border_x, border_y;
     gint hover;
 } PlwinMenu;
 
 static PlwinMenu plwin_menu = { 0 };
-
-static void
-plwin_install_menu_css(void)
-{
-    static gboolean installed = FALSE;
-    if (installed)
-        return;
-
-    GtkCssProvider *provider = gtk_css_provider_new();
-    gtk_css_provider_load_from_string(provider,
-        "popover.xmms-playlist-menu, "
-        "popover.xmms-playlist-menu > contents {"
-        "  background: transparent;"
-        "  border: 0;"
-        "  box-shadow: none;"
-        "  padding: 0;"
-        "  margin: 0;"
-        "}"
-        "popover.xmms-playlist-menu arrow {"
-        "  min-width: 0;"
-        "  min-height: 0;"
-        "  background: transparent;"
-        "  border: 0;"
-        "}");
-    gtk_style_context_add_provider_for_display(
-        gdk_display_get_default(),
-        GTK_STYLE_PROVIDER(provider),
-        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
-    installed = TRUE;
-}
 
 /* ---- Playlist rendering ---- */
 
@@ -437,11 +405,12 @@ plwin_menu_item_at(gint x, gint y)
     if (!plwin_menu.open)
         return -1;
 
-    if (x < 0 || x >= PLWIN_MENU_W ||
-        y < 0 || y >= (gint)plwin_menu.n_items * PLWIN_BUTTON_H)
+    if (x < plwin_menu.x || x >= plwin_menu.x + PLWIN_MENU_W ||
+        y < plwin_menu.y ||
+        y >= plwin_menu.y + (gint)plwin_menu.n_items * PLWIN_BUTTON_H)
         return -1;
 
-    return y / PLWIN_BUTTON_H;
+    return (y - plwin_menu.y) / PLWIN_BUTTON_H;
 }
 
 static void
@@ -456,32 +425,16 @@ draw_playlist_menu(cairo_t *cr)
         skin_draw_pixmap(cr, SKIN_PLEDIT,
                          selected ? item->selected_x : item->normal_x,
                          selected ? item->selected_y : item->normal_y,
-                         PLWIN_MENU_BORDER_W, i * PLWIN_BUTTON_H,
+                         plwin_menu.x + PLWIN_MENU_BORDER_W,
+                         plwin_menu.y + i * PLWIN_BUTTON_H,
                          PLWIN_BUTTON_SRC_W, PLWIN_BUTTON_H);
     }
 
     skin_draw_pixmap(cr, SKIN_PLEDIT,
                      plwin_menu.border_x, plwin_menu.border_y,
-                     0, 0,
-                     3, plwin_menu.n_items * PLWIN_BUTTON_H);
-    skin_draw_pixmap(cr, SKIN_PLEDIT,
-                     plwin_menu.border_x, plwin_menu.border_y,
-                     PLWIN_MENU_BORDER_W + PLWIN_BUTTON_SRC_W, 0,
-                     3, plwin_menu.n_items * PLWIN_BUTTON_H);
-}
-
-static void
-draw_playlist_menu_popover(GtkDrawingArea *area, cairo_t *cr,
-                           int width, int height, gpointer data)
-{
-    (void)area; (void)data;
-
-    if (!plwin_menu.open || plwin_menu.n_items == 0)
-        return;
-
-    cairo_scale(cr, (double)width / PLWIN_MENU_W,
-                    (double)height / (plwin_menu.n_items * PLWIN_BUTTON_H));
-    draw_playlist_menu(cr);
+                     plwin_menu.x, plwin_menu.y,
+                     PLWIN_MENU_BORDER_W,
+                     plwin_menu.n_items * PLWIN_BUTTON_H);
 }
 
 static void
@@ -503,6 +456,8 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
 
     /* Draw all custom widgets */
     widget_list_draw(plwin_wlist, cr);
+
+    draw_playlist_menu(cr);
 
 }
 
@@ -529,7 +484,15 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
     gboolean has_scrollbar = plwin_scrollbar_geometry(&thumb_y, &thumb_h);
 
     if (button == 1 && plwin_menu.open) {
+        gint item = plwin_menu_item_at(sx, sy);
+        if (item >= 0) {
+            plwin_menu.hover = item;
+            plwin_menu.pressed = TRUE;
+            plwin_queue_draw();
+            return;
+        }
         plwin_close_menu();
+        plwin_queue_draw();
     }
 
     if (button == 1 && has_scrollbar &&
@@ -616,6 +579,18 @@ plwin_click_released(GtkGestureClick *gesture, int n_press,
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
 
+    if (plwin_menu.open && plwin_menu.pressed) {
+        gint item = plwin_menu_item_at(sx, sy);
+        gboolean activate = item >= 0 && item == plwin_menu.hover;
+        PlwinAction action = activate ?
+            plwin_menu.items[item].action : PLWIN_ACTION_MISC_OPTIONS;
+        plwin_close_menu();
+        plwin_queue_draw();
+        if (activate)
+            plwin_menu_action_activate(action);
+        return;
+    }
+
     if (plwin_pressed_button != PLWIN_BUTTON_NONE) {
         PlwinButton pressed = plwin_pressed_button;
         gboolean activate = plwin_button_at(sx, sy) == pressed;
@@ -643,6 +618,15 @@ plwin_motion(GtkEventControllerMotion *controller,
     if (scale < 1) scale = 1;
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
+
+    if (plwin_menu.open) {
+        gint item = plwin_menu_item_at(sx, sy);
+        if (item != plwin_menu.hover) {
+            plwin_menu.hover = item;
+            plwin_queue_draw();
+        }
+        return;
+    }
 
     if (plwin_pressed_button != PLWIN_BUTTON_NONE) {
         gboolean was_inside = plwin_pressed_inside;
@@ -1019,81 +1003,6 @@ plwin_close_menu(void)
     plwin_menu.open = FALSE;
     plwin_menu.pressed = FALSE;
     plwin_menu.hover = -1;
-
-    if (plwin_menu_popover)
-        gtk_popover_popdown(GTK_POPOVER(plwin_menu_popover));
-}
-
-static void
-plwin_menu_popover_closed(GtkPopover *popover, gpointer data)
-{
-    (void)popover; (void)data;
-    plwin_menu.open = FALSE;
-    plwin_menu.pressed = FALSE;
-    plwin_menu.hover = -1;
-}
-
-static void
-plwin_menu_queue_draw(void)
-{
-    if (plwin_menu_area)
-        gtk_widget_queue_draw(plwin_menu_area);
-}
-
-static void
-plwin_menu_pressed(GtkGestureClick *gesture, int n_press,
-                   double x, double y, gpointer data)
-{
-    (void)n_press; (void)data;
-    gint button = gtk_gesture_single_get_current_button(
-        GTK_GESTURE_SINGLE(gesture));
-    if (button != 1)
-        return;
-
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-    gint item = plwin_menu_item_at((gint)(x / scale), (gint)(y / scale));
-    if (item >= 0) {
-        plwin_menu.hover = item;
-        plwin_menu.pressed = TRUE;
-        plwin_menu_queue_draw();
-    }
-}
-
-static void
-plwin_menu_released(GtkGestureClick *gesture, int n_press,
-                    double x, double y, gpointer data)
-{
-    (void)gesture; (void)n_press; (void)data;
-
-    if (!plwin_menu.pressed)
-        return;
-
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-    gint item = plwin_menu_item_at((gint)(x / scale), (gint)(y / scale));
-    gboolean activate = item >= 0 && item == plwin_menu.hover;
-    PlwinAction action = activate ?
-        plwin_menu.items[item].action : PLWIN_ACTION_MISC_OPTIONS;
-
-    plwin_close_menu();
-    if (activate)
-        plwin_menu_action_activate(action);
-}
-
-static void
-plwin_menu_motion(GtkEventControllerMotion *controller,
-                  double x, double y, gpointer data)
-{
-    (void)controller; (void)data;
-
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-    gint item = plwin_menu_item_at((gint)(x / scale), (gint)(y / scale));
-    if (item != plwin_menu.hover) {
-        plwin_menu.hover = item;
-        plwin_menu_queue_draw();
-    }
 }
 
 static void
@@ -1107,51 +1016,12 @@ plwin_show_menu(PlwinButton button, const PlwinMenuItem *items, guint n_items,
     plwin_menu.button = button;
     plwin_menu.items = items;
     plwin_menu.n_items = n_items;
+    plwin_menu.x = x - 1;
+    plwin_menu.y = PLWIN_BUTTON_Y - (((gint)n_items - 1) * PLWIN_BUTTON_H) - 1;
     plwin_menu.border_x = border_x;
     plwin_menu.border_y = border_y;
-    plwin_menu.hover = -1;
-
-    plwin_install_menu_css();
-    if (!plwin_menu_popover) {
-        plwin_menu_popover = gtk_popover_new();
-        gtk_widget_add_css_class(plwin_menu_popover, "xmms-playlist-menu");
-        gtk_popover_set_autohide(GTK_POPOVER(plwin_menu_popover), TRUE);
-        gtk_popover_set_has_arrow(GTK_POPOVER(plwin_menu_popover), FALSE);
-        gtk_popover_set_position(GTK_POPOVER(plwin_menu_popover), GTK_POS_TOP);
-        gtk_widget_set_parent(plwin_menu_popover, plwin_drawing_area);
-        g_signal_connect(plwin_menu_popover, "closed",
-                         G_CALLBACK(plwin_menu_popover_closed), NULL);
-    }
-
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-    plwin_menu_area = gtk_drawing_area_new();
-    gtk_widget_set_overflow(plwin_menu_area, GTK_OVERFLOW_HIDDEN);
-    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(plwin_menu_area),
-                                       PLWIN_MENU_W * scale);
-    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(plwin_menu_area),
-                                        n_items * PLWIN_BUTTON_H * scale);
-    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(plwin_menu_area),
-                                   draw_playlist_menu_popover, NULL, NULL);
-
-    GtkGesture *click = gtk_gesture_click_new();
-    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), 0);
-    g_signal_connect(click, "pressed", G_CALLBACK(plwin_menu_pressed), NULL);
-    g_signal_connect(click, "released", G_CALLBACK(plwin_menu_released), NULL);
-    gtk_widget_add_controller(plwin_menu_area, GTK_EVENT_CONTROLLER(click));
-
-    GtkEventController *motion = gtk_event_controller_motion_new();
-    g_signal_connect(motion, "motion", G_CALLBACK(plwin_menu_motion), NULL);
-    gtk_widget_add_controller(plwin_menu_area, motion);
-
-    gtk_popover_set_child(GTK_POPOVER(plwin_menu_popover), plwin_menu_area);
-
-    GdkRectangle rect = {
-        x * scale, (PLWIN_BUTTON_Y + PLWIN_BUTTON_H) * scale,
-        PLWIN_BUTTON_W * scale, 1
-    };
-    gtk_popover_set_pointing_to(GTK_POPOVER(plwin_menu_popover), &rect);
-    gtk_popover_popup(GTK_POPOVER(plwin_menu_popover));
+    plwin_menu.hover = n_items > 0 ? (gint)n_items - 1 : -1;
+    plwin_queue_draw();
 }
 
 static void
@@ -1237,6 +1107,27 @@ plwin_activate_button(PlwinButton button)
     default:
         break;
     }
+}
+
+void
+playlistwin_show_menu(const gchar *menu)
+{
+    if (g_strcmp0(menu, "add") == 0)
+        plwin_activate_button(PLWIN_BUTTON_ADD);
+    else if (g_strcmp0(menu, "remove") == 0)
+        plwin_activate_button(PLWIN_BUTTON_REMOVE);
+    else if (g_strcmp0(menu, "select") == 0)
+        plwin_activate_button(PLWIN_BUTTON_SELECT);
+    else if (g_strcmp0(menu, "misc") == 0)
+        plwin_activate_button(PLWIN_BUTTON_MISC);
+    else if (g_strcmp0(menu, "list") == 0)
+        plwin_activate_button(PLWIN_BUTTON_LIST);
+}
+
+void
+playlistwin_shutdown(void)
+{
+    plwin_close_menu();
 }
 
 static gboolean

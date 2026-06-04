@@ -6,3 +6,4 @@ builddir/
 *.lo
 .libs/
 autom4te.cache/
+xmms-1.2.6/

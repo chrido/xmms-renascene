@@ -101,6 +101,16 @@ xmms --playlist
 xmms --equalizer
 ```
 
+For UI screenshots, start with a playlist dropdown opened:
+
+```sh
+xmms --playlist-menu-add
+xmms --playlist-menu-remove
+xmms --playlist-menu-select
+xmms --playlist-menu-misc
+xmms --playlist-menu-list
+```
+
 ## Skins
 
 XMMS Resuscitated supports Winamp 2.x compatible skins. Place skin files in:
