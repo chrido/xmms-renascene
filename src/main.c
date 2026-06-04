@@ -32,6 +32,8 @@ static gboolean app_initialized = FALSE;
 static const GOptionEntry app_option_entries[] = {
     { "playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the playlist window on startup", NULL },
+    { "equalizer", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the equalizer window on startup", NULL },
     { NULL }
 };
 
@@ -950,17 +952,21 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
     GVariantDict *options =
         g_application_command_line_get_options_dict(cmdline);
     gboolean show_playlist = g_variant_dict_contains(options, "playlist");
+    gboolean show_equalizer = g_variant_dict_contains(options, "equalizer");
     gboolean files_added = FALSE;
 
     g_application_activate(app);
 
+    if (show_equalizer)
+        equalizerwin_show(TRUE);
     if (show_playlist)
         playlistwin_show(TRUE);
 
     /* Add any files from command line */
     for (gint i = 1; i < argc; i++) {
         const gchar *arg = argv[i];
-        if (g_strcmp0(arg, "--playlist") == 0)
+        if (g_strcmp0(arg, "--playlist") == 0 ||
+            g_strcmp0(arg, "--equalizer") == 0)
             continue;
         if (arg[0] == '-')
             continue;
