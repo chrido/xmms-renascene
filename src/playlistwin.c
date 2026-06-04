@@ -15,17 +15,42 @@
 #define PLWIN_DETACH_BTN_Y 3
 #define PLWIN_DETACH_BTN_W 13
 #define PLWIN_DETACH_BTN_H 10
+#define PLWIN_BUTTON_Y      (PLWIN_HEIGHT - 29)
+#define PLWIN_BUTTON_H      18
+#define PLWIN_BUTTON_W      25
+#define PLWIN_BUTTON_SRC_W  22
 
 GtkWidget *playlistwin = NULL;
 static GtkWidget *plwin_drawing_area = NULL;
 static GtkWidget *plwin_floating_window = NULL;
+static GtkWidget *plwin_url_window = NULL;
+static GtkWidget *plwin_url_entry = NULL;
 static GList *plwin_wlist = NULL;
+
+typedef enum {
+    PLWIN_BUTTON_NONE,
+    PLWIN_BUTTON_ADD,
+    PLWIN_BUTTON_REMOVE,
+    PLWIN_BUTTON_SELECT,
+    PLWIN_BUTTON_MISC,
+    PLWIN_BUTTON_LIST,
+    PLWIN_BUTTON_PREV,
+    PLWIN_BUTTON_PLAY,
+    PLWIN_BUTTON_PAUSE,
+    PLWIN_BUTTON_STOP,
+    PLWIN_BUTTON_NEXT,
+    PLWIN_BUTTON_EJECT,
+    PLWIN_BUTTON_SCROLL_UP,
+    PLWIN_BUTTON_SCROLL_DOWN
+} PlwinButton;
 
 static gint plwin_scroll_offset = 0;
 static gint plwin_selected = -1;
 static gboolean plwin_scrollbar_dragging = FALSE;
 static gint plwin_scrollbar_drag_offset = 0;
 static gdouble plwin_scroll_delta = 0.0;
+static PlwinButton plwin_pressed_button = PLWIN_BUTTON_NONE;
+static gboolean plwin_pressed_inside = FALSE;
 
 /* Forward declarations */
 static void plwin_queue_draw(void);
@@ -34,6 +59,47 @@ static gint plwin_visible_entries(void);
 static gint plwin_max_scroll_offset(void);
 static gboolean plwin_scrollbar_geometry(gint *thumb_y, gint *thumb_h);
 static void plwin_scrollbar_set_from_y(gint y);
+static void plwin_activate_button(PlwinButton button);
+
+typedef enum {
+    PLWIN_ACTION_ADD_URL,
+    PLWIN_ACTION_ADD_FILE,
+    PLWIN_ACTION_ADD_DIR,
+    PLWIN_ACTION_REMOVE_MISC,
+    PLWIN_ACTION_REMOVE_SELECTED,
+    PLWIN_ACTION_REMOVE_CROP,
+    PLWIN_ACTION_REMOVE_ALL,
+    PLWIN_ACTION_SELECT_ALL,
+    PLWIN_ACTION_SELECT_NONE,
+    PLWIN_ACTION_SELECT_INVERT,
+    PLWIN_ACTION_MISC_SORT,
+    PLWIN_ACTION_MISC_FILE_INFO,
+    PLWIN_ACTION_MISC_OPTIONS,
+    PLWIN_ACTION_LIST_NEW,
+    PLWIN_ACTION_LIST_LOAD,
+    PLWIN_ACTION_LIST_SAVE
+} PlwinAction;
+
+static void plwin_menu_action_activate(PlwinAction action);
+
+typedef struct {
+    PlwinAction action;
+    gint normal_x, normal_y;
+    gint selected_x, selected_y;
+} PlwinMenuItem;
+
+typedef struct {
+    gboolean open;
+    gboolean pressed;
+    PlwinButton button;
+    const PlwinMenuItem *items;
+    guint n_items;
+    gint x, y;
+    gint border_x, border_y;
+    gint hover;
+} PlwinMenu;
+
+static PlwinMenu plwin_menu = { 0 };
 
 /* ---- Playlist rendering ---- */
 
@@ -123,7 +189,8 @@ draw_playlist_entries(cairo_t *cr)
         gint y = list_y + i * PLWIN_ENTRY_HEIGHT;
 
         /* Selection highlight */
-        if (idx == plwin_selected) {
+        PlaylistEntry *entry = playlist_get_entry(idx);
+        if (idx == plwin_selected || (entry && entry->selected)) {
             gdk_cairo_set_source_rgba(cr, &skin->pledit_selectedbg);
             cairo_rectangle(cr, list_x, y, list_w, PLWIN_ENTRY_HEIGHT);
             cairo_fill(cr);
@@ -151,7 +218,6 @@ draw_playlist_entries(cairo_t *cr)
         }
 
         /* Duration */
-        PlaylistEntry *entry = playlist_get_entry(idx);
         if (entry && entry->length > 0) {
             gchar *dur = time_to_string(entry->length);
             cairo_text_extents_t ext;
@@ -170,6 +236,18 @@ draw_playlist_entries(cairo_t *cr)
                          PLWIN_SCROLLBAR_X, thumb_y,
                          PLWIN_SCROLLBAR_W, thumb_h);
     }
+}
+
+static void
+draw_playlist_pressed_button(cairo_t *cr, PlwinButton button,
+                             gint pressed_x, gint pressed_y,
+                             gint dest_x, gint dest_y)
+{
+    if (plwin_pressed_button != button || !plwin_pressed_inside)
+        return;
+
+    skin_draw_pixmap(cr, SKIN_PLEDIT, pressed_x, pressed_y,
+                     dest_x, dest_y, PLWIN_BUTTON_SRC_W, PLWIN_BUTTON_H);
 }
 
 static void
@@ -231,6 +309,127 @@ draw_playlist_frame(cairo_t *cr)
     cairo_set_source_rgb(cr, 10.0 / 255.0, 18.0 / 255.0, 26.0 / 255.0);
     cairo_rectangle(cr, w - 82, h - 15, 28, 9);
     cairo_fill(cr);
+
+    draw_playlist_pressed_button(cr, PLWIN_BUTTON_ADD,
+                                 23, 149, 12, PLWIN_BUTTON_Y);
+    draw_playlist_pressed_button(cr, PLWIN_BUTTON_REMOVE,
+                                 77, 149, 41, PLWIN_BUTTON_Y);
+    draw_playlist_pressed_button(cr, PLWIN_BUTTON_SELECT,
+                                 127, 149, 70, PLWIN_BUTTON_Y);
+    draw_playlist_pressed_button(cr, PLWIN_BUTTON_MISC,
+                                 177, 149, 99, PLWIN_BUTTON_Y);
+    draw_playlist_pressed_button(cr, PLWIN_BUTTON_LIST,
+                                 227, 149, w - 46, PLWIN_BUTTON_Y);
+}
+
+static gboolean
+plwin_point_in_rect(gint x, gint y, gint rx, gint ry, gint rw, gint rh)
+{
+    return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
+}
+
+static gboolean
+plwin_button_rect(PlwinButton button, gint *x, gint *y, gint *w, gint *h)
+{
+    switch (button) {
+    case PLWIN_BUTTON_ADD:
+        *x = 12; *y = PLWIN_BUTTON_Y; *w = PLWIN_BUTTON_W; *h = PLWIN_BUTTON_H;
+        return TRUE;
+    case PLWIN_BUTTON_REMOVE:
+        *x = 41; *y = PLWIN_BUTTON_Y; *w = PLWIN_BUTTON_W; *h = PLWIN_BUTTON_H;
+        return TRUE;
+    case PLWIN_BUTTON_SELECT:
+        *x = 70; *y = PLWIN_BUTTON_Y; *w = PLWIN_BUTTON_W; *h = PLWIN_BUTTON_H;
+        return TRUE;
+    case PLWIN_BUTTON_MISC:
+        *x = 99; *y = PLWIN_BUTTON_Y; *w = PLWIN_BUTTON_W; *h = PLWIN_BUTTON_H;
+        return TRUE;
+    case PLWIN_BUTTON_LIST:
+        *x = PLWIN_WIDTH - 46; *y = PLWIN_BUTTON_Y; *w = 23; *h = PLWIN_BUTTON_H;
+        return TRUE;
+    case PLWIN_BUTTON_PREV:
+        *x = PLWIN_WIDTH - 144; *y = PLWIN_HEIGHT - 16; *w = 8; *h = 7;
+        return TRUE;
+    case PLWIN_BUTTON_PLAY:
+        *x = PLWIN_WIDTH - 138; *y = PLWIN_HEIGHT - 16; *w = 10; *h = 7;
+        return TRUE;
+    case PLWIN_BUTTON_PAUSE:
+        *x = PLWIN_WIDTH - 128; *y = PLWIN_HEIGHT - 16; *w = 10; *h = 7;
+        return TRUE;
+    case PLWIN_BUTTON_STOP:
+        *x = PLWIN_WIDTH - 118; *y = PLWIN_HEIGHT - 16; *w = 9; *h = 7;
+        return TRUE;
+    case PLWIN_BUTTON_NEXT:
+        *x = PLWIN_WIDTH - 109; *y = PLWIN_HEIGHT - 16; *w = 8; *h = 7;
+        return TRUE;
+    case PLWIN_BUTTON_EJECT:
+        *x = PLWIN_WIDTH - 100; *y = PLWIN_HEIGHT - 16; *w = 9; *h = 7;
+        return TRUE;
+    case PLWIN_BUTTON_SCROLL_UP:
+        *x = PLWIN_WIDTH - 14; *y = PLWIN_HEIGHT - 35; *w = 8; *h = 5;
+        return TRUE;
+    case PLWIN_BUTTON_SCROLL_DOWN:
+        *x = PLWIN_WIDTH - 14; *y = PLWIN_HEIGHT - 30; *w = 8; *h = 5;
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+static PlwinButton
+plwin_button_at(gint x, gint y)
+{
+    static const PlwinButton buttons[] = {
+        PLWIN_BUTTON_ADD, PLWIN_BUTTON_REMOVE, PLWIN_BUTTON_SELECT,
+        PLWIN_BUTTON_MISC, PLWIN_BUTTON_LIST, PLWIN_BUTTON_PREV,
+        PLWIN_BUTTON_PLAY, PLWIN_BUTTON_PAUSE, PLWIN_BUTTON_STOP,
+        PLWIN_BUTTON_NEXT, PLWIN_BUTTON_EJECT, PLWIN_BUTTON_SCROLL_UP,
+        PLWIN_BUTTON_SCROLL_DOWN
+    };
+
+    for (guint i = 0; i < G_N_ELEMENTS(buttons); i++) {
+        gint bx, by, bw, bh;
+        if (plwin_button_rect(buttons[i], &bx, &by, &bw, &bh) &&
+            plwin_point_in_rect(x, y, bx, by, bw, bh))
+            return buttons[i];
+    }
+    return PLWIN_BUTTON_NONE;
+}
+
+static gint
+plwin_menu_item_at(gint x, gint y)
+{
+    if (!plwin_menu.open)
+        return -1;
+
+    if (x < plwin_menu.x || x >= plwin_menu.x + PLWIN_BUTTON_SRC_W ||
+        y < plwin_menu.y ||
+        y >= plwin_menu.y + (gint)plwin_menu.n_items * PLWIN_BUTTON_H)
+        return -1;
+
+    return (y - plwin_menu.y) / PLWIN_BUTTON_H;
+}
+
+static void
+draw_playlist_menu(cairo_t *cr)
+{
+    if (!plwin_menu.open)
+        return;
+
+    for (guint i = 0; i < plwin_menu.n_items; i++) {
+        const PlwinMenuItem *item = &plwin_menu.items[i];
+        gboolean selected = plwin_menu.hover == (gint)i;
+        skin_draw_pixmap(cr, SKIN_PLEDIT,
+                         selected ? item->selected_x : item->normal_x,
+                         selected ? item->selected_y : item->normal_y,
+                         plwin_menu.x, plwin_menu.y + i * PLWIN_BUTTON_H,
+                         PLWIN_BUTTON_SRC_W, PLWIN_BUTTON_H);
+    }
+
+    skin_draw_pixmap(cr, SKIN_PLEDIT,
+                     plwin_menu.border_x, plwin_menu.border_y,
+                     plwin_menu.x + PLWIN_BUTTON_SRC_W, plwin_menu.y,
+                     3, plwin_menu.n_items * PLWIN_BUTTON_H);
 }
 
 static void
@@ -252,6 +451,8 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
 
     /* Draw all custom widgets */
     widget_list_draw(plwin_wlist, cr);
+
+    draw_playlist_menu(cr);
 }
 
 /* ---- Event handling ---- */
@@ -276,6 +477,19 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
     gint thumb_y, thumb_h;
     gboolean has_scrollbar = plwin_scrollbar_geometry(&thumb_y, &thumb_h);
 
+    if (button == 1 && plwin_menu.open) {
+        gint item = plwin_menu_item_at(sx, sy);
+        if (item >= 0) {
+            plwin_menu.hover = item;
+            plwin_menu.pressed = TRUE;
+            plwin_queue_draw();
+            return;
+        }
+        plwin_menu.open = FALSE;
+        plwin_menu.pressed = FALSE;
+        plwin_queue_draw();
+    }
+
     if (button == 1 && has_scrollbar &&
         sx >= PLWIN_SCROLLBAR_X && sx < PLWIN_SCROLLBAR_X + PLWIN_SCROLLBAR_W &&
         sy >= list_y && sy < list_y + list_h) {
@@ -294,6 +508,15 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         sx >= PLWIN_DETACH_BTN_X && sx < PLWIN_DETACH_BTN_X + PLWIN_DETACH_BTN_W &&
         sy >= PLWIN_DETACH_BTN_Y && sy < PLWIN_DETACH_BTN_Y + PLWIN_DETACH_BTN_H) {
         playlistwin_set_detached(!cfg.playlist_detached);
+        return;
+    }
+
+    PlwinButton pl_button = button == 1 ? plwin_button_at(sx, sy) :
+        PLWIN_BUTTON_NONE;
+    if (pl_button != PLWIN_BUTTON_NONE) {
+        plwin_pressed_button = pl_button;
+        plwin_pressed_inside = TRUE;
+        plwin_queue_draw();
         return;
     }
 
@@ -344,7 +567,36 @@ static void
 plwin_click_released(GtkGestureClick *gesture, int n_press,
                      double x, double y, gpointer data)
 {
-    (void)gesture; (void)n_press; (void)x; (void)y; (void)data;
+    (void)gesture; (void)n_press; (void)data;
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1) scale = 1;
+    gint sx = (gint)(x / scale);
+    gint sy = (gint)(y / scale);
+
+    if (plwin_menu.open && plwin_menu.pressed) {
+        gint item = plwin_menu_item_at(sx, sy);
+        gboolean activate = item >= 0 && item == plwin_menu.hover;
+        PlwinAction action = activate ?
+            plwin_menu.items[item].action : PLWIN_ACTION_MISC_OPTIONS;
+        plwin_menu.open = FALSE;
+        plwin_menu.pressed = FALSE;
+        plwin_queue_draw();
+        if (activate)
+            plwin_menu_action_activate(action);
+        return;
+    }
+
+    if (plwin_pressed_button != PLWIN_BUTTON_NONE) {
+        PlwinButton pressed = plwin_pressed_button;
+        gboolean activate = plwin_button_at(sx, sy) == pressed;
+        plwin_pressed_button = PLWIN_BUTTON_NONE;
+        plwin_pressed_inside = FALSE;
+        plwin_queue_draw();
+        if (activate)
+            plwin_activate_button(pressed);
+        return;
+    }
 
     if (plwin_scrollbar_dragging) {
         plwin_scrollbar_dragging = FALSE;
@@ -356,14 +608,33 @@ static void
 plwin_motion(GtkEventControllerMotion *controller,
              double x, double y, gpointer data)
 {
-    (void)controller; (void)x; (void)data;
-
-    if (!plwin_scrollbar_dragging)
-        return;
+    (void)controller; (void)data;
 
     gint scale = cfg.scale_factor;
     if (scale < 1) scale = 1;
-    plwin_scrollbar_set_from_y((gint)(y / scale));
+    gint sx = (gint)(x / scale);
+    gint sy = (gint)(y / scale);
+
+    if (plwin_menu.open) {
+        gint item = plwin_menu_item_at(sx, sy);
+        if (item != plwin_menu.hover) {
+            plwin_menu.hover = item;
+            plwin_queue_draw();
+        }
+        return;
+    }
+
+    if (plwin_pressed_button != PLWIN_BUTTON_NONE) {
+        gboolean was_inside = plwin_pressed_inside;
+        plwin_pressed_inside = plwin_button_at(sx, sy) == plwin_pressed_button;
+        if (was_inside != plwin_pressed_inside)
+            plwin_queue_draw();
+        return;
+    }
+
+    if (!plwin_scrollbar_dragging)
+        return;
+    plwin_scrollbar_set_from_y(sy);
     plwin_queue_draw();
 }
 
@@ -391,6 +662,437 @@ plwin_queue_draw(void)
 {
     if (plwin_drawing_area)
         gtk_widget_queue_draw(plwin_drawing_area);
+}
+
+static void
+plwin_select_all(gboolean selected)
+{
+    for (gint i = 0; i < playlist_get_length(); i++) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (entry)
+            entry->selected = selected;
+    }
+    if (!selected)
+        plwin_selected = -1;
+    plwin_queue_draw();
+}
+
+static void
+plwin_select_invert(void)
+{
+    for (gint i = 0; i < playlist_get_length(); i++) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (entry)
+            entry->selected = !entry->selected;
+    }
+    plwin_queue_draw();
+}
+
+static void
+plwin_remove_selected(void)
+{
+    gboolean removed = FALSE;
+    for (gint i = playlist_get_length() - 1; i >= 0; i--) {
+        PlaylistEntry *entry = playlist_get_entry(i);
+        if (entry && (entry->selected || i == plwin_selected)) {
+            playlist_remove(i);
+            removed = TRUE;
+        }
+    }
+
+    if (!removed && playlist_get_position() >= 0)
+        playlist_remove(playlist_get_position());
+
+    plwin_selected = -1;
+    plwin_set_scroll_offset(plwin_scroll_offset);
+    plwin_queue_draw();
+}
+
+static void
+plwin_open_files_cb(GObject *source, GAsyncResult *result, gpointer data)
+{
+    gboolean replace = GPOINTER_TO_INT(data);
+    GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
+    GListModel *files = gtk_file_dialog_open_multiple_finish(dlg, result, NULL);
+    if (!files)
+        return;
+
+    if (replace)
+        playlist_clear();
+
+    for (guint i = 0; i < g_list_model_get_n_items(files); i++) {
+        GFile *file = g_list_model_get_item(files, i);
+        gchar *uri = g_file_get_uri(file);
+        if (uri) {
+            playlist_add_uri(uri);
+            g_free(uri);
+        }
+        g_object_unref(file);
+    }
+    g_object_unref(files);
+
+    if (replace)
+        playlist_play();
+    plwin_queue_draw();
+}
+
+static void
+plwin_open_files(gboolean replace)
+{
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, replace ? "Open Files" : "Add Files");
+
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Audio Files");
+    gtk_file_filter_add_mime_type(filter, "audio/*");
+
+    GtkFileFilter *all_filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(all_filter, "All Files");
+    gtk_file_filter_add_pattern(all_filter, "*");
+
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_list_store_append(filters, filter);
+    g_list_store_append(filters, all_filter);
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+
+    GtkWindow *parent = GTK_WINDOW(cfg.playlist_detached && plwin_floating_window ?
+                                  plwin_floating_window : mainwin);
+    gtk_file_dialog_open_multiple(dialog, parent, NULL,
+                                  plwin_open_files_cb,
+                                  GINT_TO_POINTER(replace));
+
+    g_object_unref(filters);
+    g_object_unref(filter);
+    g_object_unref(all_filter);
+}
+
+static void
+plwin_open_folder_cb(GObject *source, GAsyncResult *result, gpointer data)
+{
+    (void)data;
+    GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
+    GFile *folder = gtk_file_dialog_select_folder_finish(dlg, result, NULL);
+    if (!folder)
+        return;
+
+    gchar *path = g_file_get_path(folder);
+    if (path) {
+        playlist_add_dir(path);
+        g_free(path);
+    }
+    g_object_unref(folder);
+    plwin_queue_draw();
+}
+
+static void
+plwin_open_folder(void)
+{
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Add Directory");
+    GtkWindow *parent = GTK_WINDOW(cfg.playlist_detached && plwin_floating_window ?
+                                  plwin_floating_window : mainwin);
+    gtk_file_dialog_select_folder(dialog, parent, NULL, plwin_open_folder_cb, NULL);
+}
+
+static void
+plwin_load_cb(GObject *source, GAsyncResult *result, gpointer data)
+{
+    (void)data;
+    GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
+    GFile *file = gtk_file_dialog_open_finish(dlg, result, NULL);
+    if (!file)
+        return;
+
+    gchar *path = g_file_get_path(file);
+    if (path) {
+        playlist_clear();
+        playlist_load(path);
+        g_free(path);
+    }
+    g_object_unref(file);
+    plwin_queue_draw();
+}
+
+static void
+plwin_save_cb(GObject *source, GAsyncResult *result, gpointer data)
+{
+    (void)data;
+    GtkFileDialog *dlg = GTK_FILE_DIALOG(source);
+    GFile *file = gtk_file_dialog_save_finish(dlg, result, NULL);
+    if (!file)
+        return;
+
+    gchar *path = g_file_get_path(file);
+    if (path) {
+        playlist_save(path);
+        g_free(path);
+    }
+    g_object_unref(file);
+}
+
+static void
+plwin_load_playlist(void)
+{
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Load Playlist");
+    GtkWindow *parent = GTK_WINDOW(cfg.playlist_detached && plwin_floating_window ?
+                                  plwin_floating_window : mainwin);
+    gtk_file_dialog_open(dialog, parent, NULL, plwin_load_cb, NULL);
+}
+
+static void
+plwin_save_playlist(void)
+{
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Save Playlist");
+    GtkWindow *parent = GTK_WINDOW(cfg.playlist_detached && plwin_floating_window ?
+                                  plwin_floating_window : mainwin);
+    gtk_file_dialog_save(dialog, parent, NULL, plwin_save_cb, NULL);
+}
+
+static gboolean
+plwin_url_close_cb(GtkWindow *window, gpointer data)
+{
+    (void)window; (void)data;
+    plwin_url_window = NULL;
+    plwin_url_entry = NULL;
+    return FALSE;
+}
+
+static void
+plwin_url_add_clicked(GtkButton *button, gpointer data)
+{
+    (void)button; (void)data;
+    const gchar *url = plwin_url_entry ?
+        gtk_editable_get_text(GTK_EDITABLE(plwin_url_entry)) : NULL;
+    if (url && *url) {
+        playlist_add_uri(url);
+        plwin_queue_draw();
+    }
+    if (plwin_url_window)
+        gtk_window_destroy(GTK_WINDOW(plwin_url_window));
+}
+
+static void
+plwin_url_cancel_clicked(GtkButton *button, gpointer data)
+{
+    (void)button; (void)data;
+    if (plwin_url_window)
+        gtk_window_destroy(GTK_WINDOW(plwin_url_window));
+}
+
+static void
+plwin_show_add_url_window(void)
+{
+    if (plwin_url_window) {
+        gtk_window_present(GTK_WINDOW(plwin_url_window));
+        return;
+    }
+
+    GtkWindow *parent = GTK_WINDOW(cfg.playlist_detached && plwin_floating_window ?
+                                  plwin_floating_window : mainwin);
+    plwin_url_window = gtk_window_new();
+    gtk_window_set_title(GTK_WINDOW(plwin_url_window), "Add URL");
+    gtk_window_set_transient_for(GTK_WINDOW(plwin_url_window), parent);
+    gtk_window_set_modal(GTK_WINDOW(plwin_url_window), TRUE);
+    gtk_window_set_resizable(GTK_WINDOW(plwin_url_window), FALSE);
+    g_signal_connect(plwin_url_window, "close-request",
+                     G_CALLBACK(plwin_url_close_cb), NULL);
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(box, 12);
+    gtk_widget_set_margin_bottom(box, 12);
+    gtk_widget_set_margin_start(box, 12);
+    gtk_widget_set_margin_end(box, 12);
+    gtk_window_set_child(GTK_WINDOW(plwin_url_window), box);
+
+    plwin_url_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(plwin_url_entry), "https://...");
+    gtk_box_append(GTK_BOX(box), plwin_url_entry);
+
+    GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(box), buttons);
+
+    GtkWidget *cancel = gtk_button_new_with_label("Cancel");
+    GtkWidget *add = gtk_button_new_with_label("Add");
+    g_signal_connect(cancel, "clicked",
+                     G_CALLBACK(plwin_url_cancel_clicked), NULL);
+    g_signal_connect(add, "clicked",
+                     G_CALLBACK(plwin_url_add_clicked), NULL);
+    gtk_box_append(GTK_BOX(buttons), cancel);
+    gtk_box_append(GTK_BOX(buttons), add);
+
+    gtk_window_present(GTK_WINDOW(plwin_url_window));
+}
+
+static void
+plwin_menu_action_activate(PlwinAction action)
+{
+    switch (action) {
+    case PLWIN_ACTION_ADD_URL:
+        plwin_show_add_url_window();
+        break;
+    case PLWIN_ACTION_ADD_FILE:
+        plwin_open_files(FALSE);
+        break;
+    case PLWIN_ACTION_ADD_DIR:
+        plwin_open_folder();
+        break;
+    case PLWIN_ACTION_REMOVE_MISC:
+        break;
+    case PLWIN_ACTION_REMOVE_SELECTED:
+        plwin_remove_selected();
+        break;
+    case PLWIN_ACTION_REMOVE_CROP:
+        for (gint i = playlist_get_length() - 1; i >= 0; i--) {
+            PlaylistEntry *entry = playlist_get_entry(i);
+            if (!entry || (!entry->selected && i != plwin_selected))
+                playlist_remove(i);
+        }
+        plwin_selected = -1;
+        plwin_set_scroll_offset(0);
+        plwin_queue_draw();
+        break;
+    case PLWIN_ACTION_REMOVE_ALL:
+        playlist_clear();
+        plwin_selected = -1;
+        plwin_set_scroll_offset(0);
+        plwin_queue_draw();
+        break;
+    case PLWIN_ACTION_SELECT_ALL:
+        plwin_select_all(TRUE);
+        break;
+    case PLWIN_ACTION_SELECT_NONE:
+        plwin_select_all(FALSE);
+        break;
+    case PLWIN_ACTION_SELECT_INVERT:
+        plwin_select_invert();
+        break;
+    case PLWIN_ACTION_MISC_SORT:
+        break;
+    case PLWIN_ACTION_MISC_FILE_INFO: {
+        gint idx = plwin_selected >= 0 ? plwin_selected : playlist_get_position();
+        const gchar *title = playlist_get_title(idx);
+        g_message("Playlist entry: %s", title ? title : "none");
+        break;
+    }
+    case PLWIN_ACTION_MISC_OPTIONS:
+        break;
+    case PLWIN_ACTION_LIST_NEW:
+        playlist_clear();
+        plwin_selected = -1;
+        plwin_set_scroll_offset(0);
+        plwin_queue_draw();
+        break;
+    case PLWIN_ACTION_LIST_LOAD:
+        plwin_load_playlist();
+        break;
+    case PLWIN_ACTION_LIST_SAVE:
+        plwin_save_playlist();
+        break;
+    }
+}
+
+static void
+plwin_show_menu(PlwinButton button, const PlwinMenuItem *items, guint n_items,
+                gint x, gint border_x, gint border_y)
+{
+    plwin_menu.open = TRUE;
+    plwin_menu.pressed = FALSE;
+    plwin_menu.button = button;
+    plwin_menu.items = items;
+    plwin_menu.n_items = n_items;
+    plwin_menu.x = x;
+    plwin_menu.y = PLWIN_HEIGHT - ((gint)n_items * PLWIN_BUTTON_H) - 11;
+    plwin_menu.border_x = border_x;
+    plwin_menu.border_y = border_y;
+    plwin_menu.hover = n_items > 0 ? (gint)n_items - 1 : -1;
+    plwin_queue_draw();
+}
+
+static void
+plwin_activate_button(PlwinButton button)
+{
+    switch (button) {
+    case PLWIN_BUTTON_ADD: {
+        static const PlwinMenuItem items[] = {
+            { PLWIN_ACTION_ADD_URL,  0, 111,  23, 111 },
+            { PLWIN_ACTION_ADD_DIR,  0, 130,  23, 130 },
+            { PLWIN_ACTION_ADD_FILE, 0, 149,  23, 149 },
+        };
+        plwin_show_menu(button, items, G_N_ELEMENTS(items), 12, 48, 111);
+        break;
+    }
+    case PLWIN_BUTTON_REMOVE: {
+        static const PlwinMenuItem items[] = {
+            { PLWIN_ACTION_REMOVE_MISC,     54, 168,  77, 168 },
+            { PLWIN_ACTION_REMOVE_ALL,      54, 111,  77, 111 },
+            { PLWIN_ACTION_REMOVE_CROP,     54, 130,  77, 130 },
+            { PLWIN_ACTION_REMOVE_SELECTED, 54, 149,  77, 149 },
+        };
+        plwin_show_menu(button, items, G_N_ELEMENTS(items), 41, 100, 111);
+        break;
+    }
+    case PLWIN_BUTTON_SELECT: {
+        static const PlwinMenuItem items[] = {
+            { PLWIN_ACTION_SELECT_INVERT, 104, 111, 127, 111 },
+            { PLWIN_ACTION_SELECT_NONE,   104, 130, 127, 130 },
+            { PLWIN_ACTION_SELECT_ALL,    104, 149, 127, 149 },
+        };
+        plwin_show_menu(button, items, G_N_ELEMENTS(items), 70, 150, 111);
+        break;
+    }
+    case PLWIN_BUTTON_MISC: {
+        static const PlwinMenuItem items[] = {
+            { PLWIN_ACTION_MISC_SORT,      154, 111, 177, 111 },
+            { PLWIN_ACTION_MISC_FILE_INFO, 154, 130, 177, 130 },
+            { PLWIN_ACTION_MISC_OPTIONS,   154, 149, 177, 149 },
+        };
+        plwin_show_menu(button, items, G_N_ELEMENTS(items), 99, 200, 111);
+        break;
+    }
+    case PLWIN_BUTTON_LIST: {
+        static const PlwinMenuItem items[] = {
+            { PLWIN_ACTION_LIST_NEW,  204, 111, 227, 111 },
+            { PLWIN_ACTION_LIST_SAVE, 204, 130, 227, 130 },
+            { PLWIN_ACTION_LIST_LOAD, 204, 149, 227, 149 },
+        };
+        plwin_show_menu(button, items, G_N_ELEMENTS(items),
+                        PLWIN_WIDTH - 46, 250, 111);
+        break;
+    }
+    case PLWIN_BUTTON_PREV:
+        playlist_prev();
+        break;
+    case PLWIN_BUTTON_PLAY:
+        if (player_get_state() == PLAYER_PAUSED)
+            player_unpause();
+        else if (player_get_state() == PLAYER_STOPPED)
+            playlist_play();
+        break;
+    case PLWIN_BUTTON_PAUSE:
+        player_toggle_pause();
+        break;
+    case PLWIN_BUTTON_STOP:
+        player_stop();
+        break;
+    case PLWIN_BUTTON_NEXT:
+        playlist_next();
+        break;
+    case PLWIN_BUTTON_EJECT:
+        plwin_open_files(TRUE);
+        break;
+    case PLWIN_BUTTON_SCROLL_UP:
+        plwin_set_scroll_offset(plwin_scroll_offset - 1);
+        plwin_queue_draw();
+        break;
+    case PLWIN_BUTTON_SCROLL_DOWN:
+        plwin_set_scroll_offset(plwin_scroll_offset + 1);
+        plwin_queue_draw();
+        break;
+    default:
+        break;
+    }
 }
 
 static gboolean
