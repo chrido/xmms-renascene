@@ -393,6 +393,7 @@ equalizerwin_show(gboolean show)
         gtk_widget_set_visible(eqwin_drawing_area, show);
     }
     mainwin_update_attached_size();
+    mainwin_update_panel_toggles();
     eqwin_queue_draw();
 }
 
@@ -430,6 +431,7 @@ equalizerwin_set_detached(gboolean detached)
     }
     cfg.equalizer_visible = visible;
     mainwin_update_attached_size();
+    mainwin_update_panel_toggles();
     eqwin_queue_draw();
 }
 

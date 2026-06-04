@@ -288,6 +288,15 @@ mainwin_update_attached_size(void)
     gtk_widget_queue_resize(mainwin);
 }
 
+void
+mainwin_update_panel_toggles(void)
+{
+    if (mainwin_eq)
+        tbutton_set_toggled(mainwin_eq, equalizerwin_is_visible());
+    if (mainwin_pl)
+        tbutton_set_toggled(mainwin_pl, playlistwin_is_visible());
+}
+
 static void
 draw_mainwin_titlebar(cairo_t *cr, gboolean focused)
 {
@@ -906,6 +915,7 @@ activate(GtkApplication *app, gpointer data)
         equalizerwin_show(TRUE);
     if (cfg.playlist_visible)
         playlistwin_show(TRUE);
+    mainwin_update_panel_toggles();
 }
 
 static void

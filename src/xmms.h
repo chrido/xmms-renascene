@@ -52,6 +52,7 @@ extern GtkWidget *mainwin_container;
 
 void mainwin_queue_draw(void);
 void mainwin_update_attached_size(void);
+void mainwin_update_panel_toggles(void);
 void draw_main_window(cairo_t *cr);
 void save_config(void);
 

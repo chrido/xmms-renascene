@@ -554,6 +554,7 @@ playlistwin_show(gboolean show)
         gtk_widget_set_visible(plwin_drawing_area, show);
     }
     mainwin_update_attached_size();
+    mainwin_update_panel_toggles();
     plwin_queue_draw();
 }
 
@@ -591,6 +592,7 @@ playlistwin_set_detached(gboolean detached)
     }
     cfg.playlist_visible = visible;
     mainwin_update_attached_size();
+    mainwin_update_panel_toggles();
     plwin_queue_draw();
 }
 
