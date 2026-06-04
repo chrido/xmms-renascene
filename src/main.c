@@ -585,20 +585,9 @@ mainwin_menubtn_pushed(void)
 {
     /* Build a popover menu */
     GMenu *menu = g_menu_new();
-    GMenu *options = g_menu_new();
     GMenu *shade = g_menu_new();
-    g_menu_append(options, "Preferences", "win.preferences");
+    g_menu_append(menu, "Preferences", "win.preferences");
     g_menu_append(menu, "Skin Browser...", "win.skin-browser");
-    g_menu_append(options, "Reload Skin", "win.reload-skin");
-    g_menu_append(options, "Repeat", "win.repeat");
-    g_menu_append(options, "Shuffle", "win.shuffle");
-    g_menu_append(options, "No Playlist Advance", "win.no-advance");
-    g_menu_append(options, "Time Elapsed", "win.time-elapsed");
-    g_menu_append(options, "Time Remaining", "win.time-remaining");
-    g_menu_append(options, "Sticky", "win.sticky");
-    g_menu_append(options, "DoubleSize", "win.doublesize");
-    g_menu_append(options, "Easy Move", "win.easy-move");
-    g_menu_append_submenu(menu, "Options", G_MENU_MODEL(options));
     g_menu_append(menu, "Spotify Playlists...", "win.spotify");
     g_menu_append(menu, "Output Device...", "win.output");
     g_menu_append(shade, "WindowShade Mode", "win.windowshade");
@@ -615,9 +604,8 @@ mainwin_menubtn_pushed(void)
     rect.x *= scale; rect.y *= scale;
     rect.width *= scale; rect.height *= scale;
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
-
     gtk_popover_popup(GTK_POPOVER(popover));
-    g_object_unref(options);
+    gtk_popover_popup(GTK_POPOVER(popover));
     g_object_unref(shade);
     g_object_unref(menu);
 }
