@@ -1225,6 +1225,14 @@ plwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
     case GDK_KEY_k:
         plwin_move_selection(-1);
         return GDK_EVENT_STOP;
+    case GDK_KEY_d:
+    case GDK_KEY_x:
+        plwin_remove_selected();
+        return GDK_EVENT_STOP;
+    case GDK_KEY_i:
+        plwin_activate_button(PLWIN_BUTTON_ADD);
+        plwin_queue_draw();
+        return GDK_EVENT_STOP;
     case GDK_KEY_p:
         plwin_play_selected();
         return GDK_EVENT_STOP;
