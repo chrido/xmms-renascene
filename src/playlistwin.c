@@ -320,7 +320,7 @@ playlistwin_show(gboolean show)
     if (!playlistwin)
         return;
     if (show)
-        gtk_widget_set_visible(playlistwin, TRUE);
+        gtk_window_present(GTK_WINDOW(playlistwin));
     else
         gtk_widget_set_visible(playlistwin, FALSE);
 }

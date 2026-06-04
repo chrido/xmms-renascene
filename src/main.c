@@ -27,6 +27,12 @@ static Widget *pressed_widget = NULL;
 static guint update_timeout_tag = 0;
 static gboolean app_initialized = FALSE;
 
+static const GOptionEntry app_option_entries[] = {
+    { "playlist", 0, 0, G_OPTION_ARG_NONE, NULL,
+      "Show the playlist window on startup", NULL },
+    { NULL }
+};
+
 /* Forward declarations */
 static void open_files_cb(GObject *source, GAsyncResult *result, gpointer data);
 
@@ -813,12 +819,21 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
     gchar **argv;
     gint argc;
     argv = g_application_command_line_get_arguments(cmdline, &argc);
+    GVariantDict *options =
+        g_application_command_line_get_options_dict(cmdline);
+    gboolean show_playlist = g_variant_dict_contains(options, "playlist");
+    gboolean files_added = FALSE;
 
     g_application_activate(app);
+
+    if (show_playlist)
+        playlistwin_show(TRUE);
 
     /* Add any files from command line */
     for (gint i = 1; i < argc; i++) {
         const gchar *arg = argv[i];
+        if (g_strcmp0(arg, "--playlist") == 0)
+            continue;
         if (arg[0] == '-')
             continue;
 
@@ -826,9 +841,10 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
             playlist_add_dir(arg);
         else
             playlist_add(arg);
+        files_added = TRUE;
     }
 
-    if (argc > 1 && playlist_get_length() > 0)
+    if (files_added && playlist_get_length() > 0)
         playlist_play();
 
     g_strfreev(argv);
@@ -842,6 +858,8 @@ main(int argc, char *argv[])
 
     GtkApplication *app = gtk_application_new("org.xmms.Resuscitated",
                                                G_APPLICATION_HANDLES_COMMAND_LINE);
+    g_application_add_main_option_entries(G_APPLICATION(app),
+                                          app_option_entries);
 
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
     g_signal_connect(app, "shutdown", G_CALLBACK(shutdown_cb), NULL);
