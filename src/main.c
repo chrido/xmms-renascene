@@ -38,10 +38,7 @@ static void mainwin_set_shaded(gboolean shaded);
 static void mainwin_update_time_display(void);
 static void mainwin_apply_scale_factor(void);
 static void mainwin_reload_skin(void);
-static void mainwin_set_doublesize(gboolean enabled);
-static void mainwin_set_always_on_top(gboolean enabled);
-static void mainwin_set_sticky(gboolean enabled);
-static void mainwin_set_easy_move(gboolean enabled);
+
 static void mainwin_show_message(const gchar *title, const gchar *message);
 
 typedef enum {
@@ -79,6 +76,7 @@ static const GOptionEntry app_option_entries[] = {
 /* Forward declarations */
 static void open_files_cb(GObject *source, GAsyncResult *result, gpointer data);
 static void open_directory_cb(GObject *source, GAsyncResult *result, gpointer data);
+static void mainwin_update_time_display(void);
 
 static gchar *
 playlist_state_file(void)
@@ -261,8 +259,7 @@ static void
 mainwin_menu_prefs_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    mainwin_show_message("Preferences",
-                         "The full XMMS preferences window is not implemented yet.");
+    prefswin_show(GTK_WINDOW(mainwin));
 }
 
 static void
@@ -318,13 +315,6 @@ mainwin_menu_time_remaining_cb(GSimpleAction *action, GVariant *param, gpointer 
 }
 
 static void
-mainwin_menu_always_cb(GSimpleAction *action, GVariant *param, gpointer data)
-{
-    (void)action; (void)param; (void)data;
-    mainwin_set_always_on_top(!cfg.always_on_top);
-}
-
-static void
 mainwin_menu_sticky_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
@@ -349,85 +339,88 @@ static void
 mainwin_menu_vis_analyzer_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_mode(mainwin_vis, VIS_MODE_ANALYZER);
-    mainwin_queue_draw();
+    cfg.vis_mode = VIS_MODE_ANALYZER;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_scope_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_mode(mainwin_vis, VIS_MODE_SCOPE);
-    mainwin_queue_draw();
+    cfg.vis_mode = VIS_MODE_SCOPE;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_off_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_mode(mainwin_vis, VIS_MODE_OFF);
-    mainwin_queue_draw();
+    cfg.vis_mode = VIS_MODE_OFF;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_bars_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_analyzer_style(mainwin_vis, VIS_ANALYZER_BARS);
-    mainwin_queue_draw();
+    cfg.vis_analyzer_style = VIS_ANALYZER_BARS;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_lines_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_analyzer_style(mainwin_vis, VIS_ANALYZER_LINES);
-    mainwin_queue_draw();
+    cfg.vis_analyzer_style = VIS_ANALYZER_LINES;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_peaks_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
-    static gboolean enabled = TRUE;
     (void)action; (void)param; (void)data;
-    enabled = !enabled;
-    vis_set_peaks_enabled(mainwin_vis, enabled);
-    mainwin_queue_draw();
+    cfg.vis_peaks_enabled = !cfg.vis_peaks_enabled;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_falloff_slow_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_falloff(mainwin_vis, 0.015f);
+    cfg.vis_falloff = 0.015;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_falloff_fast_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_set_falloff(mainwin_vis, 0.08f);
+    cfg.vis_falloff = 0.08;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_refresh_full_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_update_divisor = 1;
+    cfg.vis_refresh_divisor = 1;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_refresh_half_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_update_divisor = 2;
+    cfg.vis_refresh_divisor = 2;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
 mainwin_menu_vis_refresh_quarter_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    vis_update_divisor = 4;
+    cfg.vis_refresh_divisor = 4;
+    mainwin_apply_visualization_preferences();
 }
 
 static void
@@ -467,7 +460,6 @@ mainwin_menubtn_pushed(void)
     g_menu_append(options, "No Playlist Advance", "win.no-advance");
     g_menu_append(options, "Time Elapsed", "win.time-elapsed");
     g_menu_append(options, "Time Remaining", "win.time-remaining");
-    g_menu_append(options, "Always On Top", "win.always-on-top");
     g_menu_append(options, "Sticky", "win.sticky");
     g_menu_append(options, "DoubleSize", "win.doublesize");
     g_menu_append(options, "Easy Move", "win.easy-move");
@@ -827,6 +819,7 @@ mainwin_apply_scale_factor(void)
             GTK_DRAWING_AREA(mainwin_drawing_area),
             mainwin_current_height() * scale);
     }
+
     playlistwin_set_shaded(playlistwin_is_shaded());
     equalizerwin_set_shaded(equalizerwin_is_shaded());
     mainwin_update_attached_size();
@@ -842,7 +835,7 @@ mainwin_reload_skin(void)
     playlistwin_update();
 }
 
-static void
+void
 mainwin_set_doublesize(gboolean enabled)
 {
     cfg.doublesize = enabled;
@@ -850,15 +843,7 @@ mainwin_set_doublesize(gboolean enabled)
     mainwin_apply_scale_factor();
 }
 
-static void
-mainwin_set_always_on_top(gboolean enabled)
-{
-    cfg.always_on_top = enabled;
-    if (enabled && mainwin)
-        gtk_window_present(GTK_WINDOW(mainwin));
-}
-
-static void
+void
 mainwin_set_sticky(gboolean enabled)
 {
     cfg.sticky = enabled;
@@ -866,10 +851,49 @@ mainwin_set_sticky(gboolean enabled)
         gtk_window_present(GTK_WINDOW(mainwin));
 }
 
-static void
+void
 mainwin_set_easy_move(gboolean enabled)
 {
     cfg.easy_move = enabled;
+}
+
+void
+mainwin_apply_visualization_preferences(void)
+{
+    if (!mainwin_vis)
+        return;
+
+    vis_set_mode(mainwin_vis, CLAMP(cfg.vis_mode,
+                                    VIS_MODE_ANALYZER, VIS_MODE_OFF));
+    vis_set_analyzer_style(mainwin_vis,
+                           cfg.vis_analyzer_style == VIS_ANALYZER_LINES ?
+                           VIS_ANALYZER_LINES : VIS_ANALYZER_BARS);
+    vis_set_peaks_enabled(mainwin_vis, cfg.vis_peaks_enabled);
+    vis_set_falloff(mainwin_vis, (gfloat)CLAMP(cfg.vis_falloff, 0.001, 0.25));
+    vis_update_divisor = CLAMP(cfg.vis_refresh_divisor, 1, 4);
+    mainwin_queue_draw();
+}
+
+void
+mainwin_apply_preferences(void)
+{
+    playlist_set_shuffle(cfg.shuffle);
+    playlist_set_repeat(cfg.repeat);
+    playlist_set_no_advance(cfg.no_playlist_advance);
+    player_set_volume(cfg.volume);
+    player_set_balance(cfg.balance);
+    mainwin_set_sticky(cfg.sticky);
+    mainwin_set_easy_move(cfg.easy_move);
+    mainwin_set_doublesize(cfg.doublesize);
+    mainwin_apply_visualization_preferences();
+
+    if (mainwin_shuffle)
+        tbutton_set_toggled(mainwin_shuffle, playlist_get_shuffle());
+    if (mainwin_repeat)
+        tbutton_set_toggled(mainwin_repeat, playlist_get_repeat());
+    mainwin_update_time_display();
+    playlistwin_update();
+    mainwin_queue_draw();
 }
 
 void
@@ -1083,8 +1107,7 @@ mainwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
 
         switch (key) {
         case GDK_KEY_p:
-            mainwin_show_message("Preferences",
-                                 "Preferences are not implemented yet.");
+            prefswin_show(GTK_WINDOW(mainwin));
             return GDK_EVENT_STOP;
         case GDK_KEY_l:
             mainwin_show_prompt("Play Location", "https://...",
@@ -1104,9 +1127,6 @@ mainwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
             mainwin_update_time_display();
             playlistwin_update();
             mainwin_queue_draw();
-            return GDK_EVENT_STOP;
-        case GDK_KEY_a:
-            mainwin_set_always_on_top(!cfg.always_on_top);
             return GDK_EVENT_STOP;
         case GDK_KEY_s:
             mainwin_set_sticky(!cfg.sticky);
@@ -1431,7 +1451,6 @@ load_config(void)
     cfg.volume = 100;
     cfg.balance = 0;
     cfg.no_playlist_advance = FALSE;
-    cfg.always_on_top = FALSE;
     cfg.sticky = FALSE;
     cfg.doublesize = TRUE;
     cfg.easy_move = FALSE;
@@ -1447,6 +1466,17 @@ load_config(void)
     cfg.equalizer_preamp_pos = 50;
     for (gint i = 0; i < 10; i++)
         cfg.equalizer_band_pos[i] = 50;
+    cfg.convert_underscore = TRUE;
+    cfg.convert_twenty = TRUE;
+    cfg.show_numbers_in_pl = TRUE;
+    cfg.playlist_font = g_strdup("Helvetica");
+    cfg.mainwin_font = g_strdup("Skin bitmap font");
+    cfg.title_format = g_strdup("%p - %t");
+    cfg.vis_mode = VIS_MODE_ANALYZER;
+    cfg.vis_analyzer_style = VIS_ANALYZER_BARS;
+    cfg.vis_peaks_enabled = TRUE;
+    cfg.vis_falloff = 0.04;
+    cfg.vis_refresh_divisor = 1;
 
     if (startup_reset) {
         session_debug("reset requested; skipping saved config");
@@ -1481,9 +1511,6 @@ load_config(void)
         if (g_key_file_has_key(kf, "xmms", "no_playlist_advance", NULL))
             cfg.no_playlist_advance =
                 g_key_file_get_boolean(kf, "xmms", "no_playlist_advance", NULL);
-        if (g_key_file_has_key(kf, "xmms", "always_on_top", NULL))
-            cfg.always_on_top =
-                g_key_file_get_boolean(kf, "xmms", "always_on_top", NULL);
         if (g_key_file_has_key(kf, "xmms", "sticky", NULL))
             cfg.sticky =
                 g_key_file_get_boolean(kf, "xmms", "sticky", NULL);
@@ -1533,6 +1560,54 @@ load_config(void)
                     g_key_file_get_integer(kf, "xmms", key, NULL), 0, 100);
             g_free(key);
         }
+        if (g_key_file_has_key(kf, "xmms", "convert_underscore", NULL))
+            cfg.convert_underscore =
+                g_key_file_get_boolean(kf, "xmms", "convert_underscore", NULL);
+        if (g_key_file_has_key(kf, "xmms", "convert_twenty", NULL))
+            cfg.convert_twenty =
+                g_key_file_get_boolean(kf, "xmms", "convert_twenty", NULL);
+        if (g_key_file_has_key(kf, "xmms", "show_numbers_in_pl", NULL))
+            cfg.show_numbers_in_pl =
+                g_key_file_get_boolean(kf, "xmms", "show_numbers_in_pl", NULL);
+
+        gchar *playlist_font = g_key_file_get_string(kf, "xmms", "playlist_font", NULL);
+        if (playlist_font && playlist_font[0]) {
+            g_free(cfg.playlist_font);
+            cfg.playlist_font = playlist_font;
+        } else {
+            g_free(playlist_font);
+        }
+        gchar *mainwin_font = g_key_file_get_string(kf, "xmms", "mainwin_font", NULL);
+        if (mainwin_font && mainwin_font[0]) {
+            g_free(cfg.mainwin_font);
+            cfg.mainwin_font = mainwin_font;
+        } else {
+            g_free(mainwin_font);
+        }
+        gchar *title_format = g_key_file_get_string(kf, "xmms", "title_format", NULL);
+        if (title_format && title_format[0]) {
+            g_free(cfg.title_format);
+            cfg.title_format = title_format;
+        } else {
+            g_free(title_format);
+        }
+        if (g_key_file_has_key(kf, "xmms", "vis_mode", NULL))
+            cfg.vis_mode = CLAMP(g_key_file_get_integer(kf, "xmms", "vis_mode", NULL),
+                                 VIS_MODE_ANALYZER, VIS_MODE_OFF);
+        if (g_key_file_has_key(kf, "xmms", "vis_analyzer_style", NULL))
+            cfg.vis_analyzer_style =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_analyzer_style", NULL),
+                      VIS_ANALYZER_BARS, VIS_ANALYZER_LINES);
+        if (g_key_file_has_key(kf, "xmms", "vis_peaks_enabled", NULL))
+            cfg.vis_peaks_enabled =
+                g_key_file_get_boolean(kf, "xmms", "vis_peaks_enabled", NULL);
+        if (g_key_file_has_key(kf, "xmms", "vis_falloff", NULL))
+            cfg.vis_falloff = CLAMP(g_key_file_get_double(kf, "xmms", "vis_falloff", NULL),
+                                    0.001, 0.25);
+        if (g_key_file_has_key(kf, "xmms", "vis_refresh_divisor", NULL))
+            cfg.vis_refresh_divisor =
+                CLAMP(g_key_file_get_integer(kf, "xmms", "vis_refresh_divisor", NULL),
+                      1, 4);
 
         session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                       config_file, cfg.player_x, cfg.player_y,
@@ -1567,8 +1642,6 @@ save_config(void)
     g_key_file_set_integer(kf, "xmms", "balance", player_get_balance());
     g_key_file_set_boolean(kf, "xmms", "no_playlist_advance",
                            playlist_get_no_advance());
-    g_key_file_set_boolean(kf, "xmms", "always_on_top",
-                           cfg.always_on_top);
     g_key_file_set_boolean(kf, "xmms", "sticky", cfg.sticky);
     g_key_file_set_boolean(kf, "xmms", "doublesize", cfg.doublesize);
     g_key_file_set_boolean(kf, "xmms", "easy_move", cfg.easy_move);
@@ -1598,6 +1671,29 @@ save_config(void)
     }
     if (cfg.skin)
         g_key_file_set_string(kf, "xmms", "skin", cfg.skin);
+    g_key_file_set_boolean(kf, "xmms", "convert_underscore",
+                           cfg.convert_underscore);
+    g_key_file_set_boolean(kf, "xmms", "convert_twenty",
+                           cfg.convert_twenty);
+    g_key_file_set_boolean(kf, "xmms", "show_numbers_in_pl",
+                           cfg.show_numbers_in_pl);
+    if (cfg.playlist_font)
+        g_key_file_set_string(kf, "xmms", "playlist_font",
+                              cfg.playlist_font);
+    if (cfg.mainwin_font)
+        g_key_file_set_string(kf, "xmms", "mainwin_font",
+                              cfg.mainwin_font);
+    if (cfg.title_format)
+        g_key_file_set_string(kf, "xmms", "title_format",
+                              cfg.title_format);
+    g_key_file_set_integer(kf, "xmms", "vis_mode", cfg.vis_mode);
+    g_key_file_set_integer(kf, "xmms", "vis_analyzer_style",
+                           cfg.vis_analyzer_style);
+    g_key_file_set_boolean(kf, "xmms", "vis_peaks_enabled",
+                           cfg.vis_peaks_enabled);
+    g_key_file_set_double(kf, "xmms", "vis_falloff", cfg.vis_falloff);
+    g_key_file_set_integer(kf, "xmms", "vis_refresh_divisor",
+                           cfg.vis_refresh_divisor);
 
     const gchar *output_dev = player_get_output_device();
     if (output_dev)
@@ -1769,7 +1865,6 @@ activate(GtkApplication *app, gpointer data)
         { "no-advance", mainwin_menu_no_advance_cb, NULL, NULL, NULL },
         { "time-elapsed", mainwin_menu_time_elapsed_cb, NULL, NULL, NULL },
         { "time-remaining", mainwin_menu_time_remaining_cb, NULL, NULL, NULL },
-        { "always-on-top", mainwin_menu_always_cb, NULL, NULL, NULL },
         { "sticky", mainwin_menu_sticky_cb, NULL, NULL, NULL },
         { "doublesize", mainwin_menu_doublesize_cb, NULL, NULL, NULL },
         { "easy-move", mainwin_menu_easy_move_cb, NULL, NULL, NULL },
@@ -1863,9 +1958,7 @@ activate(GtkApplication *app, gpointer data)
     /* Update timer */
     update_timeout_tag = g_timeout_add(100, mainwin_update_cb, NULL);
 
-    mainwin_set_always_on_top(cfg.always_on_top);
-    mainwin_set_sticky(cfg.sticky);
-    mainwin_set_easy_move(cfg.easy_move);
+    mainwin_apply_preferences();
     gtk_window_present(GTK_WINDOW(mainwin));
     if (cfg.equalizer_visible)
         equalizerwin_show(TRUE);

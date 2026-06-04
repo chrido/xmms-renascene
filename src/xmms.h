@@ -21,6 +21,7 @@
 #include "spotify.h"
 #include "spotifywin.h"
 #include "outputwin.h"
+#include "prefswin.h"
 
 typedef enum {
     TIMER_ELAPSED,
@@ -36,7 +37,6 @@ typedef struct {
     gint volume;
     gint balance;
     gboolean no_playlist_advance;
-    gboolean always_on_top;
     gboolean sticky;
     gboolean doublesize;
     gboolean easy_move;
@@ -51,6 +51,17 @@ typedef struct {
     gboolean equalizer_auto;
     gint equalizer_preamp_pos;
     gint equalizer_band_pos[10];
+    gboolean convert_underscore;
+    gboolean convert_twenty;
+    gboolean show_numbers_in_pl;
+    gchar *playlist_font;
+    gchar *mainwin_font;
+    gchar *title_format;
+    gint vis_mode;
+    gint vis_analyzer_style;
+    gboolean vis_peaks_enabled;
+    gdouble vis_falloff;
+    gint vis_refresh_divisor;
 } Config;
 
 extern Config cfg;
@@ -67,6 +78,11 @@ extern GtkWidget *mainwin_container;
 void mainwin_queue_draw(void);
 void mainwin_update_attached_size(void);
 void mainwin_update_panel_toggles(void);
+void mainwin_set_doublesize(gboolean enabled);
+void mainwin_set_sticky(gboolean enabled);
+void mainwin_set_easy_move(gboolean enabled);
+void mainwin_apply_preferences(void);
+void mainwin_apply_visualization_preferences(void);
 void draw_main_window(cairo_t *cr);
 void save_config(void);
 

@@ -45,6 +45,7 @@ sources = files(
   'src/spotify.c',
   'src/spotifywin.c',
   'src/outputwin.c',
+  'src/prefswin.c',
 )
 
 executable('xmms',

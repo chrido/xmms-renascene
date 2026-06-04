@@ -154,7 +154,9 @@ static void
 plwin_set_playlist_font(cairo_t *cr)
 {
     /* Original XMMS defaults to -adobe-helvetica-bold-r-*-*-10-*. */
-    cairo_select_font_face(cr, "Helvetica", CAIRO_FONT_SLANT_NORMAL,
+    cairo_select_font_face(cr, cfg.playlist_font && cfg.playlist_font[0] ?
+                           cfg.playlist_font : "Helvetica",
+                           CAIRO_FONT_SLANT_NORMAL,
                            CAIRO_FONT_WEIGHT_BOLD);
     cairo_set_font_size(cr, PLWIN_FONT_SIZE);
 }
@@ -165,13 +167,17 @@ plwin_normalize_playlist_text(const gchar *text)
     gchar *normalized = g_strdup(text ? text : "");
     gchar *pos;
 
-    while ((pos = strchr(normalized, '_')) != NULL)
-        *pos = ' ';
+    if (cfg.convert_underscore) {
+        while ((pos = strchr(normalized, '_')) != NULL)
+            *pos = ' ';
+    }
 
-    while ((pos = strstr(normalized, "%20")) != NULL) {
-        gchar *tail = pos + 3;
-        *(pos++) = ' ';
-        memmove(pos, tail, strlen(tail) + 1);
+    if (cfg.convert_twenty) {
+        while ((pos = strstr(normalized, "%20")) != NULL) {
+            gchar *tail = pos + 3;
+            *(pos++) = ' ';
+            memmove(pos, tail, strlen(tail) + 1);
+        }
     }
 
     return normalized;
@@ -271,7 +277,8 @@ plwin_update_shaded_info(void)
 
     PlaylistEntry *entry = playlist_get_entry(pos);
     gchar *normalized = plwin_normalize_playlist_text(title);
-    gchar *posstr = g_strdup_printf("%d. ", pos + 1);
+    gchar *posstr = cfg.show_numbers_in_pl ?
+        g_strdup_printf("%d. ", pos + 1) : g_strdup("");
     gchar *timestr = NULL;
     gint max_len = (PLWIN_WIDTH - 35) / 5 - (gint)strlen(posstr);
 
@@ -470,7 +477,9 @@ draw_playlist_entries(cairo_t *cr)
         const gchar *title = playlist_get_title(idx);
         if (title) {
             gchar *normalized = plwin_normalize_playlist_text(title);
-            gchar *display = g_strdup_printf("%d. %s", idx + 1, normalized);
+            gchar *display = cfg.show_numbers_in_pl ?
+                g_strdup_printf("%d. %s", idx + 1, normalized) :
+                g_strdup(normalized);
 
             plwin_ellipsize_to_width(cr, display, text_w);
             cairo_move_to(cr, list_x, y + baseline);
