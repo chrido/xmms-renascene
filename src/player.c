@@ -101,6 +101,7 @@ player_init(void)
     /* Add 10-band equalizer and spectrum analyzer */
     player->equalizer = gst_element_factory_make("equalizer-10bands", "eq");
     player->spectrum = gst_element_factory_make("spectrum", "spectrum");
+    player->panorama = gst_element_factory_make("audiopanorama", "panorama");
     {
         GstElement *sink = gst_element_factory_make("autoaudiosink", "sink");
         GstElement *bin = gst_bin_new("audio-sink-bin");
@@ -117,19 +118,32 @@ player_init(void)
                          NULL);
         }
 
-        if (player->equalizer && player->spectrum) {
-            gst_bin_add_many(GST_BIN(bin), convert, player->equalizer,
-                             player->spectrum, sink, NULL);
-            gst_element_link_many(convert, player->equalizer,
-                                  player->spectrum, sink, NULL);
-        } else if (player->equalizer) {
-            gst_bin_add_many(GST_BIN(bin), convert, player->equalizer,
-                             sink, NULL);
-            gst_element_link_many(convert, player->equalizer, sink, NULL);
-        } else {
-            gst_bin_add_many(GST_BIN(bin), convert, sink, NULL);
-            gst_element_link_many(convert, sink, NULL);
+        gst_bin_add_many(GST_BIN(bin), convert, sink, NULL);
+        if (player->panorama)
+            gst_bin_add(GST_BIN(bin), player->panorama);
+        if (player->equalizer)
+            gst_bin_add(GST_BIN(bin), player->equalizer);
+        if (player->spectrum)
+            gst_bin_add(GST_BIN(bin), player->spectrum);
+
+        GstElement *prev = convert;
+        gboolean linked = TRUE;
+        if (player->panorama) {
+            linked = gst_element_link(prev, player->panorama);
+            prev = player->panorama;
         }
+        if (linked && player->equalizer) {
+            linked = gst_element_link(prev, player->equalizer);
+            prev = player->equalizer;
+        }
+        if (linked && player->spectrum) {
+            linked = gst_element_link(prev, player->spectrum);
+            prev = player->spectrum;
+        }
+        if (linked)
+            linked = gst_element_link(prev, sink);
+        if (!linked)
+            g_warning("Failed to link audio output chain");
 
         GstPad *pad = gst_element_get_static_pad(convert, "sink");
         gst_element_add_pad(bin, gst_ghost_pad_new("sink", pad));
@@ -374,10 +388,13 @@ player_seek(gint64 ms)
 void
 player_set_volume(gint percent)
 {
-    if (!player || !player->pipeline)
+    if (!player)
         return;
 
     player->volume = CLAMP(percent, 0, 100);
+    if (!player->pipeline)
+        return;
+
     gdouble vol = player->volume / 100.0;
     g_object_set(player->pipeline, "volume", vol, NULL);
 }
@@ -394,8 +411,10 @@ player_set_balance(gint balance)
     if (!player)
         return;
     player->balance = CLAMP(balance, -100, 100);
-    /* GStreamer playbin doesn't have a built-in balance property,
-       but we can use a panning element if needed */
+    if (player->panorama) {
+        gdouble pan = player->balance / 100.0;
+        g_object_set(player->panorama, "panorama", pan, NULL);
+    }
 }
 
 gint

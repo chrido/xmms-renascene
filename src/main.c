@@ -849,6 +849,20 @@ mainwin_balance_releasecb(gint pos)
     mainwin_balance_motioncb(pos);
 }
 
+void
+mainwin_sync_volume_balance(void)
+{
+    if (mainwin_volume && !mainwin_volume->pressed)
+        hslider_set_position(mainwin_volume,
+                             CLAMP((player_get_volume() * 51 + 50) / 100,
+                                   0, 51));
+    if (mainwin_balance && !mainwin_balance->pressed)
+        hslider_set_position(mainwin_balance,
+                             CLAMP(12 + (player_get_balance() * 12) / 100,
+                                   0, 24));
+    mainwin_queue_draw();
+}
+
 static void
 mainwin_position_motioncb(gint pos)
 {
@@ -2258,10 +2272,7 @@ activate(GtkApplication *app, gpointer data)
 
     /* Create widgets */
     create_mainwin_widgets();
-    hslider_set_position(mainwin_volume,
-                         CLAMP((cfg.volume * 51 + 50) / 100, 0, 51));
-    hslider_set_position(mainwin_balance,
-                         CLAMP(12 + (cfg.balance * 12) / 100, 0, 24));
+    mainwin_sync_volume_balance();
     tbutton_set_toggled(mainwin_shuffle, cfg.shuffle);
     tbutton_set_toggled(mainwin_repeat, cfg.repeat);
 

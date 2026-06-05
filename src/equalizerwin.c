@@ -234,6 +234,7 @@ eqwin_volume_motion_cb(gint pos)
     gint volume = CLAMP((pos * 100 + 47) / 94, 0, 100);
     player_set_volume(volume);
     cfg.volume = volume;
+    mainwin_sync_volume_balance();
 }
 
 static void
@@ -264,6 +265,7 @@ eqwin_balance_motion_cb(gint pos)
                          -100, 100);
     player_set_balance(balance);
     cfg.balance = balance;
+    mainwin_sync_volume_balance();
 }
 
 static void

@@ -13,6 +13,7 @@ typedef struct {
     GstElement *pipeline;
     GstElement *equalizer;
     GstElement *spectrum;
+    GstElement *panorama;
     GstElement *audio_convert;
     PlayerState state;
     gint64 duration;
