@@ -3,6 +3,9 @@ set -eu
 
 cd "$(dirname "$0")"
 
+export GDK_DISABLE="${XMMS_GDK_DISABLE:-gl}"
+export GSK_RENDERER="${XMMS_GSK_RENDERER:-cairo}"
+
 if [ "${XMMS_EXEC_SKIP_BUILD:-}" != "1" ]; then
     if [ ! -f builddir/build.ninja ]; then
         meson setup builddir
@@ -23,7 +26,8 @@ if [ "${1:-}" = "screenshot" ]; then
         xvfb_server_args="${XMMS_XVFB_SERVER_ARGS:--screen 0 1024x768x24}"
         exec xvfb-run -a -s "$xvfb_server_args" \
             env -u WAYLAND_DISPLAY -u DBUS_SESSION_BUS_ADDRESS \
-                GDK_BACKEND=x11 GSK_RENDERER=cairo NO_AT_BRIDGE=1 \
+                GDK_BACKEND=x11 GSK_RENDERER=cairo GDK_DISABLE="$GDK_DISABLE" \
+                NO_AT_BRIDGE=1 \
                 XMMS_NON_UNIQUE=1 \
                 XMMS_EXEC_SKIP_BUILD=1 \
                 XMMS_SCREENSHOT_UNDER_XVFB=1 ./exec.sh screenshot "$@"

@@ -1379,10 +1379,6 @@ mainwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
                 playlist_play();
             }
             return GDK_EVENT_STOP;
-        case GDK_KEY_v:
-            mainwin_show_message("Visualization Plugins",
-                                 "Visualization plugins are not implemented yet.");
-            return GDK_EVENT_STOP;
         default:
             break;
         }
