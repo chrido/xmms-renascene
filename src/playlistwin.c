@@ -2,8 +2,13 @@
 #include "playlistwin.h"
 #include <glib/gstdio.h>
 
-#define PLWIN_WIDTH   275
-#define PLWIN_HEIGHT  232
+static gint plwin_width = 275;
+static gint plwin_height = 232;
+
+#define PLWIN_WIDTH   (plwin_width)
+#define PLWIN_HEIGHT  (plwin_height)
+#define PLWIN_MIN_WIDTH 275
+#define PLWIN_MIN_HEIGHT 116
 #define PLWIN_ENTRY_HEIGHT 11
 #define PLWIN_LIST_X  12
 #define PLWIN_LIST_Y  20
@@ -37,6 +42,16 @@ static TextBox *plwin_time_min = NULL;
 static TextBox *plwin_time_sec = NULL;
 static TextBox *plwin_info = NULL;
 static TextBox *plwin_sinfo = NULL;
+static SButton *plwin_shade_hit = NULL;
+static SButton *plwin_close_hit = NULL;
+static SButton *plwin_srew = NULL;
+static SButton *plwin_splay = NULL;
+static SButton *plwin_spause = NULL;
+static SButton *plwin_sstop = NULL;
+static SButton *plwin_sfwd = NULL;
+static SButton *plwin_seject = NULL;
+static SButton *plwin_scroll_up = NULL;
+static SButton *plwin_scroll_down = NULL;
 
 typedef enum {
     PLWIN_BUTTON_NONE,
@@ -59,9 +74,12 @@ static gint plwin_scroll_offset = 0;
 static gint plwin_selected = -1;
 static gint plwin_selection_anchor = -1;
 static gboolean plwin_scrollbar_dragging = FALSE;
+static gboolean plwin_resizing = FALSE;
 static gboolean plwin_shaded = FALSE;
 static gboolean plwin_focused = TRUE;
 static gint plwin_scrollbar_drag_offset = 0;
+static gint plwin_resize_dx = 0;
+static gint plwin_resize_dy = 0;
 static gdouble plwin_scroll_delta = 0.0;
 static PlwinButton plwin_pressed_button = PLWIN_BUTTON_NONE;
 static gboolean plwin_pressed_inside = FALSE;
@@ -76,6 +94,7 @@ static gint plwin_visible_entries(void);
 static gint plwin_max_scroll_offset(void);
 static gboolean plwin_scrollbar_geometry(gint *thumb_y, gint *thumb_h);
 static void plwin_scrollbar_set_from_y(gint y);
+static void plwin_resize(gint width, gint height);
 static void plwin_activate_button(PlwinButton button);
 static void plwin_close_menu(void);
 static void plwin_update_info(void);
@@ -353,6 +372,97 @@ plwin_update_shaded_info(void)
     g_free(timestr);
     g_free(posstr);
     g_free(normalized);
+}
+
+static void
+plwin_move_widget(Widget *widget, gint x, gint y)
+{
+    if (!widget)
+        return;
+    widget->x = x;
+    widget->y = y;
+}
+
+static void
+plwin_resize_widget(Widget *widget, gint width, gint height)
+{
+    if (!widget)
+        return;
+    widget->width = width;
+    widget->height = height;
+}
+
+static void
+plwin_apply_content_size(void)
+{
+    if (!plwin_drawing_area)
+        return;
+
+    gint scale = cfg.scale_factor;
+    if (scale < 1)
+        scale = 2;
+    gtk_drawing_area_set_content_width(
+        GTK_DRAWING_AREA(plwin_drawing_area), PLWIN_WIDTH * scale);
+    gtk_drawing_area_set_content_height(
+        GTK_DRAWING_AREA(plwin_drawing_area), playlistwin_height() * scale);
+}
+
+static void
+plwin_resize(gint width, gint height)
+{
+    gint nw = cfg.playlist_detached ?
+        (((width - PLWIN_MIN_WIDTH) / 25) * 25) + PLWIN_MIN_WIDTH :
+        PLWIN_MIN_WIDTH;
+    if (nw < PLWIN_MIN_WIDTH)
+        nw = PLWIN_MIN_WIDTH;
+
+    gint nh = PLWIN_HEIGHT;
+    if (!plwin_shaded) {
+        nh = (((height - 58) / 29) * 29) + 58;
+        if (nh < PLWIN_MIN_HEIGHT)
+            nh = PLWIN_MIN_HEIGHT;
+    }
+
+    if (nw == PLWIN_WIDTH && nh == PLWIN_HEIGHT)
+        return;
+
+    plwin_width = nw;
+    plwin_height = nh;
+
+    plwin_resize_widget((Widget *)plwin_sinfo, PLWIN_WIDTH - 35, 6);
+    plwin_update_shaded_info();
+    plwin_move_widget((Widget *)plwin_shade_hit, PLWIN_SHADE_BTN_X,
+                      PLWIN_TITLE_BTN_Y);
+    plwin_move_widget((Widget *)plwin_close_hit, PLWIN_CLOSE_BTN_X,
+                      PLWIN_TITLE_BTN_Y);
+    plwin_move_widget((Widget *)plwin_time_min, PLWIN_WIDTH - 82,
+                      PLWIN_HEIGHT - 15);
+    plwin_move_widget((Widget *)plwin_time_sec, PLWIN_WIDTH - 64,
+                      PLWIN_HEIGHT - 15);
+    plwin_move_widget((Widget *)plwin_info, PLWIN_WIDTH - 143,
+                      PLWIN_HEIGHT - 28);
+    plwin_move_widget((Widget *)plwin_srew, PLWIN_WIDTH - 144,
+                      PLWIN_HEIGHT - 16);
+    plwin_move_widget((Widget *)plwin_splay, PLWIN_WIDTH - 138,
+                      PLWIN_HEIGHT - 16);
+    plwin_move_widget((Widget *)plwin_spause, PLWIN_WIDTH - 128,
+                      PLWIN_HEIGHT - 16);
+    plwin_move_widget((Widget *)plwin_sstop, PLWIN_WIDTH - 118,
+                      PLWIN_HEIGHT - 16);
+    plwin_move_widget((Widget *)plwin_sfwd, PLWIN_WIDTH - 109,
+                      PLWIN_HEIGHT - 16);
+    plwin_move_widget((Widget *)plwin_seject, PLWIN_WIDTH - 100,
+                      PLWIN_HEIGHT - 16);
+    plwin_move_widget((Widget *)plwin_scroll_up, PLWIN_WIDTH - 14,
+                      PLWIN_HEIGHT - 35);
+    plwin_move_widget((Widget *)plwin_scroll_down, PLWIN_WIDTH - 14,
+                      PLWIN_HEIGHT - 30);
+
+    plwin_set_scroll_offset(plwin_scroll_offset);
+    plwin_update_info();
+    plwin_apply_content_size();
+    mainwin_update_attached_size();
+    plwin_queue_draw();
 }
 
 static void
@@ -1022,6 +1132,14 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         return;
     }
 
+    if (button == 1 && !plwin_shaded &&
+        sx > PLWIN_WIDTH - 20 && sy > PLWIN_HEIGHT - 20) {
+        plwin_resizing = TRUE;
+        plwin_resize_dx = PLWIN_WIDTH - sx;
+        plwin_resize_dy = PLWIN_HEIGHT - sy;
+        return;
+    }
+
     gint thumb_y, thumb_h;
     gboolean has_scrollbar = plwin_scrollbar_geometry(&thumb_y, &thumb_h);
 
@@ -1145,6 +1263,12 @@ plwin_click_released(GtkGestureClick *gesture, int n_press,
     gint button = gtk_gesture_single_get_current_button(
         GTK_GESTURE_SINGLE(gesture));
 
+    if (plwin_resizing) {
+        plwin_resizing = FALSE;
+        plwin_resize(sx + plwin_resize_dx, sy + plwin_resize_dy);
+        return;
+    }
+
     if (plwin_menu.open && plwin_menu.pressed) {
         gint item = plwin_menu_item_at(sx, sy);
         gboolean activate = item >= 0 && item == plwin_menu.hover;
@@ -1193,6 +1317,11 @@ plwin_motion(GtkEventControllerMotion *controller,
     if (scale < 1) scale = 1;
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
+
+    if (plwin_resizing) {
+        plwin_resize(sx + plwin_resize_dx, sy + plwin_resize_dy);
+        return;
+    }
 
     if (plwin_menu.open) {
         gint item = plwin_menu_item_at(sx, sy);
@@ -2227,29 +2356,34 @@ playlistwin_create(GtkApplication *app)
     plwin_sinfo = textbox_new(&plwin_wlist, 4, 4,
                               PLWIN_WIDTH - 35, FALSE, SKIN_TEXT);
     ((Widget *)plwin_sinfo)->visible = FALSE;
-    sbutton_new(&plwin_wlist, PLWIN_SHADE_BTN_X, PLWIN_TITLE_BTN_Y,
-                PLWIN_TITLE_BTN_W, PLWIN_TITLE_BTN_H,
-                plwin_shade_button_pushed);
-    sbutton_new(&plwin_wlist, PLWIN_CLOSE_BTN_X, PLWIN_TITLE_BTN_Y,
-                PLWIN_TITLE_BTN_W, PLWIN_TITLE_BTN_H,
-                plwin_close_button_pushed);
+    plwin_shade_hit = sbutton_new(&plwin_wlist, PLWIN_SHADE_BTN_X,
+                                  PLWIN_TITLE_BTN_Y,
+                                  PLWIN_TITLE_BTN_W, PLWIN_TITLE_BTN_H,
+                                  plwin_shade_button_pushed);
+    plwin_close_hit = sbutton_new(&plwin_wlist, PLWIN_CLOSE_BTN_X,
+                                  PLWIN_TITLE_BTN_Y,
+                                  PLWIN_TITLE_BTN_W, PLWIN_TITLE_BTN_H,
+                                  plwin_close_button_pushed);
 
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 144, PLWIN_HEIGHT - 16,
-                8, 7, playlist_prev);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 138, PLWIN_HEIGHT - 16,
-                10, 7, plwin_play_pushed);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 128, PLWIN_HEIGHT - 16,
-                10, 7, player_toggle_pause);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 118, PLWIN_HEIGHT - 16,
-                9, 7, player_stop);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 109, PLWIN_HEIGHT - 16,
-                8, 7, playlist_next);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 100, PLWIN_HEIGHT - 16,
-                9, 7, plwin_eject_pushed);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 14, PLWIN_HEIGHT - 35,
-                8, 5, plwin_scroll_up_pushed);
-    sbutton_new(&plwin_wlist, PLWIN_WIDTH - 14, PLWIN_HEIGHT - 30,
-                8, 5, plwin_scroll_down_pushed);
+    plwin_srew = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 144,
+                             PLWIN_HEIGHT - 16, 8, 7, playlist_prev);
+    plwin_splay = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 138,
+                              PLWIN_HEIGHT - 16, 10, 7, plwin_play_pushed);
+    plwin_spause = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 128,
+                               PLWIN_HEIGHT - 16, 10, 7,
+                               player_toggle_pause);
+    plwin_sstop = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 118,
+                              PLWIN_HEIGHT - 16, 9, 7, player_stop);
+    plwin_sfwd = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 109,
+                             PLWIN_HEIGHT - 16, 8, 7, playlist_next);
+    plwin_seject = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 100,
+                               PLWIN_HEIGHT - 16, 9, 7, plwin_eject_pushed);
+    plwin_scroll_up = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 14,
+                                  PLWIN_HEIGHT - 35, 8, 5,
+                                  plwin_scroll_up_pushed);
+    plwin_scroll_down = sbutton_new(&plwin_wlist, PLWIN_WIDTH - 14,
+                                    PLWIN_HEIGHT - 30, 8, 5,
+                                    plwin_scroll_down_pushed);
 
     plwin_update_info();
     plwin_update_shaded_info();
@@ -2380,13 +2514,7 @@ playlistwin_set_shaded(gboolean shaded)
         ((Widget *)plwin_sinfo)->visible = shaded;
 
     if (plwin_drawing_area) {
-        gint scale = cfg.scale_factor;
-        if (scale < 1) scale = 2;
-        gtk_drawing_area_set_content_width(
-            GTK_DRAWING_AREA(plwin_drawing_area), PLWIN_WIDTH * scale);
-        gtk_drawing_area_set_content_height(
-            GTK_DRAWING_AREA(plwin_drawing_area),
-            playlistwin_height() * scale);
+        plwin_apply_content_size();
     }
     mainwin_update_attached_size();
     plwin_queue_draw();
@@ -2396,6 +2524,12 @@ gboolean
 playlistwin_is_shaded(void)
 {
     return plwin_shaded;
+}
+
+gint
+playlistwin_width(void)
+{
+    return PLWIN_WIDTH;
 }
 
 gint

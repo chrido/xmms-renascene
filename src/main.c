@@ -956,13 +956,16 @@ mainwin_update_attached_size(void)
     if (scale < 1) scale = 2;
 
     gint height = mainwin_current_height();
+    gint width = MAINWIN_WIDTH;
     if (equalizerwin_is_visible() && !equalizerwin_is_detached())
         height += equalizerwin_height();
-    if (playlistwin_is_visible() && !playlistwin_is_detached())
+    if (playlistwin_is_visible() && !playlistwin_is_detached()) {
         height += playlistwin_height();
+        width = MAX(width, playlistwin_width());
+    }
 
     gtk_window_set_default_size(GTK_WINDOW(mainwin),
-                                MAINWIN_WIDTH * scale, height * scale);
+                                width * scale, height * scale);
     gtk_widget_queue_resize(mainwin);
 }
 
