@@ -405,11 +405,12 @@ hslider_draw(Widget *w, cairo_t *cr)
 {
     HSlider *hs = (HSlider *)w;
 
-    /* Draw frame/background */
     gint frame = hs->frame_cb ? hs->frame_cb(hs->position) : 0;
-    skin_draw_pixmap(cr, hs->skin_index,
-                     hs->frame_offset, frame * hs->frame_height,
-                     w->x, w->y, w->width, w->height);
+    if (hs->draw_frame) {
+        skin_draw_pixmap(cr, hs->skin_index,
+                         hs->frame_offset, frame * hs->frame_height,
+                         w->x, w->y, w->width, w->height);
+    }
 
     /* Draw knob */
     gint kx, ky;
@@ -498,12 +499,20 @@ hslider_new(GList **list, gint x, gint y, gint w, gint h,
     hs->frame_height = frame_height;
     hs->frame_offset = frame_offset;
     hs->min = min; hs->max = max;
+    hs->draw_frame = TRUE;
     hs->frame_cb = frame_cb;
     hs->motion_cb = motion_cb;
     hs->release_cb = release_cb;
     hs->skin_index = skin_index;
     widget_list_add(list, (Widget *)hs);
     return hs;
+}
+
+void
+hslider_set_draw_frame(HSlider *hs, gboolean draw_frame)
+{
+    hs->draw_frame = draw_frame;
+    widget_queue_draw((Widget *)hs);
 }
 
 void

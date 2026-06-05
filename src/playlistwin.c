@@ -12,10 +12,11 @@
 #define PLWIN_SCROLLBAR_X  (PLWIN_WIDTH - 16)
 #define PLWIN_SCROLLBAR_W  8
 #define PLWIN_SCROLL_THUMB_H 18
-#define PLWIN_DETACH_BTN_X 250
-#define PLWIN_DETACH_BTN_Y 3
-#define PLWIN_DETACH_BTN_W 13
-#define PLWIN_DETACH_BTN_H 10
+#define PLWIN_SHADE_BTN_X (PLWIN_WIDTH - 21)
+#define PLWIN_CLOSE_BTN_X (PLWIN_WIDTH - 11)
+#define PLWIN_TITLE_BTN_Y 3
+#define PLWIN_TITLE_BTN_W 9
+#define PLWIN_TITLE_BTN_H 9
 #define PLWIN_BUTTON_Y      (PLWIN_HEIGHT - 29)
 #define PLWIN_BUTTON_H      18
 #define PLWIN_BUTTON_W      25
@@ -86,6 +87,18 @@ static void plwin_play_selected(void);
 static void plwin_search_start(void);
 static void plwin_search_stop(void);
 static gboolean plwin_search_key(guint keyval, GdkModifierType state);
+
+static void
+plwin_shade_button_pushed(void)
+{
+    playlistwin_set_shaded(!plwin_shaded);
+}
+
+static void
+plwin_close_button_pushed(void)
+{
+    playlistwin_show(FALSE);
+}
 
 typedef enum {
     PLWIN_ACTION_ADD_URL,
@@ -1024,13 +1037,6 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
         return;
     }
 
-    if (button == 1 &&
-        sx >= PLWIN_DETACH_BTN_X && sx < PLWIN_DETACH_BTN_X + PLWIN_DETACH_BTN_W &&
-        sy >= PLWIN_DETACH_BTN_Y && sy < PLWIN_DETACH_BTN_Y + PLWIN_DETACH_BTN_H) {
-        playlistwin_set_shaded(!plwin_shaded);
-        return;
-    }
-
     PlwinButton pl_button = button == 1 ? plwin_button_at(sx, sy) :
         PLWIN_BUTTON_NONE;
     if (pl_button != PLWIN_BUTTON_NONE) {
@@ -1079,12 +1085,6 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
             }
             plwin_queue_draw();
         }
-        return;
-    }
-
-    /* Titlebar close button (top-right corner, 9x9) */
-    if (sx >= PLWIN_WIDTH - 11 && sx < PLWIN_WIDTH - 2 && sy >= 3 && sy < 12) {
-        playlistwin_show(FALSE);
         return;
     }
 
@@ -2205,6 +2205,12 @@ playlistwin_create(GtkApplication *app)
     plwin_sinfo = textbox_new(&plwin_wlist, 4, 4,
                               PLWIN_WIDTH - 35, FALSE, SKIN_TEXT);
     ((Widget *)plwin_sinfo)->visible = FALSE;
+    sbutton_new(&plwin_wlist, PLWIN_SHADE_BTN_X, PLWIN_TITLE_BTN_Y,
+                PLWIN_TITLE_BTN_W, PLWIN_TITLE_BTN_H,
+                plwin_shade_button_pushed);
+    sbutton_new(&plwin_wlist, PLWIN_CLOSE_BTN_X, PLWIN_TITLE_BTN_Y,
+                PLWIN_TITLE_BTN_W, PLWIN_TITLE_BTN_H,
+                plwin_close_button_pushed);
 
     sbutton_new(&plwin_wlist, PLWIN_WIDTH - 144, PLWIN_HEIGHT - 16,
                 8, 7, playlist_prev);

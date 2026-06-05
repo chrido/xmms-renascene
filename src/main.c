@@ -964,11 +964,9 @@ mainwin_update_panel_toggles(void)
 static void
 draw_mainwin_titlebar(cairo_t *cr, gboolean focused)
 {
-    /* titlebar.bmp layout: source x=0-26 holds button graphics (not background),
-       source x=27+ holds the actual titlebar strip (275 pixels wide).
-       Draw source (27,y) to dest (0,0) covering full window width.
-       PButtons draw button icons on top at their screen positions. */
-    gint ty = focused ? 0 : 15;
+    /* Original XMMS uses row 29 for the focused shaded player strip; that
+       strip contains the mini transport art that SButton hit areas sit over. */
+    gint ty = mainwin_shaded ? (focused ? 29 : 42) : (focused ? 0 : 15);
     skin_draw_pixmap(cr, SKIN_TITLEBAR,
                      27, ty, 0, 0, MAINWIN_WIDTH, 14);
 }
@@ -1686,12 +1684,13 @@ create_mainwin_widgets(void)
     mainwin_sposition = hslider_new(&mainwin_wlist, 226, 4, 17, 7,
                                     17, 36, 17, 36,
                                     3, 7,
-                                    1, 36,
+                                    36, 0,
                                     1, 13,
                                     mainwin_sposition_framecb,
                                     mainwin_sposition_motioncb,
                                     mainwin_sposition_releasecb,
                                     SKIN_TITLEBAR);
+    hslider_set_draw_frame(mainwin_sposition, FALSE);
     ((Widget *)mainwin_sposition)->visible = FALSE;
 
     /* Time display numbers */

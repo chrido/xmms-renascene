@@ -70,6 +70,7 @@ typedef struct {
     gint position;
     gint min, max;
     gboolean pressed;
+    gboolean draw_frame;
     gint press_offset;
     gint (*frame_cb)(gint pos);
     void (*motion_cb)(gint pos);
@@ -217,6 +218,7 @@ void vis_draw_windowshade(Vis *vis, cairo_t *cr, gint x, gint y,
                           VisVUMode vu_mode);
 void playstatus_set_status(PlayStatus *ps, gint status);
 void hslider_set_position(HSlider *hs, gint pos);
+void hslider_set_draw_frame(HSlider *hs, gboolean draw_frame);
 void tbutton_set_toggled(TButton *tb, gboolean toggled);
 
 #endif /* WIDGET_H */
