@@ -32,6 +32,7 @@ static Widget *pressed_widget = NULL;
 static guint update_timeout_tag = 0;
 static gboolean app_initialized = FALSE;
 static gboolean startup_reset = FALSE;
+static gchar *startup_skin_path = NULL;
 static gboolean mainwin_shaded = FALSE;
 static gboolean mainwin_focused = TRUE;
 static gint vis_update_divisor = 1;
@@ -85,6 +86,8 @@ static const GOptionEntry app_option_entries[] = {
       "Start the equalizer in normal mode", NULL },
     { "reset", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Start with default settings and an empty playlist", NULL },
+    { "skin", 0, 0, G_OPTION_ARG_STRING, NULL,
+      "Load a skin directory or archive on startup", "PATH" },
     { "playlist-menu-add", 0, 0, G_OPTION_ARG_NONE, NULL,
       "Show the playlist Add menu on startup", NULL },
     { "playlist-menu-remove", 0, 0, G_OPTION_ARG_NONE, NULL,
@@ -2173,6 +2176,10 @@ activate(GtkApplication *app, gpointer data)
     playlist_set_shuffle(cfg.shuffle);
     playlist_set_repeat(cfg.repeat);
     playlist_set_no_advance(cfg.no_playlist_advance);
+    if (startup_skin_path) {
+        g_free(cfg.skin);
+        cfg.skin = g_strdup(startup_skin_path);
+    }
     skin_init();
     player_init();
     player_set_volume(cfg.volume);
@@ -2340,6 +2347,7 @@ shutdown_cb(GtkApplication *app, gpointer data)
     mpris_free();
     podcast_shutdown();
     spotify_free();
+    g_clear_pointer(&startup_skin_path, g_free);
     player_stop();
     player_free();
     playlist_free();
@@ -2363,6 +2371,9 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
     gboolean files_added = FALSE;
 
     startup_reset = g_variant_dict_contains(options, "reset");
+    g_free(startup_skin_path);
+    startup_skin_path = NULL;
+    g_variant_dict_lookup(options, "skin", "s", &startup_skin_path);
     g_application_activate(app);
 
     if (g_variant_dict_contains(options, "dock-playlist"))
@@ -2419,6 +2430,12 @@ handle_command_line(GApplication *app, GApplicationCommandLine *cmdline,
             g_strcmp0(arg, "--playlist-menu-select") == 0 ||
             g_strcmp0(arg, "--playlist-menu-misc") == 0 ||
             g_strcmp0(arg, "--playlist-menu-list") == 0)
+            continue;
+        if (g_strcmp0(arg, "--skin") == 0) {
+            i++;
+            continue;
+        }
+        if (g_str_has_prefix(arg, "--skin="))
             continue;
         if (arg[0] == '-')
             continue;

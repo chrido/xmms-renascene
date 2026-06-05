@@ -1,5 +1,6 @@
 #include "xmms.h"
 #include <glib/gstdio.h>
+#include <stdint.h>
 
 #ifdef HAVE_LIBARCHIVE
 #include <archive.h>
@@ -67,16 +68,324 @@ static const struct {
     [SKIN_EQ_EX]      = { "eq_ex",    275,  50 },
 };
 
+typedef struct {
+    guint32 argb;
+    gboolean valid;
+} XpmColor;
+
+static gboolean
+xpm_hex_nibble(gchar c, guint *value)
+{
+    if (c >= '0' && c <= '9')
+        *value = c - '0';
+    else if (c >= 'a' && c <= 'f')
+        *value = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F')
+        *value = c - 'A' + 10;
+    else
+        return FALSE;
+    return TRUE;
+}
+
+static gboolean
+xpm_parse_hex_component(const gchar *text, gint digits, guint8 *out)
+{
+    guint value = 0;
+    for (gint i = 0; i < digits; i++) {
+        guint nibble;
+        if (!xpm_hex_nibble(text[i], &nibble))
+            return FALSE;
+        value = (value << 4) | nibble;
+    }
+
+    guint max = (1u << (digits * 4)) - 1u;
+    *out = (guint8)((value * 255u + max / 2u) / max);
+    return TRUE;
+}
+
+static gboolean
+xpm_parse_hex_color(const gchar *text, XpmColor *color)
+{
+    gsize len = strlen(text);
+    gint digits;
+
+    if (text[0] != '#')
+        return FALSE;
+    if (len == 4)
+        digits = 1;
+    else if (len == 7)
+        digits = 2;
+    else if (len == 13)
+        digits = 4;
+    else
+        return FALSE;
+
+    guint8 r, g, b;
+    if (!xpm_parse_hex_component(text + 1, digits, &r) ||
+        !xpm_parse_hex_component(text + 1 + digits, digits, &g) ||
+        !xpm_parse_hex_component(text + 1 + digits * 2, digits, &b))
+        return FALSE;
+
+    color->argb = 0xff000000u | ((guint32)r << 16) |
+        ((guint32)g << 8) | b;
+    color->valid = TRUE;
+    return TRUE;
+}
+
+static gboolean
+xpm_parse_named_color(const gchar *text, XpmColor *color)
+{
+    if (g_ascii_strcasecmp(text, "None") == 0) {
+        color->argb = 0;
+        color->valid = TRUE;
+        return TRUE;
+    }
+
+    if (g_ascii_strncasecmp(text, "Gray", 4) == 0 ||
+        g_ascii_strncasecmp(text, "Grey", 4) == 0) {
+        gchar *end = NULL;
+        gint value = (gint)g_ascii_strtoll(text + 4, &end, 10);
+        if (end && *end == '\0' && value >= 0 && value <= 100) {
+            guint8 channel = (guint8)((value * 255 + 50) / 100);
+            color->argb = 0xff000000u | ((guint32)channel << 16) |
+                ((guint32)channel << 8) | channel;
+            color->valid = TRUE;
+            return TRUE;
+        }
+    }
+
+    if (g_ascii_strcasecmp(text, "Green") == 0) {
+        color->argb = 0xff00ff00u;
+        color->valid = TRUE;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static gboolean
+xpm_parse_color_value(const gchar *text, XpmColor *color)
+{
+    color->argb = 0xff000000u;
+    color->valid = FALSE;
+
+    if (!text || !text[0])
+        return FALSE;
+    if (xpm_parse_hex_color(text, color) ||
+        xpm_parse_named_color(text, color))
+        return TRUE;
+
+    g_warning("Unsupported XPM color '%s'; using black", text);
+    color->valid = TRUE;
+    return TRUE;
+}
+
+static gchar *
+xpm_parse_c_string(const gchar **cursor)
+{
+    const gchar *p = *cursor;
+    GString *out = g_string_new(NULL);
+
+    while (*p && *p != '"') {
+        if (*p == '\\') {
+            p++;
+            switch (*p) {
+            case 'n': g_string_append_c(out, '\n'); p++; break;
+            case 'r': g_string_append_c(out, '\r'); p++; break;
+            case 't': g_string_append_c(out, '\t'); p++; break;
+            case 'b': g_string_append_c(out, '\b'); p++; break;
+            case 'f': g_string_append_c(out, '\f'); p++; break;
+            case 'v': g_string_append_c(out, '\v'); p++; break;
+            case '\0': break;
+            default:
+                if (*p >= '0' && *p <= '7') {
+                    gint value = 0;
+                    gint count = 0;
+                    while (count < 3 && *p >= '0' && *p <= '7') {
+                        value = value * 8 + (*p - '0');
+                        p++;
+                        count++;
+                    }
+                    g_string_append_c(out, (gchar)value);
+                } else {
+                    g_string_append_c(out, *p);
+                    p++;
+                }
+                break;
+            }
+        } else {
+            g_string_append_c(out, *p);
+            p++;
+        }
+    }
+
+    if (*p == '"')
+        p++;
+    *cursor = p;
+    return g_string_free(out, FALSE);
+}
+
+static GPtrArray *
+xpm_extract_strings(const gchar *contents)
+{
+    GPtrArray *strings = g_ptr_array_new_with_free_func(g_free);
+    const gchar *p = contents;
+
+    while (*p) {
+        if (p[0] == '/' && p[1] == '*') {
+            p += 2;
+            while (*p && !(p[0] == '*' && p[1] == '/'))
+                p++;
+            if (*p)
+                p += 2;
+            continue;
+        }
+        if (p[0] == '/' && p[1] == '/') {
+            p += 2;
+            while (*p && *p != '\n')
+                p++;
+            continue;
+        }
+        if (*p == '"') {
+            p++;
+            g_ptr_array_add(strings, xpm_parse_c_string(&p));
+            continue;
+        }
+        p++;
+    }
+
+    return strings;
+}
+
+static gchar *
+xpm_color_attr_value(const gchar *line, gint cpp)
+{
+    const gchar *p = line + cpp;
+
+    while (*p) {
+        while (g_ascii_isspace(*p))
+            p++;
+        if (!*p)
+            break;
+
+        const gchar *token = p;
+        while (*p && !g_ascii_isspace(*p))
+            p++;
+        gsize token_len = p - token;
+
+        while (g_ascii_isspace(*p))
+            p++;
+        const gchar *value = p;
+        while (*p && !g_ascii_isspace(*p))
+            p++;
+        gsize value_len = p - value;
+
+        if (token_len == 1 && token[0] == 'c' && value_len > 0)
+            return g_strndup(value, value_len);
+    }
+
+    return NULL;
+}
+
 static cairo_surface_t *
-surface_from_resource(const gchar *resource_path)
+load_xpm_surface_from_data(const gchar *contents, const gchar *source_name)
+{
+    GPtrArray *strings = xpm_extract_strings(contents);
+
+    if (strings->len < 1) {
+        g_ptr_array_free(strings, TRUE);
+        return NULL;
+    }
+
+    gint width, height, ncolors, cpp;
+    if (sscanf(g_ptr_array_index(strings, 0), "%d %d %d %d",
+               &width, &height, &ncolors, &cpp) != 4 ||
+        width <= 0 || height <= 0 || ncolors <= 0 || cpp <= 0 ||
+        strings->len < (guint)(1 + ncolors + height)) {
+        g_warning("Invalid XPM header in %s", source_name);
+        g_ptr_array_free(strings, TRUE);
+        return NULL;
+    }
+
+    GHashTable *colors = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                               g_free, g_free);
+    for (gint i = 0; i < ncolors; i++) {
+        const gchar *line = g_ptr_array_index(strings, 1 + i);
+        if ((gint)strlen(line) < cpp)
+            continue;
+
+        gchar *key = g_strndup(line, cpp);
+        gchar *value = xpm_color_attr_value(line, cpp);
+        XpmColor *color = g_new0(XpmColor, 1);
+        if (!xpm_parse_color_value(value, color))
+            color->valid = TRUE;
+        g_free(value);
+        g_hash_table_insert(colors, key, color);
+    }
+
+    cairo_surface_t *surface =
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    uint8_t *data = cairo_image_surface_get_data(surface);
+    gint stride = cairo_image_surface_get_stride(surface);
+
+    for (gint y = 0; y < height; y++) {
+        const gchar *row = g_ptr_array_index(strings, 1 + ncolors + y);
+        gsize row_len = strlen(row);
+        uint32_t *dest = (uint32_t *)(data + y * stride);
+        for (gint x = 0; x < width; x++) {
+            guint32 argb = 0xff000000u;
+            if (row_len >= (gsize)((x + 1) * cpp)) {
+                gchar *key = g_strndup(row + x * cpp, cpp);
+                XpmColor *color = g_hash_table_lookup(colors, key);
+                if (color && color->valid)
+                    argb = color->argb;
+                g_free(key);
+            }
+            dest[x] = argb;
+        }
+    }
+
+    cairo_surface_mark_dirty(surface);
+    g_hash_table_destroy(colors);
+    g_ptr_array_free(strings, TRUE);
+    return surface;
+}
+
+static cairo_surface_t *
+load_xpm_surface(const gchar *path)
+{
+    gchar *contents = NULL;
+    if (!g_file_get_contents(path, &contents, NULL, NULL))
+        return NULL;
+
+    cairo_surface_t *surface = load_xpm_surface_from_data(contents, path);
+    g_free(contents);
+    return surface;
+}
+
+static cairo_surface_t *
+surface_from_resource(const gchar *resource_path, gboolean warn_if_missing)
 {
     GError *error = NULL;
     GBytes *bytes = g_resources_lookup_data(resource_path, 0, &error);
     if (!bytes) {
-        g_warning("Failed to load resource %s: %s", resource_path,
-                  error ? error->message : "unknown");
+        if (warn_if_missing)
+            g_warning("Failed to load resource %s: %s", resource_path,
+                      error ? error->message : "unknown");
         g_clear_error(&error);
         return NULL;
+    }
+
+    if (g_str_has_suffix(resource_path, ".xpm") ||
+        g_str_has_suffix(resource_path, ".XPM")) {
+        gsize len;
+        const gchar *data = g_bytes_get_data(bytes, &len);
+        gchar *contents = g_strndup(data, len);
+        cairo_surface_t *surface =
+            load_xpm_surface_from_data(contents, resource_path);
+        g_free(contents);
+        g_bytes_unref(bytes);
+        return surface;
     }
 
     GInputStream *stream = g_memory_input_stream_new_from_bytes(bytes);
@@ -99,20 +408,20 @@ surface_from_resource(const gchar *resource_path)
 static void
 load_default_pixmaps(void)
 {
-    static const char *resource_names[SKIN_PIXMAP_COUNT] = {
-        [SKIN_MAIN]       = "/org/xmms/defskin/defskin/main.png",
-        [SKIN_CBUTTONS]   = "/org/xmms/defskin/defskin/cbuttons.png",
-        [SKIN_TITLEBAR]   = "/org/xmms/defskin/defskin/titlebar.png",
-        [SKIN_SHUFREP]    = "/org/xmms/defskin/defskin/shufrep.png",
-        [SKIN_TEXT]        = "/org/xmms/defskin/defskin/text.png",
-        [SKIN_VOLUME]     = "/org/xmms/defskin/defskin/volume.png",
-        [SKIN_MONOSTEREO] = "/org/xmms/defskin/defskin/monoster.png",
-        [SKIN_PLAYPAUSE]  = "/org/xmms/defskin/defskin/playpaus.png",
-        [SKIN_NUMBERS]    = "/org/xmms/defskin/defskin/nums_ex.png",
-        [SKIN_POSBAR]     = "/org/xmms/defskin/defskin/posbar.png",
-        [SKIN_PLEDIT]     = "/org/xmms/defskin/defskin/pledit.png",
-        [SKIN_EQMAIN]     = "/org/xmms/defskin/defskin/eqmain.png",
-        [SKIN_EQ_EX]      = "/org/xmms/defskin/defskin/eq_ex.png",
+    static const char *resource_basenames[SKIN_PIXMAP_COUNT] = {
+        [SKIN_MAIN]       = "main",
+        [SKIN_CBUTTONS]   = "cbuttons",
+        [SKIN_TITLEBAR]   = "titlebar",
+        [SKIN_SHUFREP]    = "shufrep",
+        [SKIN_TEXT]       = "text",
+        [SKIN_VOLUME]     = "volume",
+        [SKIN_MONOSTEREO] = "monoster",
+        [SKIN_PLAYPAUSE]  = "playpaus",
+        [SKIN_NUMBERS]    = "nums_ex",
+        [SKIN_POSBAR]     = "posbar",
+        [SKIN_PLEDIT]     = "pledit",
+        [SKIN_EQMAIN]     = "eqmain",
+        [SKIN_EQ_EX]      = "eq_ex",
     };
 
     for (int i = 0; i < SKIN_PIXMAP_COUNT; i++) {
@@ -122,8 +431,18 @@ load_default_pixmaps(void)
         sp->current_width = sp->width;
         sp->current_height = sp->height;
 
-        if (resource_names[i]) {
-            sp->def_surface = surface_from_resource(resource_names[i]);
+        if (resource_basenames[i]) {
+            gchar *resource_name = g_strdup_printf(
+                "/org/xmms/defskin/defskin/%s.png", resource_basenames[i]);
+            sp->def_surface = surface_from_resource(resource_name, FALSE);
+            g_free(resource_name);
+            if (!sp->def_surface) {
+                resource_name = g_strdup_printf(
+                    "/org/xmms/defskin/defskin/%s.xpm",
+                    resource_basenames[i]);
+                sp->def_surface = surface_from_resource(resource_name, TRUE);
+                g_free(resource_name);
+            }
             if (sp->def_surface) {
                 sp->width = cairo_image_surface_get_width(sp->def_surface);
                 sp->height = cairo_image_surface_get_height(sp->def_surface);
@@ -154,7 +473,9 @@ static gchar *
 find_skin_file(const gchar *dir, const gchar *name)
 {
     /* Try common extensions and case variations */
-    const gchar *exts[] = { ".bmp", ".BMP", ".png", ".PNG", NULL };
+    const gchar *exts[] = {
+        ".bmp", ".BMP", ".png", ".PNG", ".xpm", ".XPM", NULL
+    };
     gchar *lower = g_ascii_strdown(name, -1);
     gchar *upper = g_ascii_strup(name, -1);
     /* Title case: first letter uppercase, rest lowercase */
@@ -257,15 +578,27 @@ load_skin_pixmaps(const gchar *dir)
             }
         }
 
-        GdkPixbuf *pb = gdk_pixbuf_new_from_file(path, NULL);
+        if (g_str_has_suffix(path, ".xpm") ||
+            g_str_has_suffix(path, ".XPM")) {
+            sp->surface = load_xpm_surface(path);
+            if (sp->surface) {
+                sp->current_width =
+                    cairo_image_surface_get_width(sp->surface);
+                sp->current_height =
+                    cairo_image_surface_get_height(sp->surface);
+            }
+        } else {
+            GdkPixbuf *pb = gdk_pixbuf_new_from_file(path, NULL);
+            if (pb) {
+                sp->surface = pixbuf_to_surface(pb);
+                sp->current_width = gdk_pixbuf_get_width(pb);
+                sp->current_height = gdk_pixbuf_get_height(pb);
+                g_object_unref(pb);
+            }
+        }
         g_free(path);
-        if (!pb)
+        if (!sp->surface)
             continue;
-
-        sp->surface = pixbuf_to_surface(pb);
-        sp->current_width = gdk_pixbuf_get_width(pb);
-        sp->current_height = gdk_pixbuf_get_height(pb);
-        g_object_unref(pb);
 
         if (numbers_fallback && sp->surface && sp->current_width >= 99 &&
             sp->current_height >= 13) {
@@ -453,7 +786,11 @@ skin_load(const gchar *path)
             gboolean found_bmp = FALSE;
             while ((entry = g_dir_read_name(d)) != NULL) {
                 if (g_str_has_suffix(entry, ".bmp") ||
-                    g_str_has_suffix(entry, ".BMP")) {
+                    g_str_has_suffix(entry, ".BMP") ||
+                    g_str_has_suffix(entry, ".png") ||
+                    g_str_has_suffix(entry, ".PNG") ||
+                    g_str_has_suffix(entry, ".xpm") ||
+                    g_str_has_suffix(entry, ".XPM")) {
                     found_bmp = TRUE;
                     break;
                 }
