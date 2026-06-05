@@ -9,20 +9,16 @@ static GtkWidget *repeat_check = NULL;
 static GtkWidget *shuffle_check = NULL;
 static GtkWidget *no_advance_check = NULL;
 static GtkWidget *timer_remaining_check = NULL;
-static GtkWidget *sticky_check = NULL;
 static GtkWidget *zoom_spin = NULL;
 static GtkWidget *zoom_value_entry = NULL;
-static GtkWidget *easy_move_check = NULL;
-static GtkWidget *playlist_visible_check = NULL;
 static GtkWidget *playlist_detached_check = NULL;
-static GtkWidget *equalizer_visible_check = NULL;
 static GtkWidget *equalizer_detached_check = NULL;
 static GtkWidget *convert_underscore_check = NULL;
 static GtkWidget *convert_twenty_check = NULL;
 static GtkWidget *show_numbers_check = NULL;
 static GtkWidget *podcast_ttl_spin = NULL;
 static GtkWidget *podcast_refresh_spin = NULL;
-static GtkWidget *playlist_font_entry = NULL;
+static GtkWidget *playlist_font_combo = NULL;
 static GtkWidget *mainwin_font_entry = NULL;
 static GtkWidget *title_format_entry = NULL;
 static GtkWidget *vis_mode_combo = NULL;
@@ -35,6 +31,8 @@ static GtkWidget *vis_peaks_falloff_combo = NULL;
 static GtkWidget *vis_vu_mode_combo = NULL;
 static GtkWidget *vis_refresh_combo = NULL;
 static gboolean prefs_loading_controls = FALSE;
+
+static void apply_preferences(void);
 
 static GtkWidget *
 label_new_left(const gchar *text)
@@ -105,6 +103,8 @@ zoom_value_changed(GtkRange *range, gpointer data)
 {
     (void)range; (void)data;
     update_zoom_value_entry();
+    if (!prefs_loading_controls)
+        apply_preferences();
 }
 
 static void
@@ -144,6 +144,62 @@ falloff_from_id(const gchar *id)
     if (g_strcmp0(id, "fastest") == 0)
         return VIS_FALLOFF_FASTEST;
     return VIS_FALLOFF_MEDIUM;
+}
+
+static gint
+string_ptr_compare(gconstpointer a, gconstpointer b)
+{
+    return g_ascii_strcasecmp(*(const gchar * const *)a,
+                              *(const gchar * const *)b);
+}
+
+static gboolean
+strv_contains(GPtrArray *array, const gchar *value)
+{
+    for (guint i = 0; i < array->len; i++) {
+        if (g_strcmp0(g_ptr_array_index(array, i), value) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static void
+populate_playlist_font_combo(void)
+{
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(playlist_font_combo));
+
+    PangoContext *context = gtk_widget_get_pango_context(playlist_font_combo);
+    PangoFontFamily **families = NULL;
+    int n_families = 0;
+    pango_context_list_families(context, &families, &n_families);
+
+    GPtrArray *names = g_ptr_array_new_with_free_func(g_free);
+    g_ptr_array_add(names, g_strdup("Helvetica"));
+    for (int i = 0; i < n_families; i++) {
+        const gchar *name = pango_font_family_get_name(families[i]);
+        if (name && name[0] && !strv_contains(names, name))
+            g_ptr_array_add(names, g_strdup(name));
+    }
+    g_free(families);
+
+    g_ptr_array_sort(names, string_ptr_compare);
+    for (guint i = 0; i < names->len; i++) {
+        const gchar *name = g_ptr_array_index(names, i);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(playlist_font_combo),
+                                  name, name);
+    }
+    g_ptr_array_free(names, TRUE);
+}
+
+static void
+select_playlist_font(const gchar *font)
+{
+    const gchar *name = font && font[0] ? font : "Helvetica";
+    if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(playlist_font_combo), name)) {
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(playlist_font_combo),
+                                  name, name);
+        gtk_combo_box_set_active_id(GTK_COMBO_BOX(playlist_font_combo), name);
+    }
 }
 
 static void
@@ -201,17 +257,10 @@ set_controls_from_config(void)
                                 playlist_get_no_advance());
     gtk_check_button_set_active(GTK_CHECK_BUTTON(timer_remaining_check),
                                 cfg.timer_mode == TIMER_REMAINING);
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(sticky_check), cfg.sticky);
     gtk_range_set_value(GTK_RANGE(zoom_spin), cfg.scale_factor);
     update_zoom_value_entry();
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(easy_move_check),
-                                cfg.easy_move);
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_visible_check),
-                                playlistwin_is_visible());
     gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_detached_check),
                                 !cfg.playlist_detached);
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(equalizer_visible_check),
-                                equalizerwin_is_visible());
     gtk_check_button_set_active(GTK_CHECK_BUTTON(equalizer_detached_check),
                                 !cfg.equalizer_detached);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(convert_underscore_check),
@@ -225,8 +274,7 @@ set_controls_from_config(void)
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(podcast_refresh_spin),
                               cfg.podcast_refresh_interval_minutes);
 
-    gtk_editable_set_text(GTK_EDITABLE(playlist_font_entry),
-                          cfg.playlist_font ? cfg.playlist_font : "Helvetica");
+    select_playlist_font(cfg.playlist_font);
     gtk_editable_set_text(GTK_EDITABLE(mainwin_font_entry),
                           cfg.mainwin_font ? cfg.mainwin_font : "Skin bitmap font");
     gtk_editable_set_text(GTK_EDITABLE(title_format_entry),
@@ -321,19 +369,12 @@ apply_preferences(void)
         gtk_check_button_get_active(GTK_CHECK_BUTTON(no_advance_check));
     cfg.timer_mode = gtk_check_button_get_active(GTK_CHECK_BUTTON(timer_remaining_check)) ?
         TIMER_REMAINING : TIMER_ELAPSED;
-    cfg.sticky = gtk_check_button_get_active(GTK_CHECK_BUTTON(sticky_check));
     cfg.scale_factor = CLAMP(gtk_range_get_value(GTK_RANGE(zoom_spin)),
                              1.0, 5.0);
     cfg.doublesize = cfg.scale_factor > 1.0;
-    cfg.easy_move =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(easy_move_check));
-    cfg.playlist_visible =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(playlist_visible_check));
-    cfg.playlist_detached =
+    gboolean playlist_detached =
         !gtk_check_button_get_active(GTK_CHECK_BUTTON(playlist_detached_check));
-    cfg.equalizer_visible =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(equalizer_visible_check));
-    cfg.equalizer_detached =
+    gboolean equalizer_detached =
         !gtk_check_button_get_active(GTK_CHECK_BUTTON(equalizer_detached_check));
     cfg.convert_underscore =
         gtk_check_button_get_active(GTK_CHECK_BUTTON(convert_underscore_check));
@@ -352,13 +393,10 @@ apply_preferences(void)
     podcast_update_refresh_timer();
 
     g_free(cfg.playlist_font);
-    cfg.playlist_font = g_strdup(gtk_editable_get_text(
-        GTK_EDITABLE(playlist_font_entry)));
-    g_strstrip(cfg.playlist_font);
-    if (!cfg.playlist_font[0]) {
-        g_free(cfg.playlist_font);
-        cfg.playlist_font = g_strdup("Helvetica");
-    }
+    const gchar *playlist_font =
+        gtk_combo_box_get_active_id(GTK_COMBO_BOX(playlist_font_combo));
+    cfg.playlist_font = g_strdup(playlist_font && playlist_font[0] ?
+                                 playlist_font : "Helvetica");
 
     g_free(cfg.mainwin_font);
     cfg.mainwin_font = g_strdup(gtk_editable_get_text(
@@ -380,18 +418,18 @@ apply_preferences(void)
 
     apply_visualization_controls();
 
-    playlistwin_set_detached(cfg.playlist_detached);
-    equalizerwin_set_detached(cfg.equalizer_detached);
-    playlistwin_show(cfg.playlist_visible);
-    equalizerwin_show(cfg.equalizer_visible);
+    playlistwin_set_detached(playlist_detached);
+    equalizerwin_set_detached(equalizer_detached);
     mainwin_apply_preferences();
     save_config();
 }
 
 static void
-apply_clicked(GtkButton *button, gpointer data)
+control_changed(GtkWidget *widget, gpointer data)
 {
-    (void)button; (void)data;
+    (void)widget; (void)data;
+    if (prefs_loading_controls)
+        return;
     apply_preferences();
 }
 
@@ -403,24 +441,54 @@ visualization_control_changed(GtkWidget *widget, gpointer data)
         return;
 
     update_visualization_control_sensitivity();
-    apply_visualization_controls();
-    mainwin_apply_visualization_preferences();
-    save_config();
-}
-
-static void
-ok_clicked(GtkButton *button, gpointer data)
-{
-    (void)button; (void)data;
     apply_preferences();
-    gtk_window_destroy(GTK_WINDOW(prefswin));
 }
 
 static void
-cancel_clicked(GtkButton *button, gpointer data)
+set_default_controls(void)
+{
+    prefs_loading_controls = TRUE;
+
+    combo_set_active_id(output_combo, "auto");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(volume_spin), 100);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(balance_spin), 0);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(repeat_check), FALSE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(shuffle_check), FALSE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(no_advance_check), FALSE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(timer_remaining_check), FALSE);
+    gtk_range_set_value(GTK_RANGE(zoom_spin), 2.0);
+    update_zoom_value_entry();
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_detached_check), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(equalizer_detached_check), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(convert_underscore_check), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(convert_twenty_check), TRUE);
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(show_numbers_check), TRUE);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(podcast_ttl_spin), 60);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(podcast_refresh_spin), 60);
+    select_playlist_font("Helvetica");
+    gtk_editable_set_text(GTK_EDITABLE(mainwin_font_entry), "Skin bitmap font");
+    gtk_editable_set_text(GTK_EDITABLE(title_format_entry), "%p - %t");
+
+    combo_set_active_id(vis_mode_combo, "analyzer");
+    combo_set_active_id(vis_analyzer_mode_combo, "normal");
+    combo_set_active_id(vis_style_combo, "bars");
+    combo_set_active_id(vis_scope_mode_combo, "line");
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(vis_peaks_check), TRUE);
+    combo_set_active_id(vis_falloff_combo, "medium");
+    combo_set_active_id(vis_peaks_falloff_combo, "slow");
+    combo_set_active_id(vis_vu_mode_combo, "normal");
+    combo_set_active_id(vis_refresh_combo, "full");
+    update_visualization_control_sensitivity();
+
+    prefs_loading_controls = FALSE;
+}
+
+static void
+reset_defaults_clicked(GtkButton *button, gpointer data)
 {
     (void)button; (void)data;
-    gtk_window_destroy(GTK_WINDOW(prefswin));
+    set_default_controls();
+    apply_preferences();
 }
 
 static void
@@ -452,6 +520,7 @@ create_audio_page(void)
     gtk_box_append(GTK_BOX(output), grid);
     output_combo = gtk_combo_box_text_new();
     grid_attach_label(grid, "Output device:", output_combo, 0);
+    g_signal_connect(output_combo, "changed", G_CALLBACK(control_changed), NULL);
     GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget *configure = gtk_button_new_with_label("Configure");
     g_signal_connect(configure, "clicked", G_CALLBACK(output_config_clicked), NULL);
@@ -568,12 +637,15 @@ create_options_page(void)
     balance_spin = gtk_spin_button_new_with_range(-100, 100, 1);
     grid_attach_label(grid, "Volume:", volume_spin, 0);
     grid_attach_label(grid, "Balance:", balance_spin, 1);
+    g_signal_connect(volume_spin, "value-changed",
+                     G_CALLBACK(control_changed), NULL);
+    g_signal_connect(balance_spin, "value-changed",
+                     G_CALLBACK(control_changed), NULL);
 
     repeat_check = check_new("Repeat");
     shuffle_check = check_new("Shuffle");
     no_advance_check = check_new("No playlist advance");
     timer_remaining_check = check_new("Time remaining");
-    sticky_check = check_new("Sticky");
     zoom_spin = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
                                          1.0, 5.0, 0.1);
     gtk_scale_set_digits(GTK_SCALE(zoom_spin), 1);
@@ -590,10 +662,7 @@ create_options_page(void)
     gtk_box_append(GTK_BOX(zoom_box), zoom_spin);
     gtk_box_append(GTK_BOX(zoom_box), zoom_value_entry);
     grid_attach_label(grid, "Zoom level:", zoom_box, 2);
-    easy_move_check = check_new("Easy move");
-    playlist_visible_check = check_new("Show playlist");
     playlist_detached_check = check_new("Dock playlist");
-    equalizer_visible_check = check_new("Show equalizer");
     equalizer_detached_check = check_new("Dock equalizer");
     convert_twenty_check = check_new("Convert %20 to space");
     convert_underscore_check = check_new("Convert underscore to space");
@@ -606,13 +675,18 @@ create_options_page(void)
 
     GtkWidget *checks[] = {
         repeat_check, shuffle_check, no_advance_check, timer_remaining_check,
-        sticky_check, easy_move_check,
-        playlist_visible_check, playlist_detached_check,
-        equalizer_visible_check, equalizer_detached_check,
+        playlist_detached_check, equalizer_detached_check,
         convert_twenty_check, convert_underscore_check, show_numbers_check
     };
     for (guint i = 0; i < G_N_ELEMENTS(checks); i++)
         gtk_grid_attach(GTK_GRID(grid), checks[i], i % 2, 5 + (i / 2), 1, 1);
+    for (guint i = 0; i < G_N_ELEMENTS(checks); i++)
+        g_signal_connect(checks[i], "toggled",
+                         G_CALLBACK(control_changed), NULL);
+    g_signal_connect(podcast_ttl_spin, "value-changed",
+                     G_CALLBACK(control_changed), NULL);
+    g_signal_connect(podcast_refresh_spin, "value-changed",
+                     G_CALLBACK(control_changed), NULL);
     return page;
 }
 
@@ -623,8 +697,11 @@ create_fonts_page(void)
     GtkWidget *playlist = frame_box_new("Playlist", page);
     GtkWidget *grid = grid_new();
     gtk_box_append(GTK_BOX(playlist), grid);
-    playlist_font_entry = gtk_entry_new();
-    grid_attach_label(grid, "Playlist font family:", playlist_font_entry, 0);
+    playlist_font_combo = gtk_combo_box_text_new();
+    populate_playlist_font_combo();
+    grid_attach_label(grid, "Playlist font family:", playlist_font_combo, 0);
+    g_signal_connect(playlist_font_combo, "changed",
+                     G_CALLBACK(control_changed), NULL);
     gtk_box_append(GTK_BOX(playlist),
                    label_new_left("XMMS used a Helvetica bold 10px playlist font. This port keeps the original fixed row height, so only the family is configurable."));
 
@@ -649,6 +726,8 @@ create_title_page(void)
     gtk_box_append(GTK_BOX(box), grid);
     title_format_entry = gtk_entry_new();
     grid_attach_label(grid, "Title format:", title_format_entry, 0);
+    g_signal_connect(title_format_entry, "changed",
+                     G_CALLBACK(control_changed), NULL);
     gtk_box_append(GTK_BOX(box),
                    label_new_left("Original XMMS tokens include %p artist, %a album, %g genre, %f filename, and %t title. The current decoder uses embedded titles when available and stores this format for compatibility."));
     return page;
@@ -699,15 +778,9 @@ create_prefswin(GtkWindow *parent)
     GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_widget_set_halign(buttons, GTK_ALIGN_END);
     gtk_box_append(GTK_BOX(root), buttons);
-    GtkWidget *ok = gtk_button_new_with_label("Ok");
-    GtkWidget *cancel = gtk_button_new_with_label("Cancel");
-    GtkWidget *apply = gtk_button_new_with_label("Apply");
-    g_signal_connect(ok, "clicked", G_CALLBACK(ok_clicked), NULL);
-    g_signal_connect(cancel, "clicked", G_CALLBACK(cancel_clicked), NULL);
-    g_signal_connect(apply, "clicked", G_CALLBACK(apply_clicked), NULL);
-    gtk_box_append(GTK_BOX(buttons), ok);
-    gtk_box_append(GTK_BOX(buttons), cancel);
-    gtk_box_append(GTK_BOX(buttons), apply);
+    GtkWidget *reset = gtk_button_new_with_label("Reset to Defaults");
+    g_signal_connect(reset, "clicked", G_CALLBACK(reset_defaults_clicked), NULL);
+    gtk_box_append(GTK_BOX(buttons), reset);
 }
 
 void
