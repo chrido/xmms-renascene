@@ -24,6 +24,7 @@ typedef struct {
     gint index;
     gchar *uri;
     gint64 length;
+    gchar *title;
 } DurationIndexResult;
 
 static void playlist_index_item_free(gpointer data);
@@ -92,17 +93,52 @@ playlist_duration_index_result_cb(gpointer data)
     DurationIndexResult *result = data;
     PlaylistEntry *entry = playlist_get_entry(result->index);
 
+    gboolean changed = FALSE;
     if (entry && entry->filename &&
-        g_strcmp0(entry->filename, result->uri) == 0 &&
-        result->length > 0 &&
-        entry->length != result->length) {
-        entry->length = result->length;
-        playlistwin_update();
+        g_strcmp0(entry->filename, result->uri) == 0) {
+        if (result->length > 0 && entry->length != result->length) {
+            entry->length = result->length;
+            changed = TRUE;
+        }
+        if (result->title && result->title[0] &&
+            g_strcmp0(entry->title, result->title) != 0) {
+            g_free(entry->title);
+            entry->title = g_strdup(result->title);
+            changed = TRUE;
+        }
     }
 
+    if (changed)
+        playlistwin_update();
+
     g_free(result->uri);
+    g_free(result->title);
     g_free(result);
     return G_SOURCE_REMOVE;
+}
+
+static gchar *
+playlist_title_from_tags(const GstTagList *tags)
+{
+    if (!tags)
+        return NULL;
+
+    gchar *artist = NULL;
+    gchar *title = NULL;
+    gst_tag_list_get_string(tags, GST_TAG_ARTIST, &artist);
+    gst_tag_list_get_string(tags, GST_TAG_TITLE, &title);
+
+    gchar *formatted = NULL;
+    if (artist && artist[0] && title && title[0])
+        formatted = g_strdup_printf("%s - %s", artist, title);
+    else if (title && title[0])
+        formatted = g_strdup(title);
+    else if (artist && artist[0])
+        formatted = g_strdup(artist);
+
+    g_free(artist);
+    g_free(title);
+    return formatted;
 }
 
 static gboolean
@@ -150,12 +186,18 @@ playlist_duration_index_thread(gpointer data)
         }
 
         GstClockTime duration = gst_discoverer_info_get_duration(info);
-        if (GST_CLOCK_TIME_IS_VALID(duration) && duration > 0) {
+        const GstTagList *tags = gst_discoverer_info_get_tags(info);
+        gchar *title = playlist_title_from_tags(tags);
+        if ((GST_CLOCK_TIME_IS_VALID(duration) && duration > 0) || title) {
             DurationIndexResult *result = g_new0(DurationIndexResult, 1);
             result->index = item->index;
             result->uri = g_strdup(item->uri);
-            result->length = (gint64)(duration / GST_MSECOND);
+            result->length = (GST_CLOCK_TIME_IS_VALID(duration) && duration > 0) ?
+                (gint64)(duration / GST_MSECOND) : -1;
+            result->title = title;
             g_idle_add(playlist_duration_index_result_cb, result);
+        } else {
+            g_free(title);
         }
 
         gst_discoverer_info_unref(info);

@@ -320,26 +320,32 @@ plwin_update_shaded_info(void)
     gint max_len = (PLWIN_WIDTH - 35) / 5 - (gint)strlen(posstr);
 
     if (entry && entry->length >= 0) {
-        timestr = time_to_string(entry->length);
-        max_len -= (gint)strlen(timestr) + 1;
+        gchar *duration = time_to_string(entry->length);
+        timestr = g_strdup_printf(" %s", duration);
+        max_len -= (gint)strlen(timestr);
+        g_free(duration);
     } else {
         timestr = g_strdup("");
     }
 
-    max_len = MAX(0, max_len);
-    if ((gint)strlen(normalized) > max_len) {
-        gint title_len = MAX(0, max_len - 3);
-        gchar *short_title = g_strndup(normalized, title_len);
-        gchar *info = g_strdup_printf("%s%s...%s%s",
-                                      posstr, short_title,
-                                      timestr[0] ? " " : "", timestr);
+    if (max_len < 0)
+        max_len = 0;
+
+    if ((gint)strlen(normalized) > max_len && max_len > 3) {
+        gchar *info = g_strdup_printf("%s%-*.*s...%s", posstr,
+                                      max_len - 3, max_len - 3,
+                                      normalized, timestr);
+        textbox_set_text(plwin_sinfo, info);
+        g_free(info);
+    } else if ((gint)strlen(normalized) > max_len) {
+        gchar *short_title = g_strndup(normalized, max_len);
+        gchar *info = g_strdup_printf("%s%s%s", posstr, short_title, timestr);
         textbox_set_text(plwin_sinfo, info);
         g_free(info);
         g_free(short_title);
     } else {
-        gchar *info = g_strdup_printf("%s%s%s%s",
-                                      posstr, normalized,
-                                      timestr[0] ? " " : "", timestr);
+        gchar *info = g_strdup_printf("%s%-*.*s%s", posstr, max_len,
+                                      max_len, normalized, timestr);
         textbox_set_text(plwin_sinfo, info);
         g_free(info);
     }
