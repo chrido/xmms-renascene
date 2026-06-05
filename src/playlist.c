@@ -376,9 +376,17 @@ playlist_add_podcast_entry(const gchar *uri, const gchar *title,
         if (!existing->is_podcast || (!same_guid && !same_url))
             continue;
 
-        if (title && title[0] && g_strcmp0(existing->title, title) != 0) {
-            g_free(existing->title);
-            existing->title = g_strdup(title);
+        if (title && title[0]) {
+            gboolean failed =
+                existing->title && g_str_has_prefix(existing->title,
+                                                    "failed: ");
+            const gchar *current = failed ?
+                existing->title + strlen("failed: ") : existing->title;
+            if (g_strcmp0(current, title) != 0) {
+                g_free(existing->title);
+                existing->title = failed ?
+                    g_strdup_printf("failed: %s", title) : g_strdup(title);
+            }
         }
         if (feed && feed[0] && g_strcmp0(existing->podcast_feed, feed) != 0) {
             g_free(existing->podcast_feed);
@@ -600,9 +608,45 @@ playlist_podcast_cache_ready(const gchar *uri, gint64 length_ms)
             g_strcmp0(entry->filename, uri) != 0)
             continue;
         entry->podcast_downloading = FALSE;
+        if (entry->title && g_str_has_prefix(entry->title, "failed: ")) {
+            gchar *title = g_strdup(entry->title + strlen("failed: "));
+            g_free(entry->title);
+            entry->title = title;
+        }
         if (length_ms >= 0)
             entry->length = length_ms;
     }
+}
+
+gboolean
+playlist_podcast_cache_failed(const gchar *uri)
+{
+    gboolean current_failed = FALSE;
+    gint index = 0;
+
+    for (GList *l = playlist; l; l = l->next) {
+        PlaylistEntry *entry = l->data;
+        if (!entry || !entry->is_podcast ||
+            g_strcmp0(entry->filename, uri) != 0) {
+            index++;
+            continue;
+        }
+
+        entry->podcast_downloading = FALSE;
+        if (!entry->title || !entry->title[0]) {
+            g_free(entry->title);
+            entry->title = g_strdup("failed: podcast download");
+        } else if (!g_str_has_prefix(entry->title, "failed: ")) {
+            gchar *title = g_strdup_printf("failed: %s", entry->title);
+            g_free(entry->title);
+            entry->title = title;
+        }
+        if (index == playlist_position)
+            current_failed = TRUE;
+        index++;
+    }
+
+    return current_failed;
 }
 
 gint
@@ -716,6 +760,18 @@ playlist_prev(void)
     if (prev >= 0) {
         playlist_position = prev;
         playlist_play();
+    }
+}
+
+void
+playlist_skip_failed_current(void)
+{
+    gint next = get_next_position();
+    if (next >= 0 && next != playlist_position) {
+        playlist_position = next;
+        playlist_play();
+    } else {
+        player_stop();
     }
 }
 

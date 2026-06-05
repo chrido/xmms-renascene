@@ -8,6 +8,7 @@
 
 #define PODCAST_FETCH_LIMIT (5 * 1024 * 1024)
 #define PODCAST_BUFFER_SIZE 8192
+#define PODCAST_DOWNLOAD_RETRIES 3
 
 typedef struct {
     gchar *url;
@@ -31,6 +32,7 @@ typedef struct {
     gchar *url;
     gchar *cache_path;
     gint64 length;
+    gboolean success;
 } PodcastDownloadResult;
 
 static GHashTable *downloads = NULL;
@@ -532,7 +534,11 @@ podcast_download_result_cb(gpointer data)
     PodcastDownloadResult *result = data;
     if (downloads)
         g_hash_table_remove(downloads, result->url);
-    playlist_podcast_cache_ready(result->url, result->length);
+    if (result->success) {
+        playlist_podcast_cache_ready(result->url, result->length);
+    } else if (playlist_podcast_cache_failed(result->url)) {
+        playlist_skip_failed_current();
+    }
     playlistwin_update();
     g_free(result->url);
     g_free(result->cache_path);
@@ -540,28 +546,47 @@ podcast_download_result_cb(gpointer data)
     return G_SOURCE_REMOVE;
 }
 
-static gpointer
-podcast_download_thread(gpointer data)
+static guint
+podcast_retry_delay_seconds(SoupMessage *msg, guint attempt)
 {
-    PodcastDownloadJob *job = data;
-    PodcastDownloadResult *result = g_new0(PodcastDownloadResult, 1);
-    result->url = g_strdup(job->url);
-    result->cache_path = g_strdup(job->cache_path);
-    result->length = -1;
+    SoupMessageHeaders *headers = soup_message_get_response_headers(msg);
+    const gchar *retry_after =
+        soup_message_headers_get_one(headers, "Retry-After");
+    if (retry_after && retry_after[0]) {
+        gchar *end = NULL;
+        guint64 seconds = g_ascii_strtoull(retry_after, &end, 10);
+        if (end && *end == '\0' && seconds > 0)
+            return (guint)MIN(seconds, (guint64)60);
+    }
 
-    gchar *dir = podcast_cache_dir();
-    g_mkdir_with_parents(dir, 0755);
-    g_free(dir);
+    return 1u << MIN(attempt, 4u);
+}
 
-    gchar *tmp = g_strdup_printf("%s.part", job->cache_path);
+static gboolean
+podcast_status_should_retry(guint status)
+{
+    return status == 429 || status == 503;
+}
+
+static gboolean
+podcast_download_once(PodcastDownloadJob *job, const gchar *tmp,
+                      guint attempt, gint64 *length, guint *status,
+                      guint *retry_delay)
+{
     SoupSession *session = soup_session_new_with_options("timeout", 0, NULL);
     SoupMessage *msg = soup_message_new("GET", job->url);
+    SoupMessageHeaders *headers = soup_message_get_request_headers(msg);
+    soup_message_headers_replace(headers, "User-Agent", "XMMS Resuscitated");
+
     GError *error = NULL;
     GInputStream *stream = soup_session_send(session, msg, NULL, &error);
-    guint status = soup_message_get_status(msg);
+    *status = soup_message_get_status(msg);
+    *retry_delay = podcast_retry_delay_seconds(msg, attempt);
     FILE *file = NULL;
+    gboolean success = FALSE;
+    gboolean write_failed = FALSE;
 
-    if (!stream || status < 200 || status >= 300)
+    if (!stream || *status < 200 || *status >= 300)
         goto done;
 
     file = g_fopen(tmp, "wb");
@@ -572,19 +597,26 @@ podcast_download_thread(gpointer data)
     while (TRUE) {
         gssize n = g_input_stream_read(stream, buffer, sizeof(buffer),
                                        NULL, &error);
-        if (n <= 0)
+        if (n < 0)
             break;
-        if (fwrite(buffer, 1, (size_t)n, file) != (size_t)n)
+        if (n == 0)
             break;
+        if (fwrite(buffer, 1, (size_t)n, file) != (size_t)n) {
+            write_failed = TRUE;
+            break;
+        }
     }
 
     if (file) {
-        fclose(file);
+        if (fclose(file) != 0)
+            write_failed = TRUE;
         file = NULL;
     }
 
-    if (!error && g_rename(tmp, job->cache_path) == 0)
-        result->length = podcast_discover_length(job->cache_path);
+    if (!error && !write_failed && g_rename(tmp, job->cache_path) == 0) {
+        *length = podcast_discover_length(job->cache_path);
+        success = TRUE;
+    }
 
 done:
     if (file)
@@ -594,6 +626,42 @@ done:
     g_clear_error(&error);
     g_object_unref(msg);
     g_object_unref(session);
+    if (!success)
+        g_unlink(tmp);
+    return success;
+}
+
+static gpointer
+podcast_download_thread(gpointer data)
+{
+    PodcastDownloadJob *job = data;
+    PodcastDownloadResult *result = g_new0(PodcastDownloadResult, 1);
+    result->url = g_strdup(job->url);
+    result->cache_path = g_strdup(job->cache_path);
+    result->length = -1;
+    result->success = FALSE;
+
+    gchar *dir = podcast_cache_dir();
+    g_mkdir_with_parents(dir, 0755);
+    g_free(dir);
+
+    gchar *tmp = g_strdup_printf("%s.part", job->cache_path);
+    for (guint attempt = 0; attempt <= PODCAST_DOWNLOAD_RETRIES; attempt++) {
+        guint status = 0;
+        guint retry_delay = 0;
+
+        if (podcast_download_once(job, tmp, attempt, &result->length, &status,
+                                  &retry_delay)) {
+            result->success = TRUE;
+            break;
+        }
+
+        if (!podcast_status_should_retry(status) ||
+            attempt >= PODCAST_DOWNLOAD_RETRIES)
+            break;
+
+        g_usleep((guint64)retry_delay * G_USEC_PER_SEC);
+    }
     g_unlink(tmp);
     g_free(tmp);
     g_free(job->url);

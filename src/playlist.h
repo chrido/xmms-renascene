@@ -36,12 +36,14 @@ const gchar *playlist_get_filename(gint pos);
 const gchar *playlist_get_title(gint pos);
 void playlist_set_length(gint pos, gint64 length_ms);
 void playlist_podcast_cache_ready(const gchar *uri, gint64 length_ms);
+gboolean playlist_podcast_cache_failed(const gchar *uri);
 
 gint playlist_get_position(void);
 void playlist_set_position(gint pos);
 
 void playlist_next(void);
 void playlist_prev(void);
+void playlist_skip_failed_current(void);
 
 void playlist_play(void);
 void playlist_eof_reached(void);

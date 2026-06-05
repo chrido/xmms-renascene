@@ -49,8 +49,7 @@ static void mainwin_show_message(const gchar *title, const gchar *message);
 
 typedef enum {
     MAINWIN_PROMPT_PLAY_LOCATION,
-    MAINWIN_PROMPT_JUMP_TIME,
-    MAINWIN_PROMPT_JUMP_FILE
+    MAINWIN_PROMPT_JUMP_TIME
 } MainwinPromptAction;
 
 typedef struct {
@@ -720,21 +719,6 @@ mainwin_prompt_accept(GtkButton *button, gpointer data)
             player_seek(ms);
         break;
     }
-    case MAINWIN_PROMPT_JUMP_FILE:
-        if (text && text[0]) {
-            for (gint i = 0; i < playlist_get_length(); i++) {
-                const gchar *title = playlist_get_title(i);
-                const gchar *filename = playlist_get_filename(i);
-                if ((title && g_strrstr(title, text)) ||
-                    (filename && g_strrstr(filename, text))) {
-                    playlist_set_position(i);
-                    playlist_play();
-                    playlistwin_show(TRUE);
-                    break;
-                }
-            }
-        }
-        break;
     }
 
     gtk_window_destroy(GTK_WINDOW(prompt->window));
@@ -1281,10 +1265,6 @@ mainwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
             return GDK_EVENT_STOP;
         case GDK_KEY_l:
             mainwin_eject_pushed();
-            return GDK_EVENT_STOP;
-        case GDK_KEY_j:
-            mainwin_show_prompt("Jump to File", "Title or filename",
-                                MAINWIN_PROMPT_JUMP_FILE);
             return GDK_EVENT_STOP;
         case GDK_KEY_r:
             playlist_repeat_toggle();
