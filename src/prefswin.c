@@ -11,6 +11,7 @@ static GtkWidget *no_advance_check = NULL;
 static GtkWidget *timer_remaining_check = NULL;
 static GtkWidget *sticky_check = NULL;
 static GtkWidget *zoom_spin = NULL;
+static GtkWidget *zoom_value_entry = NULL;
 static GtkWidget *easy_move_check = NULL;
 static GtkWidget *playlist_visible_check = NULL;
 static GtkWidget *playlist_detached_check = NULL;
@@ -86,6 +87,24 @@ check_new(const gchar *label)
     GtkWidget *check = gtk_check_button_new_with_label(label);
     gtk_widget_set_halign(check, GTK_ALIGN_START);
     return check;
+}
+
+static void
+update_zoom_value_entry(void)
+{
+    if (!zoom_spin || !zoom_value_entry)
+        return;
+    gchar *text = g_strdup_printf("%.1fx",
+                                  gtk_range_get_value(GTK_RANGE(zoom_spin)));
+    gtk_editable_set_text(GTK_EDITABLE(zoom_value_entry), text);
+    g_free(text);
+}
+
+static void
+zoom_value_changed(GtkRange *range, gpointer data)
+{
+    (void)range; (void)data;
+    update_zoom_value_entry();
 }
 
 static void
@@ -183,7 +202,8 @@ set_controls_from_config(void)
     gtk_check_button_set_active(GTK_CHECK_BUTTON(timer_remaining_check),
                                 cfg.timer_mode == TIMER_REMAINING);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(sticky_check), cfg.sticky);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(zoom_spin), cfg.scale_factor);
+    gtk_range_set_value(GTK_RANGE(zoom_spin), cfg.scale_factor);
+    update_zoom_value_entry();
     gtk_check_button_set_active(GTK_CHECK_BUTTON(easy_move_check),
                                 cfg.easy_move);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_visible_check),
@@ -302,9 +322,9 @@ apply_preferences(void)
     cfg.timer_mode = gtk_check_button_get_active(GTK_CHECK_BUTTON(timer_remaining_check)) ?
         TIMER_REMAINING : TIMER_ELAPSED;
     cfg.sticky = gtk_check_button_get_active(GTK_CHECK_BUTTON(sticky_check));
-    cfg.scale_factor = CLAMP(
-        gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(zoom_spin)), 1, 4);
-    cfg.doublesize = cfg.scale_factor > 1;
+    cfg.scale_factor = CLAMP(gtk_range_get_value(GTK_RANGE(zoom_spin)),
+                             1.0, 5.0);
+    cfg.doublesize = cfg.scale_factor > 1.0;
     cfg.easy_move =
         gtk_check_button_get_active(GTK_CHECK_BUTTON(easy_move_check));
     cfg.playlist_visible =
@@ -554,8 +574,22 @@ create_options_page(void)
     no_advance_check = check_new("No playlist advance");
     timer_remaining_check = check_new("Time remaining");
     sticky_check = check_new("Sticky");
-    zoom_spin = gtk_spin_button_new_with_range(1, 4, 1);
-    grid_attach_label(grid, "Zoom level:", zoom_spin, 2);
+    zoom_spin = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,
+                                         1.0, 5.0, 0.1);
+    gtk_scale_set_digits(GTK_SCALE(zoom_spin), 1);
+    gtk_scale_set_draw_value(GTK_SCALE(zoom_spin), FALSE);
+    gtk_widget_set_hexpand(zoom_spin, TRUE);
+    g_signal_connect(zoom_spin, "value-changed",
+                     G_CALLBACK(zoom_value_changed), NULL);
+    zoom_value_entry = gtk_entry_new();
+    gtk_editable_set_editable(GTK_EDITABLE(zoom_value_entry), FALSE);
+    gtk_editable_set_width_chars(GTK_EDITABLE(zoom_value_entry), 5);
+    gtk_widget_set_hexpand(zoom_value_entry, FALSE);
+
+    GtkWidget *zoom_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_append(GTK_BOX(zoom_box), zoom_spin);
+    gtk_box_append(GTK_BOX(zoom_box), zoom_value_entry);
+    grid_attach_label(grid, "Zoom level:", zoom_box, 2);
     easy_move_check = check_new("Easy move");
     playlist_visible_check = check_new("Show playlist");
     playlist_detached_check = check_new("Dock playlist");

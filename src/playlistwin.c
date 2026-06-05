@@ -398,13 +398,11 @@ plwin_apply_content_size(void)
     if (!plwin_drawing_area)
         return;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1)
-        scale = 2;
     gtk_drawing_area_set_content_width(
-        GTK_DRAWING_AREA(plwin_drawing_area), PLWIN_WIDTH * scale);
+        GTK_DRAWING_AREA(plwin_drawing_area), xmms_scale_dim(PLWIN_WIDTH));
     gtk_drawing_area_set_content_height(
-        GTK_DRAWING_AREA(plwin_drawing_area), playlistwin_height() * scale);
+        GTK_DRAWING_AREA(plwin_drawing_area),
+        xmms_scale_dim(playlistwin_height()));
 }
 
 static void
@@ -1068,8 +1066,6 @@ draw_playlist_window(GtkDrawingArea *area, cairo_t *cr,
 {
     (void)area; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
     cairo_scale(cr, (double)width / PLWIN_WIDTH,
                     (double)height / playlistwin_height());
 
@@ -1100,8 +1096,7 @@ plwin_click_pressed(GtkGestureClick *gesture, int n_press,
 {
     (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
     gint button = gtk_gesture_single_get_current_button(
@@ -1256,8 +1251,7 @@ plwin_click_released(GtkGestureClick *gesture, int n_press,
 {
     (void)gesture; (void)n_press; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
     gint button = gtk_gesture_single_get_current_button(
@@ -1313,8 +1307,7 @@ plwin_motion(GtkEventControllerMotion *controller,
 {
     (void)controller; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
 
@@ -1902,9 +1895,12 @@ plwin_show_context_menu(gint x, gint y)
         gtk_widget_set_parent(plwin_context_popover, plwin_drawing_area);
     }
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-    GdkRectangle rect = { x * scale, y * scale, scale, scale };
+    GdkRectangle rect = {
+        xmms_scale_coord(x),
+        xmms_scale_coord(y),
+        xmms_scale_dim(1),
+        xmms_scale_dim(1)
+    };
     gtk_popover_set_pointing_to(GTK_POPOVER(plwin_context_popover), &rect);
     gtk_popover_popup(GTK_POPOVER(plwin_context_popover));
 }
@@ -2000,13 +1996,11 @@ plwin_show_sort_menu(void)
                                  GTK_POS_TOP);
     }
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
     GdkRectangle rect = {
-        (99 - 1) * scale,
-        (PLWIN_BUTTON_Y - 2 * PLWIN_BUTTON_H - 1) * scale,
-        PLWIN_MENU_W * scale,
-        PLWIN_BUTTON_H * scale
+        xmms_scale_coord(99 - 1),
+        xmms_scale_coord(PLWIN_BUTTON_Y - 2 * PLWIN_BUTTON_H - 1),
+        xmms_scale_dim(PLWIN_MENU_W),
+        xmms_scale_dim(PLWIN_BUTTON_H)
     };
     gtk_popover_set_pointing_to(GTK_POPOVER(plwin_sort_popover), &rect);
     gtk_popover_popup(GTK_POPOVER(plwin_sort_popover));
@@ -2332,14 +2326,11 @@ playlistwin_create(GtkApplication *app)
 {
     (void)app;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 2;
-
     plwin_drawing_area = gtk_drawing_area_new();
     gtk_drawing_area_set_content_width(
-        GTK_DRAWING_AREA(plwin_drawing_area), PLWIN_WIDTH * scale);
+        GTK_DRAWING_AREA(plwin_drawing_area), xmms_scale_dim(PLWIN_WIDTH));
     gtk_drawing_area_set_content_height(
-        GTK_DRAWING_AREA(plwin_drawing_area), PLWIN_HEIGHT * scale);
+        GTK_DRAWING_AREA(plwin_drawing_area), xmms_scale_dim(PLWIN_HEIGHT));
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(plwin_drawing_area),
         draw_playlist_window, NULL, NULL);

@@ -596,10 +596,10 @@ mainwin_menubtn_pushed(void)
     gtk_widget_set_parent(popover, mainwin_drawing_area);
 
     GdkRectangle rect = { 6, 3, 9, 9 };
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 2;
-    rect.x *= scale; rect.y *= scale;
-    rect.width *= scale; rect.height *= scale;
+    rect.x = xmms_scale_coord(rect.x);
+    rect.y = xmms_scale_coord(rect.y);
+    rect.width = xmms_scale_dim(rect.width);
+    rect.height = xmms_scale_dim(rect.height);
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
     gtk_popover_popup(GTK_POPOVER(popover));
     gtk_popover_popup(GTK_POPOVER(popover));
@@ -925,9 +925,6 @@ mainwin_update_attached_size(void)
     if (!mainwin)
         return;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 2;
-
     gint height = mainwin_current_height();
     gint width = MAINWIN_WIDTH;
     if (equalizerwin_is_visible() && !equalizerwin_is_detached())
@@ -938,7 +935,8 @@ mainwin_update_attached_size(void)
     }
 
     gtk_window_set_default_size(GTK_WINDOW(mainwin),
-                                width * scale, height * scale);
+                                xmms_scale_dim(width),
+                                xmms_scale_dim(height));
     gtk_widget_queue_resize(mainwin);
 }
 
@@ -997,11 +995,9 @@ mainwin_set_shaded(gboolean shaded)
             player_get_duration() > 0;
 
     if (mainwin_drawing_area) {
-        gint scale = cfg.scale_factor;
-        if (scale < 1) scale = 1;
         gtk_drawing_area_set_content_height(
             GTK_DRAWING_AREA(mainwin_drawing_area),
-            mainwin_current_height() * scale);
+            xmms_scale_dim(mainwin_current_height()));
     }
 
     mainwin_update_attached_size();
@@ -1011,15 +1007,13 @@ mainwin_set_shaded(gboolean shaded)
 static void
 mainwin_apply_scale_factor(void)
 {
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-
     if (mainwin_drawing_area) {
         gtk_drawing_area_set_content_width(
-            GTK_DRAWING_AREA(mainwin_drawing_area), MAINWIN_WIDTH * scale);
+            GTK_DRAWING_AREA(mainwin_drawing_area),
+            xmms_scale_dim(MAINWIN_WIDTH));
         gtk_drawing_area_set_content_height(
             GTK_DRAWING_AREA(mainwin_drawing_area),
-            mainwin_current_height() * scale);
+            xmms_scale_dim(mainwin_current_height()));
     }
 
     playlistwin_set_shaded(playlistwin_is_shaded());
@@ -1038,10 +1032,10 @@ mainwin_reload_skin(void)
 }
 
 void
-mainwin_set_scale_factor(gint scale)
+mainwin_set_scale_factor(gdouble scale)
 {
-    cfg.scale_factor = CLAMP(scale, 1, 4);
-    cfg.doublesize = cfg.scale_factor > 1;
+    cfg.scale_factor = CLAMP(scale, 1.0, 5.0);
+    cfg.doublesize = cfg.scale_factor > 1.0;
     mainwin_apply_scale_factor();
 }
 
@@ -1144,9 +1138,6 @@ mainwin_draw_func(GtkDrawingArea *area, cairo_t *cr,
 {
     (void)area; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
-
     cairo_scale(cr, (double)width / MAINWIN_WIDTH,
                     (double)height / mainwin_current_height());
 
@@ -1161,8 +1152,7 @@ mainwin_click_pressed(GtkGestureClick *gesture, int n_press,
 {
     (void)data; (void)n_press;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
 
     /* Convert to skin coordinates */
     gint sx = (gint)(x / scale);
@@ -1202,8 +1192,7 @@ mainwin_click_released(GtkGestureClick *gesture, int n_press,
 {
     (void)data; (void)n_press;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
 
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
@@ -1223,8 +1212,7 @@ mainwin_motion(GtkEventControllerMotion *controller,
 {
     (void)controller; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
 
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
@@ -1775,8 +1763,8 @@ load_config(void)
         cfg.player_y = g_key_file_get_integer(kf, "xmms", "player_y", NULL);
         if (g_key_file_has_key(kf, "xmms", "scale_factor", NULL))
             cfg.scale_factor = CLAMP(
-                g_key_file_get_integer(kf, "xmms", "scale_factor", NULL),
-                1, 4);
+                g_key_file_get_double(kf, "xmms", "scale_factor", NULL),
+                1.0, 5.0);
 
         gchar *skin = g_key_file_get_string(kf, "xmms", "skin", NULL);
         if (skin && skin[0]) cfg.skin = skin;
@@ -1802,7 +1790,7 @@ load_config(void)
             cfg.doublesize =
                 g_key_file_get_boolean(kf, "xmms", "doublesize", NULL);
         if (!g_key_file_has_key(kf, "xmms", "scale_factor", NULL))
-            cfg.scale_factor = cfg.doublesize ? 2 : 1;
+            cfg.scale_factor = cfg.doublesize ? 2.0 : 1.0;
         if (g_key_file_has_key(kf, "xmms", "easy_move", NULL))
             cfg.easy_move =
                 g_key_file_get_boolean(kf, "xmms", "easy_move", NULL);
@@ -1925,17 +1913,18 @@ load_config(void)
                                        "podcast_refresh_interval_minutes",
                                        NULL), 1, 10080);
 
-        session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
+        session_debug("loaded config %s: player=(%d,%d) scale=%.2f playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                       config_file, cfg.player_x, cfg.player_y,
                       cfg.scale_factor, cfg.playlist_visible,
                       cfg.playlist_detached, cfg.equalizer_visible,
                       cfg.equalizer_detached);
     } else {
-        session_debug("no config at %s; using defaults: player=(%d,%d) scale=%d",
+        session_debug("no config at %s; using defaults: player=(%d,%d) scale=%.2f",
                       config_file, cfg.player_x, cfg.player_y,
                       cfg.scale_factor);
     }
-    cfg.doublesize = cfg.scale_factor > 1;
+    cfg.scale_factor = xmms_scale_factor();
+    cfg.doublesize = cfg.scale_factor > 1.0;
     g_key_file_free(kf);
     g_free(config_file);
     g_free(config_dir);
@@ -1952,14 +1941,14 @@ save_config(void)
     GKeyFile *kf = g_key_file_new();
     g_key_file_set_integer(kf, "xmms", "player_x", cfg.player_x);
     g_key_file_set_integer(kf, "xmms", "player_y", cfg.player_y);
-    g_key_file_set_integer(kf, "xmms", "scale_factor", cfg.scale_factor);
+    g_key_file_set_double(kf, "xmms", "scale_factor", cfg.scale_factor);
     g_key_file_set_integer(kf, "xmms", "timer_mode", cfg.timer_mode);
     g_key_file_set_integer(kf, "xmms", "volume", player_get_volume());
     g_key_file_set_integer(kf, "xmms", "balance", player_get_balance());
     g_key_file_set_boolean(kf, "xmms", "no_playlist_advance",
                            playlist_get_no_advance());
     g_key_file_set_boolean(kf, "xmms", "sticky", cfg.sticky);
-    g_key_file_set_boolean(kf, "xmms", "doublesize", cfg.scale_factor > 1);
+    g_key_file_set_boolean(kf, "xmms", "doublesize", cfg.scale_factor > 1.0);
     g_key_file_set_boolean(kf, "xmms", "easy_move", cfg.easy_move);
     g_key_file_set_boolean(kf, "xmms", "playlist_visible",
                            playlistwin_is_visible());
@@ -2031,7 +2020,7 @@ save_config(void)
     g_key_file_save_to_file(kf, config_file, NULL);
     gchar *playlist_file = playlist_state_file();
     playlist_save(playlist_file);
-    session_debug("saved config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
+    session_debug("saved config %s: player=(%d,%d) scale=%.2f playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                   config_file, cfg.player_x, cfg.player_y,
                   cfg.scale_factor, playlistwin_is_visible(),
                   cfg.playlist_detached, equalizerwin_is_visible(),
@@ -2234,12 +2223,10 @@ activate(GtkApplication *app, gpointer data)
 
     /* Drawing area */
     mainwin_drawing_area = gtk_drawing_area_new();
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 2;
     gtk_drawing_area_set_content_width(
-        GTK_DRAWING_AREA(mainwin_drawing_area), MAINWIN_WIDTH * scale);
+        GTK_DRAWING_AREA(mainwin_drawing_area), xmms_scale_dim(MAINWIN_WIDTH));
     gtk_drawing_area_set_content_height(
-        GTK_DRAWING_AREA(mainwin_drawing_area), MAINWIN_HEIGHT * scale);
+        GTK_DRAWING_AREA(mainwin_drawing_area), xmms_scale_dim(MAINWIN_HEIGHT));
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(mainwin_drawing_area),
         mainwin_draw_func, NULL, NULL);

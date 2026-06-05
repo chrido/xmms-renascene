@@ -31,7 +31,7 @@ typedef enum {
 
 typedef struct {
     gint player_x, player_y;
-    gint scale_factor;
+    gdouble scale_factor;
     gchar *skin;
     gint timer_mode;
     gchar *output_device;
@@ -74,6 +74,24 @@ typedef struct {
 
 extern Config cfg;
 
+static inline gdouble
+xmms_scale_factor(void)
+{
+    return CLAMP(cfg.scale_factor, 1.0, 5.0);
+}
+
+static inline gint
+xmms_scale_coord(gint value)
+{
+    return (gint)(value * xmms_scale_factor() + 0.5);
+}
+
+static inline gint
+xmms_scale_dim(gint value)
+{
+    return MAX(1, xmms_scale_coord(value));
+}
+
 extern GtkWidget *mainwin;
 extern GtkWidget *mainwin_drawing_area;
 extern GtkWidget *mainwin_container;
@@ -87,7 +105,7 @@ void mainwin_queue_draw(void);
 void mainwin_update_attached_size(void);
 void mainwin_update_panel_toggles(void);
 void mainwin_sync_volume_balance(void);
-void mainwin_set_scale_factor(gint scale);
+void mainwin_set_scale_factor(gdouble scale);
 void mainwin_set_doublesize(gboolean enabled);
 void mainwin_set_sticky(gboolean enabled);
 void mainwin_set_easy_move(gboolean enabled);

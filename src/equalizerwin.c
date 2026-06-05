@@ -138,8 +138,6 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
 {
     (void)area; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
     cairo_scale(cr, (double)width / EQWIN_WIDTH,
                     (double)height / equalizerwin_height());
 
@@ -295,8 +293,7 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
 {
     (void)data; (void)n_press;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
     gint button = gtk_gesture_single_get_current_button(
@@ -408,8 +405,7 @@ eqwin_click_released(GtkGestureClick *gesture, int n_press,
 {
     (void)n_press; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
     gint button = gtk_gesture_single_get_current_button(
@@ -454,8 +450,7 @@ eqwin_motion(GtkEventControllerMotion *controller,
 {
     (void)controller; (void)data;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
+    gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
     gint sy = (gint)(y / scale);
 
@@ -607,12 +602,10 @@ eqwin_show_presets_menu(void)
         gtk_box_append(GTK_BOX(box), button);
     }
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 1;
     GdkRectangle rect = {
-        EQWIN_PRESETS_X * scale,
-        (EQWIN_PRESETS_Y + EQWIN_PRESETS_H) * scale,
-        EQWIN_PRESETS_W * scale,
+        xmms_scale_coord(EQWIN_PRESETS_X),
+        xmms_scale_coord(EQWIN_PRESETS_Y + EQWIN_PRESETS_H),
+        xmms_scale_dim(EQWIN_PRESETS_W),
         1
     };
     gtk_popover_set_pointing_to(GTK_POPOVER(eq_presets_popover), &rect);
@@ -695,14 +688,12 @@ equalizerwin_create(GtkApplication *app)
 {
     (void)app;
 
-    gint scale = cfg.scale_factor;
-    if (scale < 1) scale = 2;
-
     eqwin_drawing_area = gtk_drawing_area_new();
     gtk_drawing_area_set_content_width(
-        GTK_DRAWING_AREA(eqwin_drawing_area), EQWIN_WIDTH * scale);
+        GTK_DRAWING_AREA(eqwin_drawing_area), xmms_scale_dim(EQWIN_WIDTH));
     gtk_drawing_area_set_content_height(
-        GTK_DRAWING_AREA(eqwin_drawing_area), equalizerwin_height() * scale);
+        GTK_DRAWING_AREA(eqwin_drawing_area),
+        xmms_scale_dim(equalizerwin_height()));
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(eqwin_drawing_area),
         draw_equalizer_window, NULL, NULL);
@@ -830,13 +821,11 @@ equalizerwin_set_shaded(gboolean shaded)
     if (shaded)
         eqwin_update_shaded_sliders();
     if (eqwin_drawing_area) {
-        gint scale = cfg.scale_factor;
-        if (scale < 1) scale = 2;
         gtk_drawing_area_set_content_width(
-            GTK_DRAWING_AREA(eqwin_drawing_area), EQWIN_WIDTH * scale);
+            GTK_DRAWING_AREA(eqwin_drawing_area), xmms_scale_dim(EQWIN_WIDTH));
         gtk_drawing_area_set_content_height(
             GTK_DRAWING_AREA(eqwin_drawing_area),
-            equalizerwin_height() * scale);
+            xmms_scale_dim(equalizerwin_height()));
     }
     mainwin_update_attached_size();
     eqwin_queue_draw();
