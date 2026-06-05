@@ -60,6 +60,7 @@ static gint plwin_selected = -1;
 static gint plwin_selection_anchor = -1;
 static gboolean plwin_scrollbar_dragging = FALSE;
 static gboolean plwin_shaded = FALSE;
+static gboolean plwin_focused = TRUE;
 static gint plwin_scrollbar_drag_offset = 0;
 static gdouble plwin_scroll_delta = 0.0;
 static PlwinButton plwin_pressed_button = PLWIN_BUTTON_NONE;
@@ -87,6 +88,22 @@ static void plwin_play_selected(void);
 static void plwin_search_start(void);
 static void plwin_search_stop(void);
 static gboolean plwin_search_key(guint keyval, GdkModifierType state);
+
+static void
+plwin_focus_enter(GtkEventControllerFocus *controller, gpointer data)
+{
+    (void)controller; (void)data;
+    plwin_focused = TRUE;
+    plwin_queue_draw();
+}
+
+static void
+plwin_focus_leave(GtkEventControllerFocus *controller, gpointer data)
+{
+    (void)controller; (void)data;
+    plwin_focused = FALSE;
+    plwin_queue_draw();
+}
 
 static void
 plwin_shade_button_pushed(void)
@@ -737,7 +754,7 @@ draw_playlist_frame(cairo_t *cr)
 {
     gint w = PLWIN_WIDTH, h = PLWIN_HEIGHT;
     SkinIndex src = SKIN_PLEDIT;
-    gint y = 0; /* focused titlebar; would be 21 for unfocused */
+    gint y = plwin_focused ? 0 : 21;
 
     gdk_cairo_set_source_rgba(cr, &skin->pledit_normalbg);
     cairo_rectangle(cr, 0, 0, w, h);
@@ -813,7 +830,8 @@ draw_playlist_shaded_frame(cairo_t *cr)
     for (gint i = 0; i < c; i++)
         skin_draw_pixmap(cr, SKIN_PLEDIT, 72, 57,
                          (i * 25) + 25, 0, 25, 14);
-    skin_draw_pixmap(cr, SKIN_PLEDIT, 99, 42, w - 50, 0, 50, 14);
+    skin_draw_pixmap(cr, SKIN_PLEDIT, 99, plwin_focused ? 42 : 57,
+                     w - 50, 0, 50, 14);
 }
 
 static gboolean
@@ -2252,6 +2270,11 @@ playlistwin_create(GtkApplication *app)
     GtkEventController *key = gtk_event_controller_key_new();
     g_signal_connect(key, "key-pressed", G_CALLBACK(plwin_key_pressed), NULL);
     gtk_widget_add_controller(plwin_drawing_area, key);
+
+    GtkEventController *focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "enter", G_CALLBACK(plwin_focus_enter), NULL);
+    g_signal_connect(focus, "leave", G_CALLBACK(plwin_focus_leave), NULL);
+    gtk_widget_add_controller(plwin_drawing_area, focus);
 
     /* Drag and drop */
     GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST,
