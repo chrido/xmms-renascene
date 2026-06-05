@@ -26,6 +26,7 @@ typedef struct {
     gint nx, ny;    /* normal state skin coords */
     gint px, py;    /* pressed state skin coords */
     gboolean pressed, inside;
+    gboolean allow_draw;
     void (*push_cb)(void);
     gint skin_index;
 } PButton;
@@ -172,6 +173,7 @@ void widget_queue_draw(Widget *w);
 PButton *pbutton_new(GList **list, gint x, gint y, gint w, gint h,
                      gint nx, gint ny, gint px, gint py,
                      void (*cb)(void), gint skin_index);
+void pbutton_set_allow_draw(PButton *pb, gboolean allow_draw);
 
 TButton *tbutton_new(GList **list, gint x, gint y, gint w, gint h,
                      gint nux, gint nuy, gint pux, gint puy,

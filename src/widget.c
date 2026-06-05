@@ -52,6 +52,9 @@ pbutton_draw(Widget *w, cairo_t *cr)
     PButton *pb = (PButton *)w;
     gint sx, sy;
 
+    if (!pb->allow_draw)
+        return;
+
     if (pb->pressed && pb->inside) {
         sx = pb->px;
         sy = pb->py;
@@ -113,10 +116,20 @@ pbutton_new(GList **list, gint x, gint y, gint w, gint h,
     pb->w.motion = pbutton_motion;
     pb->nx = nx; pb->ny = ny;
     pb->px = px; pb->py = py;
+    pb->allow_draw = TRUE;
     pb->push_cb = cb;
     pb->skin_index = skin_index;
     widget_list_add(list, (Widget *)pb);
     return pb;
+}
+
+void
+pbutton_set_allow_draw(PButton *pb, gboolean allow_draw)
+{
+    if (!pb || pb->allow_draw == allow_draw)
+        return;
+    pb->allow_draw = allow_draw;
+    ((Widget *)pb)->redraw = TRUE;
 }
 
 /* ---- TButton (Toggle Button) ---- */

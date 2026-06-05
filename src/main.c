@@ -33,6 +33,7 @@ static guint update_timeout_tag = 0;
 static gboolean app_initialized = FALSE;
 static gboolean startup_reset = FALSE;
 static gboolean mainwin_shaded = FALSE;
+static gboolean mainwin_focused = TRUE;
 static gint vis_update_divisor = 1;
 static gint vis_update_counter = 0;
 
@@ -41,6 +42,7 @@ static void mainwin_set_shaded(gboolean shaded);
 static void mainwin_update_time_display(void);
 static void mainwin_apply_scale_factor(void);
 static void mainwin_reload_skin(void);
+static void mainwin_update_focus_state(gboolean focused);
 
 static void mainwin_show_message(const gchar *title, const gchar *message);
 
@@ -607,6 +609,31 @@ mainwin_menubtn_pushed(void)
 }
 
 static void
+mainwin_update_focus_state(gboolean focused)
+{
+    mainwin_focused = focused;
+    pbutton_set_allow_draw(mainwin_menubtn, focused);
+    pbutton_set_allow_draw(mainwin_minimize, focused);
+    pbutton_set_allow_draw(mainwin_shade, focused);
+    pbutton_set_allow_draw(mainwin_close, focused);
+    mainwin_queue_draw();
+}
+
+static void
+mainwin_focus_enter(GtkEventControllerFocus *controller, gpointer data)
+{
+    (void)controller; (void)data;
+    mainwin_update_focus_state(TRUE);
+}
+
+static void
+mainwin_focus_leave(GtkEventControllerFocus *controller, gpointer data)
+{
+    (void)controller; (void)data;
+    mainwin_update_focus_state(FALSE);
+}
+
+static void
 mainwin_dialog_close_clicked(GtkButton *button, gpointer data)
 {
     (void)button;
@@ -1112,7 +1139,7 @@ void
 draw_main_window(cairo_t *cr)
 {
     if (mainwin_shaded) {
-        draw_mainwin_titlebar(cr, TRUE);
+        draw_mainwin_titlebar(cr, mainwin_focused);
         vis_draw_windowshade(mainwin_vis, cr, 79, 5,
                              cfg.vis_vu_mode == VIS_VU_SMOOTH ?
                              VIS_VU_SMOOTH : VIS_VU_NORMAL);
@@ -1125,8 +1152,7 @@ draw_main_window(cairo_t *cr)
                      0, 0, 0, 0, MAINWIN_WIDTH, MAINWIN_HEIGHT);
 
     /* Draw titlebar */
-    gboolean focused = TRUE; /* TODO: track focus */
-    draw_mainwin_titlebar(cr, focused);
+    draw_mainwin_titlebar(cr, mainwin_focused);
 
     /* Draw all widgets */
     widget_list_draw(mainwin_wlist, cr);
@@ -1160,6 +1186,7 @@ mainwin_click_pressed(GtkGestureClick *gesture, int n_press,
 
     gint button = gtk_gesture_single_get_current_button(
         GTK_GESTURE_SINGLE(gesture));
+    gtk_widget_grab_focus(mainwin_drawing_area);
 
     if (mainwin_shaded && sy >= 14)
         return;
@@ -2223,6 +2250,7 @@ activate(GtkApplication *app, gpointer data)
 
     /* Drawing area */
     mainwin_drawing_area = gtk_drawing_area_new();
+    gtk_widget_set_focusable(mainwin_drawing_area, TRUE);
     gtk_drawing_area_set_content_width(
         GTK_DRAWING_AREA(mainwin_drawing_area), xmms_scale_dim(MAINWIN_WIDTH));
     gtk_drawing_area_set_content_height(
@@ -2242,6 +2270,11 @@ activate(GtkApplication *app, gpointer data)
     GtkEventController *motion = gtk_event_controller_motion_new();
     g_signal_connect(motion, "motion", G_CALLBACK(mainwin_motion), NULL);
     gtk_widget_add_controller(mainwin_drawing_area, motion);
+
+    GtkEventController *focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "enter", G_CALLBACK(mainwin_focus_enter), NULL);
+    g_signal_connect(focus, "leave", G_CALLBACK(mainwin_focus_leave), NULL);
+    gtk_widget_add_controller(mainwin_drawing_area, focus);
 
     GtkEventController *key = gtk_event_controller_key_new();
     g_signal_connect(key, "key-pressed", G_CALLBACK(mainwin_key_pressed), NULL);

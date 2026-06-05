@@ -238,6 +238,7 @@ load_skin_pixmaps(const gchar *dir)
 {
     for (int i = 0; i < SKIN_PIXMAP_COUNT; i++) {
         SkinPixmap *sp = &skin->pixmaps[i];
+        gboolean numbers_fallback = FALSE;
 
         if (sp->surface) {
             cairo_surface_destroy(sp->surface);
@@ -247,8 +248,10 @@ load_skin_pixmaps(const gchar *dir)
         gchar *path = find_skin_file(dir, skin_pixmap_info[i].name);
         if (!path) {
             /* Try "numbers" as fallback for "nums_ex" */
-            if (i == SKIN_NUMBERS)
+            if (i == SKIN_NUMBERS) {
                 path = find_skin_file(dir, "numbers");
+                numbers_fallback = path != NULL;
+            }
             if (!path) {
                 continue;
             }
@@ -263,6 +266,31 @@ load_skin_pixmaps(const gchar *dir)
         sp->current_width = gdk_pixbuf_get_width(pb);
         sp->current_height = gdk_pixbuf_get_height(pb);
         g_object_unref(pb);
+
+        if (numbers_fallback && sp->surface && sp->current_width >= 99 &&
+            sp->current_height >= 13) {
+            cairo_surface_t *expanded = cairo_image_surface_create(
+                CAIRO_FORMAT_ARGB32, 108, sp->current_height);
+            cairo_t *cr = cairo_create(expanded);
+            cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+
+            cairo_set_source_surface(cr, sp->surface, 0, 0);
+            cairo_rectangle(cr, 0, 0, 99, 13);
+            cairo_fill(cr);
+
+            cairo_set_source_surface(cr, sp->surface, 9, 0);
+            cairo_rectangle(cr, 99, 0, 9, 13);
+            cairo_fill(cr);
+
+            cairo_set_source_surface(cr, sp->surface, 81, 0);
+            cairo_rectangle(cr, 101, 6, 5, 1);
+            cairo_fill(cr);
+
+            cairo_destroy(cr);
+            cairo_surface_destroy(sp->surface);
+            sp->surface = expanded;
+            sp->current_width = 108;
+        }
     }
 
     /* Balance falls back to volume */

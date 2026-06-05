@@ -38,6 +38,7 @@ static HSlider *eqwin_balance = NULL;
 static gboolean eq_active = TRUE;
 static gboolean eq_auto = FALSE;
 static gboolean eq_shaded = FALSE;
+static gboolean eq_focused = TRUE;
 static EqControl eq_pressed_control = EQ_CONTROL_NONE;
 static gboolean eq_pressed_inside = FALSE;
 static Widget *eq_pressed_widget = NULL;
@@ -54,6 +55,22 @@ static void eqwin_attach_widget(void);
 static void eqwin_detach_widget(void);
 static void eqwin_show_presets_menu(void);
 static void eqwin_update_shaded_sliders(void);
+
+static void
+eqwin_focus_enter(GtkEventControllerFocus *controller, gpointer data)
+{
+    (void)controller; (void)data;
+    eq_focused = TRUE;
+    eqwin_queue_draw();
+}
+
+static void
+eqwin_focus_leave(GtkEventControllerFocus *controller, gpointer data)
+{
+    (void)controller; (void)data;
+    eq_focused = FALSE;
+    eqwin_queue_draw();
+}
 
 static gboolean
 eqwin_point_in_rect(gint x, gint y, gint rx, gint ry, gint rw, gint rh)
@@ -142,10 +159,13 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
                     (double)height / equalizerwin_height());
 
     if (eq_shaded) {
-        skin_draw_pixmap(cr, SKIN_EQ_EX, 0, 0, 0, 0, EQWIN_WIDTH, 14);
-        skin_draw_pixmap(cr, SKIN_EQ_EX, -1, 3, EQWIN_DETACH_BTN_X,
-                         EQWIN_DETACH_BTN_Y, 9, 9);
-        skin_draw_pixmap(cr, SKIN_EQ_EX, 11, 38, 264, 3, 9, 9);
+        skin_draw_pixmap(cr, SKIN_EQ_EX, 0, eq_focused ? 0 : 15,
+                         0, 0, EQWIN_WIDTH, 14);
+        if (eq_focused) {
+            skin_draw_pixmap(cr, SKIN_EQ_EX, -1, 3, EQWIN_DETACH_BTN_X,
+                             EQWIN_DETACH_BTN_Y, 9, 9);
+            skin_draw_pixmap(cr, SKIN_EQ_EX, 11, 38, 264, 3, 9, 9);
+        }
         eqwin_update_shaded_sliders();
         widget_list_draw(eqwin_wlist, cr);
         return;
@@ -157,9 +177,10 @@ draw_equalizer_window(GtkDrawingArea *area, cairo_t *cr,
 
     /* Overlay titlebar (focused at y=134, unfocused at y=149)
      * Only if the skin image is tall enough (real Winamp skins are 164+ px) */
-    if (skin->pixmaps[SKIN_EQMAIN].current_height >= 148)
+    if (skin->pixmaps[SKIN_EQMAIN].current_height >= 163)
         skin_draw_pixmap(cr, SKIN_EQMAIN,
-                         0, 134, 0, 0, EQWIN_WIDTH, 14);
+                         0, eq_focused ? 134 : 149,
+                         0, 0, EQWIN_WIDTH, 14);
 
     eqwin_draw_toggle_button(cr, eq_active,
                              eq_pressed_control == EQ_CONTROL_ON &&
@@ -292,6 +313,8 @@ eqwin_click_pressed(GtkGestureClick *gesture, int n_press,
                     double x, double y, gpointer data)
 {
     (void)data; (void)n_press;
+
+    gtk_widget_grab_focus(eqwin_drawing_area);
 
     gdouble scale = xmms_scale_factor();
     gint sx = (gint)(x / scale);
@@ -689,6 +712,7 @@ equalizerwin_create(GtkApplication *app)
     (void)app;
 
     eqwin_drawing_area = gtk_drawing_area_new();
+    gtk_widget_set_focusable(eqwin_drawing_area, TRUE);
     gtk_drawing_area_set_content_width(
         GTK_DRAWING_AREA(eqwin_drawing_area), xmms_scale_dim(EQWIN_WIDTH));
     gtk_drawing_area_set_content_height(
@@ -734,6 +758,11 @@ equalizerwin_create(GtkApplication *app)
     GtkEventController *motion = gtk_event_controller_motion_new();
     g_signal_connect(motion, "motion", G_CALLBACK(eqwin_motion), NULL);
     gtk_widget_add_controller(eqwin_drawing_area, motion);
+
+    GtkEventController *focus = gtk_event_controller_focus_new();
+    g_signal_connect(focus, "enter", G_CALLBACK(eqwin_focus_enter), NULL);
+    g_signal_connect(focus, "leave", G_CALLBACK(eqwin_focus_leave), NULL);
+    gtk_widget_add_controller(eqwin_drawing_area, focus);
 }
 
 GtkWidget *
