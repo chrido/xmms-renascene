@@ -350,6 +350,44 @@ playlist_add_uri(const gchar *uri)
 }
 
 void
+playlist_add_url_checked(const gchar *url)
+{
+    if (!url || !url[0])
+        return;
+    if (g_str_has_prefix(url, "http://") || g_str_has_prefix(url, "https://"))
+        podcast_add_url(url);
+    else
+        playlist_add_uri(url);
+}
+
+void
+playlist_add_podcast_entry(const gchar *uri, const gchar *title,
+                           const gchar *feed, const gchar *guid)
+{
+    if (!uri || !uri[0])
+        return;
+
+    PlaylistEntry *entry = g_new0(PlaylistEntry, 1);
+    entry->filename = g_strdup(uri);
+    entry->title = title && title[0] ? g_strdup(title) : g_strdup(uri);
+    entry->length = -1;
+    entry->is_podcast = TRUE;
+    entry->podcast_feed = g_strdup(feed);
+    entry->podcast_guid = g_strdup(guid);
+
+    if (podcast_cache_is_fresh_for_url(uri)) {
+        gchar *play_uri = podcast_prepare_playback_uri(entry);
+        if (play_uri && g_str_has_prefix(play_uri, "file://")) {
+            entry->length = -1;
+            entry->podcast_downloading = FALSE;
+        }
+        g_free(play_uri);
+    }
+
+    playlist = g_list_append(playlist, entry);
+}
+
+void
 playlist_add_spotify(const gchar *spotify_uri, const gchar *title,
                       gint duration_ms)
 {
@@ -402,6 +440,8 @@ entry_free(PlaylistEntry *entry)
 {
     g_free(entry->filename);
     g_free(entry->title);
+    g_free(entry->podcast_feed);
+    g_free(entry->podcast_guid);
     g_free(entry);
 }
 
@@ -450,6 +490,7 @@ playlist_index_missing_durations(void)
     for (GList *l = playlist; l; l = l->next, index++) {
         PlaylistEntry *entry = l->data;
         if (!entry || entry->length >= 0 || !entry->filename ||
+            entry->is_podcast ||
             g_str_has_prefix(entry->filename, "spotify:"))
             continue;
 
@@ -502,6 +543,20 @@ playlist_set_length(gint pos, gint64 length_ms)
     PlaylistEntry *entry = playlist_get_entry(pos);
     if (entry && length_ms >= 0)
         entry->length = length_ms;
+}
+
+void
+playlist_podcast_cache_ready(const gchar *uri, gint64 length_ms)
+{
+    for (GList *l = playlist; l; l = l->next) {
+        PlaylistEntry *entry = l->data;
+        if (!entry || !entry->is_podcast ||
+            g_strcmp0(entry->filename, uri) != 0)
+            continue;
+        entry->podcast_downloading = FALSE;
+        if (length_ms >= 0)
+            entry->length = length_ms;
+    }
 }
 
 gint
@@ -628,9 +683,12 @@ playlist_play(void)
     if (playlist_position < 0)
         playlist_position = 0;
 
-    const gchar *uri = playlist_get_filename(playlist_position);
-    if (uri)
+    PlaylistEntry *entry = playlist_get_entry(playlist_position);
+    gchar *uri = podcast_prepare_playback_uri(entry);
+    if (uri) {
         player_play(uri);
+        g_free(uri);
+    }
 }
 
 void
@@ -798,11 +856,17 @@ playlist_load(const gchar *filename)
     gchar *base_dir = g_path_get_dirname(filename);
     gint64 pending_length = -1;
     gchar *pending_title = NULL;
+    gboolean pending_podcast = FALSE;
 
     for (int i = 0; lines[i]; i++) {
         gchar *line = g_strstrip(lines[i]);
         if (line[0] == '\0')
             continue;
+
+        if (g_strcmp0(line, "#XMMSPODCAST") == 0) {
+            pending_podcast = TRUE;
+            continue;
+        }
 
         if (g_str_has_prefix(line, "#EXTINF:")) {
             gchar *comma = strchr(line, ',');
@@ -823,7 +887,10 @@ playlist_load(const gchar *filename)
             g_str_has_prefix(line, "http://") ||
             g_str_has_prefix(line, "https://") ||
             g_str_has_prefix(line, "spotify:")) {
-            playlist_add_uri(line);
+            if (pending_podcast)
+                playlist_add_podcast_entry(line, pending_title, NULL, NULL);
+            else
+                playlist_add_uri(line);
         } else if (g_path_is_absolute(line)) {
             playlist_add(line);
         } else {
@@ -841,8 +908,14 @@ playlist_load(const gchar *filename)
                 g_free(entry->title);
                 entry->title = g_strdup(pending_title);
             }
+            if (pending_podcast) {
+                entry->is_podcast = TRUE;
+                if (!podcast_cache_is_fresh_for_url(entry->filename))
+                    entry->length = -1;
+            }
         }
         pending_length = -1;
+        pending_podcast = FALSE;
         g_clear_pointer(&pending_title, g_free);
     }
 
@@ -859,9 +932,14 @@ playlist_save(const gchar *filename)
 
     for (GList *l = playlist; l; l = l->next) {
         PlaylistEntry *entry = l->data;
-        if (entry->length >= 0) {
+        if (entry->is_podcast)
+            g_string_append(str, "#XMMSPODCAST\n");
+        gboolean save_length = entry->length >= 0 &&
+            (!entry->is_podcast ||
+             podcast_cache_is_fresh_for_url(entry->filename));
+        if (save_length || (entry->is_podcast && entry->title)) {
             g_string_append_printf(str, "#EXTINF:%" G_GINT64_FORMAT ",%s\n",
-                                   entry->length / 1000,
+                                   save_length ? entry->length / 1000 : -1,
                                    entry->title ? entry->title : "");
         }
         g_string_append(str, entry->filename);

@@ -15,6 +15,7 @@ gstreamer_pbutils = dependency('gstreamer-pbutils-1.0', version: '>= 1.16')
 libarchive = dependency('libarchive', version: '>= 3.0', required: false)
 libsoup = dependency('libsoup-3.0', version: '>= 3.0')
 json_glib = dependency('json-glib-1.0', version: '>= 1.6')
+libxml2 = dependency('libxml-2.0', version: '>= 2.9')
 cc = meson.get_compiler('c')
 libm = cc.find_library('m', required: false)
 
@@ -49,11 +50,12 @@ sources = files(
   'src/spotifywin.c',
   'src/outputwin.c',
   'src/prefswin.c',
+  'src/podcast.c',
 )
 
 executable('xmms',
   sources, resources,
-  dependencies: [gtk4, gstreamer, gstreamer_pbutils, libarchive, libsoup, json_glib, libm],
+  dependencies: [gtk4, gstreamer, gstreamer_pbutils, libarchive, libsoup, json_glib, libxml2, libm],
   include_directories: [
     include_directories('src'),
     include_directories('.'),     # for config.h

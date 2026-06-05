@@ -22,6 +22,7 @@
 #include "spotifywin.h"
 #include "outputwin.h"
 #include "prefswin.h"
+#include "podcast.h"
 
 typedef enum {
     TIMER_ELAPSED,
@@ -67,6 +68,7 @@ typedef struct {
     gint vis_peaks_falloff;
     gint vis_vu_mode;
     gint vis_refresh_divisor;
+    gint podcast_cache_ttl_days;
 } Config;
 
 extern Config cfg;

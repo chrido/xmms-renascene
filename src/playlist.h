@@ -3,11 +3,15 @@
 
 #include <glib.h>
 
-typedef struct {
+typedef struct _PlaylistEntry {
     gchar *filename;
     gchar *title;
     gint64 length;  /* in milliseconds, -1 if unknown */
     gboolean selected;
+    gboolean is_podcast;
+    gchar *podcast_feed;
+    gchar *podcast_guid;
+    gboolean podcast_downloading;
 } PlaylistEntry;
 
 void playlist_init(void);
@@ -15,6 +19,9 @@ void playlist_free(void);
 
 void playlist_add(const gchar *filename);
 void playlist_add_uri(const gchar *uri);
+void playlist_add_url_checked(const gchar *url);
+void playlist_add_podcast_entry(const gchar *uri, const gchar *title,
+                                const gchar *feed, const gchar *guid);
 void playlist_add_dir(const gchar *dir);
 void playlist_add_spotify(const gchar *spotify_uri, const gchar *title,
                            gint duration_ms);
@@ -27,6 +34,7 @@ PlaylistEntry *playlist_get_entry(gint pos);
 const gchar *playlist_get_filename(gint pos);
 const gchar *playlist_get_title(gint pos);
 void playlist_set_length(gint pos, gint64 length_ms);
+void playlist_podcast_cache_ready(const gchar *uri, gint64 length_ms);
 
 gint playlist_get_position(void);
 void playlist_set_position(gint pos);

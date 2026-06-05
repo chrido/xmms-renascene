@@ -1778,6 +1778,7 @@ load_config(void)
     cfg.vis_peaks_falloff = VIS_FALLOFF_SLOW;
     cfg.vis_vu_mode = VIS_VU_NORMAL;
     cfg.vis_refresh_divisor = 1;
+    cfg.podcast_cache_ttl_days = 60;
 
     if (startup_reset) {
         session_debug("reset requested; skipping saved config");
@@ -1932,6 +1933,10 @@ load_config(void)
             cfg.vis_refresh_divisor =
                 CLAMP(g_key_file_get_integer(kf, "xmms", "vis_refresh_divisor", NULL),
                       1, 8);
+        if (g_key_file_has_key(kf, "xmms", "podcast_cache_ttl_days", NULL))
+            cfg.podcast_cache_ttl_days = CLAMP(
+                g_key_file_get_integer(kf, "xmms", "podcast_cache_ttl_days", NULL),
+                1, 3650);
 
         session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                       config_file, cfg.player_x, cfg.player_y,
@@ -2027,6 +2032,8 @@ save_config(void)
     g_key_file_set_integer(kf, "xmms", "vis_vu_mode", cfg.vis_vu_mode);
     g_key_file_set_integer(kf, "xmms", "vis_refresh_divisor",
                            cfg.vis_refresh_divisor);
+    g_key_file_set_integer(kf, "xmms", "podcast_cache_ttl_days",
+                           cfg.podcast_cache_ttl_days);
 
     const gchar *output_dev = player_get_output_device();
     if (output_dev)
@@ -2169,6 +2176,7 @@ activate(GtkApplication *app, gpointer data)
     player_init();
     player_set_volume(cfg.volume);
     player_set_balance(cfg.balance);
+    podcast_init();
     spotify_init();
 
     /* Apply saved output device */
@@ -2328,6 +2336,7 @@ shutdown_cb(GtkApplication *app, gpointer data)
     playlistwin_shutdown();
     save_config();
     mpris_free();
+    podcast_shutdown();
     spotify_free();
     player_stop();
     player_free();

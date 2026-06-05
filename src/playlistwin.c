@@ -1789,7 +1789,7 @@ plwin_url_add_clicked(GtkButton *button, gpointer data)
     const gchar *url = plwin_url_entry ?
         gtk_editable_get_text(GTK_EDITABLE(plwin_url_entry)) : NULL;
     if (url && *url) {
-        playlist_add_uri(url);
+        playlist_add_url_checked(url);
         plwin_queue_draw();
     }
     if (plwin_url_window)
