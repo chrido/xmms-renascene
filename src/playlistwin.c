@@ -7,9 +7,9 @@
 #define PLWIN_ENTRY_HEIGHT 11
 #define PLWIN_LIST_X  12
 #define PLWIN_LIST_Y  20
-#define PLWIN_LIST_W  (PLWIN_WIDTH - 32)
+#define PLWIN_LIST_W  (PLWIN_WIDTH - 31)
 #define PLWIN_LIST_H  (PLWIN_HEIGHT - 58)
-#define PLWIN_SCROLLBAR_X  (PLWIN_WIDTH - 16)
+#define PLWIN_SCROLLBAR_X  (PLWIN_WIDTH - 15)
 #define PLWIN_SCROLLBAR_W  8
 #define PLWIN_SCROLL_THUMB_H 18
 #define PLWIN_SHADE_BTN_X (PLWIN_WIDTH - 21)
@@ -765,12 +765,10 @@ draw_playlist_frame(cairo_t *cr)
     skin_draw_pixmap(cr, src, 153, y, w - 25, 0, 25, 20);
 
     /* Left and right sides */
-    const gint side_src_y = 52;
-    const gint side_y = 20;
-    const gint side_h = h - 58;
-    for (gint ydest = side_y; ydest < side_y + side_h; ydest++) {
-        skin_draw_pixmap(cr, src, 0, side_src_y, 0, ydest, 12, 1);
-        skin_draw_pixmap(cr, src, 32, side_src_y, w - 19, ydest, 19, 1);
+    for (gint i = 0; i < (h - 58) / 29; i++) {
+        gint ydest = (i * 29) + 20;
+        skin_draw_pixmap(cr, src, 0, 42, 0, ydest, 12, 29);
+        skin_draw_pixmap(cr, src, 32, 42, w - 19, ydest, 19, 29);
     }
 
     /* Bottom left corner (menu buttons) */
