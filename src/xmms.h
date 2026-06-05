@@ -69,6 +69,7 @@ typedef struct {
     gint vis_vu_mode;
     gint vis_refresh_divisor;
     gint podcast_cache_ttl_days;
+    gint podcast_refresh_interval_minutes;
 } Config;
 
 extern Config cfg;

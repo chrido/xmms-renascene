@@ -34,6 +34,12 @@ typedef struct {
 } PodcastDownloadResult;
 
 static GHashTable *downloads = NULL;
+static GHashTable *refreshes = NULL;
+static guint refresh_timeout_id = 0;
+
+static gboolean podcast_content_type_is_xml(const gchar *content_type);
+static GByteArray *podcast_read_limited(GInputStream *stream);
+static gboolean podcast_bytes_look_like_feed(GByteArray *bytes);
 
 static void
 podcast_item_free(gpointer data)
@@ -234,6 +240,41 @@ podcast_parse_feed(const guint8 *data, gsize len, const gchar *feed_url)
     return items;
 }
 
+static GPtrArray *
+podcast_fetch_feed_items(const gchar *url)
+{
+    SoupSession *session = soup_session_new_with_options("timeout", 12, NULL);
+    SoupMessage *msg = soup_message_new("GET", url);
+    SoupMessageHeaders *headers = soup_message_get_request_headers(msg);
+    soup_message_headers_replace(headers, "User-Agent", "XMMS Resuscitated");
+    soup_message_headers_replace(headers, "Accept",
+                                 "application/rss+xml, application/atom+xml, application/xml, text/xml, */*");
+
+    GError *error = NULL;
+    GInputStream *stream = soup_session_send(session, msg, NULL, &error);
+    guint status = soup_message_get_status(msg);
+    GPtrArray *items = NULL;
+
+    if (stream && status >= 200 && status < 300) {
+        SoupMessageHeaders *response_headers =
+            soup_message_get_response_headers(msg);
+        const gchar *content_type =
+            soup_message_headers_get_content_type(response_headers, NULL);
+        GByteArray *bytes = podcast_read_limited(stream);
+        if (podcast_content_type_is_xml(content_type) ||
+            podcast_bytes_look_like_feed(bytes))
+            items = podcast_parse_feed(bytes->data, bytes->len, url);
+        g_byte_array_free(bytes, TRUE);
+    }
+
+    if (stream)
+        g_object_unref(stream);
+    g_clear_error(&error);
+    g_object_unref(msg);
+    g_object_unref(session);
+    return items;
+}
+
 static gboolean
 podcast_content_type_is_audio(const gchar *content_type)
 {
@@ -366,6 +407,93 @@ podcast_add_url(const gchar *url)
     GThread *thread = g_thread_new("podcast-add-url",
                                    podcast_add_url_thread, g_strdup(url));
     g_thread_unref(thread);
+}
+
+static gboolean
+podcast_refresh_result_cb(gpointer data)
+{
+    PodcastUrlResult *result = data;
+    if (refreshes)
+        g_hash_table_remove(refreshes, result->url);
+    if (result->items && result->items->len > 0) {
+        for (guint i = 0; i < result->items->len; i++) {
+            PodcastItem *item = g_ptr_array_index(result->items, i);
+            playlist_add_podcast_entry(item->url, item->title,
+                                       item->feed, item->guid);
+        }
+        playlistwin_update();
+    }
+    podcast_url_result_free(result);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer
+podcast_refresh_feed_thread(gpointer data)
+{
+    gchar *url = data;
+    PodcastUrlResult *result = g_new0(PodcastUrlResult, 1);
+    result->url = g_strdup(url);
+    result->items = podcast_fetch_feed_items(url);
+    g_idle_add(podcast_refresh_result_cb, result);
+    g_free(url);
+    return NULL;
+}
+
+static void
+podcast_refresh_feed(const gchar *url)
+{
+    if (!url || !url[0])
+        return;
+    if (!refreshes)
+        refreshes = g_hash_table_new_full(g_str_hash, g_str_equal,
+                                          g_free, NULL);
+    if (g_hash_table_contains(refreshes, url))
+        return;
+    g_hash_table_add(refreshes, g_strdup(url));
+    GThread *thread = g_thread_new("podcast-refresh-feed",
+                                   podcast_refresh_feed_thread, g_strdup(url));
+    g_thread_unref(thread);
+}
+
+void
+podcast_refresh_all_feeds(void)
+{
+    GList *feeds = playlist_get_podcast_feeds();
+    for (GList *l = feeds; l; l = l->next)
+        podcast_refresh_feed(l->data);
+    g_list_free_full(feeds, g_free);
+}
+
+static gboolean podcast_refresh_timeout_cb(gpointer data);
+
+static void
+podcast_schedule_refresh_timer(void)
+{
+    if (refresh_timeout_id)
+        g_source_remove(refresh_timeout_id);
+    if (!refreshes)
+        return;
+    gint minutes = cfg.podcast_refresh_interval_minutes > 0 ?
+        cfg.podcast_refresh_interval_minutes : 60;
+    refresh_timeout_id = g_timeout_add_seconds((guint)minutes * 60,
+                                               podcast_refresh_timeout_cb,
+                                               NULL);
+}
+
+void
+podcast_update_refresh_timer(void)
+{
+    podcast_schedule_refresh_timer();
+}
+
+static gboolean
+podcast_refresh_timeout_cb(gpointer data)
+{
+    (void)data;
+    refresh_timeout_id = 0;
+    podcast_refresh_all_feeds();
+    podcast_schedule_refresh_timer();
+    return G_SOURCE_REMOVE;
 }
 
 static gint64
@@ -551,13 +679,21 @@ void
 podcast_init(void)
 {
     downloads = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    refreshes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     GThread *thread = g_thread_new("podcast-cache-cleanup",
                                    podcast_cleanup_thread, NULL);
     g_thread_unref(thread);
+    podcast_refresh_all_feeds();
+    podcast_schedule_refresh_timer();
 }
 
 void
 podcast_shutdown(void)
 {
+    if (refresh_timeout_id) {
+        g_source_remove(refresh_timeout_id);
+        refresh_timeout_id = 0;
+    }
     g_clear_pointer(&downloads, g_hash_table_destroy);
+    g_clear_pointer(&refreshes, g_hash_table_destroy);
 }

@@ -20,6 +20,7 @@ static GtkWidget *convert_underscore_check = NULL;
 static GtkWidget *convert_twenty_check = NULL;
 static GtkWidget *show_numbers_check = NULL;
 static GtkWidget *podcast_ttl_spin = NULL;
+static GtkWidget *podcast_refresh_spin = NULL;
 static GtkWidget *playlist_font_entry = NULL;
 static GtkWidget *mainwin_font_entry = NULL;
 static GtkWidget *title_format_entry = NULL;
@@ -202,6 +203,8 @@ set_controls_from_config(void)
                                 cfg.show_numbers_in_pl);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(podcast_ttl_spin),
                               cfg.podcast_cache_ttl_days);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(podcast_refresh_spin),
+                              cfg.podcast_refresh_interval_minutes);
 
     gtk_editable_set_text(GTK_EDITABLE(playlist_font_entry),
                           cfg.playlist_font ? cfg.playlist_font : "Helvetica");
@@ -322,6 +325,11 @@ apply_preferences(void)
         GTK_SPIN_BUTTON(podcast_ttl_spin));
     if (cfg.podcast_cache_ttl_days < 1)
         cfg.podcast_cache_ttl_days = 60;
+    cfg.podcast_refresh_interval_minutes = gtk_spin_button_get_value_as_int(
+        GTK_SPIN_BUTTON(podcast_refresh_spin));
+    if (cfg.podcast_refresh_interval_minutes < 1)
+        cfg.podcast_refresh_interval_minutes = 60;
+    podcast_update_refresh_timer();
 
     g_free(cfg.playlist_font);
     cfg.playlist_font = g_strdup(gtk_editable_get_text(
@@ -557,6 +565,9 @@ create_options_page(void)
     show_numbers_check = check_new("Show numbers in playlist");
     podcast_ttl_spin = gtk_spin_button_new_with_range(1, 3650, 1);
     grid_attach_label(grid, "Podcast cache TTL (days):", podcast_ttl_spin, 2);
+    podcast_refresh_spin = gtk_spin_button_new_with_range(1, 10080, 1);
+    grid_attach_label(grid, "Podcast refresh interval (minutes):",
+                      podcast_refresh_spin, 3);
 
     GtkWidget *checks[] = {
         repeat_check, shuffle_check, no_advance_check, timer_remaining_check,
@@ -566,7 +577,7 @@ create_options_page(void)
         convert_twenty_check, convert_underscore_check, show_numbers_check
     };
     for (guint i = 0; i < G_N_ELEMENTS(checks); i++)
-        gtk_grid_attach(GTK_GRID(grid), checks[i], i % 2, 3 + (i / 2), 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), checks[i], i % 2, 4 + (i / 2), 1, 1);
     return page;
 }
 

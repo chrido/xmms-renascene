@@ -22,6 +22,7 @@ void playlist_add_uri(const gchar *uri);
 void playlist_add_url_checked(const gchar *url);
 void playlist_add_podcast_entry(const gchar *uri, const gchar *title,
                                 const gchar *feed, const gchar *guid);
+GList *playlist_get_podcast_feeds(void);
 void playlist_add_dir(const gchar *dir);
 void playlist_add_spotify(const gchar *spotify_uri, const gchar *title,
                            gint duration_ms);

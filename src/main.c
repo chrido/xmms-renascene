@@ -583,40 +583,14 @@ mainwin_menu_vis_vu_smooth_cb(GSimpleAction *action, GVariant *param, gpointer d
 }
 
 static void
-mainwin_menu_windowshade_cb(GSimpleAction *action, GVariant *param, gpointer data)
-{
-    (void)action; (void)param; (void)data;
-    mainwin_set_shaded(!mainwin_shaded);
-}
-
-static void
-mainwin_menu_playlist_shade_cb(GSimpleAction *action, GVariant *param, gpointer data)
-{
-    (void)action; (void)param; (void)data;
-    playlistwin_set_shaded(!playlistwin_is_shaded());
-}
-
-static void
-mainwin_menu_equalizer_shade_cb(GSimpleAction *action, GVariant *param, gpointer data)
-{
-    (void)action; (void)param; (void)data;
-    equalizerwin_set_shaded(!equalizerwin_is_shaded());
-}
-
-static void
 mainwin_menubtn_pushed(void)
 {
     /* Build a popover menu */
     GMenu *menu = g_menu_new();
-    GMenu *shade = g_menu_new();
     g_menu_append(menu, "Preferences", "win.preferences");
     g_menu_append(menu, "Skin Browser...", "win.skin-browser");
     g_menu_append(menu, "Spotify Playlists...", "win.spotify");
     g_menu_append(menu, "Output Device...", "win.output");
-    g_menu_append(shade, "WindowShade Mode", "win.windowshade");
-    g_menu_append(shade, "Playlist WindowShade Mode", "win.playlist-shade");
-    g_menu_append(shade, "Equalizer WindowShade Mode", "win.equalizer-shade");
-    g_menu_append_submenu(menu, "WindowShade", G_MENU_MODEL(shade));
 
     GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
     gtk_widget_set_parent(popover, mainwin_drawing_area);
@@ -629,7 +603,6 @@ mainwin_menubtn_pushed(void)
     gtk_popover_set_pointing_to(GTK_POPOVER(popover), &rect);
     gtk_popover_popup(GTK_POPOVER(popover));
     gtk_popover_popup(GTK_POPOVER(popover));
-    g_object_unref(shade);
     g_object_unref(menu);
 }
 
@@ -1779,6 +1752,7 @@ load_config(void)
     cfg.vis_vu_mode = VIS_VU_NORMAL;
     cfg.vis_refresh_divisor = 1;
     cfg.podcast_cache_ttl_days = 60;
+    cfg.podcast_refresh_interval_minutes = 60;
 
     if (startup_reset) {
         session_debug("reset requested; skipping saved config");
@@ -1937,6 +1911,11 @@ load_config(void)
             cfg.podcast_cache_ttl_days = CLAMP(
                 g_key_file_get_integer(kf, "xmms", "podcast_cache_ttl_days", NULL),
                 1, 3650);
+        if (g_key_file_has_key(kf, "xmms", "podcast_refresh_interval_minutes", NULL))
+            cfg.podcast_refresh_interval_minutes = CLAMP(
+                g_key_file_get_integer(kf, "xmms",
+                                       "podcast_refresh_interval_minutes",
+                                       NULL), 1, 10080);
 
         session_debug("loaded config %s: player=(%d,%d) scale=%d playlist_visible=%d playlist_detached=%d equalizer_visible=%d equalizer_detached=%d",
                       config_file, cfg.player_x, cfg.player_y,
@@ -2034,6 +2013,8 @@ save_config(void)
                            cfg.vis_refresh_divisor);
     g_key_file_set_integer(kf, "xmms", "podcast_cache_ttl_days",
                            cfg.podcast_cache_ttl_days);
+    g_key_file_set_integer(kf, "xmms", "podcast_refresh_interval_minutes",
+                           cfg.podcast_refresh_interval_minutes);
 
     const gchar *output_dev = player_get_output_device();
     if (output_dev)
@@ -2239,9 +2220,6 @@ activate(GtkApplication *app, gpointer data)
         { "vis-refresh-eighth", mainwin_menu_vis_refresh_eighth_cb, NULL, NULL, NULL },
         { "vis-vu-normal", mainwin_menu_vis_vu_normal_cb, NULL, NULL, NULL },
         { "vis-vu-smooth", mainwin_menu_vis_vu_smooth_cb, NULL, NULL, NULL },
-        { "windowshade", mainwin_menu_windowshade_cb, NULL, NULL, NULL },
-        { "playlist-shade", mainwin_menu_playlist_shade_cb, NULL, NULL, NULL },
-        { "equalizer-shade", mainwin_menu_equalizer_shade_cb, NULL, NULL, NULL },
     };
     g_action_map_add_action_entries(G_ACTION_MAP(mainwin), win_actions,
                                     G_N_ELEMENTS(win_actions), NULL);

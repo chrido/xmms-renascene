@@ -367,6 +367,30 @@ playlist_add_podcast_entry(const gchar *uri, const gchar *title,
     if (!uri || !uri[0])
         return;
 
+    for (GList *l = playlist; l; l = l->next) {
+        PlaylistEntry *existing = l->data;
+        gboolean same_guid = guid && guid[0] && existing->podcast_guid &&
+            g_strcmp0(existing->podcast_guid, guid) == 0 &&
+            g_strcmp0(existing->podcast_feed, feed) == 0;
+        gboolean same_url = g_strcmp0(existing->filename, uri) == 0;
+        if (!existing->is_podcast || (!same_guid && !same_url))
+            continue;
+
+        if (title && title[0] && g_strcmp0(existing->title, title) != 0) {
+            g_free(existing->title);
+            existing->title = g_strdup(title);
+        }
+        if (feed && feed[0] && g_strcmp0(existing->podcast_feed, feed) != 0) {
+            g_free(existing->podcast_feed);
+            existing->podcast_feed = g_strdup(feed);
+        }
+        if (guid && guid[0] && g_strcmp0(existing->podcast_guid, guid) != 0) {
+            g_free(existing->podcast_guid);
+            existing->podcast_guid = g_strdup(guid);
+        }
+        return;
+    }
+
     PlaylistEntry *entry = g_new0(PlaylistEntry, 1);
     entry->filename = g_strdup(uri);
     entry->title = title && title[0] ? g_strdup(title) : g_strdup(uri);
@@ -385,6 +409,28 @@ playlist_add_podcast_entry(const gchar *uri, const gchar *title,
     }
 
     playlist = g_list_append(playlist, entry);
+}
+
+GList *
+playlist_get_podcast_feeds(void)
+{
+    GList *feeds = NULL;
+    for (GList *l = playlist; l; l = l->next) {
+        PlaylistEntry *entry = l->data;
+        if (!entry || !entry->is_podcast || !entry->podcast_feed ||
+            !entry->podcast_feed[0])
+            continue;
+        gboolean exists = FALSE;
+        for (GList *f = feeds; f; f = f->next) {
+            if (g_strcmp0(f->data, entry->podcast_feed) == 0) {
+                exists = TRUE;
+                break;
+            }
+        }
+        if (!exists)
+            feeds = g_list_prepend(feeds, g_strdup(entry->podcast_feed));
+    }
+    return g_list_reverse(feeds);
 }
 
 void
@@ -856,6 +902,8 @@ playlist_load(const gchar *filename)
     gchar *base_dir = g_path_get_dirname(filename);
     gint64 pending_length = -1;
     gchar *pending_title = NULL;
+    gchar *pending_feed = NULL;
+    gchar *pending_guid = NULL;
     gboolean pending_podcast = FALSE;
 
     for (int i = 0; lines[i]; i++) {
@@ -865,6 +913,23 @@ playlist_load(const gchar *filename)
 
         if (g_strcmp0(line, "#XMMSPODCAST") == 0) {
             pending_podcast = TRUE;
+            continue;
+        }
+        if (g_str_has_prefix(line, "#XMMSPODCAST:")) {
+            pending_podcast = TRUE;
+            g_free(pending_feed);
+            g_free(pending_guid);
+            pending_feed = NULL;
+            pending_guid = NULL;
+            const gchar *payload = line + strlen("#XMMSPODCAST:");
+            gchar **parts = g_strsplit(payload, "\t", -1);
+            for (gint j = 0; parts[j]; j++) {
+                if (g_str_has_prefix(parts[j], "feed="))
+                    pending_feed = g_uri_unescape_string(parts[j] + 5, NULL);
+                else if (g_str_has_prefix(parts[j], "guid="))
+                    pending_guid = g_uri_unescape_string(parts[j] + 5, NULL);
+            }
+            g_strfreev(parts);
             continue;
         }
 
@@ -887,10 +952,12 @@ playlist_load(const gchar *filename)
             g_str_has_prefix(line, "http://") ||
             g_str_has_prefix(line, "https://") ||
             g_str_has_prefix(line, "spotify:")) {
-            if (pending_podcast)
-                playlist_add_podcast_entry(line, pending_title, NULL, NULL);
-            else
+            if (pending_podcast) {
+                playlist_add_podcast_entry(line, pending_title,
+                                           pending_feed, pending_guid);
+            } else {
                 playlist_add_uri(line);
+            }
         } else if (g_path_is_absolute(line)) {
             playlist_add(line);
         } else {
@@ -917,11 +984,15 @@ playlist_load(const gchar *filename)
         pending_length = -1;
         pending_podcast = FALSE;
         g_clear_pointer(&pending_title, g_free);
+        g_clear_pointer(&pending_feed, g_free);
+        g_clear_pointer(&pending_guid, g_free);
     }
 
     g_strfreev(lines);
     g_free(base_dir);
     g_free(pending_title);
+    g_free(pending_feed);
+    g_free(pending_guid);
     return TRUE;
 }
 
@@ -932,8 +1003,29 @@ playlist_save(const gchar *filename)
 
     for (GList *l = playlist; l; l = l->next) {
         PlaylistEntry *entry = l->data;
-        if (entry->is_podcast)
-            g_string_append(str, "#XMMSPODCAST\n");
+        if (entry->is_podcast) {
+            gboolean has_feed = entry->podcast_feed && entry->podcast_feed[0];
+            gboolean has_guid = entry->podcast_guid && entry->podcast_guid[0];
+            if (has_feed || has_guid) {
+                g_string_append(str, "#XMMSPODCAST:");
+                if (has_feed) {
+                    gchar *escaped = g_uri_escape_string(entry->podcast_feed,
+                                                         NULL, TRUE);
+                    g_string_append_printf(str, "feed=%s", escaped);
+                    g_free(escaped);
+                }
+                if (has_guid) {
+                    gchar *escaped = g_uri_escape_string(entry->podcast_guid,
+                                                         NULL, TRUE);
+                    g_string_append_printf(str, "%sguid=%s",
+                                           has_feed ? "\t" : "", escaped);
+                    g_free(escaped);
+                }
+                g_string_append_c(str, '\n');
+            } else {
+                g_string_append(str, "#XMMSPODCAST\n");
+            }
+        }
         gboolean save_length = entry->length >= 0 &&
             (!entry->is_podcast ||
              podcast_cache_is_fresh_for_url(entry->filename));
