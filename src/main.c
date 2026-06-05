@@ -348,7 +348,7 @@ static void
 mainwin_menu_doublesize_cb(GSimpleAction *action, GVariant *param, gpointer data)
 {
     (void)action; (void)param; (void)data;
-    mainwin_set_doublesize(!cfg.doublesize);
+    mainwin_set_doublesize(cfg.scale_factor <= 1);
 }
 
 static void
@@ -998,7 +998,7 @@ mainwin_set_shaded(gboolean shaded)
 
     if (mainwin_drawing_area) {
         gint scale = cfg.scale_factor;
-        if (scale < 1) scale = 2;
+        if (scale < 1) scale = 1;
         gtk_drawing_area_set_content_height(
             GTK_DRAWING_AREA(mainwin_drawing_area),
             mainwin_current_height() * scale);
@@ -1038,11 +1038,17 @@ mainwin_reload_skin(void)
 }
 
 void
+mainwin_set_scale_factor(gint scale)
+{
+    cfg.scale_factor = CLAMP(scale, 1, 4);
+    cfg.doublesize = cfg.scale_factor > 1;
+    mainwin_apply_scale_factor();
+}
+
+void
 mainwin_set_doublesize(gboolean enabled)
 {
-    cfg.doublesize = enabled;
-    cfg.scale_factor = enabled ? 2 : 1;
-    mainwin_apply_scale_factor();
+    mainwin_set_scale_factor(enabled ? 2 : 1);
 }
 
 void
@@ -1096,7 +1102,7 @@ mainwin_apply_preferences(void)
     equalizerwin_sync_volume_balance();
     mainwin_set_sticky(cfg.sticky);
     mainwin_set_easy_move(cfg.easy_move);
-    mainwin_set_doublesize(cfg.doublesize);
+    mainwin_set_scale_factor(cfg.scale_factor);
     mainwin_apply_visualization_preferences();
 
     if (mainwin_shuffle)
@@ -1343,7 +1349,7 @@ mainwin_key_pressed(GtkEventControllerKey *controller, guint keyval,
             mainwin_set_shaded(!mainwin_shaded);
             return GDK_EVENT_STOP;
         case GDK_KEY_d:
-            mainwin_set_doublesize(!cfg.doublesize);
+            mainwin_set_doublesize(cfg.scale_factor <= 1);
             return GDK_EVENT_STOP;
         case GDK_KEY_3:
             mainwin_show_file_info();
@@ -1767,8 +1773,10 @@ load_config(void)
     if (g_key_file_load_from_file(kf, config_file, 0, NULL)) {
         cfg.player_x = g_key_file_get_integer(kf, "xmms", "player_x", NULL);
         cfg.player_y = g_key_file_get_integer(kf, "xmms", "player_y", NULL);
-        cfg.scale_factor = g_key_file_get_integer(kf, "xmms", "scale_factor", NULL);
-        if (cfg.scale_factor < 1) cfg.scale_factor = 2;
+        if (g_key_file_has_key(kf, "xmms", "scale_factor", NULL))
+            cfg.scale_factor = CLAMP(
+                g_key_file_get_integer(kf, "xmms", "scale_factor", NULL),
+                1, 4);
 
         gchar *skin = g_key_file_get_string(kf, "xmms", "skin", NULL);
         if (skin && skin[0]) cfg.skin = skin;
@@ -1793,8 +1801,8 @@ load_config(void)
         if (g_key_file_has_key(kf, "xmms", "doublesize", NULL))
             cfg.doublesize =
                 g_key_file_get_boolean(kf, "xmms", "doublesize", NULL);
-        else
-            cfg.doublesize = cfg.scale_factor > 1;
+        if (!g_key_file_has_key(kf, "xmms", "scale_factor", NULL))
+            cfg.scale_factor = cfg.doublesize ? 2 : 1;
         if (g_key_file_has_key(kf, "xmms", "easy_move", NULL))
             cfg.easy_move =
                 g_key_file_get_boolean(kf, "xmms", "easy_move", NULL);
@@ -1927,7 +1935,7 @@ load_config(void)
                       config_file, cfg.player_x, cfg.player_y,
                       cfg.scale_factor);
     }
-    cfg.scale_factor = cfg.doublesize ? 2 : 1;
+    cfg.doublesize = cfg.scale_factor > 1;
     g_key_file_free(kf);
     g_free(config_file);
     g_free(config_dir);
@@ -1951,7 +1959,7 @@ save_config(void)
     g_key_file_set_boolean(kf, "xmms", "no_playlist_advance",
                            playlist_get_no_advance());
     g_key_file_set_boolean(kf, "xmms", "sticky", cfg.sticky);
-    g_key_file_set_boolean(kf, "xmms", "doublesize", cfg.doublesize);
+    g_key_file_set_boolean(kf, "xmms", "doublesize", cfg.scale_factor > 1);
     g_key_file_set_boolean(kf, "xmms", "easy_move", cfg.easy_move);
     g_key_file_set_boolean(kf, "xmms", "playlist_visible",
                            playlistwin_is_visible());

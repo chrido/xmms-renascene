@@ -87,6 +87,7 @@ void mainwin_queue_draw(void);
 void mainwin_update_attached_size(void);
 void mainwin_update_panel_toggles(void);
 void mainwin_sync_volume_balance(void);
+void mainwin_set_scale_factor(gint scale);
 void mainwin_set_doublesize(gboolean enabled);
 void mainwin_set_sticky(gboolean enabled);
 void mainwin_set_easy_move(gboolean enabled);

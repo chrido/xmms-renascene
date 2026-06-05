@@ -10,7 +10,7 @@ static GtkWidget *shuffle_check = NULL;
 static GtkWidget *no_advance_check = NULL;
 static GtkWidget *timer_remaining_check = NULL;
 static GtkWidget *sticky_check = NULL;
-static GtkWidget *doublesize_check = NULL;
+static GtkWidget *zoom_spin = NULL;
 static GtkWidget *easy_move_check = NULL;
 static GtkWidget *playlist_visible_check = NULL;
 static GtkWidget *playlist_detached_check = NULL;
@@ -183,8 +183,7 @@ set_controls_from_config(void)
     gtk_check_button_set_active(GTK_CHECK_BUTTON(timer_remaining_check),
                                 cfg.timer_mode == TIMER_REMAINING);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(sticky_check), cfg.sticky);
-    gtk_check_button_set_active(GTK_CHECK_BUTTON(doublesize_check),
-                                cfg.doublesize);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(zoom_spin), cfg.scale_factor);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(easy_move_check),
                                 cfg.easy_move);
     gtk_check_button_set_active(GTK_CHECK_BUTTON(playlist_visible_check),
@@ -303,8 +302,9 @@ apply_preferences(void)
     cfg.timer_mode = gtk_check_button_get_active(GTK_CHECK_BUTTON(timer_remaining_check)) ?
         TIMER_REMAINING : TIMER_ELAPSED;
     cfg.sticky = gtk_check_button_get_active(GTK_CHECK_BUTTON(sticky_check));
-    cfg.doublesize =
-        gtk_check_button_get_active(GTK_CHECK_BUTTON(doublesize_check));
+    cfg.scale_factor = CLAMP(
+        gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(zoom_spin)), 1, 4);
+    cfg.doublesize = cfg.scale_factor > 1;
     cfg.easy_move =
         gtk_check_button_get_active(GTK_CHECK_BUTTON(easy_move_check));
     cfg.playlist_visible =
@@ -554,7 +554,8 @@ create_options_page(void)
     no_advance_check = check_new("No playlist advance");
     timer_remaining_check = check_new("Time remaining");
     sticky_check = check_new("Sticky");
-    doublesize_check = check_new("Double size");
+    zoom_spin = gtk_spin_button_new_with_range(1, 4, 1);
+    grid_attach_label(grid, "Zoom level:", zoom_spin, 2);
     easy_move_check = check_new("Easy move");
     playlist_visible_check = check_new("Show playlist");
     playlist_detached_check = check_new("Dock playlist");
@@ -564,20 +565,20 @@ create_options_page(void)
     convert_underscore_check = check_new("Convert underscore to space");
     show_numbers_check = check_new("Show numbers in playlist");
     podcast_ttl_spin = gtk_spin_button_new_with_range(1, 3650, 1);
-    grid_attach_label(grid, "Podcast cache TTL (days):", podcast_ttl_spin, 2);
+    grid_attach_label(grid, "Podcast cache TTL (days):", podcast_ttl_spin, 3);
     podcast_refresh_spin = gtk_spin_button_new_with_range(1, 10080, 1);
     grid_attach_label(grid, "Podcast refresh interval (minutes):",
-                      podcast_refresh_spin, 3);
+                      podcast_refresh_spin, 4);
 
     GtkWidget *checks[] = {
         repeat_check, shuffle_check, no_advance_check, timer_remaining_check,
-        sticky_check, doublesize_check, easy_move_check,
+        sticky_check, easy_move_check,
         playlist_visible_check, playlist_detached_check,
         equalizer_visible_check, equalizer_detached_check,
         convert_twenty_check, convert_underscore_check, show_numbers_check
     };
     for (guint i = 0; i < G_N_ELEMENTS(checks); i++)
-        gtk_grid_attach(GTK_GRID(grid), checks[i], i % 2, 4 + (i / 2), 1, 1);
+        gtk_grid_attach(GTK_GRID(grid), checks[i], i % 2, 5 + (i / 2), 1, 1);
     return page;
 }
 
