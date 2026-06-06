@@ -1499,6 +1499,10 @@ impl MainWindowUiState {
             .map(|entry| entry.filename.as_str())
     }
 
+    pub(crate) fn playlist_position(&self) -> Option<usize> {
+        self.app_state.playlist.position()
+    }
+
     pub(crate) fn accept_open_location(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -1878,6 +1882,15 @@ impl MainWindowUiState {
         true
     }
 
+    pub(crate) fn playlist_eof_reached(&mut self) {
+        self.position_position = 0;
+        if self.app_state.playlist.eof_reached() {
+            self.app_state.player.mark_playing();
+        } else {
+            self.app_state.player.stop();
+        }
+    }
+
     pub(crate) fn click(&mut self, x: i32, y: i32) -> UiAction {
         self.press(x, y);
         self.release(x, y)
@@ -2004,7 +2017,17 @@ impl MainWindowUiState {
                 self.position_position = 0;
                 UiAction::None
             }
-            MainPushButton::Previous | MainPushButton::Next => {
+            MainPushButton::Previous => {
+                if self.app_state.playlist.previous() {
+                    self.app_state.player.mark_playing();
+                }
+                self.position_position = 0;
+                UiAction::None
+            }
+            MainPushButton::Next => {
+                if self.app_state.playlist.next() {
+                    self.app_state.player.mark_playing();
+                }
                 self.position_position = 0;
                 UiAction::None
             }

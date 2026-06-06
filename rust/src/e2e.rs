@@ -423,6 +423,12 @@ impl UiE2e {
         self
     }
 
+    pub fn playlist_eof_reached(&mut self) -> &mut Self {
+        self.state.playlist_eof_reached();
+        self.sync_windows();
+        self
+    }
+
     pub fn show_jump_time_prompt(&mut self) -> &mut Self {
         self.state.set_jump_time_visible(true);
         self.sync_windows();
@@ -686,6 +692,11 @@ impl UiE2e {
 
     pub fn assert_playlist_entry(&mut self, index: usize, expected: &str) -> &mut Self {
         assert_eq!(self.state.playlist_entry_uri(index), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_position(&mut self, expected: Option<usize>) -> &mut Self {
+        assert_eq!(self.state.playlist_position(), expected);
         self
     }
 

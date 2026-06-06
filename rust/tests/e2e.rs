@@ -194,6 +194,29 @@ fn drag_and_drop_on_playlist_appends_to_existing_entries() {
 }
 
 #[test]
+fn playlist_navigation_controls_update_position_and_eof_behavior() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist(["file:///tmp/one.ogg", "file:///tmp/two.ogg"])
+        .click(MainTarget::NEXT)
+        .assert_playlist_position(Some(0))
+        .assert_player_state(PlayerState::Playing)
+        .click(MainTarget::NEXT)
+        .assert_playlist_position(Some(1))
+        .click(MainTarget::NEXT)
+        .assert_playlist_position(Some(1))
+        .click(MainTarget::PREVIOUS)
+        .assert_playlist_position(Some(0))
+        .click(MainTarget::REPEAT)
+        .click(MainTarget::PREVIOUS)
+        .assert_playlist_position(Some(1))
+        .press_shortcut(Shortcut::ToggleNoAdvance)
+        .playlist_eof_reached()
+        .assert_playlist_position(Some(1))
+        .assert_player_state(PlayerState::Stopped);
+}
+
+#[test]
 fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

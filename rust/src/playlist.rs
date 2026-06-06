@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MEDIA_EXTENSIONS: &[&str] = &[
     "mp3", "ogg", "flac", "wav", "m4a", "aac", "opus", "wma", "mp4", "webm",
@@ -60,6 +61,7 @@ impl PlaylistEntry {
 pub struct Playlist {
     entries: Vec<PlaylistEntry>,
     position: Option<usize>,
+    shuffle_order: Vec<usize>,
     shuffle: bool,
     repeat: bool,
     no_advance: bool,
@@ -84,6 +86,7 @@ impl Playlist {
 
     pub fn add_uri(&mut self, uri: impl Into<String>) {
         self.entries.push(PlaylistEntry::new_uri(uri));
+        self.invalidate_shuffle_order();
     }
 
     pub fn add_path(&mut self, path: impl AsRef<Path>) {
@@ -180,6 +183,7 @@ impl Playlist {
 
         self.entries
             .push(PlaylistEntry::podcast(uri, title, feed, guid));
+        self.invalidate_shuffle_order();
     }
 
     pub fn add_spotify(
@@ -192,11 +196,13 @@ impl Playlist {
         entry.title = title.into();
         entry.length_ms = duration_ms;
         self.entries.push(entry);
+        self.invalidate_shuffle_order();
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
         self.position = None;
+        self.invalidate_shuffle_order();
     }
 
     pub fn position(&self) -> Option<usize> {
@@ -209,8 +215,56 @@ impl Playlist {
         }
     }
 
+    pub fn next(&mut self) -> bool {
+        if let Some(next) = self.next_position() {
+            self.position = Some(next);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn previous(&mut self) -> bool {
+        if let Some(prev) = self.previous_position() {
+            self.position = Some(prev);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn eof_reached(&mut self) -> bool {
+        if self.no_advance {
+            return false;
+        }
+        self.next()
+    }
+
+    pub fn skip_failed_current(&mut self) -> bool {
+        let current = self.position;
+        if !current.is_some_and(|pos| {
+            self.entries
+                .get(pos)
+                .is_some_and(|entry| entry.title.starts_with("failed: "))
+        }) {
+            return false;
+        }
+
+        if let Some(next) = self.next_position().filter(|next| Some(*next) != current) {
+            self.position = Some(next);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn set_shuffle(&mut self, enabled: bool) {
         self.shuffle = enabled;
+        if enabled {
+            self.generate_shuffle_order();
+        } else {
+            self.invalidate_shuffle_order();
+        }
     }
 
     pub fn shuffle(&self) -> bool {
@@ -231,6 +285,75 @@ impl Playlist {
 
     pub fn no_advance(&self) -> bool {
         self.no_advance
+    }
+
+    fn next_position(&mut self) -> Option<usize> {
+        let len = self.entries.len();
+        if len == 0 {
+            return None;
+        }
+
+        if self.shuffle {
+            if self.shuffle_order.len() != len {
+                self.generate_shuffle_order();
+            }
+            if self.shuffle_order.is_empty() {
+                return None;
+            }
+            let current = self.position;
+            if let Some(index) = current.and_then(|current| {
+                self.shuffle_order
+                    .iter()
+                    .position(|candidate| *candidate == current)
+            }) {
+                if let Some(next) = self.shuffle_order.get(index + 1) {
+                    return Some(*next);
+                }
+                if self.repeat {
+                    self.generate_shuffle_order();
+                    return self.shuffle_order.first().copied();
+                }
+                return None;
+            }
+            return self.shuffle_order.first().copied();
+        }
+
+        let next = self.position.map_or(0, |pos| pos + 1);
+        if next >= len {
+            self.repeat.then_some(0)
+        } else {
+            Some(next)
+        }
+    }
+
+    fn previous_position(&self) -> Option<usize> {
+        let len = self.entries.len();
+        if len == 0 {
+            return None;
+        }
+
+        match self.position {
+            Some(pos) if pos > 0 => Some(pos - 1),
+            Some(_) | None if self.repeat => Some(len - 1),
+            Some(_) | None => Some(0),
+        }
+    }
+
+    fn invalidate_shuffle_order(&mut self) {
+        self.shuffle_order.clear();
+    }
+
+    fn generate_shuffle_order(&mut self) {
+        self.shuffle_order = (0..self.entries.len()).collect();
+        let mut seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0x584d_4d53);
+        for i in (1..self.shuffle_order.len()).rev() {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let j = (seed as usize) % (i + 1);
+            self.shuffle_order.swap(i, j);
+        }
     }
 
     pub fn load_m3u_file(path: &Path) -> io::Result<Self> {
@@ -534,6 +657,70 @@ mod tests {
             playlist.entries()[0].filename,
             "https://example.test/old.mp3"
         );
+    }
+
+    #[test]
+    fn next_previous_and_repeat_match_playlist_boundaries() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///tmp/one.ogg");
+        playlist.add_uri("file:///tmp/two.ogg");
+
+        assert!(playlist.next());
+        assert_eq!(playlist.position(), Some(0));
+        assert!(playlist.next());
+        assert_eq!(playlist.position(), Some(1));
+        assert!(!playlist.next());
+        assert_eq!(playlist.position(), Some(1));
+        assert!(playlist.previous());
+        assert_eq!(playlist.position(), Some(0));
+        assert!(playlist.previous());
+        assert_eq!(playlist.position(), Some(0));
+
+        playlist.set_repeat(true);
+        assert!(playlist.previous());
+        assert_eq!(playlist.position(), Some(1));
+        assert!(playlist.next());
+        assert_eq!(playlist.position(), Some(0));
+    }
+
+    #[test]
+    fn eof_respects_no_advance_and_repeat() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///tmp/one.ogg");
+        playlist.add_uri("file:///tmp/two.ogg");
+        playlist.set_position(0);
+
+        playlist.set_no_advance(true);
+        assert!(!playlist.eof_reached());
+        assert_eq!(playlist.position(), Some(0));
+
+        playlist.set_no_advance(false);
+        assert!(playlist.eof_reached());
+        assert_eq!(playlist.position(), Some(1));
+        assert!(!playlist.eof_reached());
+        assert_eq!(playlist.position(), Some(1));
+
+        playlist.set_repeat(true);
+        assert!(playlist.eof_reached());
+        assert_eq!(playlist.position(), Some(0));
+    }
+
+    #[test]
+    fn failed_current_skip_advances_only_from_failed_entries() {
+        let mut playlist = Playlist::new();
+        playlist.add_podcast_entry(
+            "https://example.test/failed.mp3",
+            Some("failed: Episode".to_string()),
+            Some("https://example.test/feed.xml".to_string()),
+            Some("episode-1".to_string()),
+        );
+        playlist.add_uri("file:///tmp/next.ogg");
+        playlist.set_position(0);
+
+        assert!(playlist.skip_failed_current());
+        assert_eq!(playlist.position(), Some(1));
+        assert!(!playlist.skip_failed_current());
+        assert_eq!(playlist.position(), Some(1));
     }
 
     fn unique_temp_dir() -> PathBuf {
