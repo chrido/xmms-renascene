@@ -105,6 +105,7 @@ Completed so far:
 - Expanded config coverage to include equalizer, visualization, podcast, window, docking, and output-device state.
 - Added C-compatible `~/.config/xmms/config` keyfile load/save helpers.
 - Added Rust CLI startup flags for playlist/equalizer visibility, shading, docking/undocking, playlist startup size, reset, and skin path, with GTK smoke e2e coverage.
+- Added Rust session/command-line behavior for command-line application flags, `XMMS_NON_UNIQUE`, secondary activation options, session state save/restore, and fallback config/playlist persistence, with e2e coverage.
 
 ## Rust crate layout
 

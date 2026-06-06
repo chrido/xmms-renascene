@@ -19,6 +19,10 @@ use xmms_resuscitated::podcast::{
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
 };
+use xmms_resuscitated::session::{
+    application_launch_flags, apply_session_command, load_saved_state, parse_session_command,
+    restore_state_dict, save_fallback_state, save_session_state, save_state_dict, SessionState,
+};
 use xmms_resuscitated::skin::skin_browser_search_dirs;
 use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
@@ -74,11 +78,12 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
             "--gtk-smoke",
             "--playlist",
             "--equalizer",
-            "--shade",
-            "--playlist-shaded",
-            "--equalizer-shaded",
-            "--playlist-undocked",
-            "--equalizer-undocked",
+            "--shade-main",
+            "--shade-playlist",
+            "--shade-equalizer",
+            "--undock-playlist",
+            "--undock-equalizer",
+            "--playlist-menu-list",
             "--reset",
             "--skin",
             "/tmp/example.wsz",
@@ -88,6 +93,99 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
         .unwrap();
 
     assert!(status.success());
+}
+
+#[test]
+fn session_e2e_flags_secondary_activation_and_state_dict_match_c_contract() {
+    let mut state = xmms_resuscitated::app_state::AppState::default();
+    let flags = application_launch_flags(Some("1"));
+    assert!(flags.handles_command_line);
+    assert!(flags.non_unique);
+
+    let command = parse_session_command(
+        &[
+            "xmms-rs",
+            "--playlist-menu-add",
+            "--undock-playlist",
+            "--equalizer",
+            "--skin",
+            "/tmp/session-skin.wsz",
+            "https://example.test/session.mp3",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let result = apply_session_command(&mut state, &command).unwrap();
+
+    assert!(state.config.playlist_visible);
+    assert!(state.config.playlist_detached);
+    assert!(state.config.equalizer_visible);
+    assert_eq!(state.config.skin.as_deref(), Some("/tmp/session-skin.wsz"));
+    assert_eq!(
+        state.playlist.entries()[0].filename,
+        "https://example.test/session.mp3"
+    );
+    assert!(result.should_start_playback);
+
+    let saved = save_session_state(&state);
+    assert_eq!(
+        save_state_dict(&saved),
+        std::collections::BTreeMap::from([
+            ("equalizer-detached", false),
+            ("equalizer-visible", true),
+            ("playlist-detached", true),
+            ("playlist-visible", true),
+        ])
+    );
+
+    let mut restored = xmms_resuscitated::app_state::AppState::default();
+    restore_state_dict(
+        &mut restored,
+        &std::collections::BTreeMap::from([
+            ("playlist-visible".to_string(), true),
+            ("playlist-detached".to_string(), true),
+            ("equalizer-visible".to_string(), true),
+            ("equalizer-detached".to_string(), true),
+        ]),
+        false,
+    );
+    assert_eq!(
+        save_session_state(&restored),
+        SessionState {
+            playlist_visible: true,
+            playlist_detached: true,
+            equalizer_visible: true,
+            equalizer_detached: true,
+        }
+    );
+}
+
+#[test]
+fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
+    let root = unique_temp_dir("xmms-rs-session-save");
+    let config_path = root.join("config");
+    let playlist_path = root.join("playlist.m3u");
+    let mut state = xmms_resuscitated::app_state::AppState::default();
+    state.config.playlist_visible = true;
+    state.config.equalizer_visible = true;
+    state.playlist.add_uri("https://example.test/fallback.mp3");
+
+    save_fallback_state(&mut state, &config_path, &playlist_path).unwrap();
+    let loaded = load_saved_state(&config_path, &playlist_path, false).unwrap();
+    assert!(loaded.config.playlist_visible);
+    assert!(loaded.config.equalizer_visible);
+    assert_eq!(
+        loaded.playlist.entries()[0].filename,
+        "https://example.test/fallback.mp3"
+    );
+
+    let reset = load_saved_state(&config_path, &playlist_path, true).unwrap();
+    assert!(!reset.config.playlist_visible);
+    assert!(reset.playlist.is_empty());
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

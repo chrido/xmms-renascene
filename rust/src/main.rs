@@ -43,26 +43,47 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             options.show_playlist = true;
         } else if arg == "--equalizer" {
             options.show_equalizer = true;
-        } else if arg == "--shade" || arg == "--main-shaded" {
+        } else if arg == "--shade" || arg == "--main-shaded" || arg == "--shade-main" {
             options.main_shaded = true;
+        } else if arg == "--unshade-main" {
+            options.main_shaded = false;
         } else if arg == "--playlist-shaded" {
             options.show_playlist = true;
             options.playlist_shaded = true;
+        } else if arg == "--shade-playlist" {
+            options.show_playlist = true;
+            options.playlist_shaded = true;
+        } else if arg == "--unshade-playlist" {
+            options.playlist_shaded = false;
         } else if arg == "--equalizer-shaded" {
             options.show_equalizer = true;
             options.equalizer_shaded = true;
-        } else if arg == "--playlist-undocked" {
+        } else if arg == "--shade-equalizer" {
+            options.show_equalizer = true;
+            options.equalizer_shaded = true;
+        } else if arg == "--unshade-equalizer" {
+            options.equalizer_shaded = false;
+        } else if arg == "--playlist-undocked" || arg == "--undock-playlist" {
             options.show_playlist = true;
             options.playlist_detached = true;
-        } else if arg == "--playlist-docked" {
+        } else if arg == "--playlist-docked" || arg == "--dock-playlist" {
             options.show_playlist = true;
             options.playlist_detached = false;
-        } else if arg == "--equalizer-undocked" {
+        } else if arg == "--equalizer-undocked" || arg == "--undock-equalizer" {
             options.show_equalizer = true;
             options.equalizer_detached = true;
-        } else if arg == "--equalizer-docked" {
+        } else if arg == "--equalizer-docked" || arg == "--dock-equalizer" {
             options.show_equalizer = true;
             options.equalizer_detached = false;
+        } else if matches!(
+            arg.as_str(),
+            "--playlist-menu-add"
+                | "--playlist-menu-remove"
+                | "--playlist-menu-select"
+                | "--playlist-menu-misc"
+                | "--playlist-menu-list"
+        ) {
+            options.show_playlist = true;
         } else if arg == "--reset" {
             options.reset = true;
         } else if let Some(value) = arg.strip_prefix("--skin=") {

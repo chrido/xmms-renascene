@@ -69,10 +69,20 @@ enum PreviewMode {
 }
 
 fn run_preview_application(mode: PreviewMode, options: PreviewOptions) {
+    let mut flags = gtk::gio::ApplicationFlags::HANDLES_COMMAND_LINE;
+    if std::env::var_os("XMMS_NON_UNIQUE").is_some() {
+        flags |= gtk::gio::ApplicationFlags::NON_UNIQUE;
+    }
     let app = gtk::Application::builder()
         .application_id("org.xmms.Resuscitated.RustPreview")
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .flags(flags)
+        .register_session(true)
         .build();
+
+    app.connect_command_line(|app, _cmdline| {
+        app.activate();
+        gtk::glib::ExitCode::SUCCESS
+    });
 
     app.connect_activate(move |app| {
         if let Err(err) = build_preview_window(app, options.clone()) {

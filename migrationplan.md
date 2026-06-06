@@ -183,13 +183,13 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Skip failed current podcast item when needed.
   - [x] Wire live HTTP fetch/download execution.
 
-- [ ] Port session and command-line behavior.
-  - [ ] Preserve `G_APPLICATION_HANDLES_COMMAND_LINE`.
-  - [ ] Preserve `XMMS_NON_UNIQUE`.
+- [x] Port session and command-line behavior.
+  - [x] Preserve `G_APPLICATION_HANDLES_COMMAND_LINE`.
+  - [x] Preserve `XMMS_NON_UNIQUE`.
   - [x] Port `--playlist`, `--equalizer`, docking, undocking, shading, `--reset`, `--skin`, and playlist menu options.
-  - [ ] Port secondary activation behavior.
-  - [ ] Port GTK session save/restore where available.
-  - [ ] Preserve fallback save on shutdown/query-end.
+  - [x] Port secondary activation behavior.
+  - [x] Port GTK session save/restore where available.
+  - [x] Preserve fallback save on shutdown/query-end.
 
 - [ ] Port installation and packaging assets.
   - [ ] Update README build/run instructions.
