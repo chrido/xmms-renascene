@@ -276,6 +276,28 @@ impl Playlist {
         self.refresh_position(current.as_ref());
     }
 
+    pub fn sort_selected_by(&mut self, key: PlaylistSortKey) {
+        let current = self
+            .position
+            .and_then(|position| self.entries.get(position).cloned());
+        let indices: Vec<usize> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| entry.selected.then_some(index))
+            .collect();
+        let mut selected: Vec<PlaylistEntry> = indices
+            .iter()
+            .filter_map(|index| self.entries.get(*index).cloned())
+            .collect();
+
+        selected.sort_by(|left, right| compare_entries(left, right, key));
+        for (index, entry) in indices.into_iter().zip(selected) {
+            self.entries[index] = entry;
+        }
+        self.refresh_position(current.as_ref());
+    }
+
     pub fn set_shuffle(&mut self, enabled: bool) {
         self.shuffle = enabled;
         if enabled {
@@ -869,6 +891,34 @@ mod tests {
         assert_eq!(playlist.entries()[1].filename, path_to_file_uri(&newer));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sort_selected_only_reorders_selected_entries_at_selected_indices() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/4-zulu.ogg");
+        playlist.add_uri("file:///music/3-charlie.ogg");
+        playlist.add_uri("file:///music/2-bravo.ogg");
+        playlist.add_uri("file:///music/1-alpha.ogg");
+        playlist.entries[0].selected = true;
+        playlist.entries[2].selected = true;
+        playlist.entries[3].selected = true;
+        playlist.set_position(0);
+
+        playlist.sort_selected_by(PlaylistSortKey::Filename);
+
+        assert_eq!(playlist.entries()[0].filename, "file:///music/1-alpha.ogg");
+        assert_eq!(
+            playlist.entries()[1].filename,
+            "file:///music/3-charlie.ogg"
+        );
+        assert_eq!(playlist.entries()[2].filename, "file:///music/2-bravo.ogg");
+        assert_eq!(playlist.entries()[3].filename, "file:///music/4-zulu.ogg");
+        assert!(playlist.entries()[0].selected);
+        assert!(!playlist.entries()[1].selected);
+        assert!(playlist.entries()[2].selected);
+        assert!(playlist.entries()[3].selected);
+        assert_eq!(playlist.position(), Some(3));
     }
 
     fn unique_temp_dir() -> PathBuf {
