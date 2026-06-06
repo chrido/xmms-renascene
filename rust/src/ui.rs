@@ -3,6 +3,8 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 use std::time::Duration;
 
 use gtk::prelude::*;
@@ -2979,10 +2981,11 @@ pub(crate) enum UiAction {
     OpenFileDialog,
 }
 
-#[derive(Clone)]
 pub(crate) struct MainWindowUiState {
     app_state: AppState,
     playback_backend: Option<Rc<RefCell<GStreamerBackend>>>,
+    duration_index_sender: Sender<DurationIndexResult>,
+    duration_index_receiver: Receiver<DurationIndexResult>,
     playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
@@ -3075,9 +3078,12 @@ impl Default for MainWindowUiState {
 
 impl MainWindowUiState {
     pub(crate) fn from_app_state(app_state: AppState) -> Self {
+        let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let mut state = Self {
             app_state,
             playback_backend: None,
+            duration_index_sender,
+            duration_index_receiver,
             playback_requests: Vec::new(),
             shaded: false,
             menu_visible: false,
@@ -3979,7 +3985,7 @@ impl MainWindowUiState {
         self.playlist_scroll_offset = 0;
         self.playlist_search_active = false;
         self.playlist_search_query.clear();
-        self.refresh_missing_local_playlist_durations();
+        self.schedule_missing_local_playlist_durations();
         Ok(())
     }
 
@@ -4208,36 +4214,53 @@ impl MainWindowUiState {
             });
     }
 
-    fn refresh_missing_local_playlist_durations(&mut self) {
-        let has_local_file = self
+    pub(crate) fn queue_playlist_duration_result_for_e2e(
+        &mut self,
+        index: usize,
+        length_ms: i64,
+        title: Option<String>,
+    ) {
+        let Some(uri) = self.playlist_entry_uri(index).map(ToString::to_string) else {
+            return;
+        };
+        let _ = self.duration_index_sender.send(DurationIndexResult {
+            index,
+            uri,
+            length_ms,
+            title,
+        });
+    }
+
+    fn schedule_missing_local_playlist_durations(&mut self) {
+        let items = self
             .app_state
             .playlist
             .missing_duration_items()
-            .iter()
-            .any(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()));
-        if !has_local_file {
+            .into_iter()
+            .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
+            .collect::<Vec<_>>();
+        if items.is_empty() {
             return;
         }
 
-        if let Err(err) = gstreamer::init() {
-            eprintln!("xmms-rs: failed to initialize GStreamer for playlist durations: {err}");
-            return;
-        }
-        let discoverer =
-            match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5)) {
-                Ok(discoverer) => discoverer,
-                Err(err) => {
-                    eprintln!("xmms-rs: failed to create playlist duration discoverer: {err}");
-                    return;
-                }
-            };
+        let sender = self.duration_index_sender.clone();
+        thread::spawn(move || {
+            if let Err(err) = gstreamer::init() {
+                eprintln!("xmms-rs: failed to initialize GStreamer for playlist durations: {err}");
+                return;
+            }
+            let discoverer =
+                match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5)) {
+                    Ok(discoverer) => discoverer,
+                    Err(err) => {
+                        eprintln!("xmms-rs: failed to create playlist duration discoverer: {err}");
+                        return;
+                    }
+                };
 
-        let result = self
-            .app_state
-            .playlist
-            .index_missing_durations_with(|item| {
+            for item in items {
                 let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists()) else {
-                    return Ok::<_, std::convert::Infallible>(None);
+                    continue;
                 };
                 let info = match discoverer.discover_uri(&item.uri) {
                     Ok(info) => info,
@@ -4246,21 +4269,34 @@ impl MainWindowUiState {
                             "xmms-rs: failed to discover playlist item {}: {err}",
                             path.display()
                         );
-                        return Ok(None);
+                        continue;
                     }
                 };
                 let length_ms = info
                     .duration()
                     .map(|duration| duration.mseconds() as i64)
                     .unwrap_or(-1);
-                Ok(Some(DurationIndexResult {
-                    index: item.index,
-                    uri: item.uri.clone(),
-                    length_ms,
-                    title: None,
-                }))
-            });
-        let _ = result;
+                if sender
+                    .send(DurationIndexResult {
+                        index: item.index,
+                        uri: item.uri,
+                        length_ms,
+                        title: None,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+    }
+
+    fn poll_duration_index_results(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(result) = self.duration_index_receiver.try_recv() {
+            changed |= self.app_state.playlist.apply_duration_index_result(result);
+        }
+        changed
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {
@@ -4271,7 +4307,7 @@ impl MainWindowUiState {
         match self.app_state.playlist.add_location(text) {
             Ok(added) => {
                 if added > 0 {
-                    self.refresh_missing_local_playlist_durations();
+                    self.schedule_missing_local_playlist_durations();
                     if self.app_state.playlist.position().is_none() {
                         self.app_state.playlist.set_position(0);
                     }
@@ -4311,7 +4347,7 @@ impl MainWindowUiState {
             self.app_state.playlist.set_position(0);
         }
         if accepted {
-            self.refresh_missing_local_playlist_durations();
+            self.schedule_missing_local_playlist_durations();
         }
         if accepted && start_playback {
             self.start_current_playlist_playback();
@@ -4337,8 +4373,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
-        let width = width.max(PLAYLIST_MIN_WIDTH);
-        let height = height.max(PLAYLIST_MIN_HEIGHT);
+        let (width, height) = snap_playlist_size(width, height);
         let changed = self.playlist_width != width || self.playlist_height != height;
         self.playlist_width = width;
         self.playlist_height = height;
@@ -5339,10 +5374,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
+        let duration_changed = self.poll_duration_index_results();
         self.poll_playback_backend();
         if self.app_state.player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
-            return false;
+            return duration_changed;
         }
 
         if self
@@ -5846,6 +5882,14 @@ fn position_to_balance(position: i32) -> i32 {
 fn format_duration(milliseconds: i64) -> String {
     let seconds = (milliseconds.max(0) / 1000) as i32;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn snap_playlist_size(width: i32, height: i32) -> (i32, i32) {
+    let width_blocks = (width - PLAYLIST_MIN_WIDTH) / 25;
+    let width = (width_blocks * 25 + PLAYLIST_MIN_WIDTH).max(PLAYLIST_MIN_WIDTH);
+    let height_blocks = (height - 58) / 29;
+    let height = (height_blocks * 29 + 58).max(PLAYLIST_MIN_HEIGHT);
+    (width, height)
 }
 
 fn format_playlist_footer_duration(milliseconds: i64, more: bool) -> String {

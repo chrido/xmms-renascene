@@ -271,7 +271,7 @@ impl MainTarget {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct UiE2e {
     main_visible: bool,
     main_minimized: bool,
@@ -850,8 +850,23 @@ impl UiE2e {
         self
     }
 
+    pub fn queue_playlist_duration_result(
+        &mut self,
+        index: usize,
+        length_ms: i64,
+        title: Option<&str>,
+    ) -> &mut Self {
+        self.state.queue_playlist_duration_result_for_e2e(
+            index,
+            length_ms,
+            title.map(ToString::to_string),
+        );
+        self
+    }
+
     pub fn update_timer_tick(&mut self, elapsed_ms: u32) -> &mut Self {
         self.state.update_timer_tick(elapsed_ms);
+        self.sync_windows();
         self
     }
 

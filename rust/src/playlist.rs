@@ -466,12 +466,20 @@ impl Playlist {
     }
 
     pub fn apply_duration_index_result(&mut self, result: DurationIndexResult) -> bool {
-        let Some(entry) = self.entries.get_mut(result.index) else {
+        let entry = if self
+            .entries
+            .get(result.index)
+            .is_some_and(|entry| entry.filename == result.uri)
+        {
+            self.entries.get_mut(result.index)
+        } else {
+            self.entries
+                .iter_mut()
+                .find(|entry| entry.filename == result.uri)
+        };
+        let Some(entry) = entry else {
             return false;
         };
-        if entry.filename != result.uri {
-            return false;
-        }
 
         let mut changed = false;
         if result.length_ms > 0 && entry.length_ms != result.length_ms {
@@ -1299,6 +1307,17 @@ mod tests {
         }));
         assert_eq!(playlist.entries()[0].length_ms, 12_000);
         assert_eq!(playlist.entries()[0].title, "Artist - Title");
+
+        playlist.add_uri("file:///music/second.ogg");
+        playlist.move_entry(0, 1);
+        assert!(playlist.apply_duration_index_result(DurationIndexResult {
+            index: 0,
+            uri: "file:///music/song.ogg".to_string(),
+            length_ms: 24_000,
+            title: Some("Moved".to_string()),
+        }));
+        assert_eq!(playlist.entries()[1].length_ms, 24_000);
+        assert_eq!(playlist.entries()[1].title, "Moved");
     }
 
     #[test]

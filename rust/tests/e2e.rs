@@ -1005,6 +1005,21 @@ fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
 }
 
 #[test]
+fn playlist_duration_results_are_applied_asynchronously_from_timer() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist(["file:///music/async-a.ogg", "file:///music/async-b.ogg"])
+        .assert_playlist_length_ms(0, -1)
+        .assert_playlist_length_ms(1, -1)
+        .queue_playlist_duration_result(1, 42_000, Some("Async B"))
+        .assert_playlist_length_ms(1, -1)
+        .update_timer_tick(100)
+        .assert_playlist_length_ms(0, -1)
+        .assert_playlist_length_ms(1, 42_000)
+        .assert_playlist_title(1, "Async B");
+}
+
+#[test]
 fn update_timer_advances_position_while_playing_only() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
@@ -2165,7 +2180,9 @@ fn playlist_can_resize_from_default_dimensions() {
 
     app.assert_playlist_size(275, 232)
         .resize_playlist(325, 280)
-        .assert_playlist_size(325, 280)
+        .assert_playlist_size(325, 261)
+        .resize_playlist(326, 280)
+        .assert_playlist_size(325, 261)
         .resize_playlist(100, 80)
         .assert_playlist_size(275, 116);
 }
@@ -2176,7 +2193,7 @@ fn playlist_startup_size_opens_playlist_at_requested_dimensions() {
 
     app.start_playlist_size(325, 280)
         .assert_window_visible(Window::Playlist)
-        .assert_playlist_size(325, 280);
+        .assert_playlist_size(325, 261);
 }
 
 #[test]
