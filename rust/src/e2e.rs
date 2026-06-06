@@ -1217,11 +1217,19 @@ impl UiE2e {
 
     pub fn set_preference_volume(&mut self, volume: i32) -> &mut Self {
         self.state.set_preference_volume(volume);
+        self.sync_windows();
         self
     }
 
     pub fn set_preference_balance(&mut self, balance: i32) -> &mut Self {
         self.state.set_preference_balance(balance);
+        self.sync_windows();
+        self
+    }
+
+    pub fn set_preference_scale_factor(&mut self, scale: f64) -> &mut Self {
+        self.state.set_preference_scale_factor(scale);
+        self.sync_windows();
         self
     }
 
@@ -1826,6 +1834,11 @@ impl UiE2e {
 
     pub fn assert_balance(&mut self, expected: i32) -> &mut Self {
         assert_eq!(self.state.balance(), expected);
+        self
+    }
+
+    pub fn assert_scale_factor(&mut self, expected: f64) -> &mut Self {
+        assert!((self.state.scale_factor() - expected).abs() < 0.001);
         self
     }
 
