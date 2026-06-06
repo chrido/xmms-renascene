@@ -275,6 +275,32 @@ impl UiE2e {
         self
     }
 
+    pub fn start_playlist_search(&mut self) -> &mut Self {
+        self.state.start_playlist_search();
+        self.sync_windows();
+        self
+    }
+
+    pub fn type_playlist_search(&mut self, text: &str) -> &mut Self {
+        for ch in text.chars() {
+            self.state.push_playlist_search_char(ch);
+        }
+        self.sync_windows();
+        self
+    }
+
+    pub fn backspace_playlist_search(&mut self) -> &mut Self {
+        self.state.pop_playlist_search_char();
+        self.sync_windows();
+        self
+    }
+
+    pub fn stop_playlist_search(&mut self) -> &mut Self {
+        self.state.stop_playlist_search();
+        self.sync_windows();
+        self
+    }
+
     pub fn hover_playlist_menu_item(&mut self, item: usize) -> &mut Self {
         let (x, y0) = self.playlist_menu_anchor();
         let y = 174 + item as i32 * 18 + 8;
@@ -676,6 +702,16 @@ impl UiE2e {
 
     pub fn assert_playlist_scroll_offset(&mut self, expected: usize) -> &mut Self {
         assert_eq!(self.state.playlist_scroll_offset(), expected);
+        self
+    }
+
+    pub fn assert_playlist_search_active(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.playlist_search_active(), expected);
+        self
+    }
+
+    pub fn assert_playlist_search_query(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.playlist_search_query(), expected);
         self
     }
 

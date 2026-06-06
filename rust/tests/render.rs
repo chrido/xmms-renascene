@@ -90,6 +90,7 @@ fn renders_playlist_rows_with_selected_background() {
             ],
             scroll_offset: 0,
             scrollbar_dragging: false,
+            search_query: Some("Beta".to_string()),
             show_numbers: true,
             width: PLAYLIST_DEFAULT_WIDTH,
             height: PLAYLIST_DEFAULT_HEIGHT,

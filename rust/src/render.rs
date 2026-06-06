@@ -67,6 +67,7 @@ pub struct PlaylistRowsRenderState {
     pub entries: Vec<PlaylistRowRenderEntry>,
     pub scroll_offset: usize,
     pub scrollbar_dragging: bool,
+    pub search_query: Option<String>,
     pub show_numbers: bool,
     pub width: i32,
     pub height: i32,
@@ -1287,7 +1288,53 @@ pub fn render_playlist_rows(
         }
     }
 
+    if let Some(query) = state.search_query.as_ref() {
+        draw_playlist_search(cr, colors, query, width, height)?;
+    }
+
     Ok(true)
+}
+
+fn draw_playlist_search(
+    cr: &Context,
+    colors: crate::skin::PlaylistColors,
+    query: &str,
+    width: i32,
+    height: i32,
+) -> Result<(), RenderError> {
+    let x = 10;
+    let y = height - 48;
+    let w = width - 20;
+    let h = 14;
+
+    set_rgb(cr, colors.normal_bg);
+    cr.rectangle(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+    cr.fill()?;
+
+    set_rgb(cr, colors.selected_bg);
+    cr.rectangle(
+        f64::from(x) + 0.5,
+        f64::from(y) + 0.5,
+        f64::from(w - 1),
+        f64::from(h - 1),
+    );
+    cr.stroke()?;
+
+    cr.select_font_face(
+        "Helvetica",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Normal,
+    );
+    cr.set_font_size(8.0);
+    set_rgb(cr, colors.normal);
+    let display = ellipsize_text(cr, format!("/{query}"), w - 6)?;
+    let extents = cr.text_extents(&display)?;
+    cr.move_to(
+        f64::from(x + 3),
+        f64::from(y) + (f64::from(h) - extents.height()) / 2.0 - extents.y_bearing(),
+    );
+    cr.show_text(&display)?;
+    Ok(())
 }
 
 fn playlist_scrollbar_geometry(

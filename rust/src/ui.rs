@@ -663,6 +663,7 @@ fn build_playlist_window(
     let drawing_area = gtk::DrawingArea::builder()
         .content_width(playlist_width * DEFAULT_SCALE)
         .content_height(playlist_height * DEFAULT_SCALE)
+        .focusable(true)
         .build();
     let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
@@ -705,6 +706,9 @@ fn build_playlist_window(
                 entries: rows,
                 scroll_offset: state.playlist_scroll_offset,
                 scrollbar_dragging: state.playlist_scrollbar_dragging,
+                search_query: state
+                    .playlist_search_active
+                    .then(|| state.playlist_search_query.clone()),
                 show_numbers: state.app_state.config.show_numbers_in_pl,
                 width: playlist_width,
                 height: playlist_height,
@@ -735,6 +739,7 @@ fn build_playlist_window(
 
     add_file_drop_controller(&drawing_area, Rc::clone(main_state), false, false);
     add_playlist_context_menu(&drawing_area, Rc::clone(main_state), main_area.clone());
+    add_playlist_key_controller(&drawing_area, Rc::clone(main_state));
 
     {
         let main_state = Rc::clone(main_state);
@@ -761,6 +766,73 @@ fn build_playlist_window(
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
+}
+
+fn add_playlist_key_controller(
+    area: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
+    let key_controller = gtk::EventControllerKey::new();
+    {
+        let area = area.clone();
+        key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+            if handle_playlist_key_pressed(&main_state, key, state) {
+                area.queue_draw();
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+    }
+    area.add_controller(key_controller);
+}
+
+fn handle_playlist_key_pressed(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    {
+        let mut ui_state = main_state.borrow_mut();
+        if ui_state.playlist_search_active {
+            if key == gtk::gdk::Key::Escape
+                || key == gtk::gdk::Key::Return
+                || key == gtk::gdk::Key::KP_Enter
+            {
+                ui_state.stop_playlist_search();
+                return true;
+            }
+            if key == gtk::gdk::Key::BackSpace {
+                ui_state.pop_playlist_search_char();
+                return true;
+            }
+            if state.intersects(
+                gtk::gdk::ModifierType::CONTROL_MASK
+                    | gtk::gdk::ModifierType::ALT_MASK
+                    | gtk::gdk::ModifierType::META_MASK,
+            ) {
+                return true;
+            }
+            if let Some(ch) = key.to_unicode().filter(|ch| !ch.is_control()) {
+                ui_state.push_playlist_search_char(ch);
+                return true;
+            }
+            return true;
+        }
+    }
+
+    if state.intersects(
+        gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return false;
+    }
+    if key == gtk::gdk::Key::slash {
+        main_state.borrow_mut().start_playlist_search();
+        return true;
+    }
+    false
 }
 
 fn add_playlist_context_menu(
@@ -810,8 +882,10 @@ fn add_playlist_context_menu(
     right_click.set_button(3);
     right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
+        let area = area.clone();
         let popover = popover.clone();
         right_click.connect_pressed(move |_gesture, _n_press, x, y| {
+            area.grab_focus();
             popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
             popover.popup();
         });
@@ -1139,6 +1213,7 @@ fn add_panel_click_controller(
         let window = window.clone();
         let main_state = Rc::clone(&main_state);
         click.connect_pressed(move |gesture, _n_press, x, y| {
+            area.grab_focus();
             let (base_x, base_y) =
                 panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
             if !main_state
@@ -1469,6 +1544,8 @@ pub(crate) struct MainWindowUiState {
     playlist_scroll_offset: usize,
     playlist_scrollbar_dragging: bool,
     playlist_scrollbar_drag_offset: i32,
+    playlist_search_active: bool,
+    playlist_search_query: String,
     preferences_visible: bool,
     open_location_visible: bool,
     jump_time_visible: bool,
@@ -1517,6 +1594,8 @@ impl MainWindowUiState {
             playlist_scroll_offset: 0,
             playlist_scrollbar_dragging: false,
             playlist_scrollbar_drag_offset: 0,
+            playlist_search_active: false,
+            playlist_search_query: String::new(),
             preferences_visible: false,
             open_location_visible: false,
             jump_time_visible: false,
@@ -1614,6 +1693,14 @@ impl MainWindowUiState {
 
     pub(crate) fn playlist_scroll_offset(&self) -> usize {
         self.playlist_scroll_offset
+    }
+
+    pub(crate) fn playlist_search_active(&self) -> bool {
+        self.playlist_search_active
+    }
+
+    pub(crate) fn playlist_search_query(&self) -> &str {
+        &self.playlist_search_query
     }
 
     pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
@@ -1749,6 +1836,35 @@ impl MainWindowUiState {
         if let Some(entry) = self.app_state.playlist.entries_mut().get_mut(index) {
             entry.selected = selected;
         }
+    }
+
+    pub(crate) fn start_playlist_search(&mut self) {
+        self.playlist_menu = None;
+        self.playlist_menu_hover = None;
+        self.playlist_menu_pressed = false;
+        self.playlist_search_active = true;
+        self.playlist_search_query.clear();
+    }
+
+    pub(crate) fn stop_playlist_search(&mut self) {
+        self.playlist_search_active = false;
+        self.playlist_search_query.clear();
+    }
+
+    pub(crate) fn push_playlist_search_char(&mut self, ch: char) {
+        if !self.playlist_search_active || ch.is_control() {
+            return;
+        }
+        self.playlist_search_query.push(ch);
+        self.update_playlist_search_match();
+    }
+
+    pub(crate) fn pop_playlist_search_char(&mut self) {
+        if !self.playlist_search_active {
+            return;
+        }
+        self.playlist_search_query.pop();
+        self.update_playlist_search_match();
     }
 
     pub(crate) fn sort_playlist_by(&mut self, key: PlaylistSortKey) {
@@ -2155,6 +2271,65 @@ impl MainWindowUiState {
             self.clamp_playlist_scroll_offset();
         }
         changed
+    }
+
+    fn update_playlist_search_match(&mut self) {
+        if self.playlist_search_query.is_empty() {
+            return;
+        }
+        let total = self.app_state.playlist.len();
+        if total == 0 {
+            return;
+        }
+        let query = self.playlist_search_query.to_lowercase();
+        let start = self
+            .selected_playlist_index()
+            .or_else(|| self.app_state.playlist.position())
+            .unwrap_or(0)
+            .min(total);
+
+        for index in (start..total).chain(0..start) {
+            let Some(entry) = self.app_state.playlist.entries().get(index) else {
+                continue;
+            };
+            let text = if entry.title.is_empty() {
+                &entry.filename
+            } else {
+                &entry.title
+            };
+            if text.to_lowercase().contains(&query) {
+                self.select_single_playlist_entry(index);
+                self.scroll_playlist_entry_into_view(index);
+                return;
+            }
+        }
+    }
+
+    fn selected_playlist_index(&self) -> Option<usize> {
+        self.app_state
+            .playlist
+            .entries()
+            .iter()
+            .position(|entry| entry.selected)
+    }
+
+    fn select_single_playlist_entry(&mut self, index: usize) {
+        for (entry_index, entry) in self.app_state.playlist.entries_mut().iter_mut().enumerate() {
+            entry.selected = entry_index == index;
+        }
+    }
+
+    fn scroll_playlist_entry_into_view(&mut self, index: usize) {
+        let visible = self.playlist_visible_entries();
+        if visible == 0 {
+            return;
+        }
+        if index < self.playlist_scroll_offset {
+            self.playlist_scroll_offset = index;
+        } else if index >= self.playlist_scroll_offset + visible {
+            self.playlist_scroll_offset = index + 1 - visible;
+        }
+        self.clamp_playlist_scroll_offset();
     }
 
     fn playlist_visible_entries(&self) -> usize {

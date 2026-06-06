@@ -748,6 +748,35 @@ fn playlist_context_physical_delete_removes_selected_local_files() {
 }
 
 #[test]
+fn playlist_search_selects_matching_rows_and_tracks_query_editing() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..20 {
+        let name = if index == 18 {
+            "target-track"
+        } else {
+            "ordinary-track"
+        };
+        app.accept_open_location(&format!("file:///tmp/{index:02}-{name}.mp3"));
+    }
+
+    app.start_playlist_search()
+        .assert_playlist_search_active(true)
+        .assert_playlist_search_query("")
+        .type_playlist_search("TARGET")
+        .assert_playlist_search_query("TARGET")
+        .assert_playlist_selected(18, true)
+        .assert_playlist_scroll_offset(4)
+        .assert_visible_playlist_entry(14, "file:///tmp/18-target-track.mp3")
+        .backspace_playlist_search()
+        .assert_playlist_search_query("TARGE")
+        .assert_playlist_selected(18, true)
+        .stop_playlist_search()
+        .assert_playlist_search_active(false)
+        .assert_playlist_search_query("");
+}
+
+#[test]
 fn playlist_can_resize_from_default_dimensions() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
