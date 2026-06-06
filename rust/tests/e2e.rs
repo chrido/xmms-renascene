@@ -8,9 +8,11 @@ use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState
 use xmms_resuscitated::playlist::{Playlist, PlaylistSortKey};
 use xmms_resuscitated::podcast::{
     add_feed_to_playlist, cache_file_is_fresh, cache_is_fresh, cache_path_for_url,
-    classify_url_response, cleanup_cache_dir, discover_cached_duration_ms, parse_feed,
-    prepare_playback_uri, refresh_interval_seconds, retry_delay_seconds, stale_cache_files,
-    status_should_retry, write_cache_file, PodcastCacheEntry, PodcastUrlKind,
+    classify_url_response, cleanup_cache_dir, discover_cached_duration_ms, download_with_retries,
+    handle_url_response, mark_cache_failed_and_skip_current, parse_feed, prepare_playback_uri,
+    refresh_interval_seconds, retry_delay_seconds, stale_cache_files, status_should_retry,
+    write_cache_file, PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse,
+    PodcastResponseAction, PodcastUrlKind,
 };
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
@@ -2002,6 +2004,91 @@ fn podcast_e2e_writes_cache_file_and_discovers_cached_duration() {
     assert!(discover_cached_duration_ms(&path).unwrap().unwrap() >= 1_000);
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn podcast_e2e_handles_fetched_feed_or_direct_stream_response() {
+    let mut playlist = Playlist::new();
+    let action = handle_url_response(
+        &mut playlist,
+        "https://example.test/feed.xml",
+        &PodcastHttpResponse {
+            status: 200,
+            content_type: Some("application/rss+xml".to_string()),
+            has_icy_name: false,
+            retry_after: None,
+            body: br#"<rss><channel><item><title>Fetched</title><enclosure url="fetched.mp3"/></item></channel></rss>"#.to_vec(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(action, PodcastResponseAction::AddedFeedEpisodes(1));
+    assert_eq!(playlist.entries()[0].title, "Fetched");
+
+    let action = handle_url_response(
+        &mut playlist,
+        "https://example.test/live.ogg",
+        &PodcastHttpResponse {
+            status: 200,
+            content_type: Some("audio/ogg".to_string()),
+            has_icy_name: false,
+            retry_after: None,
+            body: Vec::new(),
+        },
+    )
+    .unwrap();
+    assert_eq!(action, PodcastResponseAction::AddedDirectStream);
+    assert_eq!(
+        playlist.entries()[1].filename,
+        "https://example.test/live.ogg"
+    );
+}
+
+#[test]
+fn podcast_e2e_download_retry_loop_writes_cache_after_retry() {
+    let root = unique_temp_dir("xmms-rs-podcast-retry");
+    fs::create_dir_all(&root).unwrap();
+    let outcome = download_with_retries(&root, "https://example.test/retry.mp3", |attempt| {
+        Ok(if attempt < 2 {
+            PodcastDownloadAttempt {
+                status: 429,
+                retry_after: Some((attempt + 1).to_string()),
+                body: Vec::new(),
+            }
+        } else {
+            PodcastDownloadAttempt {
+                status: 200,
+                retry_after: None,
+                body: b"downloaded".to_vec(),
+            }
+        })
+    })
+    .unwrap();
+
+    assert_eq!(outcome.attempts, 3);
+    assert_eq!(outcome.retry_delays, vec![1, 2]);
+    assert_eq!(fs::read(outcome.cache_path).unwrap(), b"downloaded");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn podcast_e2e_failed_current_podcast_item_is_skipped() {
+    let mut playlist = Playlist::new();
+    playlist.add_podcast_entry(
+        "https://example.test/fail.mp3",
+        Some("Needs cache".to_string()),
+        Some("https://example.test/feed.xml".to_string()),
+        Some("guid".to_string()),
+    );
+    playlist.add_uri("file:///tmp/after-failure.mp3");
+    playlist.set_position(0);
+
+    assert!(mark_cache_failed_and_skip_current(
+        &mut playlist,
+        "https://example.test/fail.mp3"
+    ));
+    assert_eq!(playlist.position(), Some(1));
+    assert_eq!(playlist.entries()[0].title, "failed: Needs cache");
 }
 
 fn silent_wav_bytes() -> Vec<u8> {

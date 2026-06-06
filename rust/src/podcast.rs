@@ -32,6 +32,51 @@ pub struct PodcastCacheEntry {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodcastHttpResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub has_icy_name: bool,
+    pub retry_after: Option<String>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PodcastResponseAction {
+    AddedFeedEpisodes(usize),
+    AddedDirectStream,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PodcastResponseError {
+    HttpStatus(u16),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodcastDownloadAttempt {
+    pub status: u16,
+    pub retry_after: Option<String>,
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodcastDownloadOutcome {
+    pub cache_path: PathBuf,
+    pub attempts: u32,
+    pub retry_delays: Vec<u32>,
+}
+
+#[derive(Debug)]
+pub enum PodcastDownloadError {
+    Request(io::Error),
+    HttpStatus {
+        status: u16,
+        attempts: u32,
+        retry_delays: Vec<u32>,
+    },
+    CacheWrite(io::Error),
+}
+
 pub fn content_type_is_audio(content_type: Option<&str>) -> bool {
     content_type.is_some_and(|content_type| {
         content_type.starts_with("audio/")
@@ -102,6 +147,33 @@ pub fn add_feed_to_playlist(playlist: &mut Playlist, feed_xml: &str, feed_url: &
     episodes.len()
 }
 
+pub fn handle_url_response(
+    playlist: &mut Playlist,
+    url: &str,
+    response: &PodcastHttpResponse,
+) -> Result<PodcastResponseAction, PodcastResponseError> {
+    if response.status < 200 || response.status >= 300 {
+        return Err(PodcastResponseError::HttpStatus(response.status));
+    }
+
+    match classify_url_response(
+        response.content_type.as_deref(),
+        response.has_icy_name,
+        &response.body,
+    ) {
+        PodcastUrlKind::Feed => {
+            let feed = String::from_utf8_lossy(&response.body);
+            Ok(PodcastResponseAction::AddedFeedEpisodes(
+                add_feed_to_playlist(playlist, &feed, url),
+            ))
+        }
+        PodcastUrlKind::DirectStream | PodcastUrlKind::Unknown => {
+            playlist.add_podcast_entry(url, None, None, None);
+            Ok(PodcastResponseAction::AddedDirectStream)
+        }
+    }
+}
+
 pub fn cache_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("podcast-cache")
 }
@@ -131,6 +203,43 @@ pub fn write_cache_file(config_dir: &Path, url: &str, bytes: &[u8]) -> io::Resul
         return Err(err);
     }
     Ok(path)
+}
+
+pub fn download_with_retries<F>(
+    config_dir: &Path,
+    url: &str,
+    mut fetch_attempt: F,
+) -> Result<PodcastDownloadOutcome, PodcastDownloadError>
+where
+    F: FnMut(u32) -> io::Result<PodcastDownloadAttempt>,
+{
+    let mut retry_delays = Vec::new();
+    for attempt in 0..=DOWNLOAD_RETRIES {
+        let response = fetch_attempt(attempt).map_err(PodcastDownloadError::Request)?;
+        if (200..300).contains(&response.status) {
+            let cache_path = write_cache_file(config_dir, url, &response.body)
+                .map_err(PodcastDownloadError::CacheWrite)?;
+            return Ok(PodcastDownloadOutcome {
+                cache_path,
+                attempts: attempt + 1,
+                retry_delays,
+            });
+        }
+
+        if !status_should_retry(response.status) || attempt >= DOWNLOAD_RETRIES {
+            return Err(PodcastDownloadError::HttpStatus {
+                status: response.status,
+                attempts: attempt + 1,
+                retry_delays,
+            });
+        }
+        retry_delays.push(retry_delay_seconds(
+            response.retry_after.as_deref(),
+            attempt,
+        ));
+    }
+
+    unreachable!("download retry loop always returns before exhausting bounded attempts")
 }
 
 pub fn file_uri_for_cache(path: &Path) -> String {
@@ -228,6 +337,32 @@ pub fn discover_cached_duration_ms(cache_path: &Path) -> Result<Option<i64>, Str
         .duration()
         .map(|duration| duration.mseconds() as i64)
         .filter(|duration| *duration > 0))
+}
+
+pub fn mark_cache_ready(playlist: &mut Playlist, url: &str, length_ms: i64) -> usize {
+    let mut updated = 0;
+    for entry in playlist.entries_mut() {
+        if entry.is_podcast && entry.filename == url {
+            entry.podcast_downloading = false;
+            if length_ms > 0 {
+                entry.length_ms = length_ms;
+            }
+            updated += 1;
+        }
+    }
+    updated
+}
+
+pub fn mark_cache_failed_and_skip_current(playlist: &mut Playlist, url: &str) -> bool {
+    for entry in playlist.entries_mut() {
+        if entry.is_podcast && entry.filename == url {
+            entry.podcast_downloading = false;
+            if !entry.title.starts_with("failed: ") {
+                entry.title = format!("failed: {}", entry.title);
+            }
+        }
+    }
+    playlist.skip_failed_current()
 }
 
 pub fn prepare_playback_uri(
@@ -489,5 +624,91 @@ mod tests {
         assert!(part.exists());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn response_handling_imports_feeds_or_direct_streams() {
+        let mut playlist = Playlist::new();
+        let action = handle_url_response(
+            &mut playlist,
+            "https://example.test/feed.xml",
+            &PodcastHttpResponse {
+                status: 200,
+                content_type: Some("application/rss+xml".to_string()),
+                has_icy_name: false,
+                retry_after: None,
+                body: br#"<rss><channel><item><title>E</title><enclosure url="e.mp3"/></item></channel></rss>"#.to_vec(),
+            },
+        )
+        .unwrap();
+        assert_eq!(action, PodcastResponseAction::AddedFeedEpisodes(1));
+        assert_eq!(playlist.entries()[0].filename, "https://example.test/e.mp3");
+
+        let action = handle_url_response(
+            &mut playlist,
+            "https://example.test/live.pls",
+            &PodcastHttpResponse {
+                status: 200,
+                content_type: Some("audio/x-scpls".to_string()),
+                has_icy_name: false,
+                retry_after: None,
+                body: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(action, PodcastResponseAction::AddedDirectStream);
+        assert_eq!(
+            playlist.entries()[1].filename,
+            "https://example.test/live.pls"
+        );
+    }
+
+    #[test]
+    fn download_retry_loop_retries_retryable_statuses_and_writes_success() {
+        let root =
+            std::env::temp_dir().join(format!("xmms-rs-podcast-retry-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let outcome = download_with_retries(&root, "https://example.test/a.mp3", |attempt| {
+            Ok(if attempt == 0 {
+                PodcastDownloadAttempt {
+                    status: 503,
+                    retry_after: Some("2".to_string()),
+                    body: Vec::new(),
+                }
+            } else {
+                PodcastDownloadAttempt {
+                    status: 200,
+                    retry_after: None,
+                    body: b"ok".to_vec(),
+                }
+            })
+        })
+        .unwrap();
+
+        assert_eq!(outcome.attempts, 2);
+        assert_eq!(outcome.retry_delays, vec![2]);
+        assert_eq!(fs::read(&outcome.cache_path).unwrap(), b"ok");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn podcast_cache_failure_marks_current_failed_and_skips() {
+        let mut playlist = Playlist::new();
+        playlist.add_podcast_entry(
+            "https://example.test/fail.mp3",
+            Some("Fail".to_string()),
+            None,
+            None,
+        );
+        playlist.add_uri("file:///tmp/next.mp3");
+        playlist.set_position(0);
+
+        assert!(mark_cache_failed_and_skip_current(
+            &mut playlist,
+            "https://example.test/fail.mp3"
+        ));
+        assert_eq!(playlist.position(), Some(1));
+        assert_eq!(playlist.entries()[0].title, "failed: Fail");
     }
 }
