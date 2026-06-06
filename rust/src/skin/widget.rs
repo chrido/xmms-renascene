@@ -672,6 +672,175 @@ impl NumberDisplay {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Visualization {
+    widget: Widget,
+    mode: VisMode,
+    analyzer_style: VisAnalyzerStyle,
+    analyzer_mode: VisAnalyzerMode,
+    scope_mode: VisScopeMode,
+    peaks_enabled: bool,
+    analyzer_falloff: VisFalloffSpeed,
+    peaks_falloff: VisFalloffSpeed,
+    data: [f32; 75],
+    peak: [f32; 75],
+    peak_speed: [f32; 75],
+    milkdrop_energy: f32,
+    milkdrop_phase: f32,
+}
+
+impl Visualization {
+    const ANALYZER_FALLOFF_SPEEDS: [f32; 5] =
+        [0.34 / 16.0, 0.5 / 16.0, 1.0 / 16.0, 1.3 / 16.0, 1.6 / 16.0];
+    const PEAK_FALLOFF_SPEEDS: [f32; 5] = [1.2, 1.3, 1.4, 1.5, 1.6];
+
+    pub fn new(id: WidgetId, x: i32, y: i32, width: i32) -> Self {
+        Self {
+            widget: Widget::new(
+                id,
+                WidgetRect {
+                    x,
+                    y,
+                    width,
+                    height: 16,
+                },
+            ),
+            mode: VisMode::Analyzer,
+            analyzer_style: VisAnalyzerStyle::Bars,
+            analyzer_mode: VisAnalyzerMode::Normal,
+            scope_mode: VisScopeMode::Line,
+            peaks_enabled: true,
+            analyzer_falloff: VisFalloffSpeed::Medium,
+            peaks_falloff: VisFalloffSpeed::Slow,
+            data: [0.0; 75],
+            peak: [0.0; 75],
+            peak_speed: [0.0; 75],
+            milkdrop_energy: 0.0,
+            milkdrop_phase: 0.0,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn mode(&self) -> VisMode {
+        self.mode
+    }
+
+    pub fn analyzer_style(&self) -> VisAnalyzerStyle {
+        self.analyzer_style
+    }
+
+    pub fn analyzer_mode(&self) -> VisAnalyzerMode {
+        self.analyzer_mode
+    }
+
+    pub fn scope_mode(&self) -> VisScopeMode {
+        self.scope_mode
+    }
+
+    pub fn peaks_enabled(&self) -> bool {
+        self.peaks_enabled
+    }
+
+    pub fn data(&self) -> &[f32; 75] {
+        &self.data
+    }
+
+    pub fn peak(&self) -> &[f32; 75] {
+        &self.peak
+    }
+
+    pub fn milkdrop_energy(&self) -> f32 {
+        self.milkdrop_energy
+    }
+
+    pub fn milkdrop_phase(&self) -> f32 {
+        self.milkdrop_phase
+    }
+
+    pub fn set_data(&mut self, data: &[f32]) {
+        for (index, value) in data.iter().take(75).enumerate() {
+            let value = value.clamp(0.0, 1.0);
+            if value > self.data[index] {
+                self.data[index] = value;
+            }
+            if value > self.peak[index] {
+                self.peak[index] = value;
+                self.peak_speed[index] = 0.01 / 16.0;
+            }
+        }
+    }
+
+    pub fn tick(&mut self, data: Option<&[f32]>) {
+        if let Some(data) = data {
+            self.set_data(data);
+        }
+        self.decay();
+        let energy = self.data.iter().take(32).sum::<f32>() / 32.0;
+        self.milkdrop_energy = self.milkdrop_energy * 0.88 + energy * 0.12;
+        self.milkdrop_phase =
+            (self.milkdrop_phase + 0.08 + self.milkdrop_energy * 0.08) % std::f32::consts::TAU;
+        self.widget.queue_draw();
+    }
+
+    pub fn set_mode(&mut self, mode: VisMode) {
+        self.mode = mode;
+        self.widget.queue_draw();
+    }
+
+    pub fn set_analyzer_style(&mut self, style: VisAnalyzerStyle) {
+        self.analyzer_style = style;
+        self.widget.queue_draw();
+    }
+
+    pub fn set_analyzer_mode(&mut self, mode: VisAnalyzerMode) {
+        self.analyzer_mode = mode;
+        self.widget.queue_draw();
+    }
+
+    pub fn set_scope_mode(&mut self, mode: VisScopeMode) {
+        self.scope_mode = mode;
+        self.widget.queue_draw();
+    }
+
+    pub fn set_peaks_enabled(&mut self, enabled: bool) {
+        self.peaks_enabled = enabled;
+        if !enabled {
+            self.peak = [0.0; 75];
+        }
+        self.widget.queue_draw();
+    }
+
+    pub fn set_falloff(&mut self, analyzer: VisFalloffSpeed, peaks: VisFalloffSpeed) {
+        self.analyzer_falloff = analyzer;
+        self.peaks_falloff = peaks;
+    }
+
+    pub fn level(value: f32) -> i32 {
+        (value * 16.0 + 0.5).clamp(0.0, 16.0) as i32
+    }
+
+    fn decay(&mut self) {
+        let analyzer_falloff = self.analyzer_falloff as usize;
+        let peaks_falloff = self.peaks_falloff as usize;
+        for index in 0..75 {
+            if self.data[index] > 0.0 {
+                self.data[index] =
+                    (self.data[index] - Self::ANALYZER_FALLOFF_SPEEDS[analyzer_falloff]).max(0.0);
+            }
+            if self.peak[index] > 0.0 {
+                self.peak[index] = (self.peak[index] - self.peak_speed[index]).max(0.0);
+                self.peak_speed[index] *= Self::PEAK_FALLOFF_SPEEDS[peaks_falloff];
+                if self.peak[index] < self.data[index] {
+                    self.peak[index] = self.data[index];
+                }
+            }
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -1122,5 +1291,43 @@ mod tests {
         assert_eq!(number.source().x, 99);
         number.set_value(-1);
         assert_eq!(number.source().x, 99);
+    }
+
+    #[test]
+    fn visualization_defaults_match_c_widget() {
+        let vis = Visualization::new(WidgetId(6), 24, 43, 76);
+        assert_eq!(vis.widget().rect().height, 16);
+        assert_eq!(vis.mode(), VisMode::Analyzer);
+        assert_eq!(vis.analyzer_style(), VisAnalyzerStyle::Bars);
+        assert_eq!(vis.analyzer_mode(), VisAnalyzerMode::Normal);
+        assert_eq!(vis.scope_mode(), VisScopeMode::Line);
+        assert!(vis.peaks_enabled());
+    }
+
+    #[test]
+    fn visualization_set_data_clamps_and_updates_peaks() {
+        let mut vis = Visualization::new(WidgetId(6), 0, 0, 75);
+        vis.set_data(&[-1.0, 0.5, 2.0]);
+        assert_eq!(vis.data()[0], 0.0);
+        assert_eq!(vis.data()[1], 0.5);
+        assert_eq!(vis.data()[2], 1.0);
+        assert_eq!(vis.peak()[1], 0.5);
+        assert_eq!(vis.peak()[2], 1.0);
+
+        vis.set_peaks_enabled(false);
+        assert!(!vis.peaks_enabled());
+        assert_eq!(vis.peak()[2], 0.0);
+    }
+
+    #[test]
+    fn visualization_tick_decays_and_advances_milkdrop_state() {
+        let mut vis = Visualization::new(WidgetId(6), 0, 0, 75);
+        vis.tick(Some(&[1.0; 32]));
+        assert!(vis.data()[0] < 1.0);
+        assert!(vis.milkdrop_energy() > 0.0);
+        assert!(vis.milkdrop_phase() > 0.0);
+        assert!(vis.widget().needs_redraw());
+        assert_eq!(Visualization::level(0.5), 8);
+        assert_eq!(Visualization::level(2.0), 16);
     }
 }
