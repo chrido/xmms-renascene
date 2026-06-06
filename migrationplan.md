@@ -18,11 +18,11 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Add CI coverage for Rust formatting, tests, and GTK smoke.
   - [x] Update Flatpak/RPM packaging strategy.
 
-- [ ] Complete core application state.
-  - [ ] Replace global-style state with explicit `AppState`.
-  - [ ] Preserve C config defaults and `~/.config/xmms/config` keys.
-  - [ ] Add config load/save compatibility.
-  - [ ] Track window visibility, docking, shading, scale, sticky, easy-move, playlist position, equalizer state, visualization state, and podcast preferences.
+- [x] Complete core application state.
+  - [x] Replace global-style state with explicit `AppState`.
+  - [x] Preserve C config defaults and `~/.config/xmms/config` keys.
+  - [x] Add config load/save compatibility.
+  - [x] Track window visibility, docking, shading, scale, sticky, easy-move, playlist position, equalizer state, visualization state, and podcast preferences.
 
 - [ ] Complete skin system.
   - [ ] Load default skin assets from bundled resources.

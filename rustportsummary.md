@@ -22,6 +22,9 @@ Completed so far:
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
 - Added Meson run targets for Rust formatting, tests, CLI smoke, and GTK smoke.
 - Added a GitLab CI Rust job for formatting, tests, GTK smoke, and CLI smoke.
+- Added explicit `AppState` to tie together config, player, and playlist runtime state.
+- Expanded config coverage to include equalizer, visualization, podcast, window, docking, and output-device state.
+- Added C-compatible `~/.config/xmms/config` keyfile load/save helpers.
 
 ## Rust crate layout
 
@@ -30,6 +33,7 @@ Completed so far:
 | `rust/Cargo.toml` | Cargo package definition and dependencies |
 | `rust/src/lib.rs` | Library module exports |
 | `rust/src/main.rs` | `xmms-rs` CLI and preview entry point |
+| `rust/src/app_state.rs` | Explicit Rust application state and runtime snapshots |
 | `rust/src/config.rs` | Initial Rust config model and defaults |
 | `rust/src/player.rs` | Initial player state model |
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
@@ -131,7 +135,7 @@ These screenshots are intended as human visual references, not strict pixel-diff
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders only the default main skin preview and does not yet implement full playback, controls, playlist UI, equalizer UI, MPRIS, Spotify, podcasts, output device selection, preferences, packaging, or full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders only the default main skin preview and does not yet implement full playback, controls, playlist UI, equalizer UI, MPRIS, Spotify, podcasts, output device selection UI, preferences UI, packaging, or full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 
@@ -140,7 +144,7 @@ The manual XPM parser is intentionally kept for the first working port. A later 
 See `migrationplan.md` for the full checkbox roadmap. The next high-value areas are:
 
 - Finalize build and packaging strategy.
-- Complete config load/save compatibility.
+- Complete skin loading beyond bundled XPM defaults.
 - Expand the renderer to support pixmap blitting and all main-window widgets.
 - Port the widget framework and main player controls.
 - Port GStreamer playback.
