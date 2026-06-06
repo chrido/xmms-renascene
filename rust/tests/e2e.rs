@@ -708,6 +708,7 @@ fn mpris_root_and_player_properties_match_xmms_contract() {
 
     app.add_playlist_uri("file:///music/one.ogg")
         .assert_mpris_identity()
+        .assert_mpris_dbus_introspection()
         .assert_mpris_playback_status("Stopped")
         .assert_mpris_volume(0.4)
         .assert_mpris_position_us(0)

@@ -142,7 +142,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Include Spotify devices when authenticated.
 
 - [ ] Port MPRIS D-Bus interface.
-  - [ ] Own `org.mpris.MediaPlayer2.xmms_resuscitated`.
+  - [x] Own `org.mpris.MediaPlayer2.xmms_resuscitated`.
   - [x] Add deterministic Rust MPRIS model and e2e surface.
   - [x] Implement `org.mpris.MediaPlayer2` root property semantics.
   - [x] Implement `org.mpris.MediaPlayer2.Player` property semantics.

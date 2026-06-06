@@ -88,6 +88,7 @@ Completed so far:
 - Added Rust skin browser discovery/search-path behavior for user, legacy, system, and `SKINSDIR` skin directories plus deterministic e2e coverage for sorted discovery, archive display names, default/custom selection, and reload requests.
 - Added Rust output-device picker state with GStreamer audio sink enumeration, C-compatible local/network grouping and deduplication, automatic default selection, playback-preserving system selection, and Spotify device selection e2e coverage.
 - Added a deterministic Rust MPRIS model/e2e surface covering root/player property semantics, metadata, playback status, volume, position, transport commands, OpenUri, Raise, Quit, and emitted state-change events.
+- Wired the Rust GTK preview to own `org.mpris.MediaPlayer2.xmms_resuscitated` on the session bus with GIO, register root/player interfaces, dispatch D-Bus methods into the Rust MPRIS model, expose properties, and emit Seeked/PropertiesChanged notifications.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
@@ -240,7 +241,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with controls, resize, menu behavior, file-list drops, file/directory open dialogs, recursive directory import, Open Location playlist insertion, and a GStreamer playback backend. The Rust port still lacks live MPRIS D-Bus ownership/registration, live Spotify/podcast integrations, output device selection UI, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with controls, resize, menu behavior, file-list drops, file/directory open dialogs, recursive directory import, Open Location playlist insertion, a GStreamer playback backend, and MPRIS D-Bus registration. The Rust port still lacks desktop media-control validation, live Spotify/podcast integrations, output device selection UI, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 

@@ -9,8 +9,8 @@ use gtk::prelude::*;
 use crate::app_state::AppState;
 use crate::config::{Config, TimerMode};
 use crate::mpris::{
-    playback_status as mpris_playback_status, MprisCommand, MprisEvent, MprisMetadata,
-    MprisPlayerProperties, MprisRootProperties,
+    gio_service::MprisService, playback_status as mpris_playback_status, MprisCommand, MprisEvent,
+    MprisMetadata, MprisPlayerProperties, MprisRootProperties,
 };
 use crate::player::{
     equalizer_position_to_db, group_output_devices, OutputDevice, OutputDeviceGroups,
@@ -110,6 +110,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         &drawing_area,
         &window,
     ));
+    let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
     let menu_popover = Rc::new(build_main_menu_popover(
         app,
@@ -233,8 +234,17 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let drawing_area = drawing_area.clone();
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
+        let mpris_service = Rc::clone(&mpris_service);
         gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
-            if main_state.borrow_mut().update_timer_tick(100) {
+            let (redraw, mpris_events, mpris_properties) = {
+                let mut state = main_state.borrow_mut();
+                let redraw = state.update_timer_tick(100);
+                let events = state.take_mpris_events();
+                let properties = state.mpris_player_properties();
+                (redraw, events, properties)
+            };
+            mpris_service.emit_events(&mpris_events, &mpris_properties);
+            if redraw {
                 drawing_area.queue_draw();
                 panel_windows.playlist_area.queue_draw();
                 panel_windows.equalizer_area.queue_draw();
@@ -2219,6 +2229,10 @@ impl MainWindowUiState {
 
     pub(crate) fn mpris_events(&self) -> &[MprisEvent] {
         &self.mpris_events
+    }
+
+    pub(crate) fn take_mpris_events(&mut self) -> Vec<MprisEvent> {
+        std::mem::take(&mut self.mpris_events)
     }
 
     pub(crate) fn mpris_quit_requested(&self) -> bool {

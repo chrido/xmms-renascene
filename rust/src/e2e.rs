@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::mpris::{
-    MprisCommand, MprisEvent, BUS_NAME, OBJECT_PATH, PLAYER_INTERFACE, ROOT_INTERFACE,
+    gio_service::introspection_interfaces, MprisCommand, MprisEvent, BUS_NAME, OBJECT_PATH,
+    PLAYER_INTERFACE, ROOT_INTERFACE,
 };
 use crate::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use crate::playlist::PlaylistSortKey;
@@ -1208,6 +1209,16 @@ impl UiE2e {
         assert_eq!(root.identity, "XMMS Resuscitated");
         assert_eq!(root.desktop_entry, "org.xmms.Resuscitated");
         assert_eq!(root.supported_uri_schemes, ["file", "http", "https"]);
+        assert!(root.supported_mime_types.contains(&"audio/mpeg"));
+        assert!(root.supported_mime_types.contains(&"audio/ogg"));
+        assert!(root.supported_mime_types.contains(&"audio/flac"));
+        self
+    }
+
+    pub fn assert_mpris_dbus_introspection(&mut self) -> &mut Self {
+        let interfaces = introspection_interfaces().expect("MPRIS introspection XML must parse");
+        assert!(interfaces.contains(&ROOT_INTERFACE.to_string()));
+        assert!(interfaces.contains(&PLAYER_INTERFACE.to_string()));
         self
     }
 
