@@ -163,6 +163,31 @@ fn panel_keyboard_shortcuts_toggle_and_shade_windows() {
 }
 
 #[test]
+fn drag_and_drop_on_main_replaces_playlist_and_starts_playback() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist(["file:///tmp/old.ogg"])
+        .assert_playlist_len(1)
+        .drop_on_main(["file:///tmp/first.ogg", "file:///tmp/second.ogg"])
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/first.ogg")
+        .assert_playlist_entry(1, "file:///tmp/second.ogg")
+        .assert_player_state(PlayerState::Playing);
+}
+
+#[test]
+fn drag_and_drop_on_playlist_appends_to_existing_entries() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist(["file:///tmp/first.ogg"])
+        .drop_on_playlist(["https://example.test/stream"])
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/first.ogg")
+        .assert_playlist_entry(1, "https://example.test/stream")
+        .assert_player_state(PlayerState::Stopped);
+}
+
+#[test]
 fn transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

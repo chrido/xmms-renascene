@@ -55,6 +55,7 @@ Completed so far:
 - Wired the main menu actions in the GTK preview: Open Files opens the native multi-select file chooser, Open Location and Skin Browser show Rust placeholder windows, Preferences shows the preferences placeholder, and Quit exits the app.
 - Ported the main prompt mechanics for Play Location and Jump to Time: prompt windows use entry plus Cancel/OK controls, `Ctrl+L` and `Ctrl+J` open the prompts, Play Location records the submitted URI for later playlist integration, and Jump to Time parses seconds or `mm:ss` and updates preview seek state.
 - Added Rust preview keyboard shortcuts for currently ported main-window behavior: transport keys, open-files, shuffle/repeat/no-advance toggles, preferences, prompts, skin-browser placeholder, main shade, playlist/equalizer show-hide, and playlist/equalizer shade shortcuts.
+- Wired GTK file-list drag-and-drop for the Rust main and playlist preview windows. Drops on the main window replace the playlist and start preview playback, while drops on the playlist window append to existing entries.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.
@@ -203,7 +204,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, and menu behavior. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, complete playlist data operations, audio-connected equalizer behavior, MPRIS, Spotify, podcasts, output device selection UI, playlist-connected Open Location behavior, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, menu behavior, and basic file-list drops. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, recursive directory import/media filtering for dropped directories, complete playlist data operations, audio-connected equalizer behavior, MPRIS, Spotify, podcasts, output device selection UI, playlist-connected Open Location behavior, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 

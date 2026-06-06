@@ -175,6 +175,8 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     }
     window.add_controller(motion);
 
+    add_file_drop_controller(&drawing_area, Rc::clone(&main_state), true, true);
+
     let key_controller = gtk::EventControllerKey::new();
     {
         let panel_windows = Rc::clone(&panel_windows);
@@ -378,6 +380,40 @@ fn handle_keyboard_shortcut(
         }
     }
     drawing_area.queue_draw();
+}
+
+fn add_file_drop_controller(
+    widget: &impl IsA<gtk::Widget>,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    clear_first: bool,
+    start_playback: bool,
+) {
+    let drop = gtk::DropTarget::new(
+        gtk::gdk::FileList::static_type(),
+        gtk::gdk::DragAction::COPY,
+    );
+    {
+        let widget = widget.clone();
+        drop.connect_drop(move |_target, value, _x, _y| {
+            let Ok(files) = value.get::<gtk::gdk::FileList>() else {
+                return false;
+            };
+            let uris = files
+                .files()
+                .into_iter()
+                .map(|file| file.uri().to_string())
+                .collect::<Vec<_>>();
+            if !main_state
+                .borrow_mut()
+                .accept_dropped_uris(uris, clear_first, start_playback)
+            {
+                return false;
+            }
+            widget.queue_draw();
+            true
+        });
+    }
+    widget.add_controller(drop);
 }
 
 fn resize_main_window(
@@ -647,6 +683,9 @@ fn build_playlist_window(
             }
         }
     });
+
+    add_file_drop_controller(&drawing_area, Rc::clone(main_state), false, false);
+
     {
         let main_state = Rc::clone(main_state);
         drawing_area.connect_resize(move |area, width, height| {
@@ -1415,12 +1454,55 @@ impl MainWindowUiState {
         self.last_jump_time_ms
     }
 
+    pub(crate) fn playlist_len(&self) -> usize {
+        self.app_state.playlist.len()
+    }
+
+    pub(crate) fn playlist_entry_uri(&self, index: usize) -> Option<&str> {
+        self.app_state
+            .playlist
+            .entries()
+            .get(index)
+            .map(|entry| entry.filename.as_str())
+    }
+
     pub(crate) fn accept_open_location(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
         self.last_open_location = Some(text.to_string());
         self.open_location_visible = false;
+    }
+
+    pub(crate) fn accept_dropped_uris<I, S>(
+        &mut self,
+        uris: I,
+        clear_first: bool,
+        start_playback: bool,
+    ) -> bool
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut accepted = false;
+        if clear_first {
+            self.app_state.playlist.clear();
+        }
+        for uri in uris {
+            let uri = uri.as_ref();
+            if uri.is_empty() {
+                continue;
+            }
+            self.app_state.playlist.add_uri(uri);
+            accepted = true;
+        }
+        if accepted && clear_first {
+            self.app_state.playlist.set_position(0);
+        }
+        if accepted && start_playback {
+            self.app_state.player.mark_playing();
+        }
+        accepted
     }
 
     pub(crate) fn accept_jump_time(&mut self, text: &str) {

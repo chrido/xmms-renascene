@@ -371,6 +371,26 @@ impl UiE2e {
         self
     }
 
+    pub fn drop_on_main<I, S>(&mut self, uris: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.state.accept_dropped_uris(uris, true, true);
+        self.sync_windows();
+        self
+    }
+
+    pub fn drop_on_playlist<I, S>(&mut self, uris: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.state.accept_dropped_uris(uris, false, false);
+        self.sync_windows();
+        self
+    }
+
     pub fn show_jump_time_prompt(&mut self) -> &mut Self {
         self.state.set_jump_time_visible(true);
         self.sync_windows();
@@ -616,6 +636,16 @@ impl UiE2e {
 
     pub fn assert_last_jump_time_ms(&mut self, expected: i64) -> &mut Self {
         assert_eq!(self.state.last_jump_time_ms(), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_len(&mut self, expected: usize) -> &mut Self {
+        assert_eq!(self.state.playlist_len(), expected);
+        self
+    }
+
+    pub fn assert_playlist_entry(&mut self, index: usize, expected: &str) -> &mut Self {
+        assert_eq!(self.state.playlist_entry_uri(index), Some(expected));
         self
     }
 
