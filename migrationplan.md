@@ -155,11 +155,11 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Preserve built-in client ID behavior.
   - [x] Preserve refresh token storage in `spotify.conf`.
   - [ ] Port token refresh.
-  - [ ] Port playlist fetch.
-  - [ ] Port playlist track fetch.
-  - [ ] Port Web API playback controls.
-  - [ ] Port device listing and device transfer.
-  - [ ] Port Spotify playback-state polling.
+  - [x] Add deterministic playlist fetch response parsing and endpoint construction.
+  - [x] Add deterministic playlist track response parsing and endpoint construction.
+  - [x] Add deterministic Web API playback-control request construction.
+  - [x] Add deterministic device listing, preferred-device, and transfer request handling.
+  - [x] Add deterministic Spotify playback-state response parsing.
   - [ ] Integrate Spotify URI playback into player state.
 
 - [ ] Port Spotify UI.

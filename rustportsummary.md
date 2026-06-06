@@ -89,7 +89,7 @@ Completed so far:
 - Added Rust output-device picker state with GStreamer audio sink enumeration, C-compatible local/network grouping and deduplication, automatic default selection, playback-preserving system selection, and Spotify device selection e2e coverage.
 - Added a deterministic Rust MPRIS model/e2e surface covering root/player property semantics, metadata, playback status, volume, position, transport commands, OpenUri, Raise, Quit, and emitted state-change events.
 - Wired the Rust GTK preview to own `org.mpris.MediaPlayer2.xmms_resuscitated` on the session bus with GIO, register root/player interfaces, dispatch D-Bus methods into the Rust MPRIS model, expose properties, and emit Seeked/PropertiesChanged notifications.
-- Added Rust Spotify auth/config groundwork: C-compatible API/auth constants, authorization URL construction, `spotify.conf` refresh-token load/save behavior, token refresh request/response state semantics, and e2e coverage for the persisted auth contract.
+- Added Rust Spotify auth/config groundwork: C-compatible API/auth constants, authorization URL construction, `spotify.conf` refresh-token load/save behavior, token refresh request/response state semantics, playlist/track/device/playback-state JSON parsing, Web API playback request construction, and e2e coverage for the persisted/API contracts.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
@@ -116,7 +116,7 @@ Completed so far:
 | `rust/src/player.rs` | Initial player state model |
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
 | `rust/src/e2e.rs` | Rust UI e2e harness for scripted settings, clicks, and assertions |
-| `rust/src/spotify.rs` | Spotify API/auth constants, authorization URL construction, and `spotify.conf` refresh-token persistence |
+| `rust/src/spotify.rs` | Spotify API/auth constants, authorization URL construction, `spotify.conf` refresh-token persistence, API response parsing, and playback request construction |
 | `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, skin archives, visualization colors, and playlist colors |
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
 | `rust/src/skin/widget.rs` | Widget list/hit-testing model, all initial widget state machines, and visualization enums |

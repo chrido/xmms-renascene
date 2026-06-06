@@ -2,6 +2,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
+
 pub const AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 pub const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 pub const API_BASE: &str = "https://api.spotify.com/v1";
@@ -20,6 +22,296 @@ pub struct SpotifyAuthState {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub token_expiry_unix: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotifyPlaylist {
+    pub id: String,
+    pub name: String,
+    pub total_tracks: i32,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotifyTrack {
+    pub id: String,
+    pub name: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub uri: String,
+    pub duration_ms: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotifyDevice {
+    pub id: String,
+    pub name: String,
+    pub device_type: String,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpotifyPlaybackState {
+    pub is_playing: bool,
+    pub progress_ms: i64,
+    pub duration_ms: i64,
+    pub track_name: Option<String>,
+    pub artist_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpotifyPlaybackRequest {
+    Play,
+    Pause,
+    Next,
+    Previous,
+    TransferDevice {
+        device_id: String,
+    },
+    PlayTrack {
+        track_uri: Option<String>,
+        context_uri: Option<String>,
+        offset: i32,
+        device_id: Option<String>,
+    },
+}
+
+impl SpotifyPlaybackRequest {
+    pub fn method(&self) -> &'static str {
+        match self {
+            Self::Next | Self::Previous => "POST",
+            Self::Play | Self::Pause | Self::TransferDevice { .. } | Self::PlayTrack { .. } => {
+                "PUT"
+            }
+        }
+    }
+
+    pub fn endpoint(&self) -> String {
+        match self {
+            Self::Play => "/me/player/play".to_string(),
+            Self::Pause => "/me/player/pause".to_string(),
+            Self::Next => "/me/player/next".to_string(),
+            Self::Previous => "/me/player/previous".to_string(),
+            Self::TransferDevice { .. } => "/me/player".to_string(),
+            Self::PlayTrack { device_id, .. } => {
+                if let Some(device_id) = device_id {
+                    format!("/me/player/play?device_id={device_id}")
+                } else {
+                    "/me/player/play".to_string()
+                }
+            }
+        }
+    }
+
+    pub fn body(&self) -> Option<String> {
+        match self {
+            Self::Play | Self::Pause | Self::Next | Self::Previous => None,
+            Self::TransferDevice { device_id } => Some(format!(
+                "{{\"device_ids\":[\"{}\"],\"play\":false}}",
+                json_escape(device_id)
+            )),
+            Self::PlayTrack {
+                track_uri,
+                context_uri,
+                offset,
+                ..
+            } => Some(play_track_body(
+                track_uri.as_deref(),
+                context_uri.as_deref(),
+                *offset,
+            )),
+        }
+    }
+}
+
+pub fn playlists_endpoint(offset: usize) -> String {
+    format!("/me/playlists?limit=50&offset={offset}")
+}
+
+pub fn playlist_tracks_endpoint(playlist_id: &str, offset: usize) -> String {
+    format!("/playlists/{playlist_id}/items?limit=100&offset={offset}")
+}
+
+pub fn devices_endpoint() -> &'static str {
+    "/me/player/devices"
+}
+
+pub fn playback_state_endpoint() -> &'static str {
+    "/me/player"
+}
+
+pub fn parse_playlists_response(body: &str) -> Result<(Vec<SpotifyPlaylist>, i64), String> {
+    let root: Value = serde_json::from_str(body).map_err(|err| err.to_string())?;
+    let total = root.get("total").and_then(Value::as_i64).unwrap_or(0);
+    let mut playlists = Vec::new();
+    for item in root
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = item.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = item.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(uri) = item.get("uri").and_then(Value::as_str) else {
+            continue;
+        };
+        let total_tracks = item
+            .get("tracks")
+            .or_else(|| item.get("items"))
+            .and_then(|tracks| tracks.get("total"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+        playlists.push(SpotifyPlaylist {
+            id: id.to_string(),
+            name: name.to_string(),
+            total_tracks,
+            uri: uri.to_string(),
+        });
+    }
+    Ok((playlists, total))
+}
+
+pub fn parse_playlist_tracks_response(body: &str) -> Result<(Vec<SpotifyTrack>, i64), String> {
+    let root: Value = serde_json::from_str(body).map_err(|err| err.to_string())?;
+    let total = root.get("total").and_then(Value::as_i64).unwrap_or(0);
+    let mut tracks = Vec::new();
+    for item in root
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(track) = item.get("track").or_else(|| item.get("item")) else {
+            continue;
+        };
+        if track.get("id").is_none_or(Value::is_null) {
+            continue;
+        }
+        let Some(id) = track.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(name) = track.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(uri) = track.get("uri").and_then(Value::as_str) else {
+            continue;
+        };
+        let artist = track
+            .get("artists")
+            .and_then(Value::as_array)
+            .and_then(|artists| artists.first())
+            .and_then(|artist| artist.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let album = track
+            .get("album")
+            .and_then(|album| album.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        tracks.push(SpotifyTrack {
+            id: id.to_string(),
+            name: name.to_string(),
+            artist,
+            album,
+            uri: uri.to_string(),
+            duration_ms: track
+                .get("duration_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or(0) as i32,
+        });
+    }
+    Ok((tracks, total))
+}
+
+pub fn parse_devices_response(body: &str) -> Result<Vec<SpotifyDevice>, String> {
+    let root: Value = serde_json::from_str(body).map_err(|err| err.to_string())?;
+    let mut devices = Vec::new();
+    for device in root
+        .get("devices")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(id) = device.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        devices.push(SpotifyDevice {
+            id: id.to_string(),
+            name: device
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            device_type: device
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            is_active: device
+                .get("is_active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    Ok(devices)
+}
+
+pub fn preferred_device_id(devices: &[SpotifyDevice]) -> Option<&str> {
+    devices
+        .iter()
+        .find(|device| device.is_active)
+        .or_else(|| devices.first())
+        .map(|device| device.id.as_str())
+}
+
+pub fn parse_playback_state_response(body: &str) -> Result<SpotifyPlaybackState, String> {
+    let root: Value = serde_json::from_str(body).map_err(|err| err.to_string())?;
+    let item = root.get("item").or_else(|| root.get("track"));
+    let artist_name = item
+        .and_then(|item| item.get("artists"))
+        .and_then(Value::as_array)
+        .and_then(|artists| artists.first())
+        .and_then(|artist| artist.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(SpotifyPlaybackState {
+        is_playing: root
+            .get("is_playing")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        progress_ms: root.get("progress_ms").and_then(Value::as_i64).unwrap_or(0),
+        duration_ms: item
+            .and_then(|item| item.get("duration_ms"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0),
+        track_name: item
+            .and_then(|item| item.get("name"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        artist_name,
+    })
+}
+
+pub fn play_track_body(track_uri: Option<&str>, context_uri: Option<&str>, offset: i32) -> String {
+    match (track_uri, context_uri) {
+        (Some(track_uri), Some(context_uri)) => format!(
+            "{{\"context_uri\":\"{}\",\"offset\":{{\"uri\":\"{}\"}}}}",
+            json_escape(context_uri),
+            json_escape(track_uri)
+        ),
+        (Some(track_uri), None) => {
+            format!("{{\"uris\":[\"{}\"]}}", json_escape(track_uri))
+        }
+        (None, Some(context_uri)) => format!(
+            "{{\"context_uri\":\"{}\",\"offset\":{{\"position\":{offset}}}}}",
+            json_escape(context_uri)
+        ),
+        (None, None) => "{}".to_string(),
+    }
 }
 
 impl SpotifyAuthState {
@@ -181,6 +473,20 @@ fn escape_auth_url(input: &str) -> String {
     out
 }
 
+fn json_escape(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(|ch| match ch {
+            '"' => "\\\"".chars().collect::<Vec<_>>(),
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '\n' => "\\n".chars().collect::<Vec<_>>(),
+            '\r' => "\\r".chars().collect::<Vec<_>>(),
+            '\t' => "\\t".chars().collect::<Vec<_>>(),
+            _ => vec![ch],
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +554,68 @@ mod tests {
         assert!(!state.access_token_valid(4540));
 
         assert!(!state.apply_token_response(r#"{"expires_in":3600}"#, 1000));
+    }
+
+    #[test]
+    fn playlist_and_track_parsers_accept_old_and_new_spotify_shapes() {
+        let (playlists, total) = parse_playlists_response(
+            r#"{"total":2,"items":[
+                {"id":"old","name":"Old","uri":"spotify:playlist:old","tracks":{"total":3}},
+                {"id":"new","name":"New","uri":"spotify:playlist:new","items":{"total":4}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(total, 2);
+        assert_eq!(playlists[0].total_tracks, 3);
+        assert_eq!(playlists[1].total_tracks, 4);
+
+        let (tracks, total) = parse_playlist_tracks_response(
+            r#"{"total":3,"items":[
+                {"track":{"id":"one","name":"One","uri":"spotify:track:one","duration_ms":1000,"artists":[{"name":"Artist"}],"album":{"name":"Album"}}},
+                {"item":{"id":"two","name":"Two","uri":"spotify:track:two","duration_ms":2000,"artists":[]}},
+                {"track":{"id":null}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(tracks.len(), 2);
+        assert_eq!(tracks[0].artist.as_deref(), Some("Artist"));
+        assert_eq!(tracks[0].album.as_deref(), Some("Album"));
+        assert_eq!(tracks[1].id, "two");
+    }
+
+    #[test]
+    fn device_playback_and_request_helpers_match_c_web_api_contract() {
+        let devices = parse_devices_response(
+            r#"{"devices":[
+                {"id":"inactive","name":"Laptop","type":"Computer","is_active":false},
+                {"id":"active","name":"Phone","type":"Smartphone","is_active":true}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(preferred_device_id(&devices), Some("active"));
+        assert_eq!(
+            SpotifyPlaybackRequest::TransferDevice {
+                device_id: "active".to_string(),
+            }
+            .body()
+            .as_deref(),
+            Some(r#"{"device_ids":["active"],"play":false}"#)
+        );
+
+        let state = parse_playback_state_response(
+            r#"{"is_playing":true,"progress_ms":42,"item":{"name":"Track","duration_ms":123,"artists":[{"name":"Artist"}]}}"#,
+        )
+        .unwrap();
+        assert!(state.is_playing);
+        assert_eq!(state.track_name.as_deref(), Some("Track"));
+        assert_eq!(state.artist_name.as_deref(), Some("Artist"));
+
+        assert_eq!(
+            play_track_body(Some("spotify:track:one"), None, 0),
+            r#"{"uris":["spotify:track:one"]}"#
+        );
+        assert_eq!(SpotifyPlaybackRequest::Next.method(), "POST");
+        assert_eq!(SpotifyPlaybackRequest::Play.endpoint(), "/me/player/play");
     }
 }

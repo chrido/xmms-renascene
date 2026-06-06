@@ -14,8 +14,10 @@ use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
 use xmms_resuscitated::spotify::{
-    authorization_url, config_path as spotify_config_path, SpotifyAuthConfig, SpotifyAuthState,
-    CLIENT_ID, REDIRECT_URI,
+    authorization_url, config_path as spotify_config_path, parse_devices_response,
+    parse_playback_state_response, parse_playlist_tracks_response, parse_playlists_response,
+    play_track_body, playlist_tracks_endpoint, playlists_endpoint, preferred_device_id,
+    SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest, CLIENT_ID, REDIRECT_URI,
 };
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
@@ -338,6 +340,71 @@ fn spotify_token_refresh_state_matches_c_contract() {
     assert_eq!(state.token_expiry_unix, 70);
     assert!(state.access_token_valid(69));
     assert!(!state.access_token_valid(70));
+}
+
+#[test]
+fn spotify_api_parsers_and_requests_match_c_contract() {
+    assert_eq!(playlists_endpoint(50), "/me/playlists?limit=50&offset=50");
+    assert_eq!(
+        playlist_tracks_endpoint("playlist-id", 100),
+        "/playlists/playlist-id/items?limit=100&offset=100"
+    );
+
+    let (playlists, total) = parse_playlists_response(
+        r#"{"total":2,"items":[
+            {"id":"old","name":"Old","uri":"spotify:playlist:old","tracks":{"total":7}},
+            {"id":"new","name":"New","uri":"spotify:playlist:new","items":{"total":8}}
+        ]}"#,
+    )
+    .unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(playlists[0].name, "Old");
+    assert_eq!(playlists[1].total_tracks, 8);
+
+    let (tracks, total) = parse_playlist_tracks_response(
+        r#"{"total":3,"items":[
+            {"track":{"id":"one","name":"One","uri":"spotify:track:one","duration_ms":1000,"artists":[{"name":"Artist"}],"album":{"name":"Album"}}},
+            {"item":{"id":"two","name":"Two","uri":"spotify:track:two","duration_ms":2000}},
+            {"track":{"id":null}}
+        ]}"#,
+    )
+    .unwrap();
+    assert_eq!(total, 3);
+    assert_eq!(tracks.len(), 2);
+    assert_eq!(tracks[0].artist.as_deref(), Some("Artist"));
+    assert_eq!(tracks[0].album.as_deref(), Some("Album"));
+
+    let devices = parse_devices_response(
+        r#"{"devices":[
+            {"id":"inactive","name":"Laptop","type":"Computer","is_active":false},
+            {"id":"active","name":"Phone","type":"Smartphone","is_active":true}
+        ]}"#,
+    )
+    .unwrap();
+    assert_eq!(preferred_device_id(&devices), Some("active"));
+
+    let playback = parse_playback_state_response(
+        r#"{"is_playing":true,"progress_ms":42,"item":{"name":"Song","duration_ms":123,"artists":[{"name":"Artist"}]}}"#,
+    )
+    .unwrap();
+    assert!(playback.is_playing);
+    assert_eq!(playback.progress_ms, 42);
+    assert_eq!(playback.track_name.as_deref(), Some("Song"));
+
+    assert_eq!(
+        play_track_body(Some("spotify:track:one"), None, 0),
+        r#"{"uris":["spotify:track:one"]}"#
+    );
+    assert_eq!(
+        SpotifyPlaybackRequest::TransferDevice {
+            device_id: "active".to_string(),
+        }
+        .body()
+        .as_deref(),
+        Some(r#"{"device_ids":["active"],"play":false}"#)
+    );
+    assert_eq!(SpotifyPlaybackRequest::Next.method(), "POST");
+    assert_eq!(SpotifyPlaybackRequest::Pause.endpoint(), "/me/player/pause");
 }
 
 #[test]
