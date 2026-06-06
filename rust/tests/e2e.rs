@@ -23,11 +23,12 @@ use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
 use xmms_resuscitated::spotify::{
-    authorization_url, config_path as spotify_config_path, parse_devices_response,
+    auth_code_request_body, authorization_url, code_challenge_for_verifier,
+    config_path as spotify_config_path, exchange_code_for_token_with_url, parse_devices_response,
     parse_playback_state_response, parse_playlist_tracks_response, parse_playlists_response,
     play_track_body, playlist_tracks_endpoint, playlists_endpoint, preferred_device_id,
-    SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest, SpotifyPlaylist, SpotifyTrack,
-    CLIENT_ID, REDIRECT_URI,
+    refresh_access_token_with_url, SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest,
+    SpotifyPlaylist, SpotifyTrack, CLIENT_ID, REDIRECT_URI,
 };
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
@@ -329,6 +330,22 @@ fn spotify_auth_config_and_url_match_c_contract() {
 }
 
 #[test]
+fn spotify_pkce_helpers_and_auth_code_body_match_c_contract() {
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+    assert_eq!(
+        code_challenge_for_verifier(verifier),
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    );
+    let body = auth_code_request_body("code value", verifier);
+    assert!(body.contains("grant_type=authorization_code"));
+    assert!(body.contains("code=code%20value"));
+    assert!(body.contains(&format!("client_id={CLIENT_ID}")));
+    assert!(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8391%2Fcallback"));
+    assert!(body.contains("code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"));
+}
+
+#[test]
 fn spotify_token_refresh_state_matches_c_contract() {
     let mut state = SpotifyAuthState::from_config(SpotifyAuthConfig {
         refresh_token: Some("refresh-token".to_string()),
@@ -351,6 +368,35 @@ fn spotify_token_refresh_state_matches_c_contract() {
     assert_eq!(state.token_expiry_unix, 70);
     assert!(state.access_token_valid(69));
     assert!(!state.access_token_valid(70));
+}
+
+#[test]
+fn spotify_live_token_exchange_and_refresh_use_http_token_endpoint() {
+    let response = r#"{"access_token":"access","expires_in":120,"refresh_token":"refresh-new"}"#;
+    let (token_url, server) = local_http_server(vec![
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            response.len(),
+            response
+        ),
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            response.len(),
+            response
+        ),
+    ]);
+    let mut state = SpotifyAuthState::default();
+
+    assert!(
+        exchange_code_for_token_with_url(&mut state, &token_url, "code", "verifier", 100).unwrap()
+    );
+    assert_eq!(state.access_token.as_deref(), Some("access"));
+    assert_eq!(state.refresh_token.as_deref(), Some("refresh-new"));
+    assert_eq!(state.token_expiry_unix, 160);
+
+    assert!(refresh_access_token_with_url(&mut state, &token_url, 200).unwrap());
+    assert_eq!(state.token_expiry_unix, 260);
+    server.join().unwrap();
 }
 
 #[test]

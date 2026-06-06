@@ -150,11 +150,11 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port Next, Previous, Pause, PlayPause, Stop, Play, Seek, SetPosition, and OpenUri.
   - [x] Emit metadata and playback status changes in Rust state.
 
-- [ ] Port Spotify integration.
-  - [ ] Preserve PKCE auth flow.
+- [x] Port Spotify integration.
+  - [x] Preserve PKCE auth flow.
   - [x] Preserve built-in client ID behavior.
   - [x] Preserve refresh token storage in `spotify.conf`.
-  - [ ] Port token refresh.
+  - [x] Port token refresh.
   - [x] Add deterministic playlist fetch response parsing and endpoint construction.
   - [x] Add deterministic playlist track response parsing and endpoint construction.
   - [x] Add deterministic Web API playback-control request construction.

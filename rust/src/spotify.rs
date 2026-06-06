@@ -1,7 +1,9 @@
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use gtk::glib::{Checksum, ChecksumType};
 use serde_json::Value;
 
 pub const AUTH_URL: &str = "https://accounts.spotify.com/authorize";
@@ -57,6 +59,19 @@ pub struct SpotifyPlaybackState {
     pub duration_ms: i64,
     pub track_name: Option<String>,
     pub artist_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpotifyPkcePair {
+    pub verifier: String,
+    pub challenge: String,
+}
+
+#[derive(Debug)]
+pub enum SpotifyHttpError {
+    Transport(String),
+    HttpStatus(u16, String),
+    Read(io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,6 +329,77 @@ pub fn play_track_body(track_uri: Option<&str>, context_uri: Option<&str>, offse
     }
 }
 
+pub fn pkce_pair_from_random() -> io::Result<SpotifyPkcePair> {
+    let mut bytes = [0u8; 64];
+    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(pkce_pair_from_bytes(&bytes))
+}
+
+pub fn pkce_pair_from_bytes(bytes: &[u8]) -> SpotifyPkcePair {
+    let verifier = base64_url_no_pad(bytes);
+    let challenge = code_challenge_for_verifier(&verifier);
+    SpotifyPkcePair {
+        verifier,
+        challenge,
+    }
+}
+
+pub fn code_challenge_for_verifier(verifier: &str) -> String {
+    let mut checksum =
+        Checksum::new(ChecksumType::Sha256).expect("GLib must support SHA-256 checksums");
+    checksum.update(verifier.as_bytes());
+    base64_url_no_pad(&checksum.digest())
+}
+
+pub fn auth_code_request_body(code: &str, verifier: &str) -> String {
+    format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={CLIENT_ID}&code_verifier={}",
+        form_encode(code),
+        form_encode(REDIRECT_URI),
+        form_encode(verifier)
+    )
+}
+
+pub fn exchange_code_for_token_with_url(
+    state: &mut SpotifyAuthState,
+    token_url: &str,
+    code: &str,
+    verifier: &str,
+    now_unix: i64,
+) -> Result<bool, SpotifyHttpError> {
+    let body = auth_code_request_body(code, verifier);
+    let response = post_form(token_url, &body)?;
+    Ok(state.apply_token_response(&response, now_unix))
+}
+
+pub fn refresh_access_token_with_url(
+    state: &mut SpotifyAuthState,
+    token_url: &str,
+    now_unix: i64,
+) -> Result<bool, SpotifyHttpError> {
+    let Some(body) = state.refresh_request_body() else {
+        return Ok(false);
+    };
+    let response = post_form(token_url, &body)?;
+    Ok(state.apply_token_response(&response, now_unix))
+}
+
+pub fn exchange_code_for_token(
+    state: &mut SpotifyAuthState,
+    code: &str,
+    verifier: &str,
+    now_unix: i64,
+) -> Result<bool, SpotifyHttpError> {
+    exchange_code_for_token_with_url(state, TOKEN_URL, code, verifier, now_unix)
+}
+
+pub fn refresh_access_token(
+    state: &mut SpotifyAuthState,
+    now_unix: i64,
+) -> Result<bool, SpotifyHttpError> {
+    refresh_access_token_with_url(state, TOKEN_URL, now_unix)
+}
+
 impl SpotifyAuthState {
     pub fn from_config(config: SpotifyAuthConfig) -> Self {
         Self {
@@ -459,6 +545,31 @@ fn json_i64_member(body: &str, key: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+fn post_form(url: &str, body: &str) -> Result<String, SpotifyHttpError> {
+    let result = ureq::post(url)
+        .set("User-Agent", "XMMS Resuscitated")
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_string(body);
+    let response = match result {
+        Ok(response) => response,
+        Err(ureq::Error::Status(status, response)) => {
+            let mut body = String::new();
+            response
+                .into_reader()
+                .read_to_string(&mut body)
+                .map_err(SpotifyHttpError::Read)?;
+            return Err(SpotifyHttpError::HttpStatus(status, body));
+        }
+        Err(err) => return Err(SpotifyHttpError::Transport(err.to_string())),
+    };
+    let mut body = String::new();
+    response
+        .into_reader()
+        .read_to_string(&mut body)
+        .map_err(SpotifyHttpError::Read)?;
+    Ok(body)
+}
+
 fn escape_auth_url(input: &str) -> String {
     const ALLOWED: &str = ":/?#[]@!$&'()*+,;=-._~";
     let mut out = String::with_capacity(input.len());
@@ -468,6 +579,38 @@ fn escape_auth_url(input: &str) -> String {
             out.push(ch);
         } else {
             out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn form_encode(input: &str) -> String {
+    let mut out = String::new();
+    for byte in input.bytes() {
+        let ch = byte as char;
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '~') {
+            out.push(ch);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn base64_url_no_pad(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0b0000_0011) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0b0000_1111) << 2) | (b2 >> 6)) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0b0011_1111) as usize] as char);
         }
     }
     out
@@ -528,6 +671,21 @@ mod tests {
         assert!(url.contains(&format!("redirect_uri={REDIRECT_URI}")));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("code_challenge=challenge-value"));
+    }
+
+    #[test]
+    fn pkce_helpers_match_rfc7636_challenge_example_and_request_body() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        assert_eq!(
+            code_challenge_for_verifier(verifier),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+        assert_eq!(pkce_pair_from_bytes(b"abc").verifier, "YWJj");
+        let body = auth_code_request_body("code value", verifier);
+        assert!(body.contains("grant_type=authorization_code"));
+        assert!(body.contains("code=code%20value"));
+        assert!(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8391%2Fcallback"));
+        assert!(body.contains("code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"));
     }
 
     #[test]
