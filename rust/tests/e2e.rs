@@ -206,7 +206,11 @@ fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options(
     let root = unique_temp_dir("xmms-rs-runtime-session-save");
     let config_path = root.join("config");
     let playlist_path = root.join("playlist.m3u");
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_equalizer_visible(true),
+    );
 
     app.drop_on_playlist([
         "file:///music/session-one.ogg",
@@ -216,11 +220,18 @@ fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options(
     .click(MainTarget::NEXT)
     .click(MainTarget::SHUFFLE)
     .click(MainTarget::REPEAT)
+    .click(MainTarget::SHADE)
+    .click_panel(PanelTarget::EqualizerShade)
+    .click_panel(PanelTarget::PlaylistShade)
     .accept_jump_time("1:23")
     .save_runtime_snapshot(&config_path, &playlist_path);
 
     let loaded = load_saved_state(&config_path, &playlist_path, false).unwrap();
     assert!(loaded.config.playlist_visible);
+    assert!(loaded.config.equalizer_visible);
+    assert!(loaded.config.main_shaded);
+    assert!(loaded.config.equalizer_shaded);
+    assert!(loaded.config.playlist_shaded);
     assert!(loaded.playlist.shuffle());
     assert!(loaded.playlist.repeat());
     assert_eq!(loaded.playlist.position(), Some(1));
@@ -230,12 +241,17 @@ fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options(
         "file:///music/session-two.ogg"
     );
 
-    let mut restored = UiE2e::start_from_app_state(loaded);
+    let mut restored = UiE2e::start_from_app_state(loaded.clone());
     restored
         .assert_playlist_position(Some(1))
         .assert_shuffle(true)
         .assert_repeat(true)
         .assert_playback_position_ms(83_000);
+
+    UiE2e::start_from_app_state(loaded)
+        .assert_player_shaded()
+        .assert_equalizer_shaded()
+        .assert_playlist_shaded();
 
     fs::remove_dir_all(root).unwrap();
 }

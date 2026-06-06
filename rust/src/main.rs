@@ -44,25 +44,25 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
         } else if arg == "--equalizer" {
             options.show_equalizer = true;
         } else if arg == "--shade" || arg == "--main-shaded" || arg == "--shade-main" {
-            options.main_shaded = true;
+            options.main_shaded = Some(true);
         } else if arg == "--unshade-main" {
-            options.main_shaded = false;
+            options.main_shaded = Some(false);
         } else if arg == "--playlist-shaded" {
             options.show_playlist = true;
-            options.playlist_shaded = true;
+            options.playlist_shaded = Some(true);
         } else if arg == "--shade-playlist" {
             options.show_playlist = true;
-            options.playlist_shaded = true;
+            options.playlist_shaded = Some(true);
         } else if arg == "--unshade-playlist" {
-            options.playlist_shaded = false;
+            options.playlist_shaded = Some(false);
         } else if arg == "--equalizer-shaded" {
             options.show_equalizer = true;
-            options.equalizer_shaded = true;
+            options.equalizer_shaded = Some(true);
         } else if arg == "--shade-equalizer" {
             options.show_equalizer = true;
-            options.equalizer_shaded = true;
+            options.equalizer_shaded = Some(true);
         } else if arg == "--unshade-equalizer" {
-            options.equalizer_shaded = false;
+            options.equalizer_shaded = Some(false);
         } else if arg == "--playlist-undocked" || arg == "--undock-playlist" {
             options.show_playlist = true;
             options.playlist_detached = true;
@@ -165,9 +165,9 @@ mod tests {
 
         assert!(options.show_playlist);
         assert!(options.show_equalizer);
-        assert!(options.main_shaded);
-        assert!(options.playlist_shaded);
-        assert!(options.equalizer_shaded);
+        assert_eq!(options.main_shaded, Some(true));
+        assert_eq!(options.playlist_shaded, Some(true));
+        assert_eq!(options.equalizer_shaded, Some(true));
         assert!(options.playlist_detached);
         assert!(options.equalizer_detached);
         assert!(options.reset);

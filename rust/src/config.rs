@@ -21,13 +21,16 @@ pub struct Config {
     pub sticky: bool,
     pub doublesize: bool,
     pub easy_move: bool,
+    pub main_shaded: bool,
     pub playlist_visible: bool,
+    pub playlist_shaded: bool,
     pub playlist_detached: bool,
     pub shuffle: bool,
     pub repeat: bool,
     pub playlist_position: i32,
     pub playback_position_ms: i64,
     pub equalizer_visible: bool,
+    pub equalizer_shaded: bool,
     pub equalizer_detached: bool,
     pub equalizer_active: bool,
     pub equalizer_auto: bool,
@@ -84,13 +87,16 @@ impl Default for Config {
             sticky: false,
             doublesize: true,
             easy_move: false,
+            main_shaded: false,
             playlist_visible: false,
+            playlist_shaded: false,
             playlist_detached: false,
             shuffle: false,
             repeat: false,
             playlist_position: -1,
             playback_position_ms: 0,
             equalizer_visible: false,
+            equalizer_shaded: false,
             equalizer_detached: false,
             equalizer_active: true,
             equalizer_auto: false,
@@ -158,7 +164,9 @@ impl Config {
             get_bool(&keys, "no_playlist_advance").unwrap_or(cfg.no_playlist_advance);
         cfg.sticky = get_bool(&keys, "sticky").unwrap_or(cfg.sticky);
         cfg.easy_move = get_bool(&keys, "easy_move").unwrap_or(cfg.easy_move);
+        cfg.main_shaded = get_bool(&keys, "main_shaded").unwrap_or(cfg.main_shaded);
         cfg.playlist_visible = get_bool(&keys, "playlist_visible").unwrap_or(cfg.playlist_visible);
+        cfg.playlist_shaded = get_bool(&keys, "playlist_shaded").unwrap_or(cfg.playlist_shaded);
         cfg.playlist_detached =
             get_bool(&keys, "playlist_detached").unwrap_or(cfg.playlist_detached);
         cfg.shuffle = get_bool(&keys, "shuffle").unwrap_or(cfg.shuffle);
@@ -170,6 +178,7 @@ impl Config {
             .max(0);
         cfg.equalizer_visible =
             get_bool(&keys, "equalizer_visible").unwrap_or(cfg.equalizer_visible);
+        cfg.equalizer_shaded = get_bool(&keys, "equalizer_shaded").unwrap_or(cfg.equalizer_shaded);
         cfg.equalizer_detached =
             get_bool(&keys, "equalizer_detached").unwrap_or(cfg.equalizer_detached);
         cfg.equalizer_active = get_bool(&keys, "equalizer_active").unwrap_or(cfg.equalizer_active);
@@ -197,30 +206,56 @@ impl Config {
         if let Some(value) = get_non_empty_string(&keys, "title_format") {
             cfg.title_format = value;
         }
-        cfg.vis_mode = VisMode::from_i32(get_i32(&keys, "vis_mode").unwrap_or(cfg.vis_mode as i32));
+        cfg.vis_mode = VisMode::from_i32(
+            get_i32(&keys, "vis_mode")
+                .or_else(|| get_i32(&keys, "vis_type"))
+                .unwrap_or(cfg.vis_mode as i32),
+        );
         cfg.vis_analyzer_mode = VisAnalyzerMode::from_i32(
-            get_i32(&keys, "vis_analyzer_mode").unwrap_or(cfg.vis_analyzer_mode as i32),
+            get_i32(&keys, "vis_analyzer_mode")
+                .or_else(|| get_i32(&keys, "analyzer_mode"))
+                .unwrap_or(cfg.vis_analyzer_mode as i32),
         );
         cfg.vis_analyzer_style = VisAnalyzerStyle::from_i32(
-            get_i32(&keys, "vis_analyzer_style").unwrap_or(cfg.vis_analyzer_style as i32),
+            get_i32(&keys, "vis_analyzer_style")
+                .or_else(|| get_i32(&keys, "analyzer_type"))
+                .unwrap_or(cfg.vis_analyzer_style as i32),
         );
         cfg.vis_scope_mode = VisScopeMode::from_i32(
-            get_i32(&keys, "vis_scope_mode").unwrap_or(cfg.vis_scope_mode as i32),
+            get_i32(&keys, "vis_scope_mode")
+                .or_else(|| get_i32(&keys, "scope_mode"))
+                .unwrap_or(cfg.vis_scope_mode as i32),
         );
-        cfg.vis_peaks_enabled =
-            get_bool(&keys, "vis_peaks_enabled").unwrap_or(cfg.vis_peaks_enabled);
+        cfg.vis_peaks_enabled = get_bool(&keys, "vis_peaks_enabled")
+            .or_else(|| get_bool(&keys, "analyzer_peaks"))
+            .unwrap_or(cfg.vis_peaks_enabled);
         cfg.vis_falloff = get_f64(&keys, "vis_falloff")
             .unwrap_or(cfg.vis_falloff)
             .clamp(0.001, 0.25);
         cfg.vis_analyzer_falloff = VisFalloffSpeed::from_i32(
-            get_i32(&keys, "vis_analyzer_falloff").unwrap_or(cfg.vis_analyzer_falloff as i32),
+            get_i32(&keys, "vis_analyzer_falloff")
+                .or_else(|| get_i32(&keys, "analyzer_falloff"))
+                .unwrap_or(cfg.vis_analyzer_falloff as i32),
         );
         cfg.vis_peaks_falloff = VisFalloffSpeed::from_i32(
-            get_i32(&keys, "vis_peaks_falloff").unwrap_or(cfg.vis_peaks_falloff as i32),
+            get_i32(&keys, "vis_peaks_falloff")
+                .or_else(|| get_i32(&keys, "peaks_falloff"))
+                .unwrap_or(cfg.vis_peaks_falloff as i32),
         );
-        cfg.vis_vu_mode =
-            VisVuMode::from_i32(get_i32(&keys, "vis_vu_mode").unwrap_or(cfg.vis_vu_mode as i32));
+        cfg.vis_vu_mode = VisVuMode::from_i32(
+            get_i32(&keys, "vis_vu_mode")
+                .or_else(|| get_i32(&keys, "vu_mode"))
+                .unwrap_or(cfg.vis_vu_mode as i32),
+        );
         cfg.vis_refresh_divisor = get_i32(&keys, "vis_refresh_divisor")
+            .or_else(|| {
+                get_i32(&keys, "vis_refresh").map(|refresh| match refresh {
+                    1 => 2,
+                    2 => 4,
+                    3 => 8,
+                    _ => 1,
+                })
+            })
             .unwrap_or(cfg.vis_refresh_divisor)
             .clamp(1, 8);
         cfg.podcast_cache_ttl_days = get_i32(&keys, "podcast_cache_ttl_days")
@@ -244,13 +279,16 @@ impl Config {
         push_bool(&mut out, "sticky", self.sticky);
         push_bool(&mut out, "doublesize", self.scale_factor > 1.0);
         push_bool(&mut out, "easy_move", self.easy_move);
+        push_bool(&mut out, "main_shaded", self.main_shaded);
         push_bool(&mut out, "playlist_visible", self.playlist_visible);
+        push_bool(&mut out, "playlist_shaded", self.playlist_shaded);
         push_bool(&mut out, "playlist_detached", self.playlist_detached);
         push_bool(&mut out, "shuffle", self.shuffle);
         push_bool(&mut out, "repeat", self.repeat);
         push_i32(&mut out, "playlist_position", self.playlist_position);
         push_i64(&mut out, "playback_position_ms", self.playback_position_ms);
         push_bool(&mut out, "equalizer_visible", self.equalizer_visible);
+        push_bool(&mut out, "equalizer_shaded", self.equalizer_shaded);
         push_bool(&mut out, "equalizer_detached", self.equalizer_detached);
         push_bool(&mut out, "equalizer_active", self.equalizer_active);
         push_bool(&mut out, "equalizer_auto", self.equalizer_auto);
@@ -272,23 +310,45 @@ impl Config {
         push_string(&mut out, "mainwin_font", &self.mainwin_font);
         push_string(&mut out, "title_format", &self.title_format);
         push_i32(&mut out, "vis_mode", self.vis_mode as i32);
+        push_i32(&mut out, "vis_type", self.vis_mode as i32);
         push_i32(&mut out, "vis_analyzer_mode", self.vis_analyzer_mode as i32);
+        push_i32(&mut out, "analyzer_mode", self.vis_analyzer_mode as i32);
         push_i32(
             &mut out,
             "vis_analyzer_style",
             self.vis_analyzer_style as i32,
         );
+        push_i32(&mut out, "analyzer_type", self.vis_analyzer_style as i32);
         push_i32(&mut out, "vis_scope_mode", self.vis_scope_mode as i32);
+        push_i32(&mut out, "scope_mode", self.vis_scope_mode as i32);
         push_bool(&mut out, "vis_peaks_enabled", self.vis_peaks_enabled);
+        push_bool(&mut out, "analyzer_peaks", self.vis_peaks_enabled);
         push_f64(&mut out, "vis_falloff", self.vis_falloff);
         push_i32(
             &mut out,
             "vis_analyzer_falloff",
             self.vis_analyzer_falloff as i32,
         );
+        push_i32(
+            &mut out,
+            "analyzer_falloff",
+            self.vis_analyzer_falloff as i32,
+        );
         push_i32(&mut out, "vis_peaks_falloff", self.vis_peaks_falloff as i32);
+        push_i32(&mut out, "peaks_falloff", self.vis_peaks_falloff as i32);
         push_i32(&mut out, "vis_vu_mode", self.vis_vu_mode as i32);
+        push_i32(&mut out, "vu_mode", self.vis_vu_mode as i32);
         push_i32(&mut out, "vis_refresh_divisor", self.vis_refresh_divisor);
+        push_i32(
+            &mut out,
+            "vis_refresh",
+            match self.vis_refresh_divisor {
+                2 => 1,
+                4 => 2,
+                8 => 3,
+                _ => 0,
+            },
+        );
         push_i32(
             &mut out,
             "podcast_cache_ttl_days",
@@ -386,6 +446,9 @@ mod tests {
         assert_eq!(cfg.scale_factor, 2.0);
         assert_eq!(cfg.volume, 100);
         assert_eq!(cfg.balance, 0);
+        assert!(!cfg.main_shaded);
+        assert!(!cfg.playlist_shaded);
+        assert!(!cfg.equalizer_shaded);
         assert_eq!(cfg.equalizer_band_pos, [50; 10]);
         assert_eq!(cfg.playlist_font, "Helvetica");
         assert_eq!(cfg.title_format, "%p - %t");
@@ -402,6 +465,9 @@ mod tests {
              volume=250\n\
              balance=-250\n\
              equalizer_band_3_pos=75\n\
+             main_shaded=true\n\
+             playlist_shaded=true\n\
+             equalizer_shaded=true\n\
              playlist_font=Monospace\n\
              vis_mode=1\n\
              vis_refresh_divisor=99\n\
@@ -414,10 +480,39 @@ mod tests {
         assert_eq!(cfg.volume, 100);
         assert_eq!(cfg.balance, -100);
         assert_eq!(cfg.equalizer_band_pos[3], 75);
+        assert!(cfg.main_shaded);
+        assert!(cfg.playlist_shaded);
+        assert!(cfg.equalizer_shaded);
         assert_eq!(cfg.playlist_font, "Monospace");
         assert_eq!(cfg.vis_mode, VisMode::Scope);
         assert_eq!(cfg.vis_refresh_divisor, 8);
         assert_eq!(cfg.podcast_cache_ttl_days, 1);
+    }
+
+    #[test]
+    fn loads_legacy_xmms_visualization_keys() {
+        let cfg = Config::from_key_file_str(
+            "[xmms]\n\
+             vis_type=1\n\
+             analyzer_mode=2\n\
+             analyzer_type=1\n\
+             analyzer_peaks=false\n\
+             scope_mode=2\n\
+             analyzer_falloff=4\n\
+             peaks_falloff=0\n\
+             vu_mode=1\n\
+             vis_refresh=3\n",
+        );
+
+        assert_eq!(cfg.vis_mode, VisMode::Scope);
+        assert_eq!(cfg.vis_analyzer_mode, VisAnalyzerMode::VerticalLines);
+        assert_eq!(cfg.vis_analyzer_style, VisAnalyzerStyle::Lines);
+        assert!(!cfg.vis_peaks_enabled);
+        assert_eq!(cfg.vis_scope_mode, VisScopeMode::Solid);
+        assert_eq!(cfg.vis_analyzer_falloff, VisFalloffSpeed::Fastest);
+        assert_eq!(cfg.vis_peaks_falloff, VisFalloffSpeed::Slowest);
+        assert_eq!(cfg.vis_vu_mode, VisVuMode::Smooth);
+        assert_eq!(cfg.vis_refresh_divisor, 8);
     }
 
     #[test]
@@ -426,6 +521,9 @@ mod tests {
             skin: Some("/skins/classic".to_string()),
             output_device: Some("pipewire.node".to_string()),
             playlist_visible: true,
+            main_shaded: true,
+            playlist_shaded: true,
+            equalizer_shaded: true,
             equalizer_band_pos: [10; 10],
             ..Config::default()
         };
@@ -441,6 +539,9 @@ mod tests {
         assert_eq!(reparsed.skin, cfg.skin);
         assert_eq!(reparsed.output_device, cfg.output_device);
         assert!(reparsed.playlist_visible);
+        assert!(reparsed.main_shaded);
+        assert!(reparsed.playlist_shaded);
+        assert!(reparsed.equalizer_shaded);
         assert_eq!(reparsed.equalizer_band_pos, [10; 10]);
         assert_eq!(reparsed.vis_mode, VisMode::Off);
     }

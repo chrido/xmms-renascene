@@ -47,9 +47,9 @@ type PreferencesChanged = Rc<dyn Fn()>;
 pub struct PreviewOptions {
     pub show_playlist: bool,
     pub show_equalizer: bool,
-    pub main_shaded: bool,
-    pub playlist_shaded: bool,
-    pub equalizer_shaded: bool,
+    pub main_shaded: Option<bool>,
+    pub playlist_shaded: Option<bool>,
+    pub equalizer_shaded: Option<bool>,
     pub playlist_detached: bool,
     pub equalizer_detached: bool,
     pub playlist_size: Option<(i32, i32)>,
@@ -139,9 +139,15 @@ fn build_preview_window(
         if options.show_equalizer {
             state.app_state.config.equalizer_visible = true;
         }
-        state.shaded = options.main_shaded;
-        state.playlist_shaded = options.playlist_shaded;
-        state.equalizer_shaded = options.equalizer_shaded;
+        if let Some(shaded) = options.main_shaded {
+            state.shaded = shaded;
+        }
+        if let Some(shaded) = options.playlist_shaded {
+            state.playlist_shaded = shaded;
+        }
+        if let Some(shaded) = options.equalizer_shaded {
+            state.equalizer_shaded = shaded;
+        }
         state.app_state.config.playlist_detached = options.playlist_detached;
         state.app_state.config.equalizer_detached = options.equalizer_detached;
         if let Some(skin_path) = options.skin_path {
@@ -3140,15 +3146,18 @@ impl Default for MainWindowUiState {
 impl MainWindowUiState {
     pub(crate) fn from_app_state(app_state: AppState) -> Self {
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
+        let main_shaded = app_state.config.main_shaded;
+        let equalizer_shaded = app_state.config.equalizer_shaded;
+        let playlist_shaded = app_state.config.playlist_shaded;
         let mut state = Self {
             app_state,
             playback_backend: None,
             duration_index_sender,
             duration_index_receiver,
             playback_requests: Vec::new(),
-            shaded: false,
+            shaded: main_shaded,
             menu_visible: false,
-            equalizer_shaded: false,
+            equalizer_shaded,
             equalizer_focused: false,
             equalizer_dragging_title: false,
             equalizer_active: true,
@@ -3158,7 +3167,7 @@ impl MainWindowUiState {
             equalizer_dragging: None,
             equalizer_preamp_position: 50,
             equalizer_band_positions: [50; 10],
-            playlist_shaded: false,
+            playlist_shaded,
             playlist_focused: false,
             playlist_dragging_title: false,
             playlist_width: PLAYLIST_DEFAULT_WIDTH,
@@ -3234,6 +3243,9 @@ impl MainWindowUiState {
         playlist_path: &Path,
     ) -> io::Result<()> {
         self.app_state.config.playback_position_ms = self.playback_position_ms.max(0);
+        self.app_state.config.main_shaded = self.shaded;
+        self.app_state.config.playlist_shaded = self.playlist_shaded;
+        self.app_state.config.equalizer_shaded = self.equalizer_shaded;
         save_fallback_state(&mut self.app_state, config_path, playlist_path)
     }
 

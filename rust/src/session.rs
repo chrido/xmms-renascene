@@ -65,18 +65,20 @@ pub fn parse_session_command(args: &[String]) -> Result<SessionCommand, String> 
                 command.options.show_equalizer = true;
                 command.options.equalizer_detached = true;
             }
-            "--shade-main" | "--shade" | "--main-shaded" => command.options.main_shaded = true,
-            "--unshade-main" => command.options.main_shaded = false,
+            "--shade-main" | "--shade" | "--main-shaded" => {
+                command.options.main_shaded = Some(true)
+            }
+            "--unshade-main" => command.options.main_shaded = Some(false),
             "--shade-playlist" | "--playlist-shaded" => {
                 command.options.show_playlist = true;
-                command.options.playlist_shaded = true;
+                command.options.playlist_shaded = Some(true);
             }
-            "--unshade-playlist" => command.options.playlist_shaded = false,
+            "--unshade-playlist" => command.options.playlist_shaded = Some(false),
             "--shade-equalizer" | "--equalizer-shaded" => {
                 command.options.show_equalizer = true;
-                command.options.equalizer_shaded = true;
+                command.options.equalizer_shaded = Some(true);
             }
-            "--unshade-equalizer" => command.options.equalizer_shaded = false,
+            "--unshade-equalizer" => command.options.equalizer_shaded = Some(false),
             "--reset" => command.options.reset = true,
             "--playlist-menu-add" => command.playlist_menu = Some(PlaylistMenuKind::Add),
             "--playlist-menu-remove" => command.playlist_menu = Some(PlaylistMenuKind::Remove),
@@ -282,7 +284,7 @@ mod tests {
 
         assert!(command.options.show_playlist);
         assert!(command.options.playlist_detached);
-        assert!(command.options.playlist_shaded);
+        assert_eq!(command.options.playlist_shaded, Some(true));
         assert!(command.options.show_equalizer);
         assert!(command.options.equalizer_detached);
         assert_eq!(command.playlist_menu, Some(PlaylistMenuKind::List));
