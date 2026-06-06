@@ -1,9 +1,13 @@
+use std::path::Path;
+
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
-use crate::ui::{MainWindowUiState, PanelKind, PlaylistContextAction, PlaylistMenuKind, UiAction};
+use crate::ui::{
+    MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind, UiAction,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerSettings {
@@ -264,13 +268,39 @@ impl UiE2e {
         let (x, y0) = self.playlist_menu_anchor();
         let y = 174 + item as i32 * 18 + 8;
         self.state.playlist_press(x, y0 + (y - 174));
-        self.state.playlist_release(x, y0 + (y - 174));
+        match self.state.playlist_release(x, y0 + (y - 174)) {
+            PanelAction::OpenPlaylistLoadDialog => {
+                self.state.set_playlist_load_dialog_visible(true)
+            }
+            PanelAction::OpenPlaylistSaveDialog => {
+                self.state.set_playlist_save_dialog_visible(true)
+            }
+            _ => {}
+        }
         self.sync_windows();
         self
     }
 
     pub fn activate_playlist_context_action(&mut self, action: PlaylistContextAction) -> &mut Self {
         self.state.activate_playlist_context_action(action);
+        self.sync_windows();
+        self
+    }
+
+    pub fn accept_playlist_load(&mut self, path: &Path) -> &mut Self {
+        self.state
+            .load_playlist_file(path)
+            .expect("playlist load should succeed");
+        self.state.set_playlist_load_dialog_visible(false);
+        self.sync_windows();
+        self
+    }
+
+    pub fn accept_playlist_save(&mut self, path: &Path) -> &mut Self {
+        self.state
+            .save_playlist_file(path)
+            .expect("playlist save should succeed");
+        self.state.set_playlist_save_dialog_visible(false);
         self.sync_windows();
         self
     }
@@ -582,6 +612,22 @@ impl UiE2e {
         assert!(
             self.directory_dialog_visible || self.state.is_directory_dialog_visible(),
             "expected open directory dialog to be visible"
+        );
+        self
+    }
+
+    pub fn assert_playlist_load_dialog_visible(&mut self) -> &mut Self {
+        assert!(
+            self.state.is_playlist_load_dialog_visible(),
+            "expected playlist load dialog to be visible"
+        );
+        self
+    }
+
+    pub fn assert_playlist_save_dialog_visible(&mut self) -> &mut Self {
+        assert!(
+            self.state.is_playlist_save_dialog_visible(),
+            "expected playlist save dialog to be visible"
         );
         self
     }

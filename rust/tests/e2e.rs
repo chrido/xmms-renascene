@@ -777,6 +777,53 @@ fn playlist_search_selects_matching_rows_and_tracks_query_editing() {
 }
 
 #[test]
+fn playlist_list_save_opens_dialog_and_writes_m3u() {
+    let root = unique_temp_dir("xmms-rs-playlist-save");
+    fs::create_dir_all(&root).unwrap();
+    let playlist_path = root.join("saved.m3u");
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.accept_open_location("file:///tmp/save-one.mp3")
+        .accept_open_location("https://example.test/save-two.ogg")
+        .click_panel(PanelTarget::PlaylistList)
+        .activate_playlist_menu_item(1)
+        .assert_playlist_save_dialog_visible()
+        .accept_playlist_save(&playlist_path);
+
+    let saved = fs::read_to_string(&playlist_path).unwrap();
+    assert!(saved.contains("#EXTM3U"));
+    assert!(saved.contains("file:///tmp/save-one.mp3"));
+    assert!(saved.contains("https://example.test/save-two.ogg"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn playlist_list_load_opens_dialog_and_replaces_entries_from_m3u() {
+    let root = unique_temp_dir("xmms-rs-playlist-load");
+    fs::create_dir_all(&root).unwrap();
+    let playlist_path = root.join("loaded.m3u");
+    fs::write(
+        &playlist_path,
+        "#EXTM3U\n#EXTINF:42,Loaded Title\nfile:///tmp/loaded-one.mp3\nhttps://example.test/loaded-two.ogg\n",
+    )
+    .unwrap();
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.accept_open_location("file:///tmp/original.mp3")
+        .click_panel(PanelTarget::PlaylistList)
+        .activate_playlist_menu_item(2)
+        .assert_playlist_load_dialog_visible()
+        .accept_playlist_load(&playlist_path)
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/loaded-one.mp3")
+        .assert_playlist_title(0, "Loaded Title")
+        .assert_playlist_length_ms(0, 42_000)
+        .assert_playlist_entry(1, "https://example.test/loaded-two.ogg");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn playlist_can_resize_from_default_dimensions() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 

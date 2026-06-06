@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -6,7 +7,7 @@ use gtk::prelude::*;
 
 use crate::app_state::AppState;
 use crate::player::PlayerState;
-use crate::playlist::{DurationIndexResult, PlaylistSortKey};
+use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
     render_playlist_rows, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
@@ -1187,6 +1188,8 @@ impl PlaylistMenuKind {
 pub(crate) enum PanelAction {
     None,
     Changed,
+    OpenPlaylistLoadDialog,
+    OpenPlaylistSaveDialog,
     ShowPlaylistMenu(PlaylistMenuKind),
     ShowEqualizerPresets,
 }
@@ -1306,6 +1309,18 @@ fn add_panel_click_controller(
                 PanelAction::Changed => {
                     sync_single_panel_window_from_state(kind, &window, &area, &main_state);
                     main_area.queue_draw();
+                }
+                PanelAction::OpenPlaylistLoadDialog => {
+                    main_state
+                        .borrow_mut()
+                        .set_playlist_load_dialog_visible(true);
+                    show_playlist_load_dialog(&window, Rc::clone(&main_state), area.clone());
+                }
+                PanelAction::OpenPlaylistSaveDialog => {
+                    main_state
+                        .borrow_mut()
+                        .set_playlist_save_dialog_visible(true);
+                    show_playlist_save_dialog(&window, Rc::clone(&main_state));
                 }
                 PanelAction::ShowPlaylistMenu(menu) => {
                     let _ = menu;
@@ -1546,6 +1561,8 @@ pub(crate) struct MainWindowUiState {
     playlist_scrollbar_drag_offset: i32,
     playlist_search_active: bool,
     playlist_search_query: String,
+    playlist_load_dialog_visible: bool,
+    playlist_save_dialog_visible: bool,
     preferences_visible: bool,
     open_location_visible: bool,
     jump_time_visible: bool,
@@ -1596,6 +1613,8 @@ impl MainWindowUiState {
             playlist_scrollbar_drag_offset: 0,
             playlist_search_active: false,
             playlist_search_query: String::new(),
+            playlist_load_dialog_visible: false,
+            playlist_save_dialog_visible: false,
             preferences_visible: false,
             open_location_visible: false,
             jump_time_visible: false,
@@ -1753,6 +1772,34 @@ impl MainWindowUiState {
 
     pub(crate) fn set_directory_dialog_visible(&mut self, visible: bool) {
         self.directory_dialog_visible = visible;
+    }
+
+    pub(crate) fn is_playlist_load_dialog_visible(&self) -> bool {
+        self.playlist_load_dialog_visible
+    }
+
+    pub(crate) fn set_playlist_load_dialog_visible(&mut self, visible: bool) {
+        self.playlist_load_dialog_visible = visible;
+    }
+
+    pub(crate) fn is_playlist_save_dialog_visible(&self) -> bool {
+        self.playlist_save_dialog_visible
+    }
+
+    pub(crate) fn set_playlist_save_dialog_visible(&mut self, visible: bool) {
+        self.playlist_save_dialog_visible = visible;
+    }
+
+    pub(crate) fn load_playlist_file(&mut self, path: &Path) -> std::io::Result<()> {
+        self.app_state.playlist = Playlist::load_m3u_file(path)?;
+        self.playlist_scroll_offset = 0;
+        self.playlist_search_active = false;
+        self.playlist_search_query.clear();
+        Ok(())
+    }
+
+    pub(crate) fn save_playlist_file(&self, path: &Path) -> std::io::Result<()> {
+        self.app_state.playlist.save_m3u_file(path)
     }
 
     pub(crate) fn last_open_location(&self) -> Option<&str> {
@@ -2226,6 +2273,8 @@ impl MainWindowUiState {
                 self.app_state.playlist.clear();
                 true
             }
+            (PlaylistMenuKind::List, 1) => return PanelAction::OpenPlaylistSaveDialog,
+            (PlaylistMenuKind::List, 2) => return PanelAction::OpenPlaylistLoadDialog,
             _ => false,
         };
         if changed {
@@ -3011,6 +3060,66 @@ fn show_open_directory_dialog(
             if response == gtk::ResponseType::Accept {
                 let uri = dialog.file().map(|file| file.uri().to_string());
                 state.accept_opened_uris(uri);
+            }
+        }
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn show_playlist_load_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    playlist_area: gtk::DrawingArea,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Load Playlist"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        Some("Open"),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_playlist_load_dialog_visible(false);
+            if response == gtk::ResponseType::Accept {
+                if let Some(path) = dialog.file().and_then(|file| file.path()) {
+                    if let Err(err) = state.load_playlist_file(&path) {
+                        eprintln!("xmms-rs: failed to load playlist {}: {err}", path.display());
+                    }
+                }
+            }
+        }
+        playlist_area.queue_draw();
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn show_playlist_save_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Save Playlist"),
+        Some(parent),
+        gtk::FileChooserAction::Save,
+        Some("Save"),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_playlist_save_dialog_visible(false);
+            if response == gtk::ResponseType::Accept {
+                if let Some(path) = dialog.file().and_then(|file| file.path()) {
+                    if let Err(err) = state.save_playlist_file(&path) {
+                        eprintln!("xmms-rs: failed to save playlist {}: {err}", path.display());
+                    }
+                }
             }
         }
         dialog_for_response.destroy();
