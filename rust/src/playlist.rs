@@ -434,6 +434,20 @@ impl Playlist {
         self.refresh_position(current.as_ref());
     }
 
+    pub fn move_entry(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.entries.len() || to >= self.entries.len() || from == to {
+            return false;
+        }
+
+        let current = self
+            .position
+            .and_then(|position| self.entries.get(position).cloned());
+        let entry = self.entries.remove(from);
+        self.entries.insert(to, entry);
+        self.refresh_position(current.as_ref());
+        true
+    }
+
     pub fn missing_duration_items(&self) -> Vec<DurationIndexItem> {
         self.entries
             .iter()
@@ -893,7 +907,7 @@ fn path_to_file_uri(path: &Path) -> String {
     format!("file://{}", percent_encode_path(&path.to_string_lossy()))
 }
 
-fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+pub(crate) fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
     uri.strip_prefix("file://")
         .map(percent_decode)
         .map(PathBuf::from)

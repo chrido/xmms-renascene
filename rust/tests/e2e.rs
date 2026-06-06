@@ -756,6 +756,50 @@ fn playlist_sort_e2e_orders_entries_and_preserves_current_item() {
 }
 
 #[test]
+fn playlist_row_selection_footer_and_drag_reorder_are_wired() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.add_spotify_entry("spotify:track:one", "One", 60_000)
+        .add_playlist_uri("file:///music/unknown.ogg")
+        .add_spotify_entry("spotify:track:two", "Two", 90_000)
+        .assert_playlist_footer_info("0:00/2:30+")
+        .click_playlist_row(1)
+        .assert_playlist_entry_selected(0, false)
+        .assert_playlist_entry_selected(1, true)
+        .assert_playlist_entry_selected(2, false)
+        .assert_playlist_footer_info("?/2:30+")
+        .drag_playlist_row(1, 0)
+        .assert_playlist_entry(0, "file:///music/unknown.ogg")
+        .assert_playlist_entry(1, "spotify:track:one")
+        .assert_playlist_entry_selected(0, true)
+        .assert_playlist_footer_info("?/2:30+")
+        .drag_playlist_row(2, 1)
+        .assert_playlist_entry(0, "file:///music/unknown.ogg")
+        .assert_playlist_entry(1, "spotify:track:two")
+        .assert_playlist_entry(2, "spotify:track:one");
+}
+
+#[test]
+fn clicked_playlist_rows_update_single_selection() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist([
+        "file:///music/4-zulu.ogg",
+        "file:///music/3-charlie.ogg",
+        "file:///music/2-bravo.ogg",
+        "file:///music/1-alpha.ogg",
+    ])
+    .click_playlist_row(0)
+    .assert_playlist_entry_selected(0, true)
+    .click_playlist_row(2)
+    .assert_playlist_entry_selected(0, false)
+    .assert_playlist_entry_selected(2, true)
+    .click_playlist_row(3)
+    .assert_playlist_entry_selected(2, false)
+    .assert_playlist_entry_selected(3, true);
+}
+
+#[test]
 fn playlist_sort_e2e_supports_title_and_date_keys() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

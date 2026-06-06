@@ -1464,6 +1464,7 @@ pub fn render_playlist_frame(
     width: i32,
     height: i32,
     shaded_info: Option<&str>,
+    footer_info: Option<&str>,
 ) -> Result<bool, RenderError> {
     let width = width.max(PLAYLIST_MIN_WIDTH);
     let height = playlist_window_height(shaded, height);
@@ -1564,6 +1565,7 @@ pub fn render_playlist_frame(
     cr.set_source_rgb(10.0 / 255.0, 18.0 / 255.0, 26.0 / 255.0);
     cr.rectangle(f64::from(width - 82), f64::from(height - 15), 28.0, 9.0);
     cr.fill()?;
+    draw_playlist_footer_info(cr, width, height, footer_info.unwrap_or(""))?;
 
     Ok(true)
 }
@@ -1725,6 +1727,25 @@ fn draw_playlist_shaded_info(cr: &Context, width: i32, text: &str) -> Result<(),
     cr.rectangle(4.0, 3.0, f64::from((width - 35).max(1)), 8.0);
     cr.clip();
     cr.move_to(4.0, 10.0);
+    cr.show_text(text)?;
+    cr.restore()?;
+    Ok(())
+}
+
+fn draw_playlist_footer_info(
+    cr: &Context,
+    width: i32,
+    height: i32,
+    text: &str,
+) -> Result<(), RenderError> {
+    cr.save()?;
+    cr.set_source_rgb(0.58, 0.82, 0.58);
+    set_playlist_font(cr, "Helvetica");
+    let x = (width - 143).max(1);
+    let y = height - 9;
+    cr.rectangle(f64::from(x), f64::from(height - 17), 58.0, 11.0);
+    cr.clip();
+    cr.move_to(f64::from(x), f64::from(y));
     cr.show_text(text)?;
     cr.restore()?;
     Ok(())
@@ -1972,6 +1993,7 @@ pub fn render_docked_panels(
             state.playlist_shaded,
             state.playlist_width,
             state.playlist_height,
+            None,
             None,
         )?;
         cr.restore()?;

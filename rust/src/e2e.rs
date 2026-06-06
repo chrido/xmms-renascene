@@ -490,6 +490,44 @@ impl UiE2e {
         self
     }
 
+    pub fn click_playlist_row(&mut self, index: usize) -> &mut Self {
+        let y = self.playlist_row_y(index);
+        assert!(
+            self.state.playlist_press(20, y),
+            "expected playlist row {index} press to select an entry"
+        );
+        self.state.playlist_entry_release();
+        self.sync_windows();
+        self
+    }
+
+    pub fn drag_playlist_row(&mut self, from: usize, to: usize) -> &mut Self {
+        let from_y = self.playlist_row_y(from);
+        let to_y = self.playlist_row_y(to);
+        assert!(
+            self.state.playlist_press(20, from_y),
+            "expected playlist row {from} press to start dragging"
+        );
+        self.state.playlist_motion(20, to_y);
+        self.state.playlist_entry_release();
+        self.sync_windows();
+        self
+    }
+
+    fn playlist_row_y(&self, index: usize) -> i32 {
+        let offset = self.state.playlist_scroll_offset();
+        assert!(
+            index >= offset,
+            "playlist entry {index} is above visible offset {offset}"
+        );
+        let visible_row = index - offset;
+        assert!(
+            visible_row < ((self.state.playlist_size().1 - 58).max(0) / 11) as usize,
+            "playlist entry {index} is not visible"
+        );
+        20 + visible_row as i32 * 11 + 5
+    }
+
     pub fn start_playlist_size(&mut self, width: i32, height: i32) -> &mut Self {
         self.state.set_playlist_size(width, height);
         self.state.set_playlist_visible(true);
@@ -1015,6 +1053,16 @@ impl UiE2e {
 
     pub fn assert_playlist_scrollbar_visible(&mut self, expected: bool) -> &mut Self {
         assert_eq!(self.state.playlist_scrollbar_visible(), expected);
+        self
+    }
+
+    pub fn assert_playlist_entry_selected(&mut self, index: usize, expected: bool) -> &mut Self {
+        assert_eq!(self.state.playlist_entry_selected(index), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_footer_info(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.playlist_footer_info(), expected);
         self
     }
 

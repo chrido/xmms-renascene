@@ -17,7 +17,7 @@ use crate::player::{
     equalizer_position_to_db, group_output_devices, list_gstreamer_output_devices,
     GStreamerBackend, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlayerState,
 };
-use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
+use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, playlist_window_height,
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
@@ -165,6 +165,11 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         &panel_windows.skin_browser,
         &main_state,
     ));
+    let playlist_sort_popover = Rc::new(build_playlist_sort_popover(
+        &drawing_area,
+        &main_state,
+        &drawing_area,
+    ));
 
     {
         let skin = Rc::clone(&skin);
@@ -228,6 +233,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let window = window.clone();
         let drawing_area = drawing_area.clone();
         let menu_popover = Rc::clone(&menu_popover);
+        let playlist_sort_popover = Rc::clone(&playlist_sort_popover);
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
@@ -256,6 +262,8 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
                                 PanelAction::Changed
                             } else if state.playlist_menu_pressed() {
                                 state.playlist_release(panel_x, panel_y)
+                            } else if state.playlist_entry_release() {
+                                PanelAction::Changed
                             } else {
                                 state.panel_click(kind, panel_x, panel_y)
                             }
@@ -268,6 +276,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
                     &drawing_area,
                     &panel_windows,
                     &main_state,
+                    &playlist_sort_popover,
                 );
                 drawing_area.queue_draw();
                 return;
@@ -735,6 +744,7 @@ fn render_docked_ui_state(
             state.playlist_width,
             state.playlist_height,
             Some(&state.shaded_playlist_info()),
+            Some(&state.playlist_footer_info()),
         )?;
         if !state.playlist_shaded {
             let current = state.app_state.playlist.position();
@@ -1053,6 +1063,7 @@ fn build_playlist_window(
             playlist_width,
             playlist_height,
             Some(&state.shaded_playlist_info()),
+            Some(&state.playlist_footer_info()),
         ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
@@ -2662,6 +2673,8 @@ fn add_panel_click_controller(
                 PanelAction::Changed
             } else if main_state.borrow().playlist_menu_pressed() {
                 main_state.borrow_mut().playlist_release(x, y)
+            } else if main_state.borrow_mut().playlist_entry_release() {
+                PanelAction::Changed
             } else {
                 main_state.borrow_mut().panel_click(kind, x, y)
             };
@@ -2811,6 +2824,7 @@ fn handle_panel_action_for_main_window(
     area: &gtk::DrawingArea,
     panel_windows: &Rc<PanelWindows>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
+    playlist_sort_menu: &gtk::Popover,
 ) {
     match action {
         PanelAction::None => {}
@@ -2842,9 +2856,11 @@ fn handle_panel_action_for_main_window(
                 .set_playlist_save_dialog_visible(true);
             show_playlist_save_dialog(window, Rc::clone(main_state));
         }
-        PanelAction::ShowPlaylistSortMenu
-        | PanelAction::ShowPlaylistMenu(_)
-        | PanelAction::ShowEqualizerPresets => {
+        PanelAction::ShowPlaylistSortMenu => {
+            show_playlist_sort_menu(playlist_sort_menu, area);
+            area.queue_draw();
+        }
+        PanelAction::ShowPlaylistMenu(_) | PanelAction::ShowEqualizerPresets => {
             area.queue_draw();
         }
     }
@@ -2993,6 +3009,7 @@ pub(crate) struct MainWindowUiState {
     playlist_scrollbar_drag_offset: i32,
     playlist_docked_resizing: bool,
     playlist_resize_drag_offset_y: i32,
+    playlist_drag_index: Option<usize>,
     playlist_search_active: bool,
     playlist_search_query: String,
     playlist_load_dialog_visible: bool,
@@ -3087,6 +3104,7 @@ impl MainWindowUiState {
             playlist_scrollbar_drag_offset: 0,
             playlist_docked_resizing: false,
             playlist_resize_drag_offset_y: 0,
+            playlist_drag_index: None,
             playlist_search_active: false,
             playlist_search_query: String::new(),
             playlist_load_dialog_visible: false,
@@ -3214,6 +3232,35 @@ impl MainWindowUiState {
             .max(0) as usize;
         let title = ellipsize_chars(&title, max_len);
         format!("{prefix}{title:<max_len$}{suffix}")
+    }
+
+    pub(crate) fn playlist_footer_info(&self) -> String {
+        let mut selected_ms = 0_i64;
+        let mut total_ms = 0_i64;
+        let mut selected_more = false;
+        let mut total_more = false;
+
+        for entry in self.app_state.playlist.entries() {
+            if entry.length_ms >= 0 {
+                total_ms += entry.length_ms;
+            } else {
+                total_more = true;
+            }
+
+            if entry.selected {
+                if entry.length_ms >= 0 {
+                    selected_ms += entry.length_ms;
+                } else {
+                    selected_more = true;
+                }
+            }
+        }
+
+        format!(
+            "{}/{}",
+            format_playlist_footer_duration(selected_ms, selected_more),
+            format_playlist_footer_duration(total_ms, total_more)
+        )
     }
 
     fn current_duration_ms(&self) -> Option<i64> {
@@ -3932,6 +3979,7 @@ impl MainWindowUiState {
         self.playlist_scroll_offset = 0;
         self.playlist_search_active = false;
         self.playlist_search_query.clear();
+        self.refresh_missing_local_playlist_durations();
         Ok(())
     }
 
@@ -4160,6 +4208,61 @@ impl MainWindowUiState {
             });
     }
 
+    fn refresh_missing_local_playlist_durations(&mut self) {
+        let has_local_file = self
+            .app_state
+            .playlist
+            .missing_duration_items()
+            .iter()
+            .any(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()));
+        if !has_local_file {
+            return;
+        }
+
+        if let Err(err) = gstreamer::init() {
+            eprintln!("xmms-rs: failed to initialize GStreamer for playlist durations: {err}");
+            return;
+        }
+        let discoverer =
+            match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5)) {
+                Ok(discoverer) => discoverer,
+                Err(err) => {
+                    eprintln!("xmms-rs: failed to create playlist duration discoverer: {err}");
+                    return;
+                }
+            };
+
+        let result = self
+            .app_state
+            .playlist
+            .index_missing_durations_with(|item| {
+                let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists()) else {
+                    return Ok::<_, std::convert::Infallible>(None);
+                };
+                let info = match discoverer.discover_uri(&item.uri) {
+                    Ok(info) => info,
+                    Err(err) => {
+                        eprintln!(
+                            "xmms-rs: failed to discover playlist item {}: {err}",
+                            path.display()
+                        );
+                        return Ok(None);
+                    }
+                };
+                let length_ms = info
+                    .duration()
+                    .map(|duration| duration.mseconds() as i64)
+                    .unwrap_or(-1);
+                Ok(Some(DurationIndexResult {
+                    index: item.index,
+                    uri: item.uri.clone(),
+                    length_ms,
+                    title: None,
+                }))
+            });
+        let _ = result;
+    }
+
     pub(crate) fn accept_open_location(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -4168,6 +4271,7 @@ impl MainWindowUiState {
         match self.app_state.playlist.add_location(text) {
             Ok(added) => {
                 if added > 0 {
+                    self.refresh_missing_local_playlist_durations();
                     if self.app_state.playlist.position().is_none() {
                         self.app_state.playlist.set_position(0);
                     }
@@ -4205,6 +4309,9 @@ impl MainWindowUiState {
         }
         if accepted && clear_first {
             self.app_state.playlist.set_position(0);
+        }
+        if accepted {
+            self.refresh_missing_local_playlist_durations();
         }
         if accepted && start_playback {
             self.start_current_playlist_playback();
@@ -4502,15 +4609,36 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_press(&mut self, x: i32, y: i32) -> bool {
-        let Some(item) = self.playlist_menu_item_at(x, y) else {
+        if let Some(item) = self.playlist_menu_item_at(x, y) {
+            self.playlist_menu_hover = Some(item);
+            self.playlist_menu_pressed = true;
+            return true;
+        }
+        if self.playlist_menu.is_some() {
+            return false;
+        }
+
+        let Some(index) = self.playlist_entry_at(x, y) else {
             return false;
         };
-        self.playlist_menu_hover = Some(item);
-        self.playlist_menu_pressed = true;
+        self.select_single_playlist_entry(index);
+        self.playlist_drag_index = Some(index);
         true
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
+        if let Some(from) = self.playlist_drag_index {
+            let Some(to) = self.playlist_entry_at(x, y) else {
+                return false;
+            };
+            if self.app_state.playlist.move_entry(from, to) {
+                self.playlist_drag_index = Some(to);
+                self.scroll_playlist_entry_into_view(to);
+                return true;
+            }
+            return false;
+        }
+
         if self.playlist_menu.is_none() {
             return false;
         }
@@ -4518,6 +4646,10 @@ impl MainWindowUiState {
         let changed = self.playlist_menu_hover != item;
         self.playlist_menu_hover = item;
         changed
+    }
+
+    pub(crate) fn playlist_entry_release(&mut self) -> bool {
+        self.playlist_drag_index.take().is_some()
     }
 
     pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
@@ -4727,6 +4859,21 @@ impl MainWindowUiState {
         ((self.playlist_height - 58).max(0) / 11) as usize
     }
 
+    fn playlist_entry_at(&self, x: i32, y: i32) -> Option<usize> {
+        if self.playlist_shaded || !(12..self.playlist_width - 19).contains(&x) {
+            return None;
+        }
+        if !(20..self.playlist_height - 38).contains(&y) {
+            return None;
+        }
+        let row = ((y - 20) / 11) as usize;
+        if row >= self.playlist_visible_entries() {
+            return None;
+        }
+        let index = self.playlist_scroll_offset + row;
+        (index < self.app_state.playlist.len()).then_some(index)
+    }
+
     fn playlist_max_scroll(&self) -> usize {
         self.app_state
             .playlist
@@ -4798,6 +4945,7 @@ impl MainWindowUiState {
             self.playlist_menu = None;
             self.playlist_menu_hover = None;
             self.playlist_menu_pressed = false;
+            self.playlist_drag_index = None;
         }
 
         if self.panel_title_button_hit(kind, x, y) {
@@ -5698,6 +5846,30 @@ fn position_to_balance(position: i32) -> i32 {
 fn format_duration(milliseconds: i64) -> String {
     let seconds = (milliseconds.max(0) / 1000) as i32;
     format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn format_playlist_footer_duration(milliseconds: i64, more: bool) -> String {
+    if milliseconds <= 0 && more {
+        return "?".to_string();
+    }
+
+    let seconds = milliseconds.max(0) / 1000;
+    if seconds > 3600 {
+        format!(
+            "{}:{:02}:{:02}{}",
+            seconds / 3600,
+            (seconds / 60) % 60,
+            seconds % 60,
+            if more { "+" } else { "" }
+        )
+    } else {
+        format!(
+            "{}:{:02}{}",
+            seconds / 60,
+            seconds % 60,
+            if more { "+" } else { "" }
+        )
+    }
 }
 
 fn format_title_for_preferences(format: &str, filename: &str, title: &str) -> String {

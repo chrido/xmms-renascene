@@ -68,6 +68,7 @@ fn renders_playlist_rows_with_selected_background() {
         false,
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
+        None,
         None
     )
     .unwrap());
