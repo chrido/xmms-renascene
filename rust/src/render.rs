@@ -127,6 +127,36 @@ pub fn blit_surface_rect(
     Ok(true)
 }
 
+pub fn clamp_scale_factor(scale: f64) -> f64 {
+    scale.clamp(1.0, 5.0)
+}
+
+pub fn scale_coord(value: i32, scale: f64) -> i32 {
+    (f64::from(value) * clamp_scale_factor(scale) + 0.5) as i32
+}
+
+pub fn scale_dim(value: i32, scale: f64) -> i32 {
+    scale_coord(value, scale).max(1)
+}
+
+pub fn apply_window_scale(
+    cr: &Context,
+    actual_width: i32,
+    actual_height: i32,
+    base_width: i32,
+    base_height: i32,
+) -> bool {
+    if actual_width <= 0 || actual_height <= 0 || base_width <= 0 || base_height <= 0 {
+        return false;
+    }
+
+    cr.scale(
+        f64::from(actual_width) / f64::from(base_width),
+        f64::from(actual_height) / f64::from(base_height),
+    );
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +176,14 @@ mod tests {
         let surface = surface_from_xpm(&image).unwrap();
         assert_eq!(surface.width(), 2);
         assert_eq!(surface.height(), 1);
+
+        let mut surface = surface;
+        let data = surface.data().unwrap();
+        assert_eq!(
+            u32::from_ne_bytes(data[0..4].try_into().unwrap()),
+            0xff00_0000
+        );
+        assert_eq!(u32::from_ne_bytes(data[4..8].try_into().unwrap()), 0);
     }
 
     #[test]
@@ -199,5 +237,25 @@ mod tests {
             u32::from_ne_bytes(data[4..8].try_into().unwrap()),
             0xff01_0203
         );
+    }
+
+    #[test]
+    fn scaling_helpers_match_c_rounding_and_clamping() {
+        assert_eq!(clamp_scale_factor(0.5), 1.0);
+        assert_eq!(clamp_scale_factor(6.0), 5.0);
+        assert_eq!(scale_coord(11, 1.5), 17);
+        assert_eq!(scale_dim(0, 1.0), 1);
+    }
+
+    #[test]
+    fn applies_window_scale_from_actual_to_base_size() {
+        let surface = ImageSurface::create(Format::ARgb32, 20, 20).unwrap();
+        let cr = Context::new(&surface).unwrap();
+
+        assert!(apply_window_scale(&cr, 20, 10, 10, 5));
+        let matrix = cr.matrix();
+        assert_eq!(matrix.xx(), 2.0);
+        assert_eq!(matrix.yy(), 2.0);
+        assert!(!apply_window_scale(&cr, 0, 10, 10, 5));
     }
 }
