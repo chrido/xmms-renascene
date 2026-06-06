@@ -146,6 +146,36 @@ fn equalizer_top_right_buttons_shade_and_close_equalizer_window() {
 }
 
 #[test]
+fn equalizer_buttons_sliders_and_presets_update_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
+
+    app.assert_equalizer_active(true)
+        .click_panel(PanelTarget::EqualizerOn)
+        .assert_equalizer_active(false)
+        .click_panel(PanelTarget::EqualizerOn)
+        .assert_equalizer_active(true);
+
+    app.assert_equalizer_automatic(false)
+        .click_panel(PanelTarget::EqualizerAuto)
+        .assert_equalizer_automatic(true);
+
+    app.drag_equalizer_preamp(25)
+        .assert_equalizer_preamp_position(25)
+        .drag_equalizer_band(0, 10)
+        .assert_equalizer_band_position(0, 11)
+        .drag_equalizer_band(9, 80)
+        .assert_equalizer_band_position(9, 80);
+
+    app.click_panel(PanelTarget::EqualizerPresets)
+        .assert_equalizer_presets_pressed(false)
+        .apply_equalizer_preset(3)
+        .assert_equalizer_preamp_position(50)
+        .assert_equalizer_band_position(0, 30)
+        .assert_equalizer_band_position(4, 60)
+        .assert_equalizer_band_position(9, 30);
+}
+
+#[test]
 fn playlist_top_right_buttons_shade_and_close_playlist_window() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

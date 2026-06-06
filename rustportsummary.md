@@ -47,7 +47,9 @@ Completed so far:
 - Moved Rust main-window input handling to capture-phase GTK window controllers so clicks reach the skinned controls reliably, and added a visible popover menu for the main menu button.
 - Wired playlist and equalizer top-right titlebar controls in the Rust GTK preview: shade toggles shrink/restore the skinned windows, and close hides the panel and clears the main toggle state.
 - Wired floating equalizer and playlist titlebar drags through GTK4 toplevel movement for the undecorated preview windows.
-- Wired the playlist bottom Add, Remove, Select, Misc, and List buttons to open GTK popover submenus using the C playlist button coordinates.
+- Wired panel titlebar focus/drag skin state so floating playlist/equalizer windows redraw their active titlebar skin while moving.
+- Wired the playlist bottom Add, Remove, Select, Misc, and List buttons to open skinned in-window submenus using the C playlist button and menu source coordinates.
+- Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.

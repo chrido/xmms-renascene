@@ -17,6 +17,62 @@ pub const PLAYLIST_MIN_WIDTH: i32 = 275;
 pub const PLAYLIST_MIN_HEIGHT: i32 = 116;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EqualizerRenderState {
+    pub focused: bool,
+    pub shaded: bool,
+    pub active: bool,
+    pub automatic: bool,
+    pub pressed_control: Option<EqualizerControl>,
+    pub preamp_position: i32,
+    pub band_positions: [i32; 10],
+}
+
+impl Default for EqualizerRenderState {
+    fn default() -> Self {
+        Self {
+            focused: true,
+            shaded: false,
+            active: true,
+            automatic: false,
+            pressed_control: None,
+            preamp_position: 50,
+            band_positions: [50; 10],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EqualizerControl {
+    On,
+    Auto,
+    Presets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaylistMenuRenderState {
+    pub kind: PlaylistMenuRenderKind,
+    pub hover: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistMenuRenderKind {
+    Add,
+    Remove,
+    Select,
+    Misc,
+    List,
+}
+
+impl PlaylistMenuRenderKind {
+    pub fn item_count(self) -> usize {
+        match self {
+            Self::Add | Self::Select | Self::Misc | Self::List => 3,
+            Self::Remove => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DockedPanelState {
     pub main_focused: bool,
     pub main_shaded: bool,
@@ -887,6 +943,129 @@ pub fn render_equalizer_background(
     Ok(rendered)
 }
 
+pub fn render_equalizer_state(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: &EqualizerRenderState,
+) -> Result<bool, RenderError> {
+    let mut rendered = render_equalizer_background(cr, skin, state.focused, state.shaded)?;
+    if state.shaded {
+        return Ok(rendered);
+    }
+
+    let Some(eqmain_image) = skin.get(SkinPixmapKind::EqMain) else {
+        return Ok(rendered);
+    };
+    let eqmain = surface_from_xpm(eqmain_image)?;
+
+    rendered |= draw_eq_toggle_button(
+        cr,
+        &eqmain,
+        state.active,
+        state.pressed_control == Some(EqualizerControl::On),
+        (10, 119),
+        (128, 119),
+        (69, 119),
+        (187, 119),
+        14,
+        18,
+        25,
+        12,
+    )?;
+    rendered |= draw_eq_toggle_button(
+        cr,
+        &eqmain,
+        state.automatic,
+        state.pressed_control == Some(EqualizerControl::Auto),
+        (35, 119),
+        (153, 119),
+        (94, 119),
+        (212, 119),
+        39,
+        18,
+        33,
+        12,
+    )?;
+
+    rendered |= blit_surface_rect(
+        cr,
+        &eqmain,
+        224,
+        if state.pressed_control == Some(EqualizerControl::Presets) {
+            176
+        } else {
+            164
+        },
+        217,
+        18,
+        44,
+        12,
+    )?;
+
+    rendered |= draw_eq_slider(cr, &eqmain, 21, state.preamp_position)?;
+    for (idx, position) in state.band_positions.iter().enumerate() {
+        rendered |= draw_eq_slider(cr, &eqmain, 78 + idx as i32 * 18, *position)?;
+    }
+    draw_eq_graph(cr, &state.band_positions)?;
+
+    Ok(rendered)
+}
+
+fn draw_eq_toggle_button(
+    cr: &Context,
+    eqmain: &ImageSurface,
+    selected: bool,
+    pressed: bool,
+    normal_unselected: (i32, i32),
+    pressed_unselected: (i32, i32),
+    normal_selected: (i32, i32),
+    pressed_selected: (i32, i32),
+    dest_x: i32,
+    dest_y: i32,
+    width: i32,
+    height: i32,
+) -> Result<bool, RenderError> {
+    let (src_x, src_y) = match (selected, pressed) {
+        (true, true) => pressed_selected,
+        (true, false) => normal_selected,
+        (false, true) => pressed_unselected,
+        (false, false) => normal_unselected,
+    };
+    blit_surface_rect(cr, eqmain, src_x, src_y, dest_x, dest_y, width, height)
+}
+
+fn draw_eq_slider(
+    cr: &Context,
+    eqmain: &ImageSurface,
+    x: i32,
+    position: i32,
+) -> Result<bool, RenderError> {
+    let knob_y = 38 + (position.clamp(0, 100) * (63 - 11)) / 100;
+    blit_surface_rect(cr, eqmain, 0, 164, x, knob_y, 14, 11)
+}
+
+fn draw_eq_graph(cr: &Context, band_positions: &[i32; 10]) -> Result<(), RenderError> {
+    let graph_x = 86.0;
+    let graph_y = 17.0;
+    let graph_w = 113.0;
+    let graph_h = 19.0;
+
+    cr.set_source_rgb(0.0, 1.0, 0.0);
+    cr.set_line_width(1.0);
+    for (idx, position) in band_positions.iter().enumerate() {
+        let x = graph_x + (idx as f64 * graph_w) / 9.0;
+        let value = f64::from(50 - (*position).clamp(0, 100)) / 50.0;
+        let y = graph_y + graph_h / 2.0 - value * (graph_h / 2.0 - 1.0);
+        if idx == 0 {
+            cr.move_to(x, y);
+        } else {
+            cr.line_to(x, y);
+        }
+    }
+    cr.stroke()?;
+    Ok(())
+}
+
 pub fn render_playlist_frame(
     cr: &Context,
     skin: &DefaultSkin,
@@ -978,6 +1157,167 @@ pub fn render_playlist_frame(
     cr.fill()?;
 
     Ok(true)
+}
+
+pub fn render_playlist_menu(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: PlaylistMenuRenderState,
+) -> Result<bool, RenderError> {
+    let Some(pledit) = skin.get(SkinPixmapKind::PlEdit) else {
+        return Ok(false);
+    };
+    let pledit = surface_from_xpm(pledit)?;
+    let items = playlist_menu_items(state.kind);
+    for (idx, item) in items.iter().enumerate() {
+        let selected = state.hover == Some(idx);
+        let (src_x, src_y) = if selected {
+            (item.selected_x, item.selected_y)
+        } else {
+            (item.normal_x, item.normal_y)
+        };
+        blit_surface_rect(cr, &pledit, src_x, src_y, 3, idx as i32 * 18, 22, 18)?;
+    }
+    let (border_x, border_y) = playlist_menu_border_source(state.kind);
+    blit_surface_rect(
+        cr,
+        &pledit,
+        border_x,
+        border_y,
+        0,
+        0,
+        3,
+        items.len() as i32 * 18,
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaylistMenuItemSource {
+    normal_x: i32,
+    normal_y: i32,
+    selected_x: i32,
+    selected_y: i32,
+}
+
+fn playlist_menu_items(kind: PlaylistMenuRenderKind) -> &'static [PlaylistMenuItemSource] {
+    match kind {
+        PlaylistMenuRenderKind::Add => &[
+            PlaylistMenuItemSource {
+                normal_x: 0,
+                normal_y: 111,
+                selected_x: 23,
+                selected_y: 111,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 0,
+                normal_y: 130,
+                selected_x: 23,
+                selected_y: 130,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 0,
+                normal_y: 149,
+                selected_x: 23,
+                selected_y: 149,
+            },
+        ],
+        PlaylistMenuRenderKind::Remove => &[
+            PlaylistMenuItemSource {
+                normal_x: 54,
+                normal_y: 168,
+                selected_x: 77,
+                selected_y: 168,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 54,
+                normal_y: 111,
+                selected_x: 77,
+                selected_y: 111,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 54,
+                normal_y: 130,
+                selected_x: 77,
+                selected_y: 130,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 54,
+                normal_y: 149,
+                selected_x: 77,
+                selected_y: 149,
+            },
+        ],
+        PlaylistMenuRenderKind::Select => &[
+            PlaylistMenuItemSource {
+                normal_x: 104,
+                normal_y: 111,
+                selected_x: 127,
+                selected_y: 111,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 104,
+                normal_y: 130,
+                selected_x: 127,
+                selected_y: 130,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 104,
+                normal_y: 149,
+                selected_x: 127,
+                selected_y: 149,
+            },
+        ],
+        PlaylistMenuRenderKind::Misc => &[
+            PlaylistMenuItemSource {
+                normal_x: 154,
+                normal_y: 111,
+                selected_x: 177,
+                selected_y: 111,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 154,
+                normal_y: 130,
+                selected_x: 177,
+                selected_y: 130,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 154,
+                normal_y: 149,
+                selected_x: 177,
+                selected_y: 149,
+            },
+        ],
+        PlaylistMenuRenderKind::List => &[
+            PlaylistMenuItemSource {
+                normal_x: 204,
+                normal_y: 111,
+                selected_x: 227,
+                selected_y: 111,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 204,
+                normal_y: 130,
+                selected_x: 227,
+                selected_y: 130,
+            },
+            PlaylistMenuItemSource {
+                normal_x: 204,
+                normal_y: 149,
+                selected_x: 227,
+                selected_y: 149,
+            },
+        ],
+    }
+}
+
+fn playlist_menu_border_source(kind: PlaylistMenuRenderKind) -> (i32, i32) {
+    match kind {
+        PlaylistMenuRenderKind::Add => (48, 111),
+        PlaylistMenuRenderKind::Remove => (100, 111),
+        PlaylistMenuRenderKind::Select => (150, 111),
+        PlaylistMenuRenderKind::Misc => (200, 111),
+        PlaylistMenuRenderKind::List => (250, 111),
+    }
 }
 
 pub fn render_docked_panels(

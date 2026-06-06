@@ -6,10 +6,11 @@ use gtk::prelude::*;
 use crate::app_state::AppState;
 use crate::player::PlayerState;
 use crate::render::{
-    render_equalizer_background, render_main_player_state, render_playlist_frame, MainPushButton,
-    MainSlider, MainToggleButton, MainWindowRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
+    EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton,
+    MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
@@ -226,8 +227,7 @@ impl PanelWindows {
         main_area: &gtk::DrawingArea,
     ) -> Self {
         let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
-        let (playlist, playlist_area, _playlist_menu) =
-            build_playlist_window(app, skin, main_state, main_area);
+        let (playlist, playlist_area) = build_playlist_window(app, skin, main_state, main_area);
         let preferences = build_preferences_window(app, main_state);
         Self {
             equalizer,
@@ -260,8 +260,8 @@ fn build_equalizer_window(
     let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
-        let shaded = state.borrow().equalizer_shaded;
-        let base_height = if shaded {
+        let render_state = state.borrow().equalizer_render_state();
+        let base_height = if render_state.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
             EQUALIZER_WINDOW_HEIGHT
@@ -270,17 +270,18 @@ fn build_equalizer_window(
             width as f64 / EQUALIZER_WINDOW_WIDTH as f64,
             height as f64 / base_height as f64,
         );
-        if let Err(err) = render_equalizer_background(cr, &skin, true, shaded) {
+        if let Err(err) = render_equalizer_state(cr, &skin, &render_state) {
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
     });
+    let presets_menu = build_equalizer_presets_popover(&drawing_area, main_state);
     add_panel_click_controller(
         &window,
         &drawing_area,
         Rc::clone(main_state),
         main_area.clone(),
         PanelKind::Equalizer,
-        None,
+        Some(presets_menu),
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
@@ -291,7 +292,7 @@ fn build_playlist_window(
     skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
-) -> (gtk::ApplicationWindow, gtk::DrawingArea, gtk::Popover) {
+) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Playlist")
@@ -307,7 +308,9 @@ fn build_playlist_window(
     let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
-        let shaded = state.borrow().playlist_shaded;
+        let state = state.borrow();
+        let shaded = state.playlist_shaded;
+        let focused = state.playlist_focused || state.playlist_dragging_title;
         let base_height = if shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
@@ -320,44 +323,74 @@ fn build_playlist_window(
         if let Err(err) = render_playlist_frame(
             cr,
             &skin,
-            true,
+            focused,
             shaded,
             PLAYLIST_DEFAULT_WIDTH,
             PLAYLIST_DEFAULT_HEIGHT,
         ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
+        if let Some(menu) = state.playlist_menu() {
+            let (x, y, _, _) = playlist_menu_rect(menu);
+            if let Err(err) = cr.save() {
+                eprintln!("xmms-rs: failed to save playlist menu render state: {err}");
+                return;
+            }
+            cr.translate(f64::from(x), f64::from(y));
+            let render_state = PlaylistMenuRenderState {
+                kind: menu.render_kind(),
+                hover: Some(menu.item_count().saturating_sub(1)),
+            };
+            if let Err(err) = render_playlist_menu(cr, &skin, render_state) {
+                eprintln!("xmms-rs: failed to render playlist menu: {err}");
+            }
+            if let Err(err) = cr.restore() {
+                eprintln!("xmms-rs: failed to restore playlist menu render state: {err}");
+            }
+        }
     });
-    let playlist_menu = build_playlist_menu_popover(&drawing_area);
     add_panel_click_controller(
         &window,
         &drawing_area,
         Rc::clone(main_state),
         main_area.clone(),
         PanelKind::Playlist,
-        Some(playlist_menu.clone()),
+        None,
     );
     window.set_child(Some(&drawing_area));
-    (window, drawing_area, playlist_menu)
+    (window, drawing_area)
 }
 
-fn build_playlist_menu_popover(parent: &gtk::DrawingArea) -> gtk::Popover {
+fn build_equalizer_presets_popover(
+    parent: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) -> gtk::Popover {
     let popover = gtk::Popover::builder()
         .autohide(true)
         .has_arrow(false)
         .build();
     popover.set_parent(parent);
-    popover
-}
-
-fn set_playlist_menu_items(popover: &gtk::Popover, menu: PlaylistMenuKind) {
     let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    for label in menu.labels() {
+    for (label, preset) in [
+        ("Flat", 0),
+        ("Bass Boost", 1),
+        ("Treble Boost", 2),
+        ("Rock", 3),
+    ] {
         let item = gtk::Button::with_label(label);
         item.set_halign(gtk::Align::Fill);
+        {
+            let main_state = Rc::clone(main_state);
+            let popover = popover.clone();
+            item.connect_clicked(move |_| {
+                main_state.borrow_mut().apply_equalizer_preset(preset);
+                popover.popdown();
+            });
+        }
         menu_box.append(&item);
     }
     popover.set_child(Some(&menu_box));
+    popover
 }
 
 fn build_preferences_window(
@@ -406,14 +439,18 @@ pub enum PlaylistMenuKind {
 }
 
 impl PlaylistMenuKind {
-    fn labels(self) -> &'static [&'static str] {
+    fn render_kind(self) -> PlaylistMenuRenderKind {
         match self {
-            Self::Add => &["Add URL", "Add Directory", "Add File"],
-            Self::Remove => &["Remove Misc", "Remove All", "Crop", "Remove Selected"],
-            Self::Select => &["Invert Selection", "Select None", "Select All"],
-            Self::Misc => &["Sort List", "File Info", "Options"],
-            Self::List => &["New List", "Save List", "Load List"],
+            Self::Add => PlaylistMenuRenderKind::Add,
+            Self::Remove => PlaylistMenuRenderKind::Remove,
+            Self::Select => PlaylistMenuRenderKind::Select,
+            Self::Misc => PlaylistMenuRenderKind::Misc,
+            Self::List => PlaylistMenuRenderKind::List,
         }
+    }
+
+    fn item_count(self) -> usize {
+        self.render_kind().item_count()
     }
 }
 
@@ -422,6 +459,13 @@ pub(crate) enum PanelAction {
     None,
     Changed,
     ShowPlaylistMenu(PlaylistMenuKind),
+    ShowEqualizerPresets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EqualizerSlider {
+    Preamp,
+    Band(usize),
 }
 
 fn add_panel_click_controller(
@@ -430,7 +474,7 @@ fn add_panel_click_controller(
     main_state: Rc<RefCell<MainWindowUiState>>,
     main_area: gtk::DrawingArea,
     kind: PanelKind,
-    playlist_menu: Option<gtk::Popover>,
+    equalizer_presets_menu: Option<gtk::Popover>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(1);
@@ -446,9 +490,16 @@ fn add_panel_click_controller(
                 .borrow()
                 .panel_title_drag_region(kind, base_x, base_y)
             {
+                if kind == PanelKind::Equalizer
+                    && main_state.borrow_mut().equalizer_press(base_x, base_y)
+                {
+                    area.queue_draw();
+                }
                 return;
             }
 
+            main_state.borrow_mut().set_panel_dragging(kind, true);
+            area.queue_draw();
             let Some(device) = gesture.current_event_device() else {
                 return;
             };
@@ -470,9 +521,21 @@ fn add_panel_click_controller(
     {
         let area = area.clone();
         let window = window.clone();
+        let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
-            let action = main_state.borrow_mut().panel_click(kind, x, y);
+            main_state.borrow_mut().set_panel_dragging(kind, false);
+            area.queue_draw();
+            let action = if kind == PanelKind::Equalizer {
+                let title_action = main_state.borrow_mut().panel_click(kind, x, y);
+                if title_action == PanelAction::None {
+                    main_state.borrow_mut().equalizer_release(x, y)
+                } else {
+                    title_action
+                }
+            } else {
+                main_state.borrow_mut().panel_click(kind, x, y)
+            };
             match action {
                 PanelAction::None => {}
                 PanelAction::Changed => {
@@ -480,9 +543,12 @@ fn add_panel_click_controller(
                     main_area.queue_draw();
                 }
                 PanelAction::ShowPlaylistMenu(menu) => {
-                    if let Some(popover) = playlist_menu.as_ref() {
-                        set_playlist_menu_items(popover, menu);
-                        show_playlist_menu(popover, &area, menu);
+                    let _ = menu;
+                    area.queue_draw();
+                }
+                PanelAction::ShowEqualizerPresets => {
+                    if let Some(popover) = equalizer_presets_menu.as_ref() {
+                        show_equalizer_presets_menu(popover, &area);
                     }
                     area.queue_draw();
                 }
@@ -490,17 +556,51 @@ fn add_panel_click_controller(
         });
     }
     window.add_controller(click);
+
+    let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        motion.connect_motion(move |_motion, x, y| {
+            if kind != PanelKind::Equalizer {
+                return;
+            }
+            let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            if main_state.borrow_mut().equalizer_motion(x, y) {
+                area.queue_draw();
+            }
+        });
+    }
+    window.add_controller(motion);
+
+    let focus = gtk::EventControllerFocus::new();
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        focus.connect_enter(move |_focus| {
+            main_state.borrow_mut().set_panel_focused(kind, true);
+            area.queue_draw();
+        });
+    }
+    {
+        let area = area.clone();
+        focus.connect_leave(move |_focus| {
+            main_state.borrow_mut().set_panel_focused(kind, false);
+            area.queue_draw();
+        });
+    }
+    window.add_controller(focus);
 }
 
-fn show_playlist_menu(popover: &gtk::Popover, area: &gtk::DrawingArea, menu: PlaylistMenuKind) {
-    let (base_x, base_y, base_width, base_height) = playlist_menu_rect(menu);
-    let scale_x = area.allocated_width().max(1) as f64 / f64::from(PLAYLIST_DEFAULT_WIDTH);
-    let scale_y = area.allocated_height().max(1) as f64 / f64::from(PLAYLIST_DEFAULT_HEIGHT);
+fn show_equalizer_presets_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
+    let scale_x = area.allocated_width().max(1) as f64 / f64::from(EQUALIZER_WINDOW_WIDTH);
+    let scale_y = area.allocated_height().max(1) as f64 / f64::from(EQUALIZER_WINDOW_HEIGHT);
     let rect = gtk::gdk::Rectangle::new(
-        (f64::from(base_x) * scale_x) as i32,
-        (f64::from(base_y) * scale_y) as i32,
-        (f64::from(base_width) * scale_x).max(1.0) as i32,
-        (f64::from(base_height) * scale_y).max(1.0) as i32,
+        (217.0 * scale_x) as i32,
+        (30.0 * scale_y) as i32,
+        (44.0 * scale_x).max(1.0) as i32,
+        1,
     );
     popover.set_pointing_to(Some(&rect));
     popover.popup();
@@ -636,7 +736,18 @@ pub(crate) struct MainWindowUiState {
     shaded: bool,
     menu_visible: bool,
     equalizer_shaded: bool,
+    equalizer_focused: bool,
+    equalizer_dragging_title: bool,
+    equalizer_active: bool,
+    equalizer_automatic: bool,
+    equalizer_pressed_control: Option<EqualizerControl>,
+    equalizer_pressed_inside: bool,
+    equalizer_dragging: Option<EqualizerSlider>,
+    equalizer_preamp_position: i32,
+    equalizer_band_positions: [i32; 10],
     playlist_shaded: bool,
+    playlist_focused: bool,
+    playlist_dragging_title: bool,
     playlist_menu: Option<PlaylistMenuKind>,
     preferences_visible: bool,
     position_position: i32,
@@ -658,7 +769,18 @@ impl MainWindowUiState {
             shaded: false,
             menu_visible: false,
             equalizer_shaded: false,
+            equalizer_focused: false,
+            equalizer_dragging_title: false,
+            equalizer_active: true,
+            equalizer_automatic: false,
+            equalizer_pressed_control: None,
+            equalizer_pressed_inside: false,
+            equalizer_dragging: None,
+            equalizer_preamp_position: 50,
+            equalizer_band_positions: [50; 10],
             playlist_shaded: false,
+            playlist_focused: false,
+            playlist_dragging_title: false,
             playlist_menu: None,
             preferences_visible: false,
             position_position: 0,
@@ -687,6 +809,20 @@ impl MainWindowUiState {
                 PlayerState::Playing => PlayStatusValue::Playing,
             },
             ..MainWindowRenderState::default()
+        }
+    }
+
+    fn equalizer_render_state(&self) -> EqualizerRenderState {
+        EqualizerRenderState {
+            focused: self.equalizer_focused || self.equalizer_dragging_title,
+            shaded: self.equalizer_shaded,
+            active: self.equalizer_active,
+            automatic: self.equalizer_automatic,
+            pressed_control: self
+                .equalizer_pressed_control
+                .filter(|_| self.equalizer_pressed_inside),
+            preamp_position: self.equalizer_preamp_position,
+            band_positions: self.equalizer_band_positions,
         }
     }
 
@@ -727,6 +863,142 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
         self.preferences_visible = visible;
+    }
+
+    pub(crate) fn set_panel_dragging(&mut self, kind: PanelKind, dragging: bool) {
+        match kind {
+            PanelKind::Equalizer => self.equalizer_dragging_title = dragging,
+            PanelKind::Playlist => self.playlist_dragging_title = dragging,
+        }
+    }
+
+    pub(crate) fn set_panel_focused(&mut self, kind: PanelKind, focused: bool) {
+        match kind {
+            PanelKind::Equalizer => self.equalizer_focused = focused,
+            PanelKind::Playlist => self.playlist_focused = focused,
+        }
+    }
+
+    pub(crate) fn equalizer_active(&self) -> bool {
+        self.equalizer_active
+    }
+
+    pub(crate) fn equalizer_automatic(&self) -> bool {
+        self.equalizer_automatic
+    }
+
+    pub(crate) fn equalizer_preamp_position(&self) -> i32 {
+        self.equalizer_preamp_position
+    }
+
+    pub(crate) fn equalizer_band_position(&self, band: usize) -> Option<i32> {
+        self.equalizer_band_positions.get(band).copied()
+    }
+
+    pub(crate) fn equalizer_presets_pressed(&self) -> bool {
+        self.equalizer_pressed_control == Some(EqualizerControl::Presets)
+            && self.equalizer_pressed_inside
+    }
+
+    pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
+        if self.equalizer_shaded {
+            return false;
+        }
+
+        if let Some(control) = equalizer_control_at(x, y) {
+            self.equalizer_pressed_control = Some(control);
+            self.equalizer_pressed_inside = true;
+            return true;
+        }
+
+        if let Some(slider) = equalizer_slider_at(x, y) {
+            self.equalizer_dragging = Some(slider);
+            self.set_equalizer_slider_position(slider, y);
+            return true;
+        }
+
+        false
+    }
+
+    pub(crate) fn equalizer_motion(&mut self, x: i32, y: i32) -> bool {
+        if let Some(control) = self.equalizer_pressed_control {
+            let inside = equalizer_control_at(x, y) == Some(control);
+            let changed = self.equalizer_pressed_inside != inside;
+            self.equalizer_pressed_inside = inside;
+            return changed;
+        }
+
+        let Some(slider) = self.equalizer_dragging else {
+            return false;
+        };
+        self.set_equalizer_slider_position(slider, y)
+    }
+
+    pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
+        if let Some(control) = self.equalizer_pressed_control.take() {
+            let activated =
+                self.equalizer_pressed_inside && equalizer_control_at(x, y) == Some(control);
+            self.equalizer_pressed_inside = false;
+            if activated {
+                match control {
+                    EqualizerControl::On => self.equalizer_active = !self.equalizer_active,
+                    EqualizerControl::Auto => self.equalizer_automatic = !self.equalizer_automatic,
+                    EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
+                }
+            }
+            return PanelAction::Changed;
+        }
+
+        if self.equalizer_dragging.take().is_some() {
+            return PanelAction::Changed;
+        }
+
+        PanelAction::None
+    }
+
+    pub(crate) fn apply_equalizer_preset(&mut self, preset: i32) {
+        self.equalizer_preamp_position = 50;
+        self.equalizer_band_positions = [50; 10];
+        match preset {
+            1 => {
+                self.equalizer_band_positions[0] = 25;
+                self.equalizer_band_positions[1] = 30;
+                self.equalizer_band_positions[2] = 40;
+            }
+            2 => {
+                self.equalizer_band_positions[7] = 40;
+                self.equalizer_band_positions[8] = 30;
+                self.equalizer_band_positions[9] = 25;
+            }
+            3 => {
+                self.equalizer_band_positions[0] = 30;
+                self.equalizer_band_positions[1] = 35;
+                self.equalizer_band_positions[4] = 60;
+                self.equalizer_band_positions[5] = 60;
+                self.equalizer_band_positions[8] = 35;
+                self.equalizer_band_positions[9] = 30;
+            }
+            _ => {}
+        }
+    }
+
+    fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, y: i32) -> bool {
+        let position = ((y - 38) * 100 / 63).clamp(0, 100);
+        match slider {
+            EqualizerSlider::Preamp => {
+                let changed = self.equalizer_preamp_position != position;
+                self.equalizer_preamp_position = position;
+                changed
+            }
+            EqualizerSlider::Band(band) => {
+                let Some(value) = self.equalizer_band_positions.get_mut(band) else {
+                    return false;
+                };
+                let changed = *value != position;
+                *value = position;
+                changed
+            }
+        }
     }
 
     pub(crate) fn panel_title_drag_region(&self, kind: PanelKind, x: i32, y: i32) -> bool {
@@ -1086,6 +1358,27 @@ fn push_button_rect(button: MainPushButton) -> ControlRect {
         MainPushButton::Next => ControlRect::new(108, 88, 22, 18),
         MainPushButton::Eject => ControlRect::new(136, 89, 22, 16),
     }
+}
+
+fn equalizer_control_at(x: i32, y: i32) -> Option<EqualizerControl> {
+    [
+        (EqualizerControl::On, ControlRect::new(14, 18, 25, 12)),
+        (EqualizerControl::Auto, ControlRect::new(39, 18, 33, 12)),
+        (EqualizerControl::Presets, ControlRect::new(217, 18, 44, 12)),
+    ]
+    .into_iter()
+    .find_map(|(control, rect)| rect.contains(x, y).then_some(control))
+}
+
+fn equalizer_slider_at(x: i32, y: i32) -> Option<EqualizerSlider> {
+    if ControlRect::new(21, 38, 14, 63).contains(x, y) {
+        return Some(EqualizerSlider::Preamp);
+    }
+    (0..10).find_map(|band| {
+        ControlRect::new(78 + band * 18, 38, 14, 63)
+            .contains(x, y)
+            .then_some(EqualizerSlider::Band(band as usize))
+    })
 }
 
 fn playlist_menu_at(x: i32, y: i32) -> Option<PlaylistMenuKind> {

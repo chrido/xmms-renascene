@@ -58,6 +58,9 @@ pub enum MainTarget {
 pub enum PanelTarget {
     EqualizerShade,
     EqualizerClose,
+    EqualizerOn,
+    EqualizerAuto,
+    EqualizerPresets,
     PlaylistShade,
     PlaylistClose,
     PlaylistAdd,
@@ -75,6 +78,18 @@ impl PanelTarget {
             }
             Self::EqualizerClose => {
                 state.panel_click(PanelKind::Equalizer, 268, 7);
+            }
+            Self::EqualizerOn => {
+                state.equalizer_press(20, 24);
+                state.equalizer_release(20, 24);
+            }
+            Self::EqualizerAuto => {
+                state.equalizer_press(50, 24);
+                state.equalizer_release(50, 24);
+            }
+            Self::EqualizerPresets => {
+                state.equalizer_press(230, 24);
+                state.equalizer_release(230, 24);
             }
             Self::PlaylistShade => {
                 state.panel_click(PanelKind::Playlist, 258, 7);
@@ -192,6 +207,19 @@ impl UiE2e {
     pub fn click_panel(&mut self, target: PanelTarget) -> &mut Self {
         target.click(&mut self.state);
         self.sync_windows();
+        self
+    }
+
+    pub fn drag_equalizer_preamp(&mut self, position: i32) -> &mut Self {
+        self.drag_equalizer_slider(21, position)
+    }
+
+    pub fn drag_equalizer_band(&mut self, band: usize, position: i32) -> &mut Self {
+        self.drag_equalizer_slider(78 + band as i32 * 18, position)
+    }
+
+    pub fn apply_equalizer_preset(&mut self, preset: i32) -> &mut Self {
+        self.state.apply_equalizer_preset(preset);
         self
     }
 
@@ -330,6 +358,31 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_equalizer_active(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.equalizer_active(), expected);
+        self
+    }
+
+    pub fn assert_equalizer_automatic(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.equalizer_automatic(), expected);
+        self
+    }
+
+    pub fn assert_equalizer_preamp_position(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.equalizer_preamp_position(), expected);
+        self
+    }
+
+    pub fn assert_equalizer_band_position(&mut self, band: usize, expected: i32) -> &mut Self {
+        assert_eq!(self.state.equalizer_band_position(band), Some(expected));
+        self
+    }
+
+    pub fn assert_equalizer_presets_pressed(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.equalizer_presets_pressed(), expected);
+        self
+    }
+
     pub fn assert_player_state(&mut self, expected: PlayerState) -> &mut Self {
         assert_eq!(self.state.player_state(), expected);
         self
@@ -390,6 +443,14 @@ impl UiE2e {
         self.playlist_visible = visibility.playlist;
         self.equalizer_visible = visibility.equalizer;
         self.preferences_visible = self.state.is_preferences_visible();
+    }
+
+    fn drag_equalizer_slider(&mut self, x: i32, position: i32) -> &mut Self {
+        let y = 38 + (position.clamp(0, 100) * 63 + 99) / 100;
+        self.state.equalizer_press(x, y);
+        self.state.equalizer_motion(x, y);
+        self.state.equalizer_release(x, y);
+        self
     }
 }
 
