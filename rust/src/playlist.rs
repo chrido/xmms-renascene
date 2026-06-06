@@ -232,6 +232,82 @@ impl Playlist {
         self.invalidate_shuffle_order();
     }
 
+    pub fn select_all(&mut self, selected: bool) {
+        for entry in &mut self.entries {
+            entry.selected = selected;
+        }
+    }
+
+    pub fn invert_selection(&mut self) {
+        for entry in &mut self.entries {
+            entry.selected = !entry.selected;
+        }
+    }
+
+    pub fn remove_selected_or_current(&mut self) -> bool {
+        let old_position = self.position;
+        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let has_selected = self.entries.iter().any(|entry| entry.selected);
+        let mut removed = false;
+        let mut index = 0;
+        self.entries.retain(|entry| {
+            let remove = if has_selected {
+                entry.selected
+            } else {
+                Some(index) == old_position
+            };
+            index += 1;
+            removed |= remove;
+            !remove
+        });
+
+        if !removed {
+            return false;
+        }
+        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        true
+    }
+
+    pub fn crop_to_selected_or_current(&mut self) -> bool {
+        let old_position = self.position;
+        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let old_len = self.entries.len();
+        let has_selected = self.entries.iter().any(|entry| entry.selected);
+        let mut index = 0;
+        self.entries.retain(|entry| {
+            let keep = if has_selected {
+                entry.selected
+            } else {
+                Some(index) == old_position
+            };
+            index += 1;
+            keep
+        });
+
+        if self.entries.len() == old_len {
+            return false;
+        }
+        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        true
+    }
+
+    pub fn remove_dead_files(&mut self) -> bool {
+        let old_position = self.position;
+        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let old_len = self.entries.len();
+        self.entries.retain(|entry| {
+            !entry_local_path(entry)
+                .as_ref()
+                .is_some_and(|path| !path.exists())
+        });
+
+        if self.entries.len() == old_len {
+            return false;
+        }
+        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        true
+    }
+
     pub fn position(&self) -> Option<usize> {
         self.position
     }
@@ -518,6 +594,19 @@ impl Playlist {
         };
     }
 
+    fn update_position_after_reorder_or_remove(
+        &mut self,
+        current: Option<&PlaylistEntry>,
+        old_position: Option<usize>,
+    ) {
+        self.refresh_position(current);
+        if self.position.is_none() {
+            self.position = old_position
+                .filter(|_| !self.entries.is_empty())
+                .map(|position| position.min(self.entries.len() - 1));
+        }
+    }
+
     pub fn load_m3u_file(path: &Path) -> io::Result<Self> {
         let contents = fs::read_to_string(path)?;
         Ok(Self::load_m3u(
@@ -719,6 +808,13 @@ fn entry_path_for_compare(entry: &PlaylistEntry) -> String {
     file_uri_to_path(&entry.filename)
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| entry.filename.clone())
+}
+
+fn entry_local_path(entry: &PlaylistEntry) -> Option<PathBuf> {
+    file_uri_to_path(&entry.filename).or_else(|| {
+        let path = Path::new(&entry.filename);
+        path.is_absolute().then(|| path.to_path_buf())
+    })
 }
 
 fn path_basename(path: &str) -> &str {

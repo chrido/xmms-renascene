@@ -1582,6 +1582,14 @@ impl MainWindowUiState {
             .map(|entry| entry.length_ms)
     }
 
+    pub(crate) fn playlist_entry_selected(&self, index: usize) -> Option<bool> {
+        self.app_state
+            .playlist
+            .entries()
+            .get(index)
+            .map(|entry| entry.selected)
+    }
+
     pub(crate) fn visible_playlist_entry_uri(&self, row: usize) -> Option<&str> {
         self.playlist_scroll_offset
             .checked_add(row)
@@ -1939,11 +1947,51 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
-        let activated = self.playlist_menu_item_at(x, y) == self.playlist_menu_hover;
+        let menu = self.playlist_menu;
+        let item = self.playlist_menu_item_at(x, y);
+        let activated = item == self.playlist_menu_hover;
         self.playlist_menu = None;
         self.playlist_menu_hover = None;
         self.playlist_menu_pressed = false;
         if activated {
+            if let (Some(menu), Some(item)) = (menu, item) {
+                self.activate_playlist_menu_item(menu, item)
+            } else {
+                PanelAction::Changed
+            }
+        } else {
+            PanelAction::None
+        }
+    }
+
+    fn activate_playlist_menu_item(&mut self, menu: PlaylistMenuKind, item: usize) -> PanelAction {
+        let changed = match (menu, item) {
+            (PlaylistMenuKind::Remove, 1) => {
+                self.app_state.playlist.clear();
+                true
+            }
+            (PlaylistMenuKind::Remove, 2) => self.app_state.playlist.crop_to_selected_or_current(),
+            (PlaylistMenuKind::Remove, 3) => self.app_state.playlist.remove_selected_or_current(),
+            (PlaylistMenuKind::Select, 0) => {
+                self.app_state.playlist.invert_selection();
+                true
+            }
+            (PlaylistMenuKind::Select, 1) => {
+                self.app_state.playlist.select_all(false);
+                true
+            }
+            (PlaylistMenuKind::Select, 2) => {
+                self.app_state.playlist.select_all(true);
+                true
+            }
+            (PlaylistMenuKind::List, 0) => {
+                self.app_state.playlist.clear();
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.clamp_playlist_scroll_offset();
             PanelAction::Changed
         } else {
             PanelAction::None

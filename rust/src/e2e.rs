@@ -260,6 +260,15 @@ impl UiE2e {
         self
     }
 
+    pub fn activate_playlist_menu_item(&mut self, item: usize) -> &mut Self {
+        let (x, y0) = self.playlist_menu_anchor();
+        let y = 174 + item as i32 * 18 + 8;
+        self.state.playlist_press(x, y0 + (y - 174));
+        self.state.playlist_release(x, y0 + (y - 174));
+        self.sync_windows();
+        self
+    }
+
     pub fn hover_playlist_menu_item(&mut self, item: usize) -> &mut Self {
         let (x, y0) = self.playlist_menu_anchor();
         let y = 174 + item as i32 * 18 + 8;
@@ -786,6 +795,11 @@ impl UiE2e {
 
     pub fn assert_playlist_length_ms(&mut self, index: usize, expected: i64) -> &mut Self {
         assert_eq!(self.state.playlist_entry_length_ms(index), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_selected(&mut self, index: usize, expected: bool) -> &mut Self {
+        assert_eq!(self.state.playlist_entry_selected(index), Some(expected));
         self
     }
 

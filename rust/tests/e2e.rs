@@ -630,6 +630,57 @@ fn playlist_bottom_buttons_open_their_submenus() {
 }
 
 #[test]
+fn playlist_select_menu_items_update_row_selection() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..3 {
+        app.accept_open_location(&format!("file:///tmp/select-{index}.mp3"));
+    }
+
+    app.click_panel(PanelTarget::PlaylistSelect)
+        .activate_playlist_menu_item(2)
+        .assert_playlist_selected(0, true)
+        .assert_playlist_selected(1, true)
+        .assert_playlist_selected(2, true)
+        .click_panel(PanelTarget::PlaylistSelect)
+        .activate_playlist_menu_item(1)
+        .assert_playlist_selected(0, false)
+        .assert_playlist_selected(1, false)
+        .assert_playlist_selected(2, false)
+        .select_playlist_entry(1)
+        .click_panel(PanelTarget::PlaylistSelect)
+        .activate_playlist_menu_item(0)
+        .assert_playlist_selected(0, true)
+        .assert_playlist_selected(1, false)
+        .assert_playlist_selected(2, true);
+}
+
+#[test]
+fn playlist_remove_and_list_menu_items_modify_entries() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..4 {
+        app.accept_open_location(&format!("file:///tmp/remove-{index}.mp3"));
+    }
+
+    app.select_playlist_entry(1)
+        .click_panel(PanelTarget::PlaylistRemove)
+        .activate_playlist_menu_item(3)
+        .assert_playlist_len(3)
+        .assert_playlist_entry(0, "file:///tmp/remove-0.mp3")
+        .assert_playlist_entry(1, "file:///tmp/remove-2.mp3")
+        .assert_playlist_entry(2, "file:///tmp/remove-3.mp3")
+        .select_playlist_entry(1)
+        .click_panel(PanelTarget::PlaylistRemove)
+        .activate_playlist_menu_item(2)
+        .assert_playlist_len(1)
+        .assert_playlist_entry(0, "file:///tmp/remove-2.mp3")
+        .click_panel(PanelTarget::PlaylistList)
+        .activate_playlist_menu_item(0)
+        .assert_playlist_len(0);
+}
+
+#[test]
 fn playlist_can_resize_from_default_dimensions() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
