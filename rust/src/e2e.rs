@@ -471,6 +471,12 @@ impl UiE2e {
         self
     }
 
+    pub fn index_missing_playlist_durations(&mut self) -> &mut Self {
+        self.state.index_missing_playlist_durations_for_e2e();
+        self.sync_windows();
+        self
+    }
+
     pub fn update_timer_tick(&mut self, elapsed_ms: u32) -> &mut Self {
         self.state.update_timer_tick(elapsed_ms);
         self
@@ -750,6 +756,11 @@ impl UiE2e {
 
     pub fn assert_playlist_title(&mut self, index: usize, expected: &str) -> &mut Self {
         assert_eq!(self.state.playlist_entry_title(index), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_length_ms(&mut self, index: usize, expected: i64) -> &mut Self {
+        assert_eq!(self.state.playlist_entry_length_ms(index), Some(expected));
         self
     }
 

@@ -17,6 +17,20 @@ pub enum PlaylistSortKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurationIndexItem {
+    pub index: usize,
+    pub uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DurationIndexResult {
+    pub index: usize,
+    pub uri: String,
+    pub length_ms: i64,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistEntry {
     pub filename: String,
     pub title: String,
@@ -316,6 +330,91 @@ impl Playlist {
             .and_then(|position| self.entries.get(position).cloned());
         shuffle_slice(&mut self.entries);
         self.refresh_position(current.as_ref());
+    }
+
+    pub fn missing_duration_items(&self) -> Vec<DurationIndexItem> {
+        self.entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.length_ms < 0
+                    && !entry.filename.is_empty()
+                    && !entry.is_podcast
+                    && !entry.filename.starts_with("spotify:")
+            })
+            .map(|(index, entry)| DurationIndexItem {
+                index,
+                uri: entry.filename.clone(),
+            })
+            .collect()
+    }
+
+    pub fn apply_duration_index_result(&mut self, result: DurationIndexResult) -> bool {
+        let Some(entry) = self.entries.get_mut(result.index) else {
+            return false;
+        };
+        if entry.filename != result.uri {
+            return false;
+        }
+
+        let mut changed = false;
+        if result.length_ms > 0 && entry.length_ms != result.length_ms {
+            entry.length_ms = result.length_ms;
+            changed = true;
+        }
+        if let Some(title) = result.title.filter(|title| !title.is_empty()) {
+            if entry.title != title {
+                entry.title = title;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    pub fn index_missing_durations_with<F, E>(&mut self, mut discover: F) -> Result<usize, E>
+    where
+        F: FnMut(&DurationIndexItem) -> Result<Option<DurationIndexResult>, E>,
+    {
+        let items = self.missing_duration_items();
+        let mut changed = 0;
+        for item in items {
+            if let Some(result) = discover(&item)? {
+                if self.apply_duration_index_result(result) {
+                    changed += 1;
+                }
+            }
+        }
+        Ok(changed)
+    }
+
+    pub fn index_missing_durations_with_gstreamer(&mut self) -> Result<usize, String> {
+        gstreamer::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
+        let discoverer = gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
+            .map_err(|err| format!("failed to create GStreamer discoverer: {err}"))?;
+
+        self.index_missing_durations_with(|item| {
+            let info = match discoverer.discover_uri(&item.uri) {
+                Ok(info) => info,
+                Err(err) => {
+                    eprintln!(
+                        "xmms-rs: failed to discover playlist item {}: {err}",
+                        item.uri
+                    );
+                    return Ok(None);
+                }
+            };
+            let length_ms = info
+                .duration()
+                .map(|duration| duration.mseconds() as i64)
+                .unwrap_or(-1);
+            let title = info.tags().and_then(|tags| title_from_tags(&tags));
+            Ok(Some(DurationIndexResult {
+                index: item.index,
+                uri: item.uri.clone(),
+                length_ms,
+                title,
+            }))
+        })
     }
 
     pub fn set_shuffle(&mut self, enabled: bool) {
@@ -630,6 +729,24 @@ fn path_basename(path: &str) -> &str {
 
 fn compare_ascii_case_insensitive(left: &str, right: &str) -> Ordering {
     left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
+}
+
+fn title_from_tags(tags: &gstreamer::TagList) -> Option<String> {
+    let artist = tags
+        .get::<gstreamer::tags::Artist>()
+        .map(|value| value.get().to_string())
+        .filter(|value| !value.is_empty());
+    let title = tags
+        .get::<gstreamer::tags::Title>()
+        .map(|value| value.get().to_string())
+        .filter(|value| !value.is_empty());
+
+    match (artist, title) {
+        (Some(artist), Some(title)) => Some(format!("{artist} - {title}")),
+        (None, Some(title)) => Some(title),
+        (Some(artist), None) => Some(artist),
+        (None, None) => None,
+    }
 }
 
 fn shuffle_slice<T>(items: &mut [T]) {
@@ -997,6 +1114,83 @@ mod tests {
                 .map(|position| &playlist.entries()[position]),
             Some(&current)
         );
+    }
+
+    #[test]
+    fn duration_indexing_skips_known_spotify_and_podcast_entries() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/missing.ogg");
+        playlist.add_uri("file:///music/known.ogg");
+        playlist.entries[1].length_ms = 42_000;
+        playlist.add_spotify("spotify:track:1", "Spotify", 10_000);
+        playlist.add_podcast_entry(
+            "https://example.test/episode.mp3",
+            Some("Episode".to_string()),
+            Some("https://example.test/feed.xml".to_string()),
+            Some("episode-1".to_string()),
+        );
+
+        let items = playlist.missing_duration_items();
+
+        assert_eq!(
+            items,
+            vec![DurationIndexItem {
+                index: 0,
+                uri: "file:///music/missing.ogg".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn duration_index_result_updates_only_matching_entry() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/song.ogg");
+
+        assert!(!playlist.apply_duration_index_result(DurationIndexResult {
+            index: 0,
+            uri: "file:///music/replaced.ogg".to_string(),
+            length_ms: 12_000,
+            title: Some("Wrong".to_string()),
+        }));
+        assert_eq!(playlist.entries()[0].length_ms, -1);
+        assert_ne!(playlist.entries()[0].title, "Wrong");
+
+        assert!(playlist.apply_duration_index_result(DurationIndexResult {
+            index: 0,
+            uri: "file:///music/song.ogg".to_string(),
+            length_ms: 12_000,
+            title: Some("Artist - Title".to_string()),
+        }));
+        assert_eq!(playlist.entries()[0].length_ms, 12_000);
+        assert_eq!(playlist.entries()[0].title, "Artist - Title");
+    }
+
+    #[test]
+    fn duration_indexing_with_mock_discoverer_updates_missing_entries() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/a.ogg");
+        playlist.add_uri("file:///music/b.ogg");
+
+        let changed = playlist
+            .index_missing_durations_with(|item| {
+                Ok::<_, std::convert::Infallible>(Some(DurationIndexResult {
+                    index: item.index,
+                    uri: item.uri.clone(),
+                    length_ms: if item.uri.ends_with("a.ogg") {
+                        1_000
+                    } else {
+                        2_000
+                    },
+                    title: Some(format!("indexed {}", item.index)),
+                }))
+            })
+            .unwrap();
+
+        assert_eq!(changed, 2);
+        assert_eq!(playlist.entries()[0].length_ms, 1_000);
+        assert_eq!(playlist.entries()[0].title, "indexed 0");
+        assert_eq!(playlist.entries()[1].length_ms, 2_000);
+        assert_eq!(playlist.entries()[1].title, "indexed 1");
     }
 
     fn unique_temp_dir() -> PathBuf {

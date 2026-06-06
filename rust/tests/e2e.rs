@@ -374,6 +374,29 @@ fn playlist_reverse_and_randomize_e2e_preserve_current_entry() {
 }
 
 #[test]
+fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist(["file:///music/a.ogg", "file:///music/b.ogg"])
+        .add_spotify_entry("spotify:track:skip", "Spotify", 123_000)
+        .add_podcast_entry(
+            "https://example.test/episode.mp3",
+            "Episode",
+            "https://example.test/feed.xml",
+            "episode-1",
+        )
+        .index_missing_playlist_durations()
+        .assert_playlist_length_ms(0, 1_000)
+        .assert_playlist_title(0, "Indexed 1")
+        .assert_playlist_length_ms(1, 2_000)
+        .assert_playlist_title(1, "Indexed 2")
+        .assert_playlist_length_ms(2, 123_000)
+        .assert_playlist_title(2, "Spotify")
+        .assert_playlist_length_ms(3, -1)
+        .assert_playlist_title(3, "Episode");
+}
+
+#[test]
 fn update_timer_advances_position_while_playing_only() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

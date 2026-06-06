@@ -6,7 +6,7 @@ use gtk::prelude::*;
 
 use crate::app_state::AppState;
 use crate::player::PlayerState;
-use crate::playlist::PlaylistSortKey;
+use crate::playlist::{DurationIndexResult, PlaylistSortKey};
 use crate::render::{
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
     EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton,
@@ -1526,6 +1526,14 @@ impl MainWindowUiState {
             .map(|entry| entry.title.as_str())
     }
 
+    pub(crate) fn playlist_entry_length_ms(&self, index: usize) -> Option<i64> {
+        self.app_state
+            .playlist
+            .entries()
+            .get(index)
+            .map(|entry| entry.length_ms)
+    }
+
     pub(crate) fn playlist_position(&self) -> Option<usize> {
         self.app_state.playlist.position()
     }
@@ -1573,6 +1581,20 @@ impl MainWindowUiState {
 
     pub(crate) fn randomize_playlist(&mut self) {
         self.app_state.playlist.randomize();
+    }
+
+    pub(crate) fn index_missing_playlist_durations_for_e2e(&mut self) {
+        let _ = self
+            .app_state
+            .playlist
+            .index_missing_durations_with(|item| {
+                Ok::<_, std::convert::Infallible>(Some(DurationIndexResult {
+                    index: item.index,
+                    uri: item.uri.clone(),
+                    length_ms: ((item.index + 1) as i64) * 1_000,
+                    title: Some(format!("Indexed {}", item.index + 1)),
+                }))
+            });
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {

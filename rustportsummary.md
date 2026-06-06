@@ -63,6 +63,7 @@ Completed so far:
 - Ported Rust selected-entry playlist sorting so only selected rows are sorted and reinserted at their original selected indices.
 - Expanded deterministic Rust e2e coverage for playlist Spotify/podcast entries, all playlist sort keys, selected-entry sorting, and close-button behavior.
 - Ported Rust playlist reverse and randomize operations, preserving the current entry after reordering and covering both in e2e tests.
+- Ported Rust playlist duration indexing with a GStreamer `Discoverer` path plus deterministic e2e coverage; missing non-podcast/non-Spotify entries can now receive duration and tag-title updates while stale URI results are ignored.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
