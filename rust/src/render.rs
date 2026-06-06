@@ -54,6 +54,23 @@ pub struct PlaylistMenuRenderState {
     pub hover: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistRowRenderEntry {
+    pub title: String,
+    pub length_ms: i64,
+    pub selected: bool,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistRowsRenderState {
+    pub entries: Vec<PlaylistRowRenderEntry>,
+    pub scroll_offset: usize,
+    pub show_numbers: bool,
+    pub width: i32,
+    pub height: i32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistMenuRenderKind {
     Add,
@@ -1177,6 +1194,83 @@ pub fn render_playlist_frame(
     Ok(true)
 }
 
+pub fn render_playlist_rows(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: &PlaylistRowsRenderState,
+) -> Result<bool, RenderError> {
+    let width = state.width.max(PLAYLIST_MIN_WIDTH);
+    let height = state.height.max(PLAYLIST_MIN_HEIGHT);
+    let list_x = 12;
+    let list_y = 20;
+    let list_w = width - 31;
+    let list_h = height - 58;
+    let entry_h = 11;
+    let colors = skin.playlist_colors();
+
+    set_rgb(cr, colors.normal_bg);
+    cr.rectangle(
+        f64::from(list_x),
+        f64::from(list_y),
+        f64::from(list_w),
+        f64::from(list_h),
+    );
+    cr.fill()?;
+
+    cr.select_font_face(
+        "Helvetica",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Normal,
+    );
+    cr.set_font_size(8.0);
+    let baseline = cr.font_extents()?.ascent().ceil() as i32;
+    let visible = (list_h / entry_h).max(0) as usize;
+    for row in 0..visible {
+        let Some(entry) = state.entries.get(row + state.scroll_offset) else {
+            break;
+        };
+        let y = list_y + row as i32 * entry_h;
+        if entry.selected {
+            set_rgb(cr, colors.selected_bg);
+            cr.rectangle(
+                f64::from(list_x),
+                f64::from(y),
+                f64::from(list_w),
+                f64::from(entry_h),
+            );
+            cr.fill()?;
+        }
+
+        if entry.current {
+            set_rgb(cr, colors.current);
+        } else {
+            set_rgb(cr, colors.normal);
+        }
+
+        let mut text_w = list_w;
+        if entry.length_ms > 0 {
+            let duration = format_duration(entry.length_ms);
+            let extents = cr.text_extents(&duration)?;
+            cr.move_to(
+                f64::from(list_x + list_w) - extents.width() - 2.0,
+                f64::from(y + baseline),
+            );
+            cr.show_text(&duration)?;
+            text_w = (f64::from(list_w) - extents.width() - 5.0).max(1.0) as i32;
+        }
+
+        let mut title = normalize_playlist_text(&entry.title);
+        if state.show_numbers {
+            title = format!("{}. {title}", row + state.scroll_offset + 1);
+        }
+        let title = ellipsize_text(cr, title, text_w)?;
+        cr.move_to(f64::from(list_x), f64::from(y + baseline));
+        cr.show_text(&title)?;
+    }
+
+    Ok(true)
+}
+
 fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError> {
     cr.save()?;
     cr.set_source_rgb(0.58, 0.82, 0.58);
@@ -1192,6 +1286,37 @@ fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError
     cr.show_text("1. No file loaded                         0:00/0:00")?;
     cr.restore()?;
     Ok(())
+}
+
+fn set_rgb(cr: &Context, color: [u8; 3]) {
+    cr.set_source_rgb(
+        f64::from(color[0]) / 255.0,
+        f64::from(color[1]) / 255.0,
+        f64::from(color[2]) / 255.0,
+    );
+}
+
+fn format_duration(length_ms: i64) -> String {
+    let total_seconds = (length_ms / 1000).max(0);
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{minutes}:{seconds:02}")
+}
+
+fn normalize_playlist_text(text: &str) -> String {
+    text.chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect()
+}
+
+fn ellipsize_text(cr: &Context, mut text: String, max_width: i32) -> Result<String, RenderError> {
+    if max_width <= 0 {
+        return Ok(String::new());
+    }
+    while !text.is_empty() && cr.text_extents(&text)?.width() > f64::from(max_width) {
+        text.pop();
+    }
+    Ok(text)
 }
 
 pub fn render_playlist_menu(

@@ -9,11 +9,11 @@ use crate::player::PlayerState;
 use crate::playlist::{DurationIndexResult, PlaylistSortKey};
 use crate::render::{
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
-    EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton,
-    MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
-    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
-    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
-    PLAYLIST_MIN_WIDTH,
+    render_playlist_rows, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
+    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
+    PlaylistRowRenderEntry, PlaylistRowsRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
@@ -685,6 +685,32 @@ fn build_playlist_window(
             render_playlist_frame(cr, &skin, focused, shaded, playlist_width, playlist_height)
         {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
+        }
+        if !shaded {
+            let current = state.app_state.playlist.position();
+            let rows = state
+                .app_state
+                .playlist
+                .entries()
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| PlaylistRowRenderEntry {
+                    title: entry.title.clone(),
+                    length_ms: entry.length_ms,
+                    selected: entry.selected,
+                    current: current == Some(index),
+                })
+                .collect();
+            let row_state = PlaylistRowsRenderState {
+                entries: rows,
+                scroll_offset: 0,
+                show_numbers: state.app_state.config.show_numbers_in_pl,
+                width: playlist_width,
+                height: playlist_height,
+            };
+            if let Err(err) = render_playlist_rows(cr, &skin, &row_state) {
+                eprintln!("xmms-rs: failed to render playlist rows: {err}");
+            }
         }
         if let Some(menu) = state.playlist_menu() {
             let (x, y, _, _) = playlist_menu_rect(menu, playlist_width, playlist_height);

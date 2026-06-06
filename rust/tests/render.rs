@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use cairo::{Context, Format, ImageSurface};
 use xmms_resuscitated::render::{
-    render_main_player_reset, surface_from_xpm, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    render_main_player_reset, render_playlist_frame, render_playlist_rows, surface_from_xpm,
+    PlaylistRowRenderEntry, PlaylistRowsRenderState, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use xmms_resuscitated::skin::{DefaultSkin, SkinPixmapKind};
 
@@ -47,4 +49,60 @@ fn renders_reset_state_widgets_over_main_skin() {
         .count();
 
     assert!(changed_pixels > 1_000);
+}
+
+#[test]
+fn renders_playlist_rows_with_selected_background() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+    )
+    .unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_playlist_frame(
+        &cr,
+        &skin,
+        true,
+        false,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT
+    )
+    .unwrap());
+    assert!(render_playlist_rows(
+        &cr,
+        &skin,
+        &PlaylistRowsRenderState {
+            entries: vec![
+                PlaylistRowRenderEntry {
+                    title: "First".to_string(),
+                    length_ms: 61_000,
+                    selected: true,
+                    current: false,
+                },
+                PlaylistRowRenderEntry {
+                    title: "Second".to_string(),
+                    length_ms: -1,
+                    selected: false,
+                    current: true,
+                },
+            ],
+            scroll_offset: 0,
+            show_numbers: true,
+            width: PLAYLIST_DEFAULT_WIDTH,
+            height: PLAYLIST_DEFAULT_HEIGHT,
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = 21 * stride + 150 * 4;
+    let selected = skin.playlist_colors().selected_bg;
+    assert_eq!(data[offset], selected[2]);
+    assert_eq!(data[offset + 1], selected[1]);
+    assert_eq!(data[offset + 2], selected[0]);
 }

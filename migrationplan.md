@@ -77,7 +77,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port duration indexing with GStreamer discoverer.
 
 - [ ] Port playlist window.
-  - [ ] Render playlist background and rows.
+  - [x] Render playlist background and rows.
   - [ ] Port scrolling and scrollbar dragging.
   - [ ] Port resizing.
   - [ ] Port shaded mode.
