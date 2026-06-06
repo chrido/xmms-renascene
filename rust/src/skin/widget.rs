@@ -920,6 +920,67 @@ impl MonoStereoIndicator {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayStatusValue {
+    Stopped = 0,
+    Paused = 1,
+    Playing = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayStatusIndicator {
+    widget: Widget,
+    skin: SkinPixmapKind,
+    status: PlayStatusValue,
+}
+
+impl PlayStatusIndicator {
+    pub const WIDTH: i32 = 11;
+    pub const HEIGHT: i32 = 9;
+
+    pub fn new(id: WidgetId, x: i32, y: i32, skin: SkinPixmapKind) -> Self {
+        Self {
+            widget: Widget::new(
+                id,
+                WidgetRect {
+                    x,
+                    y,
+                    width: Self::WIDTH,
+                    height: Self::HEIGHT,
+                },
+            ),
+            skin,
+            status: PlayStatusValue::Stopped,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn status(&self) -> PlayStatusValue {
+        self.status
+    }
+
+    pub fn set_status(&mut self, status: PlayStatusValue) {
+        self.status = status;
+        self.widget.queue_draw();
+    }
+
+    pub fn source(&self) -> SkinSource {
+        let y = match self.status {
+            PlayStatusValue::Playing => 0,
+            PlayStatusValue::Paused => 9,
+            PlayStatusValue::Stopped => 18,
+        };
+        SkinSource {
+            kind: self.skin,
+            x: 0,
+            y,
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -1433,5 +1494,21 @@ mod tests {
         assert_eq!(inactive[1].source.y, 12);
         assert_eq!(inactive[0].width, 29);
         assert_eq!(inactive[1].width, 27);
+    }
+
+    #[test]
+    fn play_status_indicator_maps_status_to_source_rows() {
+        let mut indicator = PlayStatusIndicator::new(WidgetId(8), 1, 2, SkinPixmapKind::PlayPause);
+        assert_eq!(indicator.widget().rect().width, 11);
+        assert_eq!(indicator.widget().rect().height, 9);
+        assert_eq!(indicator.status(), PlayStatusValue::Stopped);
+        assert_eq!(indicator.source().y, 18);
+
+        indicator.set_status(PlayStatusValue::Playing);
+        assert_eq!(indicator.source().y, 0);
+        assert!(indicator.widget().needs_redraw());
+
+        indicator.set_status(PlayStatusValue::Paused);
+        assert_eq!(indicator.source().y, 9);
     }
 }

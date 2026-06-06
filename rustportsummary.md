@@ -38,6 +38,7 @@ Completed so far:
 - Ported numeric time display state, default blank value, digit source mapping, dash fallback, and redraw behavior.
 - Ported visualization widget state, defaults, data/peak clamping, decay, milkdrop phase/energy updates, and redraw behavior.
 - Ported mono/stereo indicator state and C-compatible active/inactive segment source mapping.
+- Ported play-status indicator state and stopped/paused/playing source-row mapping.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
