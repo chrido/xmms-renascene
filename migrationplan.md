@@ -214,5 +214,5 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [ ] Remove temporary working-first unsafe code where practical.
   - [ ] Replace manual XPM parser with a library if still desired.
   - [ ] Remove duplicated C compatibility scaffolding.
-  - [ ] Make Rust implementation the primary installed app.
+  - [x] Make Rust implementation the primary installed app.
   - [ ] Retire or archive the C implementation once parity is proven.

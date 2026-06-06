@@ -53,14 +53,14 @@ sources = files(
   'src/podcast.c',
 )
 
-executable('xmms',
+c_reference = executable('xmms-c',
   sources, resources,
   dependencies: [gtk4, gstreamer, gstreamer_pbutils, libarchive, libsoup, json_glib, libxml2, libm],
   include_directories: [
     include_directories('src'),
     include_directories('.'),     # for config.h
   ],
-  install: true,
+  install: false,
 )
 
 install_data('data/org.xmms.Resuscitated.desktop',
@@ -79,12 +79,28 @@ install_data('data/xmms.1',
   install_dir: get_option('mandir') / 'man1',
 )
 
-cargo = find_program('cargo', required: false)
+cargo = find_program('cargo', required: true)
+sh = find_program('sh', required: true)
 xvfb_run = find_program('xvfb-run', required: false)
 env_prog = find_program('env', required: false)
 rust_manifest = meson.project_source_root() / 'rust' / 'Cargo.toml'
+rust_target_dir = meson.project_build_root() / 'rust-target'
 
-if cargo.found()
+custom_target('xmms-rust-primary',
+  output: 'xmms',
+  command: [
+    sh, '-c',
+    'cargo build --manifest-path "$1" --release --target-dir "$2" && cp "$2/release/xmms-rs" "$3"',
+    'xmms-rust-build',
+    rust_manifest,
+    rust_target_dir,
+    '@OUTPUT@',
+  ],
+  build_by_default: true,
+  install: true,
+  install_dir: get_option('bindir'),
+)
+
   run_target('rust-fmt',
     command: [cargo, 'fmt', '--manifest-path', rust_manifest, '--check'],
   )
@@ -115,4 +131,3 @@ if cargo.found()
       ],
     )
   endif
-endif

@@ -85,6 +85,13 @@ After building, run directly from the build directory:
 ./builddir/xmms
 ```
 
+The installed and build-directory `xmms` binary is the Rust implementation.
+The C reference implementation remains buildable during the migration as:
+
+```sh
+./builddir/xmms-c
+```
+
 Or after installing:
 
 ```sh

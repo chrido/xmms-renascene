@@ -96,6 +96,17 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
 }
 
 #[test]
+fn cli_primary_binary_loads_bundled_skin_without_gtk_mode() {
+    let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("xmms-rs: loaded 14 bundled default skin pixmaps"));
+}
+
+#[test]
 fn session_e2e_flags_secondary_activation_and_state_dict_match_c_contract() {
     let mut state = xmms_resuscitated::app_state::AppState::default();
     let flags = application_launch_flags(Some("1"));

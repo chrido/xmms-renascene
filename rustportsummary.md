@@ -107,6 +107,7 @@ Completed so far:
 - Added Rust CLI startup flags for playlist/equalizer visibility, shading, docking/undocking, playlist startup size, reset, and skin path, with GTK smoke e2e coverage.
 - Added Rust session/command-line behavior for command-line application flags, `XMMS_NON_UNIQUE`, secondary activation options, session state save/restore, and fallback config/playlist persistence, with e2e coverage.
 - Completed Rust main-window shortcut parity for feature-dependent actions including skin reload, timer mode, sticky, double-size, file info, and play-first, with e2e coverage.
+- Made the Rust implementation the primary Meson build/install `xmms` binary while keeping the C implementation buildable as `xmms-c` for reference during final cleanup.
 
 ## Rust crate layout
 

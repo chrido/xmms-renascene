@@ -102,7 +102,7 @@ rust_args_include_gtk_mode() {
 
 start_selected_app() {
     if [ "$app" = "c" ]; then
-        exec ./builddir/xmms "$@"
+        exec ./builddir/xmms-c "$@"
     fi
 
     if [ ! -x "$rust_bin" ]; then
@@ -119,7 +119,7 @@ start_selected_app() {
 
 start_selected_app_in_background() {
     if [ "$app" = "c" ]; then
-        ./builddir/xmms "$@" &
+        ./builddir/xmms-c "$@" &
     elif rust_args_include_gtk_mode "$@"; then
         "$rust_bin" "$@" &
     else
