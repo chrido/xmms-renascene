@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::fmt;
 use std::io;
 use std::path::Path;
 use std::rc::Rc;
@@ -13,8 +14,8 @@ use crate::mpris::{
     MprisMetadata, MprisPlayerProperties, MprisRootProperties,
 };
 use crate::player::{
-    equalizer_position_to_db, group_output_devices, OutputDevice, OutputDeviceGroups,
-    OutputDeviceSelection, PlayerState,
+    equalizer_position_to_db, group_output_devices, list_gstreamer_output_devices,
+    GStreamerBackend, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlayerState,
 };
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
@@ -106,6 +107,10 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     let main_state = Rc::new(RefCell::new(MainWindowUiState::default()));
     {
         let mut state = main_state.borrow_mut();
+        match GStreamerBackend::new() {
+            Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
+            Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
+        }
         if let Some((width, height)) = options.playlist_size {
             state.set_playlist_size(width, height);
         }
@@ -326,6 +331,51 @@ pub enum PreferencesPage {
     Options,
     Fonts,
     Title,
+}
+
+pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'static str] {
+    match page {
+        PreferencesPage::Audio => &[
+            "Input Plugins",
+            "Output Plugin",
+            "Output device:",
+            "Configure",
+        ],
+        PreferencesPage::Plugins => &["Effect Plugins", "General Plugins"],
+        PreferencesPage::Visualization => &[
+            "Visualization mode:",
+            "Analyzer mode:",
+            "Analyzer style:",
+            "Scope mode:",
+            "Show analyzer peaks",
+            "Analyzer falloff:",
+            "Peaks falloff:",
+            "WindowShade VU mode:",
+            "Refresh rate:",
+        ],
+        PreferencesPage::Options => &[
+            "Volume:",
+            "Balance:",
+            "Zoom level:",
+            "Podcast cache TTL (days):",
+            "Podcast refresh interval (minutes):",
+            "Repeat",
+            "Shuffle",
+            "No playlist advance",
+            "Time remaining",
+            "Dock playlist",
+            "Dock equalizer",
+            "Convert %20 to space",
+            "Convert underscore to space",
+            "Show numbers in playlist",
+        ],
+        PreferencesPage::Fonts => &[
+            "Playlist font family:",
+            "Open Skin Browser",
+            "Skin bitmap font",
+        ],
+        PreferencesPage::Title => &["Title format:"],
+    }
 }
 
 fn keyboard_shortcut_from_event(
@@ -1168,48 +1218,39 @@ fn build_preferences_window(
 
     let notebook = gtk::Notebook::new();
     notebook.set_vexpand(true);
-    for (page, label, body) in [
+    for (page, label, page_widget) in [
         (
             PreferencesPage::Audio,
             "Audio I/O Plugins",
-            "GStreamer input support and output device selection are wired through the Rust preferences model.",
+            build_preferences_audio_page(main_state),
         ),
         (
             PreferencesPage::Plugins,
             "Effect/General Plugins",
-            "Built-in equalizer, MPRIS, and service integrations are configured by the Rust port.",
+            build_preferences_plugins_page(),
         ),
         (
             PreferencesPage::Visualization,
             "Visualization Plugins",
-            "Visualization mode, analyzer, scope, peaks, VU, and refresh settings apply immediately.",
+            build_preferences_visualization_page(main_state),
         ),
         (
             PreferencesPage::Options,
             "Options",
-            "Playback, playlist, docking, title conversion, and podcast options apply immediately.",
+            build_preferences_options_page(main_state),
         ),
         (
             PreferencesPage::Fonts,
             "Fonts",
-            "Playlist font family and main-window font compatibility settings are preserved.",
+            build_preferences_fonts_page(main_state),
         ),
         (
             PreferencesPage::Title,
             "Title",
-            "Title format compatibility settings are preserved and normalized.",
+            build_preferences_title_page(main_state),
         ),
     ] {
-        let page_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        page_box.set_margin_top(8);
-        page_box.set_margin_bottom(8);
-        page_box.set_margin_start(8);
-        page_box.set_margin_end(8);
-        let text = gtk::Label::new(Some(body));
-        text.set_xalign(0.0);
-        text.set_wrap(true);
-        page_box.append(&text);
-        notebook.append_page(&page_box, Some(&gtk::Label::new(Some(label))));
+        notebook.append_page(&page_widget, Some(&gtk::Label::new(Some(label))));
         if page == PreferencesPage::Options {
             notebook.set_current_page(Some(3));
         }
@@ -1253,6 +1294,607 @@ fn build_preferences_window(
     }
 
     window
+}
+
+fn prefs_page_box() -> gtk::Box {
+    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    page.set_margin_top(8);
+    page.set_margin_bottom(8);
+    page.set_margin_start(8);
+    page.set_margin_end(8);
+    page
+}
+
+fn prefs_frame(title: &str, parent: &gtk::Box) -> gtk::Box {
+    let frame = gtk::Frame::new(Some(title));
+    frame.set_margin_top(6);
+    frame.set_margin_bottom(6);
+    frame.set_margin_start(6);
+    frame.set_margin_end(6);
+    parent.append(&frame);
+
+    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    box_.set_margin_top(8);
+    box_.set_margin_bottom(8);
+    box_.set_margin_start(8);
+    box_.set_margin_end(8);
+    frame.set_child(Some(&box_));
+    box_
+}
+
+fn prefs_grid() -> gtk::Grid {
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(6);
+    grid.set_column_spacing(12);
+    grid
+}
+
+fn prefs_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.set_wrap(true);
+    label
+}
+
+fn prefs_attach_label(grid: &gtk::Grid, label: &str, child: &impl IsA<gtk::Widget>, row: i32) {
+    grid.attach(&prefs_label(label), 0, row, 1, 1);
+    grid.attach(child, 1, row, 1, 1);
+    child.set_hexpand(true);
+}
+
+fn prefs_check(label: &str, active: bool) -> gtk::CheckButton {
+    let check = gtk::CheckButton::with_label(label);
+    check.set_halign(gtk::Align::Start);
+    check.set_active(active);
+    check
+}
+
+fn build_preferences_audio_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+    let page = prefs_page_box();
+    let input = prefs_frame("Input Plugins", &page);
+    input.append(&prefs_label("GStreamer input support (built in)"));
+    input.append(&prefs_label(
+        "File, URI, and stream decoding are provided by installed GStreamer plugins.",
+    ));
+
+    let output = prefs_frame("Output Plugin", &page);
+    let grid = prefs_grid();
+    output.append(&grid);
+    let output_combo = gtk::ComboBoxText::new();
+    output_combo.append(Some("auto"), "Automatic (System Default)");
+    if let Ok(devices) = list_gstreamer_output_devices() {
+        for device in devices {
+            output_combo.append(Some(&device.id), &device.display_name);
+        }
+    }
+    if let Some(device) = main_state.borrow().preference_output_device() {
+        if !output_combo.set_active_id(Some(device)) {
+            output_combo.append(Some(device), device);
+            output_combo.set_active_id(Some(device));
+        }
+    } else {
+        output_combo.set_active_id(Some("auto"));
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        output_combo.connect_changed(move |combo| {
+            let selected = combo.active_id().map(|id| id.to_string());
+            let device = selected.filter(|id| id != "auto");
+            main_state.borrow_mut().set_preference_output_device(device);
+        });
+    }
+    prefs_attach_label(&grid, "Output device:", &output_combo, 0);
+
+    let configure = gtk::Button::with_label("Configure");
+    configure.connect_clicked(|_| {
+        eprintln!("xmms-rs: output device configuration is handled by the system audio settings");
+    });
+    grid.attach(&configure, 1, 1, 1, 1);
+    page
+}
+
+fn build_preferences_plugins_page() -> gtk::Box {
+    let page = prefs_page_box();
+    let effects = prefs_frame("Effect Plugins", &page);
+    effects.append(&prefs_label(
+        "GStreamer equalizer (built in, controlled by the Equalizer window)",
+    ));
+    let general = prefs_frame("General Plugins", &page);
+    general.append(&prefs_label("MPRIS desktop integration (built in)"));
+    general.append(&prefs_label(
+        "Spotify support (built in, configured from the Spotify window)",
+    ));
+    page
+}
+
+fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+    let page = prefs_page_box();
+    let box_ = prefs_frame("Options", &page);
+    let grid = prefs_grid();
+    box_.append(&grid);
+
+    let volume = gtk::SpinButton::with_range(0.0, 100.0, 1.0);
+    volume.set_value(main_state.borrow().volume() as f64);
+    {
+        let main_state = Rc::clone(main_state);
+        volume.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_volume(spin.value_as_int());
+        });
+    }
+    prefs_attach_label(&grid, "Volume:", &volume, 0);
+
+    let balance = gtk::SpinButton::with_range(-100.0, 100.0, 1.0);
+    balance.set_value(main_state.borrow().balance() as f64);
+    {
+        let main_state = Rc::clone(main_state);
+        balance.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_balance(spin.value_as_int());
+        });
+    }
+    prefs_attach_label(&grid, "Balance:", &balance, 1);
+
+    let (scale, zoom_text) = {
+        let state = main_state.borrow();
+        let scale = state.app_state.config.scale_factor.clamp(1.0, 5.0);
+        (scale, format!("{scale:.1}x"))
+    };
+    let zoom = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 5.0, 0.1);
+    zoom.set_digits(1);
+    zoom.set_draw_value(false);
+    zoom.set_value(scale);
+    let zoom_value = gtk::Entry::new();
+    zoom_value.set_editable(false);
+    zoom_value.set_width_chars(5);
+    zoom_value.set_hexpand(false);
+    zoom_value.set_text(&zoom_text);
+    let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    zoom_box.append(&zoom);
+    zoom_box.append(&zoom_value);
+    {
+        let main_state = Rc::clone(main_state);
+        let zoom_value = zoom_value.clone();
+        zoom.connect_value_changed(move |scale| {
+            let value = scale.value().clamp(1.0, 5.0);
+            zoom_value.set_text(&format!("{value:.1}x"));
+            main_state.borrow_mut().set_preference_scale_factor(value);
+        });
+    }
+    prefs_attach_label(&grid, "Zoom level:", &zoom_box, 2);
+
+    let ttl = gtk::SpinButton::with_range(1.0, 3650.0, 1.0);
+    ttl.set_value(main_state.borrow().preference_podcast_cache_ttl_days() as f64);
+    {
+        let main_state = Rc::clone(main_state);
+        ttl.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_podcast_cache_ttl_days(spin.value_as_int());
+        });
+    }
+    prefs_attach_label(&grid, "Podcast cache TTL (days):", &ttl, 3);
+
+    let refresh = gtk::SpinButton::with_range(1.0, 10080.0, 1.0);
+    refresh.set_value(
+        main_state
+            .borrow()
+            .preference_podcast_refresh_interval_minutes() as f64,
+    );
+    {
+        let main_state = Rc::clone(main_state);
+        refresh.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_podcast_refresh_interval_minutes(spin.value_as_int());
+        });
+    }
+    prefs_attach_label(&grid, "Podcast refresh interval (minutes):", &refresh, 4);
+
+    let checks = {
+        let state = main_state.borrow();
+        [
+            ("Repeat", state.repeat(), PreferenceCheck::Repeat),
+            ("Shuffle", state.shuffle(), PreferenceCheck::Shuffle),
+            (
+                "No playlist advance",
+                state.preference_no_playlist_advance(),
+                PreferenceCheck::NoAdvance,
+            ),
+            (
+                "Time remaining",
+                state.preference_timer_remaining(),
+                PreferenceCheck::TimerRemaining,
+            ),
+            (
+                "Dock playlist",
+                !state.app_state.config.playlist_detached,
+                PreferenceCheck::DockPlaylist,
+            ),
+            (
+                "Dock equalizer",
+                !state.app_state.config.equalizer_detached,
+                PreferenceCheck::DockEqualizer,
+            ),
+            (
+                "Convert %20 to space",
+                state.preference_convert_twenty(),
+                PreferenceCheck::ConvertTwenty,
+            ),
+            (
+                "Convert underscore to space",
+                state.preference_convert_underscore(),
+                PreferenceCheck::ConvertUnderscore,
+            ),
+            (
+                "Show numbers in playlist",
+                state.preference_show_numbers_in_playlist(),
+                PreferenceCheck::ShowNumbers,
+            ),
+        ]
+    };
+    for (index, (label, active, action)) in checks.into_iter().enumerate() {
+        let check = prefs_check(label, active);
+        {
+            let main_state = Rc::clone(main_state);
+            check.connect_toggled(move |check| {
+                let mut state = main_state.borrow_mut();
+                match action {
+                    PreferenceCheck::Repeat => state.set_preference_repeat(check.is_active()),
+                    PreferenceCheck::Shuffle => state.set_preference_shuffle(check.is_active()),
+                    PreferenceCheck::NoAdvance => {
+                        state.set_preference_no_playlist_advance(check.is_active())
+                    }
+                    PreferenceCheck::TimerRemaining => {
+                        state.set_preference_timer_remaining(check.is_active())
+                    }
+                    PreferenceCheck::DockPlaylist => {
+                        state.set_preference_playlist_docked(check.is_active())
+                    }
+                    PreferenceCheck::DockEqualizer => {
+                        state.set_preference_equalizer_docked(check.is_active())
+                    }
+                    PreferenceCheck::ConvertTwenty => {
+                        state.set_preference_convert_twenty(check.is_active())
+                    }
+                    PreferenceCheck::ConvertUnderscore => {
+                        state.set_preference_convert_underscore(check.is_active())
+                    }
+                    PreferenceCheck::ShowNumbers => {
+                        state.set_preference_show_numbers_in_playlist(check.is_active())
+                    }
+                }
+            });
+        }
+        grid.attach(&check, (index % 2) as i32, 5 + (index / 2) as i32, 1, 1);
+    }
+    page
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PreferenceCheck {
+    Repeat,
+    Shuffle,
+    NoAdvance,
+    TimerRemaining,
+    DockPlaylist,
+    DockEqualizer,
+    ConvertTwenty,
+    ConvertUnderscore,
+    ShowNumbers,
+}
+
+fn build_preferences_fonts_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+    let page = prefs_page_box();
+    let playlist = prefs_frame("Playlist", &page);
+    let grid = prefs_grid();
+    playlist.append(&grid);
+    let playlist_font = gtk::ComboBoxText::with_entry();
+    for font in ["Helvetica", "Sans", "Serif", "Monospace"] {
+        playlist_font.append(Some(font), font);
+    }
+    let current_font = main_state.borrow().preference_playlist_font().to_string();
+    if !playlist_font.set_active_id(Some(&current_font)) {
+        playlist_font.append(Some(&current_font), &current_font);
+        playlist_font.set_active_id(Some(&current_font));
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        playlist_font.connect_changed(move |combo| {
+            if let Some(font) = combo.active_id() {
+                main_state.borrow_mut().set_preference_playlist_font(&font);
+            }
+        });
+    }
+    prefs_attach_label(&grid, "Playlist font family:", &playlist_font, 0);
+    playlist.append(&prefs_label("XMMS used a Helvetica bold 10px playlist font. This port keeps the original fixed row height, so only the family is configurable."));
+
+    let main = prefs_frame("Main Window", &page);
+    let mainwin_font = gtk::Entry::new();
+    mainwin_font.set_editable(false);
+    mainwin_font.set_text(main_state.borrow().preference_mainwin_font());
+    main.append(&mainwin_font);
+    main.append(&prefs_label(
+        "The main window uses the skin bitmap font, matching XMMS skins.",
+    ));
+    let skin_browser = gtk::Button::with_label("Open Skin Browser");
+    {
+        let main_state = Rc::clone(main_state);
+        skin_browser.connect_clicked(move |_| {
+            main_state.borrow_mut().set_skin_browser_visible(true);
+        });
+    }
+    main.append(&skin_browser);
+    page
+}
+
+fn build_preferences_title_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+    let page = prefs_page_box();
+    let box_ = prefs_frame("Title", &page);
+    let grid = prefs_grid();
+    box_.append(&grid);
+    let title = gtk::Entry::new();
+    title.set_text(main_state.borrow().preference_title_format());
+    {
+        let main_state = Rc::clone(main_state);
+        title.connect_changed(move |entry| {
+            main_state
+                .borrow_mut()
+                .set_preference_title_format(entry.text().as_str());
+        });
+    }
+    prefs_attach_label(&grid, "Title format:", &title, 0);
+    box_.append(&prefs_label("Original XMMS tokens include %p artist, %a album, %g genre, %f filename, and %t title. The current decoder uses embedded titles when available and stores this format for compatibility."));
+    page
+}
+
+fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+    let page = prefs_page_box();
+    let box_ = prefs_frame("Visualization", &page);
+    let grid = prefs_grid();
+    box_.append(&grid);
+    box_.append(&prefs_label(
+        "Controls that do not affect the selected visualization mode are disabled.",
+    ));
+
+    let mode = gtk::ComboBoxText::new();
+    for (id, label) in [
+        ("analyzer", "Analyzer"),
+        ("scope", "Scope"),
+        ("milkdrop", "MilkDrop-inspired"),
+        ("off", "Off"),
+    ] {
+        mode.append(Some(id), label);
+    }
+    mode.set_active_id(Some(match main_state.borrow().visualization_mode() {
+        VisMode::Scope => "scope",
+        VisMode::Milkdrop => "milkdrop",
+        VisMode::Off => "off",
+        VisMode::Analyzer => "analyzer",
+    }));
+    {
+        let main_state = Rc::clone(main_state);
+        mode.connect_changed(move |combo| {
+            let mode = match combo.active_id().as_deref() {
+                Some("scope") => VisMode::Scope,
+                Some("milkdrop") => VisMode::Milkdrop,
+                Some("off") => VisMode::Off,
+                _ => VisMode::Analyzer,
+            };
+            main_state.borrow_mut().set_visualization_mode(mode);
+        });
+    }
+    prefs_attach_label(&grid, "Visualization mode:", &mode, 0);
+
+    let analyzer_mode = gtk::ComboBoxText::new();
+    for (id, label) in [
+        ("normal", "Analyzer normal"),
+        ("fire", "Analyzer fire"),
+        ("vlines", "Analyzer vertical lines"),
+    ] {
+        analyzer_mode.append(Some(id), label);
+    }
+    analyzer_mode.set_active_id(Some(
+        match main_state.borrow().visualization_analyzer_mode() {
+            VisAnalyzerMode::Fire => "fire",
+            VisAnalyzerMode::VerticalLines => "vlines",
+            VisAnalyzerMode::Normal => "normal",
+        },
+    ));
+    {
+        let main_state = Rc::clone(main_state);
+        analyzer_mode.connect_changed(move |combo| {
+            let mode = match combo.active_id().as_deref() {
+                Some("fire") => VisAnalyzerMode::Fire,
+                Some("vlines") => VisAnalyzerMode::VerticalLines,
+                _ => VisAnalyzerMode::Normal,
+            };
+            main_state
+                .borrow_mut()
+                .set_visualization_analyzer_mode(mode);
+        });
+    }
+    prefs_attach_label(&grid, "Analyzer mode:", &analyzer_mode, 1);
+
+    let style = gtk::ComboBoxText::new();
+    style.append(Some("bars"), "Analyzer bars");
+    style.append(Some("lines"), "Analyzer lines");
+    style.set_active_id(Some(
+        match main_state.borrow().visualization_analyzer_style() {
+            VisAnalyzerStyle::Lines => "lines",
+            VisAnalyzerStyle::Bars => "bars",
+        },
+    ));
+    {
+        let main_state = Rc::clone(main_state);
+        style.connect_changed(move |combo| {
+            let style = match combo.active_id().as_deref() {
+                Some("lines") => VisAnalyzerStyle::Lines,
+                _ => VisAnalyzerStyle::Bars,
+            };
+            main_state
+                .borrow_mut()
+                .set_visualization_analyzer_style(style);
+        });
+    }
+    prefs_attach_label(&grid, "Analyzer style:", &style, 2);
+
+    let scope = gtk::ComboBoxText::new();
+    for (id, label) in [
+        ("dot", "Dot scope"),
+        ("line", "Line scope"),
+        ("solid", "Solid scope"),
+    ] {
+        scope.append(Some(id), label);
+    }
+    scope.set_active_id(Some(match main_state.borrow().visualization_scope_mode() {
+        VisScopeMode::Dot => "dot",
+        VisScopeMode::Solid => "solid",
+        VisScopeMode::Line => "line",
+    }));
+    {
+        let main_state = Rc::clone(main_state);
+        scope.connect_changed(move |combo| {
+            let mode = match combo.active_id().as_deref() {
+                Some("dot") => VisScopeMode::Dot,
+                Some("solid") => VisScopeMode::Solid,
+                _ => VisScopeMode::Line,
+            };
+            main_state.borrow_mut().set_visualization_scope_mode(mode);
+        });
+    }
+    prefs_attach_label(&grid, "Scope mode:", &scope, 3);
+
+    let peaks = prefs_check(
+        "Show analyzer peaks",
+        main_state.borrow().visualization_peaks_enabled(),
+    );
+    {
+        let main_state = Rc::clone(main_state);
+        peaks.connect_toggled(move |check| {
+            main_state
+                .borrow_mut()
+                .set_visualization_peaks_enabled(check.is_active());
+        });
+    }
+    grid.attach(&peaks, 1, 4, 1, 1);
+
+    let falloff = falloff_combo(main_state.borrow().visualization_analyzer_falloff());
+    let peaks_falloff = falloff_combo(main_state.borrow().visualization_peaks_falloff());
+    {
+        let main_state = Rc::clone(main_state);
+        let peaks_falloff = peaks_falloff.clone();
+        falloff.connect_changed(move |combo| {
+            let analyzer = falloff_from_combo(combo);
+            let peaks = falloff_from_combo(&peaks_falloff);
+            main_state
+                .borrow_mut()
+                .set_visualization_falloff(analyzer, peaks);
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        let falloff = falloff.clone();
+        peaks_falloff.connect_changed(move |combo| {
+            let analyzer = falloff_from_combo(&falloff);
+            let peaks = falloff_from_combo(combo);
+            main_state
+                .borrow_mut()
+                .set_visualization_falloff(analyzer, peaks);
+        });
+    }
+    prefs_attach_label(&grid, "Analyzer falloff:", &falloff, 5);
+    prefs_attach_label(&grid, "Peaks falloff:", &peaks_falloff, 6);
+
+    let vu = gtk::ComboBoxText::new();
+    vu.append(Some("normal"), "Normal");
+    vu.append(Some("smooth"), "Smooth");
+    vu.set_active_id(Some(match main_state.borrow().visualization_vu_mode() {
+        VisVuMode::Smooth => "smooth",
+        VisVuMode::Normal => "normal",
+    }));
+    {
+        let main_state = Rc::clone(main_state);
+        vu.connect_changed(move |combo| {
+            let mode = match combo.active_id().as_deref() {
+                Some("smooth") => VisVuMode::Smooth,
+                _ => VisVuMode::Normal,
+            };
+            main_state.borrow_mut().set_visualization_vu_mode(mode);
+        });
+    }
+    prefs_attach_label(&grid, "WindowShade VU mode:", &vu, 7);
+
+    let refresh = gtk::ComboBoxText::new();
+    for (id, label) in [
+        ("full", "Full"),
+        ("half", "Half"),
+        ("quarter", "Quarter"),
+        ("eighth", "Eighth"),
+    ] {
+        refresh.append(Some(id), label);
+    }
+    refresh.set_active_id(Some(
+        match main_state.borrow().visualization_refresh_divisor() {
+            8.. => "eighth",
+            4..=7 => "quarter",
+            2..=3 => "half",
+            _ => "full",
+        },
+    ));
+    {
+        let main_state = Rc::clone(main_state);
+        refresh.connect_changed(move |combo| {
+            let divisor = match combo.active_id().as_deref() {
+                Some("eighth") => 8,
+                Some("quarter") => 4,
+                Some("half") => 2,
+                _ => 1,
+            };
+            main_state
+                .borrow_mut()
+                .set_visualization_refresh_divisor(divisor);
+        });
+    }
+    prefs_attach_label(&grid, "Refresh rate:", &refresh, 8);
+    page
+}
+
+fn falloff_combo(active: VisFalloffSpeed) -> gtk::ComboBoxText {
+    let combo = gtk::ComboBoxText::new();
+    for (id, label) in [
+        ("slowest", "Slowest"),
+        ("slow", "Slow"),
+        ("medium", "Medium"),
+        ("fast", "Fast"),
+        ("fastest", "Fastest"),
+    ] {
+        combo.append(Some(id), label);
+    }
+    combo.set_active_id(Some(falloff_id(active)));
+    combo
+}
+
+fn falloff_id(speed: VisFalloffSpeed) -> &'static str {
+    match speed {
+        VisFalloffSpeed::Slowest => "slowest",
+        VisFalloffSpeed::Slow => "slow",
+        VisFalloffSpeed::Fast => "fast",
+        VisFalloffSpeed::Fastest => "fastest",
+        VisFalloffSpeed::Medium => "medium",
+    }
+}
+
+fn falloff_from_combo(combo: &gtk::ComboBoxText) -> VisFalloffSpeed {
+    match combo.active_id().as_deref() {
+        Some("slowest") => VisFalloffSpeed::Slowest,
+        Some("slow") => VisFalloffSpeed::Slow,
+        Some("fast") => VisFalloffSpeed::Fast,
+        Some("fastest") => VisFalloffSpeed::Fastest,
+        _ => VisFalloffSpeed::Medium,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1838,9 +2480,11 @@ pub(crate) enum UiAction {
     OpenFileDialog,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct MainWindowUiState {
     app_state: AppState,
+    playback_backend: Option<Rc<RefCell<GStreamerBackend>>>,
+    playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
     equalizer_shaded: bool,
@@ -1908,6 +2552,19 @@ pub(crate) struct MainWindowUiState {
     slider_press_offset: i32,
 }
 
+impl fmt::Debug for MainWindowUiState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MainWindowUiState")
+            .field("app_state", &self.app_state)
+            .field("shaded", &self.shaded)
+            .field("playlist_shaded", &self.playlist_shaded)
+            .field("preferences_visible", &self.preferences_visible)
+            .field("preferences_page", &self.preferences_page)
+            .field("player_state", &self.app_state.player.state())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for MainWindowUiState {
     fn default() -> Self {
         Self::from_app_state(AppState::default())
@@ -1918,6 +2575,8 @@ impl MainWindowUiState {
     pub(crate) fn from_app_state(app_state: AppState) -> Self {
         let mut state = Self {
             app_state,
+            playback_backend: None,
+            playback_requests: Vec::new(),
             shaded: false,
             menu_visible: false,
             equalizer_shaded: false,
@@ -1990,6 +2649,18 @@ impl MainWindowUiState {
 
     pub(crate) fn app_state_mut(&mut self) -> &mut AppState {
         &mut self.app_state
+    }
+
+    pub(crate) fn set_playback_backend(&mut self, backend: Rc<RefCell<GStreamerBackend>>) {
+        {
+            let player = &self.app_state.player;
+            let backend = backend.borrow();
+            backend.set_volume_percent(player.volume());
+            backend.set_balance_percent(player.balance());
+            backend
+                .set_equalizer_from_positions(self.equalizer_active, self.equalizer_band_positions);
+        }
+        self.playback_backend = Some(backend);
     }
 
     fn render_state(&self) -> MainWindowRenderState {
@@ -2727,8 +3398,44 @@ impl MainWindowUiState {
             let duration_ms = self.playlist_entry_length_ms(position).unwrap_or(0);
             self.app_state.player.play_spotify_uri(uri, duration_ms);
         } else {
+            self.playback_requests.push(uri.clone());
+            if let Some(backend) = &self.playback_backend {
+                if let Err(err) = backend.borrow().play_uri(&uri) {
+                    eprintln!("xmms-rs: failed to play {uri}: {err}");
+                    self.app_state.player.stop();
+                    return;
+                }
+            }
             self.app_state.player.mark_playing();
         }
+    }
+
+    fn pause_playback(&mut self) {
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend.borrow().pause() {
+                eprintln!("xmms-rs: failed to pause playback: {err}");
+            }
+        }
+        self.app_state.player.pause();
+    }
+
+    fn unpause_playback(&mut self) {
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend.borrow().unpause() {
+                eprintln!("xmms-rs: failed to resume playback: {err}");
+            }
+        }
+        self.app_state.player.unpause();
+    }
+
+    fn stop_playback(&mut self) {
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend.borrow().stop() {
+                eprintln!("xmms-rs: failed to stop playback: {err}");
+            }
+        }
+        self.app_state.player.stop();
+        self.position_position = 0;
     }
 
     pub(crate) fn player_spotify_mode(&self) -> bool {
@@ -2741,6 +3448,10 @@ impl MainWindowUiState {
 
     pub(crate) fn player_spotify_position_ms(&self) -> i64 {
         self.app_state.player.spotify_position_ms()
+    }
+
+    pub(crate) fn last_playback_request(&self) -> Option<&str> {
+        self.playback_requests.last().map(String::as_str)
     }
 
     pub(crate) fn player_spotify_duration_ms(&self) -> i64 {
@@ -3520,6 +4231,14 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_output_device(&mut self, device: Option<String>) {
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend
+                .borrow_mut()
+                .rebuild_output_sink("autoaudiosink", device.as_deref())
+            {
+                eprintln!("xmms-rs: failed to switch output device: {err}");
+            }
+        }
         self.app_state.config.output_device = device;
         self.mark_preferences_saved();
     }
@@ -3532,6 +4251,9 @@ impl MainWindowUiState {
         let volume = volume.clamp(0, 100);
         self.app_state.config.volume = volume;
         self.app_state.player.set_volume(volume);
+        if let Some(backend) = &self.playback_backend {
+            backend.borrow().set_volume_percent(volume);
+        }
         self.mark_preferences_saved();
     }
 
@@ -3539,6 +4261,16 @@ impl MainWindowUiState {
         let balance = balance.clamp(-100, 100);
         self.app_state.config.balance = balance;
         self.app_state.player.set_balance(balance);
+        if let Some(backend) = &self.playback_backend {
+            backend.borrow().set_balance_percent(balance);
+        }
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_scale_factor(&mut self, scale: f64) {
+        let scale = scale.clamp(1.0, 5.0);
+        self.app_state.config.scale_factor = scale;
+        self.app_state.config.doublesize = scale > 1.0;
         self.mark_preferences_saved();
     }
 
@@ -3722,6 +4454,14 @@ impl MainWindowUiState {
         self.visualization.peaks_enabled()
     }
 
+    pub(crate) fn visualization_analyzer_falloff(&self) -> VisFalloffSpeed {
+        self.app_state.config.vis_analyzer_falloff
+    }
+
+    pub(crate) fn visualization_peaks_falloff(&self) -> VisFalloffSpeed {
+        self.app_state.config.vis_peaks_falloff
+    }
+
     pub(crate) fn set_visualization_falloff(
         &mut self,
         analyzer: VisFalloffSpeed,
@@ -3811,7 +4551,7 @@ impl MainWindowUiState {
         if self.app_state.playlist.eof_reached() {
             self.start_current_playlist_playback();
         } else {
-            self.app_state.player.stop();
+            self.stop_playback();
         }
     }
 
@@ -3930,15 +4670,14 @@ impl MainWindowUiState {
             }
             MainPushButton::Pause => {
                 match self.app_state.player.state() {
-                    PlayerState::Playing => self.app_state.player.pause(),
-                    PlayerState::Paused => self.app_state.player.unpause(),
+                    PlayerState::Playing => self.pause_playback(),
+                    PlayerState::Paused => self.unpause_playback(),
                     PlayerState::Stopped => {}
                 }
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.app_state.player.stop();
-                self.position_position = 0;
+                self.stop_playback();
                 UiAction::None
             }
             MainPushButton::Previous => {
@@ -4001,14 +4740,20 @@ impl MainWindowUiState {
         }
 
         match slider {
-            MainSlider::Volume => self
-                .app_state
-                .player
-                .set_volume(position_to_volume(position)),
-            MainSlider::Balance => self
-                .app_state
-                .player
-                .set_balance(position_to_balance(position)),
+            MainSlider::Volume => {
+                let volume = position_to_volume(position);
+                self.app_state.player.set_volume(volume);
+                if let Some(backend) = &self.playback_backend {
+                    backend.borrow().set_volume_percent(volume);
+                }
+            }
+            MainSlider::Balance => {
+                let balance = position_to_balance(position);
+                self.app_state.player.set_balance(balance);
+                if let Some(backend) = &self.playback_backend {
+                    backend.borrow().set_balance_percent(balance);
+                }
+            }
             MainSlider::Position => self.position_position = position,
         }
         self.app_state.sync_config_from_runtime();

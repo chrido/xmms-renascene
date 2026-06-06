@@ -1315,6 +1315,11 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_last_playback_request(&mut self, expected: Option<&str>) -> &mut Self {
+        assert_eq!(self.state.last_playback_request(), expected);
+        self
+    }
+
     pub fn assert_player_spotify_position_ms(&mut self, expected: i64) -> &mut Self {
         assert_eq!(self.state.player_spotify_position_ms(), expected);
         self

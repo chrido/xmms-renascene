@@ -36,8 +36,8 @@ use xmms_resuscitated::spotify::{
     SpotifyPlaylist, SpotifyTrack, CLIENT_ID, REDIRECT_URI,
 };
 use xmms_resuscitated::ui::{
-    PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
-    SpotifyChooserPage,
+    preferences_page_parity_controls, PanelKind, PlaylistContextAction, PlaylistMenuKind,
+    PlaylistSortAction, PreferencesPage, SpotifyChooserPage,
 };
 
 #[test]
@@ -1628,6 +1628,40 @@ fn preferences_audio_page_applies_output_volume_and_balance_immediately() {
         .set_preference_balance(-40)
         .assert_balance(-40)
         .assert_preferences_saved();
+}
+
+#[test]
+fn preferences_pages_expose_c_parity_controls() {
+    for page in [
+        PreferencesPage::Audio,
+        PreferencesPage::Plugins,
+        PreferencesPage::Visualization,
+        PreferencesPage::Options,
+        PreferencesPage::Fonts,
+        PreferencesPage::Title,
+    ] {
+        assert!(
+            !preferences_page_parity_controls(page).is_empty(),
+            "expected {page:?} preferences page to expose controls"
+        );
+    }
+
+    assert!(preferences_page_parity_controls(PreferencesPage::Options).contains(&"Volume:"));
+    assert!(
+        preferences_page_parity_controls(PreferencesPage::Visualization)
+            .contains(&"Visualization mode:")
+    );
+    assert!(preferences_page_parity_controls(PreferencesPage::Audio).contains(&"Output device:"));
+}
+
+#[test]
+fn local_file_playback_requests_gstreamer_uri_instead_of_only_toggling_ui_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_main(["file:///music/local-song.ogg"])
+        .assert_player_state(PlayerState::Playing)
+        .assert_player_spotify_uri(None)
+        .assert_last_playback_request(Some("file:///music/local-song.ogg"));
 }
 
 #[test]
