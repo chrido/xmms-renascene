@@ -3104,6 +3104,7 @@ fn sync_single_panel_window_values(
     area.set_content_width(scale_dim(width, scale));
     area.set_content_height(scale_dim(height, scale));
     window.set_default_size(scale_dim(width, scale), scale_dim(height, scale));
+    window.present();
     area.queue_draw();
 }
 
