@@ -94,7 +94,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Disable video with fake sink.
   - [x] Port bus handling for EOS, errors, duration changes, tags, and spectrum messages.
   - [x] Port play, stop, pause, unpause, toggle pause, seek, position, and duration.
-  - [ ] Port bitrate, frequency, and channel reporting.
+  - [x] Port bitrate, frequency, and channel reporting.
   - [x] Port volume and balance.
   - [ ] Port output-device rebuild behavior.
 

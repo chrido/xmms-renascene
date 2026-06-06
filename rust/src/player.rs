@@ -50,12 +50,20 @@ pub struct PlaybackTags {
     pub bitrate: Option<i32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StreamInfo {
+    pub bitrate: Option<i32>,
+    pub frequency: Option<i32>,
+    pub channels: Option<i32>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlaybackEvent {
     EndOfStream,
     Error(String),
     DurationChanged(Option<i64>),
     Tags(PlaybackTags),
+    StreamInfo(StreamInfo),
     Spectrum([f32; SPECTRUM_BANDS]),
 }
 
@@ -166,6 +174,15 @@ impl GStreamerBackend {
 
     pub fn duration_ms(&self) -> Option<i64> {
         query_duration_ms(&self.pipeline)
+    }
+
+    pub fn audio_stream_info(&self) -> StreamInfo {
+        self.audio_sink_bin
+            .static_pad("sink")
+            .and_then(|pad| pad.current_caps())
+            .as_ref()
+            .map(stream_info_from_caps)
+            .unwrap_or_default()
     }
 
     pub fn playback_state(&self) -> PlayerState {
@@ -348,6 +365,9 @@ impl Player {
             PlaybackEvent::Tags(tags) => {
                 self.set_stream_info(tags.bitrate, None, None);
             }
+            PlaybackEvent::StreamInfo(info) => {
+                self.set_stream_info(info.bitrate, info.frequency, info.channels);
+            }
             PlaybackEvent::Spectrum(data) => self.set_visualization_data(*data),
             PlaybackEvent::EndOfStream | PlaybackEvent::Error(_) => self.stop(),
             PlaybackEvent::DurationChanged(duration) => {
@@ -484,6 +504,25 @@ fn tags_from_tag_list(tags: &gst::TagList) -> PlaybackTags {
             .get::<gst::tags::Bitrate>()
             .map(|value| (value.get() / 1000) as i32),
     }
+}
+
+fn stream_info_from_caps(caps: &gst::Caps) -> StreamInfo {
+    let mut info = StreamInfo::default();
+    for structure in caps.iter() {
+        if !structure.name().starts_with("audio/") {
+            continue;
+        }
+        if info.frequency.is_none() {
+            info.frequency = structure.get::<i32>("rate").ok().filter(|value| *value > 0);
+        }
+        if info.channels.is_none() {
+            info.channels = structure
+                .get::<i32>("channels")
+                .ok()
+                .filter(|value| *value > 0);
+        }
+    }
+    info
 }
 
 fn tag_string<'a, T>(tags: &'a gst::TagList) -> Option<String>
@@ -721,6 +760,14 @@ mod tests {
         }));
         assert_eq!(player.bitrate(), 256);
 
+        player.apply_playback_event(&PlaybackEvent::StreamInfo(StreamInfo {
+            bitrate: None,
+            frequency: Some(48_000),
+            channels: Some(6),
+        }));
+        assert_eq!(player.frequency(), 48_000);
+        assert_eq!(player.channels(), 6);
+
         player.apply_playback_event(&PlaybackEvent::DurationChanged(Some(12_000)));
         assert_eq!(player.duration_ms(), Some(12_000));
 
@@ -733,6 +780,30 @@ mod tests {
         player.mark_playing();
         player.apply_playback_event(&PlaybackEvent::EndOfStream);
         assert_eq!(player.state(), PlayerState::Stopped);
+    }
+
+    #[test]
+    fn stream_info_from_caps_reports_audio_frequency_and_channels() {
+        let _guard = gst_test_guard();
+        gst::init().expect("GStreamer should initialize");
+        let caps = gst::Caps::builder("audio/x-raw")
+            .field("rate", 44_100i32)
+            .field("channels", 2i32)
+            .build();
+
+        assert_eq!(
+            stream_info_from_caps(&caps),
+            StreamInfo {
+                bitrate: None,
+                frequency: Some(44_100),
+                channels: Some(2),
+            }
+        );
+
+        let video_caps = gst::Caps::builder("video/x-raw")
+            .field("rate", 30i32)
+            .build();
+        assert_eq!(stream_info_from_caps(&video_caps), StreamInfo::default());
     }
 
     #[test]
