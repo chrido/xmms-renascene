@@ -28,8 +28,15 @@ pub struct GStreamerBackend {
     pipeline: gst::Element,
     audio_sink_bin: gst::Bin,
     audio_chain: Vec<&'static str>,
+    panorama: gst::Element,
     requested_state: Cell<PlayerState>,
     requested_uri: RefCell<Option<String>>,
+}
+
+struct AudioSinkBin {
+    bin: gst::Bin,
+    chain: Vec<&'static str>,
+    panorama: gst::Element,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,13 +64,14 @@ impl GStreamerBackend {
         let fake_video = make_element("fakesink", "fakevideo")?;
         pipeline.set_property("video-sink", &fake_video);
 
-        let (audio_sink_bin, audio_chain) = build_audio_sink_bin()?;
-        pipeline.set_property("audio-sink", &audio_sink_bin);
+        let audio_sink = build_audio_sink_bin()?;
+        pipeline.set_property("audio-sink", &audio_sink.bin);
 
         Ok(Self {
             pipeline,
-            audio_sink_bin,
-            audio_chain,
+            audio_sink_bin: audio_sink.bin,
+            audio_chain: audio_sink.chain,
+            panorama: audio_sink.panorama,
             requested_state: Cell::new(PlayerState::Stopped),
             requested_uri: RefCell::new(None),
         })
@@ -164,6 +172,24 @@ impl GStreamerBackend {
         self.requested_uri.borrow().clone()
     }
 
+    pub fn set_volume_percent(&self, percent: i32) {
+        self.pipeline
+            .set_property("volume", (percent.clamp(0, 100) as f64) / 100.0);
+    }
+
+    pub fn volume_percent(&self) -> i32 {
+        (self.pipeline.property::<f64>("volume") * 100.0).round() as i32
+    }
+
+    pub fn set_balance_percent(&self, percent: i32) {
+        self.panorama
+            .set_property("panorama", (percent.clamp(-100, 100) as f32) / 100.0);
+    }
+
+    pub fn balance_percent(&self) -> i32 {
+        (self.panorama.property::<f32>("panorama") * 100.0).round() as i32
+    }
+
     fn event_from_message(&self, message: &gst::Message) -> Option<PlaybackEvent> {
         event_from_message(message, || query_duration_ms(&self.pipeline))
     }
@@ -210,6 +236,10 @@ impl Player {
         self.state
     }
 
+    pub fn duration_ms(&self) -> Option<i64> {
+        self.duration_ms
+    }
+
     pub fn mark_playing(&mut self) {
         self.state = PlayerState::Playing;
     }
@@ -249,9 +279,64 @@ impl Player {
     pub fn balance(&self) -> i32 {
         self.balance
     }
+
+    pub fn set_stream_info(
+        &mut self,
+        bitrate: Option<i32>,
+        frequency: Option<i32>,
+        channels: Option<i32>,
+    ) {
+        if let Some(bitrate) = bitrate {
+            self.bitrate = bitrate.max(0);
+        }
+        if let Some(frequency) = frequency {
+            self.frequency = frequency.max(0);
+        }
+        if let Some(channels) = channels {
+            self.channels = channels.max(0);
+        }
+    }
+
+    pub fn bitrate(&self) -> i32 {
+        self.bitrate
+    }
+
+    pub fn frequency(&self) -> i32 {
+        self.frequency
+    }
+
+    pub fn channels(&self) -> i32 {
+        self.channels
+    }
+
+    pub fn set_visualization_data(&mut self, data: [f32; SPECTRUM_BANDS]) {
+        self.vis_data = data;
+        self.vis_data_valid = true;
+    }
+
+    pub fn visualization_data(&self) -> &[f32; SPECTRUM_BANDS] {
+        &self.vis_data
+    }
+
+    pub fn visualization_data_valid(&self) -> bool {
+        self.vis_data_valid
+    }
+
+    pub fn apply_playback_event(&mut self, event: &PlaybackEvent) {
+        match event {
+            PlaybackEvent::Tags(tags) => {
+                self.set_stream_info(tags.bitrate, None, None);
+            }
+            PlaybackEvent::Spectrum(data) => self.set_visualization_data(*data),
+            PlaybackEvent::EndOfStream | PlaybackEvent::Error(_) => self.stop(),
+            PlaybackEvent::DurationChanged(duration) => {
+                self.duration_ms = *duration;
+            }
+        }
+    }
 }
 
-fn build_audio_sink_bin() -> Result<(gst::Bin, Vec<&'static str>), String> {
+fn build_audio_sink_bin() -> Result<AudioSinkBin, String> {
     let bin = gst::Bin::builder().name("audio-sink-bin").build();
     let convert = make_element("audioconvert", "convert")?;
     let panorama = make_element("audiopanorama", "panorama")?;
@@ -313,7 +398,11 @@ fn build_audio_sink_bin() -> Result<(gst::Bin, Vec<&'static str>), String> {
             _ => "unknown",
         })
         .collect();
-    Ok((bin, names))
+    Ok(AudioSinkBin {
+        bin,
+        chain: names,
+        panorama,
+    })
 }
 
 fn make_element(factory: &str, name: &str) -> Result<gst::Element, String> {
@@ -536,6 +625,52 @@ mod tests {
         let _ = backend.seek_to_ms(1_000);
         let _ = backend.position_ms();
         let _ = backend.duration_ms();
+    }
+
+    #[test]
+    fn gstreamer_backend_volume_and_balance_map_to_pipeline_properties() {
+        let _guard = gst_test_guard();
+        let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
+
+        backend.set_volume_percent(150);
+        backend.set_balance_percent(-250);
+        assert_eq!(backend.volume_percent(), 100);
+        assert_eq!(backend.balance_percent(), -100);
+
+        backend.set_volume_percent(33);
+        backend.set_balance_percent(25);
+        assert_eq!(backend.volume_percent(), 33);
+        assert_eq!(backend.balance_percent(), 25);
+    }
+
+    #[test]
+    fn player_stream_info_and_playback_events_update_runtime_fields() {
+        let mut player = Player::default();
+        player.set_stream_info(Some(192), Some(44_100), Some(2));
+        assert_eq!(player.bitrate(), 192);
+        assert_eq!(player.frequency(), 44_100);
+        assert_eq!(player.channels(), 2);
+
+        player.apply_playback_event(&PlaybackEvent::Tags(PlaybackTags {
+            title: Some("Song".to_string()),
+            artist: None,
+            audio_codec: None,
+            bitrate: Some(256),
+        }));
+        assert_eq!(player.bitrate(), 256);
+
+        player.apply_playback_event(&PlaybackEvent::DurationChanged(Some(12_000)));
+        assert_eq!(player.duration_ms(), Some(12_000));
+
+        let mut spectrum = [0.0; SPECTRUM_BANDS];
+        spectrum[3] = 0.75;
+        player.apply_playback_event(&PlaybackEvent::Spectrum(spectrum));
+        assert!(player.visualization_data_valid());
+        assert_eq!(player.visualization_data()[3], 0.75);
+
+        player.mark_playing();
+        player.apply_playback_event(&PlaybackEvent::EndOfStream);
+        assert_eq!(player.state(), PlayerState::Stopped);
     }
 
     #[test]

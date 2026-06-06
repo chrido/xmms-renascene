@@ -95,7 +95,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port bus handling for EOS, errors, duration changes, tags, and spectrum messages.
   - [x] Port play, stop, pause, unpause, toggle pause, seek, position, and duration.
   - [ ] Port bitrate, frequency, and channel reporting.
-  - [ ] Port volume and balance.
+  - [x] Port volume and balance.
   - [ ] Port output-device rebuild behavior.
 
 - [ ] Port equalizer window.
