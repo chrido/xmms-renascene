@@ -68,8 +68,8 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 
 - [ ] Complete playlist model.
   - [x] Add files, directories, URLs, Spotify tracks, and podcast entries.
-  - [ ] Preserve recursive directory import and media-extension filtering.
-  - [ ] Preserve M3U load/save including `#EXTINF` and `#XMMSPODCAST` markers.
+  - [x] Preserve recursive directory import and media-extension filtering.
+  - [x] Preserve M3U load/save including `#EXTINF` and `#XMMSPODCAST` markers.
   - [ ] Port shuffle, repeat, no-advance, next, previous, EOF, and failed-item skip behavior.
   - [ ] Port sorting by title, filename, path, and date.
   - [ ] Port selected-entry sorting.
