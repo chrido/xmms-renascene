@@ -1,5 +1,6 @@
 use gst::prelude::*;
 use gstreamer as gst;
+use std::cell::{Cell, RefCell};
 
 const SPECTRUM_BANDS: usize = 75;
 
@@ -27,6 +28,8 @@ pub struct GStreamerBackend {
     pipeline: gst::Element,
     audio_sink_bin: gst::Bin,
     audio_chain: Vec<&'static str>,
+    requested_state: Cell<PlayerState>,
+    requested_uri: RefCell<Option<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +64,8 @@ impl GStreamerBackend {
             pipeline,
             audio_sink_bin,
             audio_chain,
+            requested_state: Cell::new(PlayerState::Stopped),
+            requested_uri: RefCell::new(None),
         })
     }
 
@@ -97,8 +102,84 @@ impl GStreamerBackend {
         Ok(events)
     }
 
+    pub fn play_uri(&self, uri: &str) -> Result<(), String> {
+        self.pipeline.set_property("uri", Some(uri));
+        self.requested_uri.replace(Some(uri.to_string()));
+        self.set_state(gst::State::Playing)
+    }
+
+    pub fn stop(&self) -> Result<(), String> {
+        self.set_state(gst::State::Null)
+    }
+
+    pub fn pause(&self) -> Result<(), String> {
+        self.set_state(gst::State::Paused)
+    }
+
+    pub fn unpause(&self) -> Result<(), String> {
+        self.set_state(gst::State::Playing)
+    }
+
+    pub fn toggle_pause(&self) -> Result<PlayerState, String> {
+        match self.playback_state() {
+            PlayerState::Playing => {
+                self.pause()?;
+                Ok(PlayerState::Paused)
+            }
+            PlayerState::Paused | PlayerState::Stopped => {
+                self.unpause()?;
+                Ok(PlayerState::Playing)
+            }
+        }
+    }
+
+    pub fn seek_to_ms(&self, milliseconds: i64) -> Result<(), String> {
+        if milliseconds < 0 {
+            return Err("seek position must be non-negative".to_string());
+        }
+
+        self.pipeline
+            .seek_simple(
+                gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+                gst::ClockTime::from_mseconds(milliseconds as u64),
+            )
+            .map_err(|err| format!("failed to seek GStreamer pipeline: {err}"))
+    }
+
+    pub fn position_ms(&self) -> Option<i64> {
+        self.pipeline
+            .query_position::<gst::ClockTime>()
+            .map(|position| position.mseconds() as i64)
+    }
+
+    pub fn duration_ms(&self) -> Option<i64> {
+        query_duration_ms(&self.pipeline)
+    }
+
+    pub fn playback_state(&self) -> PlayerState {
+        self.requested_state.get()
+    }
+
+    pub fn uri(&self) -> Option<String> {
+        self.requested_uri.borrow().clone()
+    }
+
     fn event_from_message(&self, message: &gst::Message) -> Option<PlaybackEvent> {
         event_from_message(message, || query_duration_ms(&self.pipeline))
+    }
+
+    fn set_state(&self, state: gst::State) -> Result<(), String> {
+        self.pipeline
+            .set_state(state)
+            .map(|_| {
+                self.requested_state.set(match state {
+                    gst::State::Playing => PlayerState::Playing,
+                    gst::State::Paused => PlayerState::Paused,
+                    gst::State::Null => PlayerState::Stopped,
+                    _ => self.requested_state.get(),
+                });
+            })
+            .map_err(|err| format!("failed to set GStreamer state to {state:?}: {err}"))
     }
 }
 
@@ -309,9 +390,53 @@ fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<[f32; SPECTR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
 
     static GST_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn gst_test_guard() -> MutexGuard<'static, ()> {
+        GST_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn backend_with_test_sink() -> GStreamerBackend {
+        let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
+        let fake_audio = make_element("fakesink", "testaudio").expect("fakesink should construct");
+        backend.pipeline.set_property("audio-sink", &fake_audio);
+        backend
+    }
+
+    fn silent_wav_uri(name: &str) -> String {
+        let path = std::env::temp_dir().join(format!("xmms-rs-{name}.wav"));
+        std::fs::write(&path, silent_wav_bytes()).expect("silent wav fixture should be written");
+        path_to_uri(&path)
+    }
+
+    fn path_to_uri(path: &PathBuf) -> String {
+        format!("file://{}", path.to_string_lossy())
+    }
+
+    fn silent_wav_bytes() -> Vec<u8> {
+        let sample_rate = 8_000u32;
+        let samples = 8_000u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + samples).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&8u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&samples.to_le_bytes());
+        bytes.extend(std::iter::repeat_n(128u8, samples as usize));
+        bytes
+    }
 
     #[test]
     fn volume_and_balance_are_clamped_like_the_c_player() {
@@ -336,7 +461,7 @@ mod tests {
 
     #[test]
     fn gstreamer_backend_uses_playbin_with_video_disabled() {
-        let _guard = GST_TEST_LOCK.lock().expect("GStreamer test lock poisoned");
+        let _guard = gst_test_guard();
         let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
 
         assert_eq!(backend.pipeline_factory_name().as_deref(), Some("playbin"));
@@ -348,7 +473,7 @@ mod tests {
 
     #[test]
     fn gstreamer_backend_builds_audio_output_chain() {
-        let _guard = GST_TEST_LOCK.lock().expect("GStreamer test lock poisoned");
+        let _guard = gst_test_guard();
         let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
         let chain = backend.audio_chain();
 
@@ -366,8 +491,56 @@ mod tests {
     }
 
     #[test]
+    fn gstreamer_backend_play_uri_sets_uri_and_stop_returns_to_stopped() {
+        let _guard = gst_test_guard();
+        let backend = backend_with_test_sink();
+        let uri = silent_wav_uri("play-uri");
+
+        backend.play_uri(&uri).expect("play should request playing");
+        assert_eq!(backend.uri().as_deref(), Some(uri.as_str()));
+
+        backend.stop().expect("stop should request the null state");
+        assert_eq!(backend.playback_state(), PlayerState::Stopped);
+    }
+
+    #[test]
+    fn gstreamer_backend_pause_unpause_and_toggle_drive_state_requests() {
+        let _guard = gst_test_guard();
+        let backend = backend_with_test_sink();
+        let uri = silent_wav_uri("pause-toggle");
+
+        backend.play_uri(&uri).expect("play should request playing");
+        backend.pause().expect("pause should request paused state");
+        assert_eq!(backend.playback_state(), PlayerState::Paused);
+
+        let toggled = backend
+            .toggle_pause()
+            .expect("toggle from paused should request playing");
+        assert_eq!(toggled, PlayerState::Playing);
+
+        let toggled = backend
+            .toggle_pause()
+            .expect("toggle from playing should request paused");
+        assert_eq!(toggled, PlayerState::Paused);
+        backend.stop().expect("stop should request null state");
+    }
+
+    #[test]
+    fn gstreamer_backend_seek_and_position_queries_are_safe_without_media() {
+        let _guard = gst_test_guard();
+        let backend = backend_with_test_sink();
+        let uri = silent_wav_uri("seek");
+
+        assert!(backend.seek_to_ms(-1).is_err());
+        backend.play_uri(&uri).expect("play should request playing");
+        let _ = backend.seek_to_ms(1_000);
+        let _ = backend.position_ms();
+        let _ = backend.duration_ms();
+    }
+
+    #[test]
     fn gstreamer_bus_events_cover_eos_errors_and_duration_changes() {
-        let _guard = GST_TEST_LOCK.lock().expect("GStreamer test lock poisoned");
+        let _guard = gst_test_guard();
         gst::init().expect("GStreamer should initialize");
 
         assert_eq!(
@@ -389,7 +562,7 @@ mod tests {
 
     #[test]
     fn gstreamer_bus_tag_messages_extract_player_metadata() {
-        let _guard = GST_TEST_LOCK.lock().expect("GStreamer test lock poisoned");
+        let _guard = gst_test_guard();
         gst::init().expect("GStreamer should initialize");
         let mut tags = gst::TagList::new();
         {
@@ -413,7 +586,7 @@ mod tests {
 
     #[test]
     fn gstreamer_bus_spectrum_messages_extract_visualizer_bands() {
-        let _guard = GST_TEST_LOCK.lock().expect("GStreamer test lock poisoned");
+        let _guard = gst_test_guard();
         gst::init().expect("GStreamer should initialize");
         let magnitudes = gst::Array::new([-80.0f64, -40.0, 0.0]);
         let structure = gst::Structure::builder("spectrum")

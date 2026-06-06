@@ -93,7 +93,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Build audio sink chain: `audioconvert`, `audiopanorama`, `equalizer-10bands`, `spectrum`, sink.
   - [x] Disable video with fake sink.
   - [x] Port bus handling for EOS, errors, duration changes, tags, and spectrum messages.
-  - [ ] Port play, stop, pause, unpause, toggle pause, seek, position, and duration.
+  - [x] Port play, stop, pause, unpause, toggle pause, seek, position, and duration.
   - [ ] Port bitrate, frequency, and channel reporting.
   - [ ] Port volume and balance.
   - [ ] Port output-device rebuild behavior.
