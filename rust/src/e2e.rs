@@ -1197,6 +1197,31 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_player_spotify_mode(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.player_spotify_mode(), expected);
+        self
+    }
+
+    pub fn assert_player_spotify_uri(&mut self, expected: Option<&str>) -> &mut Self {
+        assert_eq!(self.state.player_spotify_uri(), expected);
+        self
+    }
+
+    pub fn assert_player_spotify_position_ms(&mut self, expected: i64) -> &mut Self {
+        assert_eq!(self.state.player_spotify_position_ms(), expected);
+        self
+    }
+
+    pub fn assert_player_spotify_duration_ms(&mut self, expected: i64) -> &mut Self {
+        assert_eq!(self.state.player_spotify_duration_ms(), expected);
+        self
+    }
+
+    pub fn assert_spotify_playback_poll_requests(&mut self, expected: u32) -> &mut Self {
+        assert_eq!(self.state.spotify_playback_poll_requests(), expected);
+        self
+    }
+
     pub fn assert_mpris_identity(&mut self) -> &mut Self {
         let root = self.state.mpris_root_properties();
         assert_eq!(BUS_NAME, "org.mpris.MediaPlayer2.xmms_resuscitated");

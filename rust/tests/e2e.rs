@@ -408,6 +408,40 @@ fn spotify_api_parsers_and_requests_match_c_contract() {
 }
 
 #[test]
+fn spotify_uri_playback_updates_player_state_like_c_player() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_spotify_entry("spotify:track:one", "Spotify One", 123_000)
+        .press_shortcut(Shortcut::Play)
+        .assert_player_state(PlayerState::Playing)
+        .assert_player_spotify_mode(true)
+        .assert_player_spotify_uri(Some("spotify:track:one"))
+        .assert_player_spotify_duration_ms(123_000)
+        .assert_player_spotify_position_ms(0)
+        .update_timer_tick(100)
+        .assert_player_spotify_position_ms(100)
+        .assert_spotify_playback_poll_requests(0);
+
+    for _ in 0..19 {
+        app.update_timer_tick(100);
+    }
+
+    app.assert_spotify_playback_poll_requests(1)
+        .press_shortcut(Shortcut::Pause)
+        .assert_player_state(PlayerState::Paused)
+        .assert_player_spotify_mode(true)
+        .press_shortcut(Shortcut::Stop)
+        .assert_player_state(PlayerState::Stopped)
+        .assert_player_spotify_mode(false)
+        .assert_player_spotify_uri(None);
+
+    app.add_playlist_uri("file:///music/local.ogg")
+        .execute_mpris_command(MprisCommand::Next)
+        .assert_player_state(PlayerState::Playing)
+        .assert_player_spotify_mode(false);
+}
+
+#[test]
 fn playlist_sort_e2e_orders_entries_and_preserves_current_item() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

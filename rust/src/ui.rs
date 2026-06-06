@@ -1831,6 +1831,7 @@ pub(crate) struct MainWindowUiState {
     output_device_groups: OutputDeviceGroups,
     selected_spotify_output_device: Option<String>,
     output_switch_count: u32,
+    spotify_playback_poll_requests: u32,
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
     file_dialog_visible: bool,
@@ -1898,6 +1899,7 @@ impl MainWindowUiState {
             output_device_groups: OutputDeviceGroups::default(),
             selected_spotify_output_device: None,
             output_switch_count: 0,
+            spotify_playback_poll_requests: 0,
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
             file_dialog_visible: false,
@@ -2194,6 +2196,10 @@ impl MainWindowUiState {
         self.output_switch_count
     }
 
+    pub(crate) fn spotify_playback_poll_requests(&self) -> u32 {
+        self.spotify_playback_poll_requests
+    }
+
     pub(crate) fn mpris_root_properties(&self) -> MprisRootProperties {
         MprisRootProperties::default()
     }
@@ -2283,7 +2289,7 @@ impl MainWindowUiState {
                     {
                         self.app_state.playlist.set_position(0);
                     }
-                    self.app_state.player.mark_playing();
+                    self.start_current_playlist_playback();
                 }
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
@@ -2481,6 +2487,42 @@ impl MainWindowUiState {
             .and_then(|position| self.playlist_entry_uri(position))
     }
 
+    fn start_current_playlist_playback(&mut self) {
+        if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
+            self.app_state.playlist.set_position(0);
+        }
+        let Some(position) = self.app_state.playlist.position() else {
+            self.app_state.player.mark_playing();
+            return;
+        };
+        let Some(uri) = self.playlist_entry_uri(position).map(ToString::to_string) else {
+            self.app_state.player.mark_playing();
+            return;
+        };
+        if uri.starts_with("spotify:") {
+            let duration_ms = self.playlist_entry_length_ms(position).unwrap_or(0);
+            self.app_state.player.play_spotify_uri(uri, duration_ms);
+        } else {
+            self.app_state.player.mark_playing();
+        }
+    }
+
+    pub(crate) fn player_spotify_mode(&self) -> bool {
+        self.app_state.player.spotify_mode()
+    }
+
+    pub(crate) fn player_spotify_uri(&self) -> Option<&str> {
+        self.app_state.player.spotify_uri()
+    }
+
+    pub(crate) fn player_spotify_position_ms(&self) -> i64 {
+        self.app_state.player.spotify_position_ms()
+    }
+
+    pub(crate) fn player_spotify_duration_ms(&self) -> i64 {
+        self.app_state.player.spotify_duration_ms()
+    }
+
     pub(crate) fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
         self.app_state.playlist.add_spotify(uri, title, duration_ms);
     }
@@ -2573,7 +2615,7 @@ impl MainWindowUiState {
                     if self.app_state.playlist.position().is_none() {
                         self.app_state.playlist.set_position(0);
                     }
-                    self.app_state.player.mark_playing();
+                    self.start_current_playlist_playback();
                 }
             }
             Err(err) => eprintln!("xmms-rs: failed to add open location {text}: {err}"),
@@ -2609,7 +2651,7 @@ impl MainWindowUiState {
             self.app_state.playlist.set_position(0);
         }
         if accepted && start_playback {
-            self.app_state.player.mark_playing();
+            self.start_current_playlist_playback();
         }
         accepted
     }
@@ -3512,6 +3554,14 @@ impl MainWindowUiState {
             return false;
         }
 
+        if self
+            .app_state
+            .player
+            .tick_spotify_playback(i64::from(elapsed_ms))
+        {
+            self.spotify_playback_poll_requests =
+                self.spotify_playback_poll_requests.saturating_add(1);
+        }
         self.update_accumulator_ms = self.update_accumulator_ms.saturating_add(elapsed_ms);
         let seconds = self.update_accumulator_ms / 1000;
         self.update_accumulator_ms %= 1000;
@@ -3535,7 +3585,7 @@ impl MainWindowUiState {
     pub(crate) fn playlist_eof_reached(&mut self) {
         self.position_position = 0;
         if self.app_state.playlist.eof_reached() {
-            self.app_state.player.mark_playing();
+            self.start_current_playlist_playback();
         } else {
             self.app_state.player.stop();
         }
@@ -3651,7 +3701,7 @@ impl MainWindowUiState {
                 UiAction::Resize
             }
             MainPushButton::Play => {
-                self.app_state.player.mark_playing();
+                self.start_current_playlist_playback();
                 UiAction::None
             }
             MainPushButton::Pause => {
@@ -3669,14 +3719,14 @@ impl MainWindowUiState {
             }
             MainPushButton::Previous => {
                 if self.app_state.playlist.previous() {
-                    self.app_state.player.mark_playing();
+                    self.start_current_playlist_playback();
                 }
                 self.position_position = 0;
                 UiAction::None
             }
             MainPushButton::Next => {
                 if self.app_state.playlist.next() {
-                    self.app_state.player.mark_playing();
+                    self.start_current_playlist_playback();
                 }
                 self.position_position = 0;
                 UiAction::None
