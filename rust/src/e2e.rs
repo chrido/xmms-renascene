@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 use crate::app_state::AppState;
 use crate::config::Config;
+use crate::mpris::{
+    MprisCommand, MprisEvent, BUS_NAME, OBJECT_PATH, PLAYER_INTERFACE, ROOT_INTERFACE,
+};
 use crate::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
@@ -1190,6 +1193,83 @@ impl UiE2e {
 
     pub fn assert_output_switch_count(&mut self, expected: u32) -> &mut Self {
         assert_eq!(self.state.output_switch_count(), expected);
+        self
+    }
+
+    pub fn assert_mpris_identity(&mut self) -> &mut Self {
+        let root = self.state.mpris_root_properties();
+        assert_eq!(BUS_NAME, "org.mpris.MediaPlayer2.xmms_resuscitated");
+        assert_eq!(OBJECT_PATH, "/org/mpris/MediaPlayer2");
+        assert_eq!(ROOT_INTERFACE, "org.mpris.MediaPlayer2");
+        assert_eq!(PLAYER_INTERFACE, "org.mpris.MediaPlayer2.Player");
+        assert!(root.can_quit);
+        assert!(root.can_raise);
+        assert!(!root.has_track_list);
+        assert_eq!(root.identity, "XMMS Resuscitated");
+        assert_eq!(root.desktop_entry, "org.xmms.Resuscitated");
+        assert_eq!(root.supported_uri_schemes, ["file", "http", "https"]);
+        self
+    }
+
+    pub fn assert_mpris_playback_status(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(
+            self.state.mpris_player_properties().playback_status,
+            expected
+        );
+        self
+    }
+
+    pub fn assert_mpris_volume(&mut self, expected: f64) -> &mut Self {
+        assert!((self.state.mpris_player_properties().volume - expected).abs() < 0.001);
+        self
+    }
+
+    pub fn set_mpris_volume(&mut self, volume: f64) -> &mut Self {
+        self.state.set_mpris_volume(volume);
+        self
+    }
+
+    pub fn assert_mpris_position_us(&mut self, expected: i64) -> &mut Self {
+        assert_eq!(self.state.mpris_player_properties().position_us, expected);
+        self
+    }
+
+    pub fn assert_mpris_metadata(
+        &mut self,
+        track_id: &str,
+        title: Option<&str>,
+        url: Option<&str>,
+        length_us: Option<i64>,
+    ) -> &mut Self {
+        let metadata = self.state.mpris_player_properties().metadata;
+        assert_eq!(metadata.track_id, track_id);
+        assert_eq!(metadata.title.as_deref(), title);
+        assert_eq!(metadata.url.as_deref(), url);
+        assert_eq!(metadata.length_us, length_us);
+        self
+    }
+
+    pub fn execute_mpris_command(&mut self, command: MprisCommand) -> &mut Self {
+        self.state.execute_mpris_command(command);
+        self.sync_windows();
+        self
+    }
+
+    pub fn assert_mpris_event(&mut self, expected: MprisEvent) -> &mut Self {
+        assert!(
+            self.state.mpris_events().contains(&expected),
+            "expected MPRIS event {expected:?}"
+        );
+        self
+    }
+
+    pub fn assert_mpris_quit_requested(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.mpris_quit_requested(), expected);
+        self
+    }
+
+    pub fn add_playlist_uri(&mut self, uri: &str) -> &mut Self {
+        self.state.app_state_mut().playlist.add_uri(uri);
         self
     }
 

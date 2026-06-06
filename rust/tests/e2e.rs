@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use xmms_resuscitated::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
 };
+use xmms_resuscitated::mpris::{MprisCommand, MprisEvent};
 use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use xmms_resuscitated::playlist::PlaylistSortKey;
 use xmms_resuscitated::render::{
@@ -699,6 +700,91 @@ fn output_device_picker_lists_and_selects_spotify_devices() {
     .assert_selected_spotify_output_device(Some("desktop"))
     .assert_selected_output_device(None)
     .assert_output_switch_count(1);
+}
+
+#[test]
+fn mpris_root_and_player_properties_match_xmms_contract() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_volume(40));
+
+    app.add_playlist_uri("file:///music/one.ogg")
+        .assert_mpris_identity()
+        .assert_mpris_playback_status("Stopped")
+        .assert_mpris_volume(0.4)
+        .assert_mpris_position_us(0)
+        .assert_mpris_metadata(
+            "/org/xmms/Track/0",
+            Some("one"),
+            Some("file:///music/one.ogg"),
+            None,
+        )
+        .press_shortcut(Shortcut::Play)
+        .assert_mpris_playback_status("Playing")
+        .press_shortcut(Shortcut::Pause)
+        .assert_mpris_playback_status("Paused");
+}
+
+#[test]
+fn mpris_volume_seek_and_set_position_update_player_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.set_mpris_volume(0.25)
+        .assert_volume(25)
+        .assert_mpris_volume(0.25)
+        .execute_mpris_command(MprisCommand::Play)
+        .assert_player_state(PlayerState::Playing)
+        .execute_mpris_command(MprisCommand::Seek {
+            offset_us: 5_000_000,
+        })
+        .assert_position(5)
+        .assert_mpris_position_us(5_000_000)
+        .assert_mpris_event(MprisEvent::Seeked(5_000_000))
+        .execute_mpris_command(MprisCommand::SetPosition {
+            track_id: "/org/xmms/Track/0".to_string(),
+            position_us: 2_000_000,
+        })
+        .assert_position(2)
+        .assert_mpris_position_us(2_000_000)
+        .assert_mpris_event(MprisEvent::Seeked(2_000_000));
+}
+
+#[test]
+fn mpris_transport_methods_drive_playlist_and_playback() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_playlist_uri("file:///music/one.ogg")
+        .add_playlist_uri("file:///music/two.ogg")
+        .execute_mpris_command(MprisCommand::OpenUri(
+            "file:///music/opened.ogg".to_string(),
+        ))
+        .assert_playlist_len(1)
+        .assert_current_playlist_entry("file:///music/opened.ogg")
+        .assert_player_state(PlayerState::Playing)
+        .assert_mpris_event(MprisEvent::MetadataChanged)
+        .execute_mpris_command(MprisCommand::Pause)
+        .assert_player_state(PlayerState::Paused)
+        .execute_mpris_command(MprisCommand::PlayPause)
+        .assert_player_state(PlayerState::Playing)
+        .execute_mpris_command(MprisCommand::Stop)
+        .assert_player_state(PlayerState::Stopped)
+        .assert_mpris_event(MprisEvent::PlaybackStatusChanged);
+}
+
+#[test]
+fn mpris_raise_quit_and_next_previous_methods_emit_expected_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_playlist_uri("file:///music/one.ogg")
+        .add_playlist_uri("file:///music/two.ogg")
+        .execute_mpris_command(MprisCommand::Play)
+        .execute_mpris_command(MprisCommand::Next)
+        .assert_playlist_position(Some(1))
+        .execute_mpris_command(MprisCommand::Previous)
+        .assert_playlist_position(Some(0))
+        .execute_mpris_command(MprisCommand::Raise)
+        .assert_mpris_event(MprisEvent::Raised)
+        .execute_mpris_command(MprisCommand::Quit)
+        .assert_mpris_quit_requested(true)
+        .assert_mpris_event(MprisEvent::QuitRequested);
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

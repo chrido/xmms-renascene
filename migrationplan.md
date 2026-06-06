@@ -143,11 +143,12 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 
 - [ ] Port MPRIS D-Bus interface.
   - [ ] Own `org.mpris.MediaPlayer2.xmms_resuscitated`.
-  - [ ] Implement `org.mpris.MediaPlayer2`.
-  - [ ] Implement `org.mpris.MediaPlayer2.Player`.
-  - [ ] Port metadata, playback status, volume, and position properties.
-  - [ ] Port Next, Previous, Pause, PlayPause, Stop, Play, Seek, SetPosition, and OpenUri.
-  - [ ] Emit metadata and playback status changes.
+  - [x] Add deterministic Rust MPRIS model and e2e surface.
+  - [x] Implement `org.mpris.MediaPlayer2` root property semantics.
+  - [x] Implement `org.mpris.MediaPlayer2.Player` property semantics.
+  - [x] Port metadata, playback status, volume, and position properties.
+  - [x] Port Next, Previous, Pause, PlayPause, Stop, Play, Seek, SetPosition, and OpenUri.
+  - [x] Emit metadata and playback status changes in Rust state.
 
 - [ ] Port Spotify integration.
   - [ ] Preserve PKCE auth flow.

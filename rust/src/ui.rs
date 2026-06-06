@@ -8,6 +8,10 @@ use gtk::prelude::*;
 
 use crate::app_state::AppState;
 use crate::config::{Config, TimerMode};
+use crate::mpris::{
+    playback_status as mpris_playback_status, MprisCommand, MprisEvent, MprisMetadata,
+    MprisPlayerProperties, MprisRootProperties,
+};
 use crate::player::{
     equalizer_position_to_db, group_output_devices, OutputDevice, OutputDeviceGroups,
     OutputDeviceSelection, PlayerState,
@@ -1817,6 +1821,8 @@ pub(crate) struct MainWindowUiState {
     output_device_groups: OutputDeviceGroups,
     selected_spotify_output_device: Option<String>,
     output_switch_count: u32,
+    mpris_events: Vec<MprisEvent>,
+    mpris_quit_requested: bool,
     file_dialog_visible: bool,
     directory_dialog_visible: bool,
     last_open_location: Option<String>,
@@ -1882,6 +1888,8 @@ impl MainWindowUiState {
             output_device_groups: OutputDeviceGroups::default(),
             selected_spotify_output_device: None,
             output_switch_count: 0,
+            mpris_events: Vec::new(),
+            mpris_quit_requested: false,
             file_dialog_visible: false,
             directory_dialog_visible: false,
             last_open_location: None,
@@ -2174,6 +2182,122 @@ impl MainWindowUiState {
 
     pub(crate) fn output_switch_count(&self) -> u32 {
         self.output_switch_count
+    }
+
+    pub(crate) fn mpris_root_properties(&self) -> MprisRootProperties {
+        MprisRootProperties::default()
+    }
+
+    pub(crate) fn mpris_player_properties(&self) -> MprisPlayerProperties {
+        MprisPlayerProperties {
+            playback_status: mpris_playback_status(self.app_state.player.state()),
+            rate: 1.0,
+            metadata: self.mpris_metadata(),
+            volume: f64::from(self.app_state.player.volume()) / 100.0,
+            position_us: i64::from(self.position_position) * 1_000_000,
+            can_go_next: true,
+            can_go_previous: true,
+            can_play: true,
+            can_pause: true,
+            can_seek: true,
+            can_control: true,
+        }
+    }
+
+    fn mpris_metadata(&self) -> MprisMetadata {
+        let position = self.app_state.playlist.position().unwrap_or(0);
+        MprisMetadata {
+            track_id: format!("/org/xmms/Track/{position}"),
+            title: self.playlist_entry_title(position).map(ToString::to_string),
+            url: self.playlist_entry_uri(position).map(ToString::to_string),
+            length_us: self
+                .playlist_entry_length_ms(position)
+                .filter(|length| *length > 0)
+                .map(|length| length * 1000),
+        }
+    }
+
+    pub(crate) fn mpris_events(&self) -> &[MprisEvent] {
+        &self.mpris_events
+    }
+
+    pub(crate) fn mpris_quit_requested(&self) -> bool {
+        self.mpris_quit_requested
+    }
+
+    pub(crate) fn set_mpris_volume(&mut self, volume: f64) {
+        let percent = (volume * 100.0) as i32;
+        self.app_state.player.set_volume(percent);
+        self.app_state.config.volume = self.app_state.player.volume();
+    }
+
+    pub(crate) fn execute_mpris_command(&mut self, command: MprisCommand) {
+        match command {
+            MprisCommand::Raise => self.mpris_events.push(MprisEvent::Raised),
+            MprisCommand::Quit => {
+                self.mpris_quit_requested = true;
+                self.mpris_events.push(MprisEvent::QuitRequested);
+            }
+            MprisCommand::Next => {
+                let _ = self.activate_push(MainPushButton::Next);
+                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            }
+            MprisCommand::Previous => {
+                let _ = self.activate_push(MainPushButton::Previous);
+                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            }
+            MprisCommand::Pause => {
+                if self.app_state.player.state() == PlayerState::Playing {
+                    self.app_state.player.pause();
+                    self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+                }
+            }
+            MprisCommand::PlayPause => {
+                let _ = self.activate_push(MainPushButton::Pause);
+                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            }
+            MprisCommand::Stop => {
+                let _ = self.activate_push(MainPushButton::Stop);
+                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            }
+            MprisCommand::Play => {
+                if self.app_state.player.state() == PlayerState::Paused {
+                    self.app_state.player.unpause();
+                } else {
+                    if self.app_state.playlist.position().is_none()
+                        && self.app_state.playlist.len() > 0
+                    {
+                        self.app_state.playlist.set_position(0);
+                    }
+                    self.app_state.player.mark_playing();
+                }
+                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            }
+            MprisCommand::Seek { offset_us } => {
+                let position_us =
+                    (i64::from(self.position_position) * 1_000_000 + offset_us).max(0);
+                self.position_position =
+                    ((position_us / 1_000_000) as i32).clamp(0, slider_max(MainSlider::Position));
+                self.mpris_events.push(MprisEvent::Seeked(
+                    i64::from(self.position_position) * 1_000_000,
+                ));
+            }
+            MprisCommand::SetPosition {
+                track_id: _,
+                position_us,
+            } => {
+                self.position_position = ((position_us.max(0) / 1_000_000) as i32)
+                    .clamp(0, slider_max(MainSlider::Position));
+                self.mpris_events.push(MprisEvent::Seeked(
+                    i64::from(self.position_position) * 1_000_000,
+                ));
+            }
+            MprisCommand::OpenUri(uri) => {
+                self.accept_dropped_uris([uri.as_str()], true, true);
+                self.mpris_events.push(MprisEvent::MetadataChanged);
+                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            }
+        }
     }
 
     pub(crate) fn scan_skin_browser_dirs<P: AsRef<Path>>(&mut self, dirs: &[P]) -> io::Result<()> {

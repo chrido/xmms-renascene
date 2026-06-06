@@ -87,6 +87,7 @@ Completed so far:
 - Added a Rust preferences state/e2e surface plus a tabbed GTK preferences shell, covering immediate application of audio, playlist, docking, font, title, visualization, podcast, and default-reset settings.
 - Added Rust skin browser discovery/search-path behavior for user, legacy, system, and `SKINSDIR` skin directories plus deterministic e2e coverage for sorted discovery, archive display names, default/custom selection, and reload requests.
 - Added Rust output-device picker state with GStreamer audio sink enumeration, C-compatible local/network grouping and deduplication, automatic default selection, playback-preserving system selection, and Spotify device selection e2e coverage.
+- Added a deterministic Rust MPRIS model/e2e surface covering root/player property semantics, metadata, playback status, volume, position, transport commands, OpenUri, Raise, Quit, and emitted state-change events.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
@@ -109,6 +110,7 @@ Completed so far:
 | `rust/src/main.rs` | `xmms-rs` CLI and preview entry point |
 | `rust/src/app_state.rs` | Explicit Rust application state and runtime snapshots |
 | `rust/src/config.rs` | Initial Rust config model and defaults |
+| `rust/src/mpris.rs` | Deterministic MPRIS constants, properties, commands, events, metadata, and playback-status mapping |
 | `rust/src/player.rs` | Initial player state model |
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
 | `rust/src/e2e.rs` | Rust UI e2e harness for scripted settings, clicks, and assertions |
@@ -238,7 +240,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, menu behavior, file-list drops, file/directory open dialogs, recursive directory import, and Open Location playlist insertion. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, complete playlist data operations, audio-connected equalizer behavior, MPRIS, live Spotify/podcast integrations, output device selection UI, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with controls, resize, menu behavior, file-list drops, file/directory open dialogs, recursive directory import, Open Location playlist insertion, and a GStreamer playback backend. The Rust port still lacks live MPRIS D-Bus ownership/registration, live Spotify/podcast integrations, output device selection UI, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 
