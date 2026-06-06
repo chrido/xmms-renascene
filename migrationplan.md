@@ -107,15 +107,15 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Sync volume and balance with the main window.
   - [x] Preserve shaded and detached modes.
 
-- [ ] Port visualization behavior.
-  - [ ] Port analyzer mode.
-  - [ ] Port scope mode.
-  - [ ] Port off mode.
-  - [ ] Port current milkdrop placeholder behavior.
-  - [ ] Port analyzer styles: bars and lines.
-  - [ ] Port analyzer modes: normal, fire, vertical lines.
-  - [ ] Port peaks and falloff speeds.
-  - [ ] Port VU mode and refresh divisor.
+- [x] Port visualization behavior.
+  - [x] Port analyzer mode.
+  - [x] Port scope mode.
+  - [x] Port off mode.
+  - [x] Port current milkdrop placeholder behavior.
+  - [x] Port analyzer styles: bars and lines.
+  - [x] Port analyzer modes: normal, fire, vertical lines.
+  - [x] Port peaks and falloff speeds.
+  - [x] Port VU mode and refresh divisor.
 
 - [ ] Port preferences window.
   - [ ] Port playback/output preferences.

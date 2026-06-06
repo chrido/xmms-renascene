@@ -13,11 +13,14 @@ use crate::render::{
     render_playlist_menu, render_playlist_rows, DockedPanelState, EqualizerControl,
     EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState,
     PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
-    PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
-use crate::skin::widget::PlayStatusValue;
+use crate::skin::widget::{
+    PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode,
+    VisVuMode, Visualization, WidgetId,
+};
 use crate::skin::DefaultSkin;
 
 const DEFAULT_SCALE: i32 = 2;
@@ -1706,6 +1709,8 @@ pub(crate) struct MainWindowUiState {
     last_jump_time_ms: Option<i64>,
     position_position: i32,
     update_accumulator_ms: u32,
+    visualization: Visualization,
+    visualization_tick_counter: i32,
     active: Option<MainControl>,
     active_inside: bool,
     slider_press_offset: i32,
@@ -1719,7 +1724,7 @@ impl Default for MainWindowUiState {
 
 impl MainWindowUiState {
     pub(crate) fn from_app_state(app_state: AppState) -> Self {
-        Self {
+        let mut state = Self {
             app_state,
             shaded: false,
             menu_visible: false,
@@ -1760,10 +1765,18 @@ impl MainWindowUiState {
             last_jump_time_ms: None,
             position_position: 0,
             update_accumulator_ms: 0,
+            visualization: Visualization::new(WidgetId(6), 24, 43, 76),
+            visualization_tick_counter: 0,
             active: None,
             active_inside: false,
             slider_press_offset: 0,
-        }
+        };
+        state.apply_visualization_preferences();
+        state
+    }
+
+    pub(crate) fn app_state_mut(&mut self) -> &mut AppState {
+        &mut self.app_state
     }
 
     fn render_state(&self) -> MainWindowRenderState {
@@ -1784,7 +1797,23 @@ impl MainWindowUiState {
                 PlayerState::Paused => PlayStatusValue::Paused,
                 PlayerState::Playing => PlayStatusValue::Playing,
             },
+            visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
+        }
+    }
+
+    fn make_visualization_render_state(&self) -> VisualizationRenderState {
+        VisualizationRenderState {
+            mode: self.visualization.mode(),
+            analyzer_style: self.visualization.analyzer_style(),
+            analyzer_mode: self.visualization.analyzer_mode(),
+            scope_mode: self.visualization.scope_mode(),
+            peaks_enabled: self.visualization.peaks_enabled(),
+            vu_mode: self.app_state.config.vis_vu_mode,
+            data: *self.visualization.data(),
+            peak: *self.visualization.peak(),
+            milkdrop_energy: self.visualization.milkdrop_energy(),
+            milkdrop_phase: self.visualization.milkdrop_phase(),
         }
     }
 
@@ -2813,9 +2842,101 @@ impl MainWindowUiState {
         self.position_position
     }
 
+    pub(crate) fn set_visualization_mode(&mut self, mode: VisMode) {
+        self.app_state.config.vis_mode = mode;
+        self.apply_visualization_preferences();
+    }
+
+    pub(crate) fn visualization_mode(&self) -> VisMode {
+        self.visualization.mode()
+    }
+
+    pub(crate) fn set_visualization_analyzer_style(&mut self, style: VisAnalyzerStyle) {
+        self.app_state.config.vis_analyzer_style = style;
+        self.apply_visualization_preferences();
+    }
+
+    pub(crate) fn visualization_analyzer_style(&self) -> VisAnalyzerStyle {
+        self.visualization.analyzer_style()
+    }
+
+    pub(crate) fn set_visualization_analyzer_mode(&mut self, mode: VisAnalyzerMode) {
+        self.app_state.config.vis_analyzer_mode = mode;
+        self.apply_visualization_preferences();
+    }
+
+    pub(crate) fn visualization_analyzer_mode(&self) -> VisAnalyzerMode {
+        self.visualization.analyzer_mode()
+    }
+
+    pub(crate) fn set_visualization_scope_mode(&mut self, mode: VisScopeMode) {
+        self.app_state.config.vis_scope_mode = mode;
+        self.apply_visualization_preferences();
+    }
+
+    pub(crate) fn visualization_scope_mode(&self) -> VisScopeMode {
+        self.visualization.scope_mode()
+    }
+
+    pub(crate) fn set_visualization_peaks_enabled(&mut self, enabled: bool) {
+        self.app_state.config.vis_peaks_enabled = enabled;
+        self.apply_visualization_preferences();
+    }
+
+    pub(crate) fn visualization_peaks_enabled(&self) -> bool {
+        self.visualization.peaks_enabled()
+    }
+
+    pub(crate) fn set_visualization_falloff(
+        &mut self,
+        analyzer: VisFalloffSpeed,
+        peaks: VisFalloffSpeed,
+    ) {
+        self.app_state.config.vis_analyzer_falloff = analyzer;
+        self.app_state.config.vis_peaks_falloff = peaks;
+        self.apply_visualization_preferences();
+    }
+
+    pub(crate) fn set_visualization_vu_mode(&mut self, mode: VisVuMode) {
+        self.app_state.config.vis_vu_mode = mode;
+    }
+
+    pub(crate) fn visualization_vu_mode(&self) -> VisVuMode {
+        self.app_state.config.vis_vu_mode
+    }
+
+    pub(crate) fn set_visualization_refresh_divisor(&mut self, divisor: i32) {
+        self.app_state.config.vis_refresh_divisor = divisor.clamp(1, 8);
+    }
+
+    pub(crate) fn visualization_refresh_divisor(&self) -> i32 {
+        self.app_state.config.vis_refresh_divisor.clamp(1, 8)
+    }
+
+    pub(crate) fn visualization_render_state(&self) -> VisualizationRenderState {
+        self.make_visualization_render_state()
+    }
+
+    fn apply_visualization_preferences(&mut self) {
+        self.visualization.set_mode(self.app_state.config.vis_mode);
+        self.visualization
+            .set_analyzer_mode(self.app_state.config.vis_analyzer_mode);
+        self.visualization
+            .set_analyzer_style(self.app_state.config.vis_analyzer_style);
+        self.visualization
+            .set_scope_mode(self.app_state.config.vis_scope_mode);
+        self.visualization
+            .set_peaks_enabled(self.app_state.config.vis_peaks_enabled);
+        self.visualization.set_falloff(
+            self.app_state.config.vis_analyzer_falloff,
+            self.app_state.config.vis_peaks_falloff,
+        );
+    }
+
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
         if self.app_state.player.state() != PlayerState::Playing {
             self.update_accumulator_ms = 0;
+            self.visualization_tick_counter = 0;
             return false;
         }
 
@@ -2825,6 +2946,16 @@ impl MainWindowUiState {
         if seconds > 0 {
             self.position_position =
                 (self.position_position + seconds as i32).min(slider_max(MainSlider::Position));
+        }
+        self.visualization_tick_counter += 1;
+        if self.visualization_tick_counter >= self.visualization_refresh_divisor() {
+            self.visualization_tick_counter = 0;
+            let data = self
+                .app_state
+                .player
+                .visualization_data_valid()
+                .then_some(self.app_state.player.visualization_data() as &[f32]);
+            self.visualization.tick(data);
         }
         true
     }

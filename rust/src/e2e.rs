@@ -5,6 +5,9 @@ use crate::config::Config;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
+use crate::skin::widget::{
+    VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
+};
 use crate::ui::{
     MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind,
     PlaylistSortAction, UiAction,
@@ -41,6 +44,41 @@ impl PlayerSettings {
 
     pub fn with_balance(mut self, balance: i32) -> Self {
         self.config.balance = balance.clamp(-100, 100);
+        self
+    }
+
+    pub fn with_visualization_mode(mut self, mode: VisMode) -> Self {
+        self.config.vis_mode = mode;
+        self
+    }
+
+    pub fn with_visualization_analyzer_style(mut self, style: VisAnalyzerStyle) -> Self {
+        self.config.vis_analyzer_style = style;
+        self
+    }
+
+    pub fn with_visualization_analyzer_mode(mut self, mode: VisAnalyzerMode) -> Self {
+        self.config.vis_analyzer_mode = mode;
+        self
+    }
+
+    pub fn with_visualization_scope_mode(mut self, mode: VisScopeMode) -> Self {
+        self.config.vis_scope_mode = mode;
+        self
+    }
+
+    pub fn with_visualization_peaks_enabled(mut self, enabled: bool) -> Self {
+        self.config.vis_peaks_enabled = enabled;
+        self
+    }
+
+    pub fn with_visualization_vu_mode(mut self, mode: VisVuMode) -> Self {
+        self.config.vis_vu_mode = mode;
+        self
+    }
+
+    pub fn with_visualization_refresh_divisor(mut self, divisor: i32) -> Self {
+        self.config.vis_refresh_divisor = divisor.clamp(1, 8);
         self
     }
 }
@@ -851,6 +889,129 @@ impl UiE2e {
 
     pub fn assert_docked_panel_size(&mut self, expected: (i32, i32)) -> &mut Self {
         assert_eq!(self.state.docked_panel_size(), expected);
+        self
+    }
+
+    pub fn set_visualization_mode(&mut self, mode: VisMode) -> &mut Self {
+        self.state.set_visualization_mode(mode);
+        self
+    }
+
+    pub fn assert_visualization_mode(&mut self, expected: VisMode) -> &mut Self {
+        assert_eq!(self.state.visualization_mode(), expected);
+        self
+    }
+
+    pub fn set_visualization_analyzer_style(&mut self, style: VisAnalyzerStyle) -> &mut Self {
+        self.state.set_visualization_analyzer_style(style);
+        self
+    }
+
+    pub fn assert_visualization_analyzer_style(&mut self, expected: VisAnalyzerStyle) -> &mut Self {
+        assert_eq!(self.state.visualization_analyzer_style(), expected);
+        self
+    }
+
+    pub fn set_visualization_analyzer_mode(&mut self, mode: VisAnalyzerMode) -> &mut Self {
+        self.state.set_visualization_analyzer_mode(mode);
+        self
+    }
+
+    pub fn assert_visualization_analyzer_mode(&mut self, expected: VisAnalyzerMode) -> &mut Self {
+        assert_eq!(self.state.visualization_analyzer_mode(), expected);
+        self
+    }
+
+    pub fn set_visualization_scope_mode(&mut self, mode: VisScopeMode) -> &mut Self {
+        self.state.set_visualization_scope_mode(mode);
+        self
+    }
+
+    pub fn assert_visualization_scope_mode(&mut self, expected: VisScopeMode) -> &mut Self {
+        assert_eq!(self.state.visualization_scope_mode(), expected);
+        self
+    }
+
+    pub fn set_visualization_peaks_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_visualization_peaks_enabled(enabled);
+        self
+    }
+
+    pub fn assert_visualization_peaks_enabled(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.visualization_peaks_enabled(), expected);
+        self
+    }
+
+    pub fn set_visualization_falloff(
+        &mut self,
+        analyzer: VisFalloffSpeed,
+        peaks: VisFalloffSpeed,
+    ) -> &mut Self {
+        self.state.set_visualization_falloff(analyzer, peaks);
+        self
+    }
+
+    pub fn set_visualization_vu_mode(&mut self, mode: VisVuMode) -> &mut Self {
+        self.state.set_visualization_vu_mode(mode);
+        self
+    }
+
+    pub fn assert_visualization_vu_mode(&mut self, expected: VisVuMode) -> &mut Self {
+        assert_eq!(self.state.visualization_vu_mode(), expected);
+        self
+    }
+
+    pub fn set_visualization_refresh_divisor(&mut self, divisor: i32) -> &mut Self {
+        self.state.set_visualization_refresh_divisor(divisor);
+        self
+    }
+
+    pub fn assert_visualization_refresh_divisor(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.visualization_refresh_divisor(), expected);
+        self
+    }
+
+    pub fn feed_visualization_data(&mut self, band: usize, value: f32) -> &mut Self {
+        let mut data = [0.0; 75];
+        data[band.min(74)] = value;
+        self.state
+            .app_state_mut()
+            .player
+            .set_visualization_data(data);
+        self
+    }
+
+    pub fn tick_visualization(&mut self, elapsed_ms: u32) -> &mut Self {
+        self.state.app_state_mut().player.mark_playing();
+        self.state.update_timer_tick(elapsed_ms);
+        self
+    }
+
+    pub fn assert_visualization_band_at_least(&mut self, band: usize, expected: f32) -> &mut Self {
+        assert!(
+            self.state.visualization_render_state().data[band.min(74)] >= expected,
+            "expected visualization band {band} to be at least {expected}"
+        );
+        self
+    }
+
+    pub fn assert_visualization_band_at_most(&mut self, band: usize, expected: f32) -> &mut Self {
+        assert!(
+            self.state.visualization_render_state().data[band.min(74)] <= expected,
+            "expected visualization band {band} to be at most {expected}"
+        );
+        self
+    }
+
+    pub fn assert_visualization_peak_cleared(&mut self) -> &mut Self {
+        assert!(
+            self.state
+                .visualization_render_state()
+                .peak
+                .iter()
+                .all(|peak| *peak == 0.0),
+            "expected visualization peaks to be cleared"
+        );
         self
     }
 

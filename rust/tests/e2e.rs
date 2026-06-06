@@ -8,6 +8,9 @@ use xmms_resuscitated::playlist::PlaylistSortKey;
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
 };
+use xmms_resuscitated::skin::widget::{
+    VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
+};
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction,
 };
@@ -808,6 +811,102 @@ fn docked_panel_size_respects_playlist_detached_and_docked_state() {
             MAIN_WINDOW_WIDTH,
             MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT,
         ));
+}
+
+#[test]
+fn visualization_modes_can_be_selected_from_rust_e2e() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.assert_visualization_mode(VisMode::Analyzer)
+        .set_visualization_mode(VisMode::Scope)
+        .assert_visualization_mode(VisMode::Scope)
+        .set_visualization_mode(VisMode::Off)
+        .assert_visualization_mode(VisMode::Off)
+        .set_visualization_mode(VisMode::Milkdrop)
+        .assert_visualization_mode(VisMode::Milkdrop)
+        .set_visualization_mode(VisMode::Analyzer)
+        .assert_visualization_mode(VisMode::Analyzer);
+}
+
+#[test]
+fn visualization_analyzer_styles_can_be_selected_from_rust_e2e() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default().with_visualization_analyzer_style(VisAnalyzerStyle::Lines),
+    );
+
+    app.assert_visualization_analyzer_style(VisAnalyzerStyle::Lines)
+        .set_visualization_analyzer_style(VisAnalyzerStyle::Bars)
+        .assert_visualization_analyzer_style(VisAnalyzerStyle::Bars);
+}
+
+#[test]
+fn visualization_analyzer_modes_can_be_selected_from_rust_e2e() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default().with_visualization_analyzer_mode(VisAnalyzerMode::Fire),
+    );
+
+    app.assert_visualization_analyzer_mode(VisAnalyzerMode::Fire)
+        .set_visualization_analyzer_mode(VisAnalyzerMode::VerticalLines)
+        .assert_visualization_analyzer_mode(VisAnalyzerMode::VerticalLines)
+        .set_visualization_analyzer_mode(VisAnalyzerMode::Normal)
+        .assert_visualization_analyzer_mode(VisAnalyzerMode::Normal);
+}
+
+#[test]
+fn visualization_scope_modes_can_be_selected_from_rust_e2e() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_visualization_mode(VisMode::Scope)
+            .with_visualization_scope_mode(VisScopeMode::Dot),
+    );
+
+    app.assert_visualization_mode(VisMode::Scope)
+        .assert_visualization_scope_mode(VisScopeMode::Dot)
+        .set_visualization_scope_mode(VisScopeMode::Solid)
+        .assert_visualization_scope_mode(VisScopeMode::Solid)
+        .set_visualization_scope_mode(VisScopeMode::Line)
+        .assert_visualization_scope_mode(VisScopeMode::Line);
+}
+
+#[test]
+fn visualization_peaks_and_falloff_can_be_selected_from_rust_e2e() {
+    let mut app =
+        UiE2e::start_player(PlayerSettings::default().with_visualization_peaks_enabled(false));
+
+    app.assert_visualization_peaks_enabled(false)
+        .assert_visualization_peak_cleared()
+        .set_visualization_peaks_enabled(true)
+        .assert_visualization_peaks_enabled(true)
+        .set_visualization_falloff(VisFalloffSpeed::Fastest, VisFalloffSpeed::Slowest)
+        .feed_visualization_data(3, 1.0)
+        .tick_visualization(100)
+        .assert_visualization_band_at_least(3, 0.8);
+}
+
+#[test]
+fn visualization_windowshade_vu_mode_can_be_selected_from_rust_e2e() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default().with_visualization_vu_mode(VisVuMode::Smooth),
+    );
+
+    app.assert_visualization_vu_mode(VisVuMode::Smooth)
+        .set_visualization_vu_mode(VisVuMode::Normal)
+        .assert_visualization_vu_mode(VisVuMode::Normal);
+}
+
+#[test]
+fn visualization_refresh_divisor_throttles_data_ticks_from_rust_e2e() {
+    let mut app =
+        UiE2e::start_player(PlayerSettings::default().with_visualization_refresh_divisor(2));
+
+    app.assert_visualization_refresh_divisor(2)
+        .feed_visualization_data(4, 1.0)
+        .tick_visualization(100)
+        .assert_visualization_band_at_most(4, 0.0)
+        .tick_visualization(100)
+        .assert_visualization_band_at_least(4, 0.9)
+        .set_visualization_refresh_divisor(8)
+        .assert_visualization_refresh_divisor(8);
 }
 
 #[test]
