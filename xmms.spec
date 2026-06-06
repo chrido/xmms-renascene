@@ -16,6 +16,7 @@ BuildRequires:  pkgconfig(gstreamer-1.0) >= 1.16
 BuildRequires:  pkgconfig(libarchive) >= 3.0
 BuildRequires:  pkgconfig(libsoup-3.0) >= 3.0
 BuildRequires:  pkgconfig(json-glib-1.0) >= 1.6
+BuildRequires:  pkgconfig(libxml-2.0) >= 2.9
 BuildRequires:  desktop-file-utils
 BuildRequires:  libappstream-glib
 

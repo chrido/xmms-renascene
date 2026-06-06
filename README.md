@@ -43,14 +43,16 @@ flatpak install xmms-resuscitated.flatpak
 - GStreamer 1.x (>= 1.16) with `gstreamer-plugins-base` and `gstreamer-plugins-good`
 - libsoup 3.0 (>= 3.0)
 - json-glib (>= 1.6)
+- libxml2 (>= 2.9)
 - libarchive (>= 3.0, optional — for skin archive extraction)
+- Rust/Cargo for running the Rust port validation targets during migration
 
 ### Fedora
 
 ```sh
 sudo dnf install gtk4-devel gstreamer1-devel gstreamer1-plugins-base \
     gstreamer1-plugins-good libsoup3-devel json-glib-devel \
-    libarchive-devel meson gcc
+    libxml2-devel libarchive-devel meson gcc cargo
 ```
 
 ### Ubuntu / Debian
@@ -58,7 +60,8 @@ sudo dnf install gtk4-devel gstreamer1-devel gstreamer1-plugins-base \
 ```sh
 sudo apt install libgtk-4-dev libgstreamer1.0-dev \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-    libsoup-3.0-dev libjson-glib-dev libarchive-dev meson gcc
+    libsoup-3.0-dev libjson-glib-dev libxml2-dev libarchive-dev \
+    meson gcc cargo
 ```
 
 ## Building
@@ -101,6 +104,17 @@ xmms --playlist
 xmms --equalizer
 ```
 
+Control startup docking, WindowShade mode, and skin selection:
+
+```sh
+xmms --dock-playlist
+xmms --undock-playlist
+xmms --shade-main
+xmms --shade-playlist
+xmms --shade-equalizer
+xmms --skin ~/Skins/classic.wsz
+```
+
 Start once with defaults and an empty playlist, ignoring saved state:
 
 ```sh
@@ -115,6 +129,15 @@ xmms --playlist-menu-remove
 xmms --playlist-menu-select
 xmms --playlist-menu-misc
 xmms --playlist-menu-list
+```
+
+During the Rust migration, the Rust preview and parity tests can be run through Meson:
+
+```sh
+meson compile -C builddir rust-test
+meson compile -C builddir rust-e2e
+meson compile -C builddir rust-smoke
+meson compile -C builddir rust-gtk-smoke
 ```
 
 ## Skins

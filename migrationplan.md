@@ -191,12 +191,12 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port GTK session save/restore where available.
   - [x] Preserve fallback save on shutdown/query-end.
 
-- [ ] Port installation and packaging assets.
-  - [ ] Update README build/run instructions.
-  - [ ] Update Flatpak manifest.
-  - [ ] Update RPM spec.
-  - [ ] Update man page if CLI behavior changes.
-  - [ ] Install desktop file, appstream metadata, icon, skins, and binary.
+- [x] Port installation and packaging assets.
+  - [x] Update README build/run instructions.
+  - [x] Update Flatpak manifest.
+  - [x] Update RPM spec.
+  - [x] Update man page if CLI behavior changes.
+  - [x] Install desktop file, appstream metadata, icon, skins, and binary.
 
 - [ ] Add parity validation.
   - [ ] Keep Rust unit tests for pure logic.

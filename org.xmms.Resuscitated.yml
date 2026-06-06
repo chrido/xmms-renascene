@@ -11,7 +11,7 @@ finish-args:
   - --share=ipc
   # Audio playback
   - --socket=pulseaudio
-  # Network for Spotify integration
+  # Network for Spotify and podcast integration
   - --share=network
   # MPRIS D-Bus interface
   - --own-name=org.mpris.MediaPlayer2.xmms_resuscitated

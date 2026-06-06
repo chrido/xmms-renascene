@@ -23,6 +23,39 @@ Show the playlist window on startup.
 .B \-\-equalizer
 Show the equalizer window on startup.
 .TP
+.B \-\-dock\-playlist
+Dock the playlist to the main window on startup.
+.TP
+.B \-\-undock\-playlist
+Detach the playlist into its own window on startup.
+.TP
+.B \-\-dock\-equalizer
+Dock the equalizer to the main window on startup.
+.TP
+.B \-\-undock\-equalizer
+Detach the equalizer into its own window on startup.
+.TP
+.B \-\-shade\-main
+Start the main window in WindowShade mode.
+.TP
+.B \-\-unshade\-main
+Start the main window in normal mode.
+.TP
+.B \-\-shade\-playlist
+Start the playlist in WindowShade mode and show it.
+.TP
+.B \-\-unshade\-playlist
+Start the playlist in normal mode.
+.TP
+.B \-\-shade\-equalizer
+Start the equalizer in WindowShade mode and show it.
+.TP
+.B \-\-unshade\-equalizer
+Start the equalizer in normal mode.
+.TP
+.BI \-\-skin " PATH"
+Load a skin directory or archive on startup.
+.TP
 .B \-\-reset
 Start with default settings and an empty playlist, ignoring saved state.
 .TP
@@ -41,6 +74,45 @@ Show the playlist window with the Misc dropdown opened on startup.
 .B \-\-playlist-menu-list
 Show the playlist window with the List dropdown opened on startup.
 .SH KEYBOARD SHORTCUTS
+.TP
+.B F5
+Reload the current skin
+.TP
+.BR Ctrl + p
+Open preferences
+.TP
+.BR Ctrl + l
+Open the Play Location prompt
+.TP
+.BR Ctrl + j
+Open the Jump to Time prompt
+.TP
+.BR Ctrl + e / Ctrl + r
+Switch the timer between elapsed and remaining
+.TP
+.BR Ctrl + n
+Toggle no playlist advance
+.TP
+.BR Ctrl + s
+Toggle sticky window behavior
+.TP
+.BR Ctrl + d
+Toggle double-size mode
+.TP
+.BR Ctrl + 3
+Show file information for the current playlist entry
+.TP
+.BR Ctrl + z
+Play the first playlist entry
+.TP
+.BR Ctrl + w
+Toggle main WindowShade mode
+.TP
+.BR Ctrl + Shift + w
+Toggle playlist WindowShade mode
+.TP
+.BR Ctrl + Alt + w
+Toggle equalizer WindowShade mode
 .TP
 .B z
 Previous track
