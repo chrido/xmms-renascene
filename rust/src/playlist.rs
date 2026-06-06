@@ -302,6 +302,22 @@ impl Playlist {
         self.refresh_position(current.as_ref());
     }
 
+    pub fn reverse(&mut self) {
+        let current = self
+            .position
+            .and_then(|position| self.entries.get(position).cloned());
+        self.entries.reverse();
+        self.refresh_position(current.as_ref());
+    }
+
+    pub fn randomize(&mut self) {
+        let current = self
+            .position
+            .and_then(|position| self.entries.get(position).cloned());
+        shuffle_slice(&mut self.entries);
+        self.refresh_position(current.as_ref());
+    }
+
     pub fn set_shuffle(&mut self, enabled: bool) {
         self.shuffle = enabled;
         if enabled {
@@ -389,15 +405,7 @@ impl Playlist {
 
     fn generate_shuffle_order(&mut self) {
         self.shuffle_order = (0..self.entries.len()).collect();
-        let mut seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos() as u64)
-            .unwrap_or(0x584d_4d53);
-        for i in (1..self.shuffle_order.len()).rev() {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let j = (seed as usize) % (i + 1);
-            self.shuffle_order.swap(i, j);
-        }
+        shuffle_slice(&mut self.shuffle_order);
     }
 
     fn refresh_position(&mut self, current: Option<&PlaylistEntry>) {
@@ -622,6 +630,18 @@ fn path_basename(path: &str) -> &str {
 
 fn compare_ascii_case_insensitive(left: &str, right: &str) -> Ordering {
     left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
+}
+
+fn shuffle_slice<T>(items: &mut [T]) {
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0x584d_4d53);
+    for i in (1..items.len()).rev() {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let j = (seed as usize) % (i + 1);
+        items.swap(i, j);
+    }
 }
 
 fn is_media_file(path: &Path) -> bool {
@@ -923,6 +943,60 @@ mod tests {
         assert!(playlist.entries()[2].selected);
         assert!(playlist.entries()[3].selected);
         assert_eq!(playlist.position(), Some(3));
+    }
+
+    #[test]
+    fn reverse_preserves_current_entry_position() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/one.ogg");
+        playlist.add_uri("file:///music/two.ogg");
+        playlist.add_uri("file:///music/three.ogg");
+        playlist.set_position(0);
+
+        playlist.reverse();
+
+        assert_eq!(playlist.entries()[0].filename, "file:///music/three.ogg");
+        assert_eq!(playlist.entries()[1].filename, "file:///music/two.ogg");
+        assert_eq!(playlist.entries()[2].filename, "file:///music/one.ogg");
+        assert_eq!(playlist.position(), Some(2));
+    }
+
+    #[test]
+    fn randomize_preserves_all_entries_and_current_entry() {
+        let mut playlist = Playlist::new();
+        for index in 0..8 {
+            playlist.add_uri(format!("file:///music/{index}.ogg"));
+        }
+        playlist.set_position(3);
+        let current = playlist.entries()[3].clone();
+
+        playlist.randomize();
+
+        let mut sorted: Vec<_> = playlist
+            .entries()
+            .iter()
+            .map(|entry| entry.filename.as_str())
+            .collect();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![
+                "file:///music/0.ogg",
+                "file:///music/1.ogg",
+                "file:///music/2.ogg",
+                "file:///music/3.ogg",
+                "file:///music/4.ogg",
+                "file:///music/5.ogg",
+                "file:///music/6.ogg",
+                "file:///music/7.ogg",
+            ]
+        );
+        assert_eq!(
+            playlist
+                .position()
+                .map(|position| &playlist.entries()[position]),
+            Some(&current)
+        );
     }
 
     fn unique_temp_dir() -> PathBuf {

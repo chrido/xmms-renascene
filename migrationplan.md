@@ -73,7 +73,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port shuffle, repeat, no-advance, next, previous, EOF, and failed-item skip behavior.
   - [x] Port sorting by title, filename, path, and date.
   - [x] Port selected-entry sorting.
-  - [ ] Port reverse and randomize.
+  - [x] Port reverse and randomize.
   - [ ] Port duration indexing with GStreamer discoverer.
 
 - [ ] Port playlist window.

@@ -1530,6 +1530,13 @@ impl MainWindowUiState {
         self.app_state.playlist.position()
     }
 
+    pub(crate) fn current_playlist_entry_uri(&self) -> Option<&str> {
+        self.app_state
+            .playlist
+            .position()
+            .and_then(|position| self.playlist_entry_uri(position))
+    }
+
     pub(crate) fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
         self.app_state.playlist.add_spotify(uri, title, duration_ms);
     }
@@ -1558,6 +1565,14 @@ impl MainWindowUiState {
 
     pub(crate) fn sort_selected_playlist_by(&mut self, key: PlaylistSortKey) {
         self.app_state.playlist.sort_selected_by(key);
+    }
+
+    pub(crate) fn reverse_playlist(&mut self) {
+        self.app_state.playlist.reverse();
+    }
+
+    pub(crate) fn randomize_playlist(&mut self) {
+        self.app_state.playlist.randomize();
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {

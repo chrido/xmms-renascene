@@ -459,6 +459,18 @@ impl UiE2e {
         self
     }
 
+    pub fn reverse_playlist(&mut self) -> &mut Self {
+        self.state.reverse_playlist();
+        self.sync_windows();
+        self
+    }
+
+    pub fn randomize_playlist(&mut self) -> &mut Self {
+        self.state.randomize_playlist();
+        self.sync_windows();
+        self
+    }
+
     pub fn update_timer_tick(&mut self, elapsed_ms: u32) -> &mut Self {
         self.state.update_timer_tick(elapsed_ms);
         self
@@ -743,6 +755,11 @@ impl UiE2e {
 
     pub fn assert_playlist_position(&mut self, expected: Option<usize>) -> &mut Self {
         assert_eq!(self.state.playlist_position(), expected);
+        self
+    }
+
+    pub fn assert_current_playlist_entry(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.current_playlist_entry_uri(), Some(expected));
         self
     }
 

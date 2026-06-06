@@ -349,6 +349,31 @@ fn selected_playlist_sort_e2e_reorders_only_selected_rows() {
 }
 
 #[test]
+fn playlist_reverse_and_randomize_e2e_preserve_current_entry() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist([
+        "file:///music/one.ogg",
+        "file:///music/two.ogg",
+        "file:///music/three.ogg",
+        "file:///music/four.ogg",
+    ])
+    .click(MainTarget::NEXT)
+    .click(MainTarget::NEXT)
+    .assert_playlist_position(Some(1))
+    .assert_playlist_entry(1, "file:///music/two.ogg")
+    .reverse_playlist()
+    .assert_playlist_entry(0, "file:///music/four.ogg")
+    .assert_playlist_entry(1, "file:///music/three.ogg")
+    .assert_playlist_entry(2, "file:///music/two.ogg")
+    .assert_playlist_entry(3, "file:///music/one.ogg")
+    .assert_playlist_position(Some(2))
+    .randomize_playlist()
+    .assert_playlist_len(4)
+    .assert_current_playlist_entry("file:///music/two.ogg");
+}
+
+#[test]
 fn update_timer_advances_position_while_playing_only() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
