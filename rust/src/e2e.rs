@@ -269,6 +269,9 @@ impl UiE2e {
         let y = 174 + item as i32 * 18 + 8;
         self.state.playlist_press(x, y0 + (y - 174));
         match self.state.playlist_release(x, y0 + (y - 174)) {
+            PanelAction::OpenDirectoryDialog => self.state.set_directory_dialog_visible(true),
+            PanelAction::OpenFileDialog => self.state.set_file_dialog_visible(true),
+            PanelAction::OpenLocationWindow => self.state.set_open_location_visible(true),
             PanelAction::OpenPlaylistLoadDialog => {
                 self.state.set_playlist_load_dialog_visible(true)
             }
@@ -497,10 +500,30 @@ impl UiE2e {
         self
     }
 
+    pub fn accept_playlist_add_file_dialog<I, S>(&mut self, uris: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.state.set_file_dialog_visible(false);
+        self.file_dialog_visible = false;
+        self.state.accept_dropped_uris(uris, false, false);
+        self.sync_windows();
+        self
+    }
+
     pub fn accept_directory_dialog(&mut self, uri: &str) -> &mut Self {
         self.state.set_directory_dialog_visible(false);
         self.directory_dialog_visible = false;
         self.state.accept_opened_uris([uri]);
+        self.sync_windows();
+        self
+    }
+
+    pub fn accept_playlist_add_directory_dialog(&mut self, uri: &str) -> &mut Self {
+        self.state.set_directory_dialog_visible(false);
+        self.directory_dialog_visible = false;
+        self.state.accept_dropped_uris([uri], false, false);
         self.sync_windows();
         self
     }

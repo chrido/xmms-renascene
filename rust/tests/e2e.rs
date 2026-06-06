@@ -630,6 +630,58 @@ fn playlist_bottom_buttons_open_their_submenus() {
 }
 
 #[test]
+fn playlist_add_menu_url_opens_location_prompt_and_adds_entry() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.accept_open_location("file:///tmp/existing-url-base.mp3")
+        .click_panel(PanelTarget::PlaylistAdd)
+        .activate_playlist_menu_item(0)
+        .assert_window_visible(Window::OpenLocation)
+        .accept_open_location("https://example.test/add-url.ogg")
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/existing-url-base.mp3")
+        .assert_playlist_entry(1, "https://example.test/add-url.ogg");
+}
+
+#[test]
+fn playlist_add_menu_file_opens_file_dialog_and_adds_entries() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.accept_open_location("file:///tmp/existing-file-base.mp3")
+        .click_panel(PanelTarget::PlaylistAdd)
+        .activate_playlist_menu_item(2)
+        .assert_file_dialog_visible()
+        .accept_playlist_add_file_dialog([
+            "file:///tmp/add-file-one.mp3",
+            "file:///tmp/add-file-two.ogg",
+        ])
+        .assert_playlist_len(3)
+        .assert_playlist_entry(0, "file:///tmp/existing-file-base.mp3")
+        .assert_playlist_entry(1, "file:///tmp/add-file-one.mp3")
+        .assert_playlist_entry(2, "file:///tmp/add-file-two.ogg");
+}
+
+#[test]
+fn playlist_add_menu_directory_opens_directory_dialog_and_adds_entries() {
+    let music_dir = unique_temp_dir("xmms-rs-add-menu-dir");
+    fs::create_dir_all(&music_dir).unwrap();
+    fs::write(music_dir.join("track-one.mp3"), b"audio").unwrap();
+    fs::write(music_dir.join("ignored.txt"), b"text").unwrap();
+    let dir_uri = format!("file://{}", music_dir.display());
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.accept_open_location("file:///tmp/existing-dir-base.mp3")
+        .click_panel(PanelTarget::PlaylistAdd)
+        .activate_playlist_menu_item(1)
+        .assert_directory_dialog_visible()
+        .accept_playlist_add_directory_dialog(&dir_uri)
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/existing-dir-base.mp3");
+
+    fs::remove_dir_all(music_dir).unwrap();
+}
+
+#[test]
 fn playlist_select_menu_items_update_row_selection() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 

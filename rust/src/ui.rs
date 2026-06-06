@@ -579,12 +579,13 @@ impl PanelWindows {
         parent_window: &gtk::ApplicationWindow,
     ) -> Self {
         let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
-        let (playlist, playlist_area) = build_playlist_window(app, skin, main_state, main_area);
         let preferences = build_preferences_window(app, main_state);
         let open_location =
             build_prompt_window(app, parent_window, main_state, PromptKind::OpenLocation);
         let jump_time = build_prompt_window(app, parent_window, main_state, PromptKind::JumpTime);
         let skin_browser = build_skin_browser_window(app, main_state);
+        let (playlist, playlist_area) =
+            build_playlist_window(app, skin, main_state, main_area, &open_location);
         Self {
             equalizer,
             equalizer_area,
@@ -641,6 +642,7 @@ fn build_equalizer_window(
         main_area.clone(),
         PanelKind::Equalizer,
         Some(presets_menu),
+        None,
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
@@ -651,6 +653,7 @@ fn build_playlist_window(
     skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
+    open_location_window: &gtk::ApplicationWindow,
 ) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
     let (playlist_width, playlist_height) = main_state.borrow().playlist_size();
     let window = gtk::ApplicationWindow::builder()
@@ -764,6 +767,7 @@ fn build_playlist_window(
         main_area.clone(),
         PanelKind::Playlist,
         None,
+        Some(open_location_window.clone()),
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
@@ -1188,6 +1192,9 @@ impl PlaylistMenuKind {
 pub(crate) enum PanelAction {
     None,
     Changed,
+    OpenDirectoryDialog,
+    OpenFileDialog,
+    OpenLocationWindow,
     OpenPlaylistLoadDialog,
     OpenPlaylistSaveDialog,
     ShowPlaylistMenu(PlaylistMenuKind),
@@ -1207,6 +1214,7 @@ fn add_panel_click_controller(
     main_area: gtk::DrawingArea,
     kind: PanelKind,
     equalizer_presets_menu: Option<gtk::Popover>,
+    open_location_window: Option<gtk::ApplicationWindow>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(1);
@@ -1309,6 +1317,24 @@ fn add_panel_click_controller(
                 PanelAction::Changed => {
                     sync_single_panel_window_from_state(kind, &window, &area, &main_state);
                     main_area.queue_draw();
+                }
+                PanelAction::OpenDirectoryDialog => {
+                    main_state.borrow_mut().set_directory_dialog_visible(true);
+                    show_playlist_add_directory_dialog(
+                        &window,
+                        Rc::clone(&main_state),
+                        area.clone(),
+                    );
+                }
+                PanelAction::OpenFileDialog => {
+                    main_state.borrow_mut().set_file_dialog_visible(true);
+                    show_playlist_add_file_dialog(&window, Rc::clone(&main_state), area.clone());
+                }
+                PanelAction::OpenLocationWindow => {
+                    main_state.borrow_mut().set_open_location_visible(true);
+                    if let Some(open_location_window) = open_location_window.as_ref() {
+                        open_location_window.present();
+                    }
                 }
                 PanelAction::OpenPlaylistLoadDialog => {
                     main_state
@@ -2251,6 +2277,9 @@ impl MainWindowUiState {
 
     fn activate_playlist_menu_item(&mut self, menu: PlaylistMenuKind, item: usize) -> PanelAction {
         let changed = match (menu, item) {
+            (PlaylistMenuKind::Add, 0) => return PanelAction::OpenLocationWindow,
+            (PlaylistMenuKind::Add, 1) => return PanelAction::OpenDirectoryDialog,
+            (PlaylistMenuKind::Add, 2) => return PanelAction::OpenFileDialog,
             (PlaylistMenuKind::Remove, 1) => {
                 self.app_state.playlist.clear();
                 true
@@ -3062,6 +3091,63 @@ fn show_open_directory_dialog(
                 state.accept_opened_uris(uri);
             }
         }
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn show_playlist_add_file_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    playlist_area: gtk::DrawingArea,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Add Files"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        Some("Open"),
+        Some("Cancel"),
+    );
+    dialog.set_select_multiple(true);
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_file_dialog_visible(false);
+            if response == gtk::ResponseType::Accept {
+                let uris = files_from_list_model(dialog.files());
+                state.accept_dropped_uris(uris, false, false);
+            }
+        }
+        playlist_area.queue_draw();
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn show_playlist_add_directory_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    playlist_area: gtk::DrawingArea,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Add Directory"),
+        Some(parent),
+        gtk::FileChooserAction::SelectFolder,
+        Some("Open"),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_directory_dialog_visible(false);
+            if response == gtk::ResponseType::Accept {
+                let uri = dialog.file().map(|file| file.uri().to_string());
+                state.accept_dropped_uris(uri, false, false);
+            }
+        }
+        playlist_area.queue_draw();
         dialog_for_response.destroy();
     });
     dialog.show();
