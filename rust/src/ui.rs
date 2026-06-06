@@ -530,7 +530,6 @@ enum MainKeyboardShortcut {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreferencesPage {
     Audio,
-    Plugins,
     Visualization,
     Options,
     Fonts,
@@ -553,7 +552,6 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Output device:",
             "Configure",
         ],
-        PreferencesPage::Plugins => &["Effect Plugins", "General Plugins"],
         PreferencesPage::Visualization => &[
             "Visualization mode:",
             "Analyzer mode:",
@@ -1631,11 +1629,6 @@ fn build_preferences_window(
             build_preferences_audio_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
         (
-            PreferencesPage::Plugins,
-            "Effect/General Plugins",
-            build_preferences_plugins_page(),
-        ),
-        (
             PreferencesPage::Visualization,
             "Visualization Plugins",
             build_preferences_visualization_page(main_state, Some(Rc::clone(&preferences_changed))),
@@ -1658,7 +1651,7 @@ fn build_preferences_window(
     ] {
         notebook.append_page(&page_widget, Some(&gtk::Label::new(Some(label))));
         if page == PreferencesPage::Options {
-            notebook.set_current_page(Some(3));
+            notebook.set_current_page(Some(2));
         }
     }
     {
@@ -1666,10 +1659,9 @@ fn build_preferences_window(
         notebook.connect_switch_page(move |_notebook, _page_widget, page_num| {
             let page = match page_num {
                 0 => PreferencesPage::Audio,
-                1 => PreferencesPage::Plugins,
-                2 => PreferencesPage::Visualization,
-                3 => PreferencesPage::Options,
-                4 => PreferencesPage::Fonts,
+                1 => PreferencesPage::Visualization,
+                2 => PreferencesPage::Options,
+                3 => PreferencesPage::Fonts,
                 _ => PreferencesPage::Title,
             };
             main_state.borrow_mut().set_preferences_page(page);
@@ -1845,20 +1837,6 @@ fn build_preferences_audio_page(
         eprintln!("xmms-rs: output device configuration is handled by the system audio settings");
     });
     grid.attach(&configure, 1, 1, 1, 1);
-    page
-}
-
-fn build_preferences_plugins_page() -> gtk::Box {
-    let page = prefs_page_box();
-    let effects = prefs_frame("Effect Plugins", &page);
-    effects.append(&prefs_label(
-        "GStreamer equalizer (built in, controlled by the Equalizer window)",
-    ));
-    let general = prefs_frame("General Plugins", &page);
-    general.append(&prefs_label("MPRIS desktop integration (built in)"));
-    general.append(&prefs_label(
-        "Spotify support (built in, configured from the Spotify window)",
-    ));
     page
 }
 
@@ -5320,7 +5298,7 @@ impl MainWindowUiState {
         }
 
         if self.panel_title_button_hit(kind, x, y) {
-            if (264..273).contains(&x) {
+            if self.panel_close_button_hit(kind, x) {
                 match kind {
                     PanelKind::Equalizer => self.app_state.config.equalizer_visible = false,
                     PanelKind::Playlist => self.app_state.config.playlist_visible = false,
@@ -5328,7 +5306,7 @@ impl MainWindowUiState {
                 return PanelAction::Changed;
             }
 
-            if (254..263).contains(&x) {
+            if self.panel_shade_button_hit(kind, x) {
                 match kind {
                     PanelKind::Equalizer => self.equalizer_shaded = !self.equalizer_shaded,
                     PanelKind::Playlist => self.playlist_shaded = !self.playlist_shaded,
@@ -5350,11 +5328,23 @@ impl MainWindowUiState {
 
     fn panel_title_button_hit(&self, kind: PanelKind, x: i32, y: i32) -> bool {
         (3..12).contains(&y)
-            && match kind {
-                PanelKind::Equalizer | PanelKind::Playlist => {
-                    (254..263).contains(&x) || (264..273).contains(&x)
-                }
-            }
+            && (self.panel_shade_button_hit(kind, x) || self.panel_close_button_hit(kind, x))
+    }
+
+    fn panel_shade_button_hit(&self, kind: PanelKind, x: i32) -> bool {
+        let shade_x = match kind {
+            PanelKind::Equalizer => 254,
+            PanelKind::Playlist => self.playlist_width - 21,
+        };
+        (shade_x..shade_x + 9).contains(&x)
+    }
+
+    fn panel_close_button_hit(&self, kind: PanelKind, x: i32) -> bool {
+        let close_x = match kind {
+            PanelKind::Equalizer => 264,
+            PanelKind::Playlist => self.playlist_width - 11,
+        };
+        (close_x..close_x + 9).contains(&x)
     }
 
     pub(crate) fn player_state(&self) -> PlayerState {

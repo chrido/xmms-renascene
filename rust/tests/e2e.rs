@@ -1846,7 +1846,6 @@ fn preferences_audio_page_applies_output_volume_and_balance_immediately() {
 fn preferences_pages_expose_c_parity_controls() {
     for page in [
         PreferencesPage::Audio,
-        PreferencesPage::Plugins,
         PreferencesPage::Visualization,
         PreferencesPage::Options,
         PreferencesPage::Fonts,
@@ -2444,6 +2443,19 @@ fn resized_playlist_bottom_buttons_use_current_geometry() {
         .assert_playlist_menu_hover(Some(2))
         .press_playlist_menu_item(1)
         .assert_playlist_menu_hover(Some(1));
+}
+
+#[test]
+fn resized_playlist_title_buttons_use_current_width() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.resize_playlist(325, 280)
+        .click_panel(PanelTarget::PlaylistShade)
+        .assert_playlist_shaded()
+        .click_panel(PanelTarget::PlaylistShade)
+        .assert_playlist_unshaded()
+        .click_panel(PanelTarget::PlaylistClose)
+        .assert_window_hidden(Window::Playlist);
 }
 
 #[test]
