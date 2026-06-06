@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use cairo::{Context, Format, ImageSurface};
 use xmms_resuscitated::render::{
-    render_main_player_reset, render_playlist_frame, render_playlist_rows, render_visualization,
-    surface_from_xpm, PlaylistRowRenderEntry, PlaylistRowsRenderState, VisualizationRenderState,
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    render_equalizer_state, render_main_player_reset, render_playlist_frame, render_playlist_rows,
+    render_visualization, surface_from_xpm, EqualizerRenderState, PlaylistRowRenderEntry,
+    PlaylistRowsRenderState, VisualizationRenderState, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use xmms_resuscitated::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
 use xmms_resuscitated::skin::{DefaultSkin, SkinPixmapKind};
@@ -146,6 +147,29 @@ fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
 
     assert_eq!(transparent_pixels, 0);
     assert_eq!(separator_pixels, 0);
+}
+
+#[test]
+fn equalizer_graph_uses_skin_color_ramp() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(Format::ARgb32, 275, 116).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_equalizer_state(&cr, &skin, &EqualizerRenderState::default()).unwrap());
+    drop(cr);
+    surface.flush();
+
+    let expected = skin
+        .get(SkinPixmapKind::EqMain)
+        .unwrap()
+        .pixel_argb(115, 303)
+        .unwrap();
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = 26 * stride + 88 * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual & 0x00ff_ffff, expected & 0x00ff_ffff);
+    assert_ne!(actual & 0x00ff_ffff, 0x0000_ff00);
 }
 
 fn rendered_visualization_bytes(state: VisualizationRenderState) -> Vec<u8> {

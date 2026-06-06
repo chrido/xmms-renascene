@@ -1396,7 +1396,7 @@ pub fn render_equalizer_state(
     for (idx, position) in state.band_positions.iter().enumerate() {
         rendered |= draw_eq_slider(cr, &eqmain, 78 + idx as i32 * 18, *position)?;
     }
-    draw_eq_graph(cr, &state.band_positions)?;
+    draw_eq_graph(cr, eqmain_image, &state.band_positions)?;
 
     Ok(rendered)
 }
@@ -1434,26 +1434,54 @@ fn draw_eq_slider(
     blit_surface_rect(cr, eqmain, 0, 164, x, knob_y, 14, 11)
 }
 
-fn draw_eq_graph(cr: &Context, band_positions: &[i32; 10]) -> Result<(), RenderError> {
-    let graph_x = 86.0;
-    let graph_y = 17.0;
-    let graph_w = 113.0;
-    let graph_h = 19.0;
-
-    cr.set_source_rgb(0.0, 1.0, 0.0);
-    cr.set_line_width(1.0);
-    for (idx, position) in band_positions.iter().enumerate() {
-        let x = graph_x + (idx as f64 * graph_w) / 9.0;
-        let value = f64::from(50 - (*position).clamp(0, 100)) / 50.0;
-        let y = graph_y + graph_h / 2.0 - value * (graph_h / 2.0 - 1.0);
-        if idx == 0 {
-            cr.move_to(x, y);
-        } else {
-            cr.line_to(x, y);
+fn draw_eq_graph(
+    cr: &Context,
+    eqmain: &XpmImage,
+    band_positions: &[i32; 10],
+) -> Result<(), RenderError> {
+    let points = eq_graph_points(band_positions);
+    for pair in points.windows(2) {
+        let (x0, y0) = pair[0];
+        let (x1, y1) = pair[1];
+        for y in y0.min(y1)..=y0.max(y1) {
+            set_eq_graph_color(cr, eqmain, y);
+            cr.rectangle(f64::from(x0), f64::from(17 + y), 1.0, 1.0);
+            cr.fill()?;
+        }
+        if x1 != x0 {
+            for x in x0.min(x1)..=x0.max(x1) {
+                let t = f64::from(x - x0) / f64::from(x1 - x0);
+                let y = (f64::from(y0) + (f64::from(y1 - y0) * t)).round() as i32;
+                set_eq_graph_color(cr, eqmain, y);
+                cr.rectangle(f64::from(x), f64::from(17 + y), 1.0, 1.0);
+                cr.fill()?;
+            }
         }
     }
-    cr.stroke()?;
     Ok(())
+}
+
+fn eq_graph_points(band_positions: &[i32; 10]) -> Vec<(i32, i32)> {
+    band_positions
+        .iter()
+        .enumerate()
+        .map(|(idx, position)| {
+            let x = 88 + ((idx as i32 * 109) / 9);
+            let value = 50 - (*position).clamp(0, 100);
+            let y = (9 - ((value * 9) / 50)).clamp(0, 18);
+            (x, y)
+        })
+        .collect()
+}
+
+fn set_eq_graph_color(cr: &Context, eqmain: &XpmImage, y: i32) {
+    let color = eqmain
+        .pixel_argb(115, (294 + y.clamp(0, 18)) as usize)
+        .unwrap_or(0xff00_8cff);
+    let red = ((color >> 16) & 0xff) as f64 / 255.0;
+    let green = ((color >> 8) & 0xff) as f64 / 255.0;
+    let blue = (color & 0xff) as f64 / 255.0;
+    cr.set_source_rgb(red, green, blue);
 }
 
 pub fn render_playlist_frame(
