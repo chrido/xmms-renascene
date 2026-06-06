@@ -31,7 +31,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port `viscolor.txt` parsing.
   - [x] Port `pledit.txt` playlist color parsing.
   - [x] Preserve `numbers` fallback for `nums_ex`.
-  - [ ] Preserve balance-from-volume fallback.
+  - [x] Preserve balance-from-volume fallback.
   - [ ] Replace manual XPM parser with a library in a later cleanup phase.
 
 - [ ] Complete Cairo renderer.

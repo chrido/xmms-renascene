@@ -810,6 +810,26 @@ static char * main_xpm[] = {
     }
 
     #[test]
+    fn directory_loader_uses_volume_as_balance_fallback() {
+        let tmp =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-balance", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut image = image::RgbaImage::new(1, 1);
+        image.put_pixel(0, 0, image::Rgba([10, 20, 30, 255]));
+        image.save(tmp.join("volume.png")).unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        let balance = skin.get(SkinPixmapKind::Balance).unwrap();
+        assert_eq!(balance.width(), 1);
+        assert_eq!(balance.height(), 1);
+        assert_eq!(balance.pixel_argb(0, 0), Some(0xff0a141e));
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
     fn path_loader_accepts_wsz_zip_skin_archives() {
         let path =
             std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-zip.wsz", std::process::id()));
