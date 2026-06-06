@@ -80,6 +80,7 @@ Completed so far:
 - Added Rust GStreamer equalizer band syncing helpers for all ten `equalizer-10bands` properties, including dB clamping and coverage for every band.
 - Added Rust GStreamer stream-info reporting from audio caps so frequency and channel counts can be applied to player state alongside tag-derived bitrate.
 - Added Rust GStreamer audio output rebuild support by sink factory, preserving the full audio processing chain and explicitly surfacing unsupported device selection requests.
+- Added C-compatible Rust equalizer slider-to-dB mapping, exposed equalizer GStreamer band values from the UI state, and expanded e2e coverage across all ten bands plus inactive-EQ zeroing.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.

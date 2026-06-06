@@ -860,6 +860,21 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_equalizer_preamp_db(&mut self, expected: f64) -> &mut Self {
+        assert_eq!(self.state.equalizer_preamp_db(), expected);
+        self
+    }
+
+    pub fn assert_equalizer_band_db(&mut self, band: usize, expected: f64) -> &mut Self {
+        assert_eq!(self.state.equalizer_band_db(band), Some(expected));
+        self
+    }
+
+    pub fn assert_equalizer_gstreamer_band_db_values(&mut self, expected: [f64; 10]) -> &mut Self {
+        assert_eq!(self.state.equalizer_gstreamer_band_db_values(), expected);
+        self
+    }
+
     pub fn assert_equalizer_presets_pressed(&mut self, expected: bool) -> &mut Self {
         assert_eq!(self.state.equalizer_presets_pressed(), expected);
         self

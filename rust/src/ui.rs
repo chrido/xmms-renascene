@@ -6,7 +6,7 @@ use std::time::Duration;
 use gtk::prelude::*;
 
 use crate::app_state::AppState;
-use crate::player::PlayerState;
+use crate::player::{equalizer_position_to_db, PlayerState};
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
@@ -2198,6 +2198,24 @@ impl MainWindowUiState {
 
     pub(crate) fn equalizer_band_position(&self, band: usize) -> Option<i32> {
         self.equalizer_band_positions.get(band).copied()
+    }
+
+    pub(crate) fn equalizer_preamp_db(&self) -> f64 {
+        equalizer_position_to_db(self.equalizer_preamp_position)
+    }
+
+    pub(crate) fn equalizer_band_db(&self, band: usize) -> Option<f64> {
+        self.equalizer_band_positions
+            .get(band)
+            .map(|position| equalizer_position_to_db(*position))
+    }
+
+    pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> [f64; 10] {
+        if self.equalizer_active {
+            self.equalizer_band_positions.map(equalizer_position_to_db)
+        } else {
+            [0.0; 10]
+        }
     }
 
     pub(crate) fn equalizer_presets_pressed(&self) -> bool {

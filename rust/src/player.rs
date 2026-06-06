@@ -228,6 +228,15 @@ impl GStreamerBackend {
         }
     }
 
+    pub fn set_equalizer_from_positions(&self, active: bool, positions: [i32; EQUALIZER_BANDS]) {
+        let bands = if active {
+            positions.map(equalizer_position_to_db)
+        } else {
+            [0.0; EQUALIZER_BANDS]
+        };
+        self.set_equalizer_bands_db(bands);
+    }
+
     pub fn rebuild_output_sink(
         &mut self,
         sink_factory: &str,
@@ -484,6 +493,10 @@ fn equalizer_band_property(band: usize) -> Result<&'static str, String> {
         9 => Ok("band9"),
         _ => Err(format!("equalizer band index {band} is out of range")),
     }
+}
+
+pub fn equalizer_position_to_db(position: i32) -> f64 {
+    (50 - position.clamp(0, 100)) as f64 * 20.0 / 50.0
 }
 
 fn event_from_message(
@@ -781,6 +794,27 @@ mod tests {
             .enumerate()
         {
             assert_eq!(backend.equalizer_band_db(index).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn gstreamer_backend_equalizer_positions_follow_c_mapping() {
+        let _guard = gst_test_guard();
+        let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
+
+        assert_eq!(equalizer_position_to_db(0), 20.0);
+        assert_eq!(equalizer_position_to_db(50), 0.0);
+        assert_eq!(equalizer_position_to_db(100), -20.0);
+
+        backend.set_equalizer_from_positions(true, [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        assert_eq!(backend.equalizer_band_db(0).unwrap(), 12.0);
+        assert_eq!(backend.equalizer_band_db(2).unwrap(), 12.0);
+        assert_eq!(backend.equalizer_band_db(5).unwrap(), 0.0);
+        assert_eq!(backend.equalizer_band_db(9).unwrap(), -16.0);
+
+        backend.set_equalizer_from_positions(false, [0; 10]);
+        for band in 0..10 {
+            assert_eq!(backend.equalizer_band_db(band).unwrap(), 0.0);
         }
     }
 

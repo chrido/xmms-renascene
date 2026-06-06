@@ -678,6 +678,35 @@ fn equalizer_buttons_sliders_and_presets_update_state() {
 }
 
 #[test]
+fn equalizer_all_bands_expose_c_compatible_gstreamer_db_mapping() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
+
+    app.drag_equalizer_preamp(0)
+        .assert_equalizer_preamp_position(0)
+        .assert_equalizer_preamp_db(20.0);
+
+    let requested_positions = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
+    let snapped_positions = [0, 11, 20, 30, 41, 50, 60, 71, 80, 90];
+    for (band, (requested, snapped)) in requested_positions
+        .into_iter()
+        .zip(snapped_positions)
+        .enumerate()
+    {
+        app.drag_equalizer_band(band, requested)
+            .assert_equalizer_band_position(band, snapped)
+            .assert_equalizer_band_db(band, (50 - snapped) as f64 * 20.0 / 50.0);
+    }
+
+    app.assert_equalizer_gstreamer_band_db_values([
+        20.0, 15.6, 12.0, 8.0, 3.6, 0.0, -4.0, -8.4, -12.0, -16.0,
+    ]);
+
+    app.click_panel(PanelTarget::EqualizerOn)
+        .assert_equalizer_active(false)
+        .assert_equalizer_gstreamer_band_db_values([0.0; 10]);
+}
+
+#[test]
 fn playlist_top_right_buttons_shade_and_close_playlist_window() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
