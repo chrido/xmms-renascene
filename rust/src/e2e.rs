@@ -132,8 +132,24 @@ pub enum MenuItem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shortcut {
+    Previous,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    OpenFiles,
+    ToggleRepeat,
+    ToggleShuffle,
+    Preferences,
     OpenLocation,
+    ToggleNoAdvance,
+    ShadeMain,
     JumpTime,
+    SkinBrowser,
+    TogglePlaylist,
+    ToggleEqualizer,
+    ShadePlaylist,
+    ShadeEqualizer,
 }
 
 impl MainTarget {
@@ -298,8 +314,58 @@ impl UiE2e {
 
     pub fn press_shortcut(&mut self, shortcut: Shortcut) -> &mut Self {
         match shortcut {
+            Shortcut::Previous => {
+                self.state.activate_push(MainPushButton::Previous);
+            }
+            Shortcut::Play => {
+                self.state.activate_push(MainPushButton::Play);
+            }
+            Shortcut::Pause => {
+                self.state.activate_push(MainPushButton::Pause);
+            }
+            Shortcut::Stop => {
+                self.state.activate_push(MainPushButton::Stop);
+            }
+            Shortcut::Next => {
+                self.state.activate_push(MainPushButton::Next);
+            }
+            Shortcut::OpenFiles => {
+                self.file_dialog_visible = true;
+                self.state.set_file_dialog_visible(true);
+            }
+            Shortcut::ToggleRepeat => {
+                self.state.activate_toggle(MainToggleButton::Repeat);
+            }
+            Shortcut::ToggleShuffle => {
+                self.state.activate_toggle(MainToggleButton::Shuffle);
+            }
+            Shortcut::Preferences => {
+                self.state.set_preferences_visible(true);
+            }
             Shortcut::OpenLocation => self.state.set_open_location_visible(true),
+            Shortcut::ToggleNoAdvance => {
+                let enabled = !self.state.no_advance();
+                self.state.set_no_advance(enabled);
+            }
+            Shortcut::ShadeMain => {
+                self.state.toggle_shaded();
+            }
             Shortcut::JumpTime => self.state.set_jump_time_visible(true),
+            Shortcut::SkinBrowser => {
+                self.state.set_skin_browser_visible(true);
+            }
+            Shortcut::TogglePlaylist => {
+                self.state.activate_toggle(MainToggleButton::Playlist);
+            }
+            Shortcut::ToggleEqualizer => {
+                self.state.activate_toggle(MainToggleButton::Equalizer);
+            }
+            Shortcut::ShadePlaylist => {
+                self.state.toggle_playlist_shaded();
+            }
+            Shortcut::ShadeEqualizer => {
+                self.state.toggle_equalizer_shaded();
+            }
         }
         self.sync_windows();
         self
@@ -520,6 +586,11 @@ impl UiE2e {
 
     pub fn assert_repeat(&mut self, expected: bool) -> &mut Self {
         assert_eq!(self.state.repeat(), expected);
+        self
+    }
+
+    pub fn assert_no_advance(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.no_advance(), expected);
         self
     }
 

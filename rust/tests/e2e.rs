@@ -108,6 +108,61 @@ fn prompt_keyboard_shortcuts_open_location_and_jump_time() {
 }
 
 #[test]
+fn main_keyboard_shortcuts_trigger_preview_actions() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.press_shortcut(Shortcut::Play)
+        .assert_player_state(PlayerState::Playing)
+        .press_shortcut(Shortcut::Pause)
+        .assert_player_state(PlayerState::Paused)
+        .press_shortcut(Shortcut::Stop)
+        .assert_player_state(PlayerState::Stopped)
+        .click(MainTarget::position(100))
+        .assert_position(100)
+        .press_shortcut(Shortcut::Previous)
+        .assert_position(0)
+        .click(MainTarget::position(100))
+        .assert_position(100)
+        .press_shortcut(Shortcut::Next)
+        .assert_position(0);
+
+    app.press_shortcut(Shortcut::OpenFiles)
+        .assert_file_dialog_visible()
+        .assert_shuffle(false)
+        .press_shortcut(Shortcut::ToggleShuffle)
+        .assert_shuffle(true)
+        .assert_repeat(false)
+        .press_shortcut(Shortcut::ToggleRepeat)
+        .assert_repeat(true)
+        .assert_no_advance(false)
+        .press_shortcut(Shortcut::ToggleNoAdvance)
+        .assert_no_advance(true)
+        .press_shortcut(Shortcut::Preferences)
+        .assert_window_visible(Window::Preferences)
+        .press_shortcut(Shortcut::SkinBrowser)
+        .assert_window_visible(Window::SkinBrowser);
+}
+
+#[test]
+fn panel_keyboard_shortcuts_toggle_and_shade_windows() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.press_shortcut(Shortcut::TogglePlaylist)
+        .assert_window_visible(Window::Playlist)
+        .assert_playlist_unshaded()
+        .press_shortcut(Shortcut::ShadePlaylist)
+        .assert_playlist_shaded()
+        .press_shortcut(Shortcut::ToggleEqualizer)
+        .assert_window_visible(Window::Equalizer)
+        .assert_equalizer_unshaded()
+        .press_shortcut(Shortcut::ShadeEqualizer)
+        .assert_equalizer_shaded()
+        .assert_player_unshaded()
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_player_shaded();
+}
+
+#[test]
 fn transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

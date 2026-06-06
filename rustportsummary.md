@@ -54,6 +54,7 @@ Completed so far:
 - Wired the main player eject/open button to a native file chooser dialog in the GTK preview.
 - Wired the main menu actions in the GTK preview: Open Files opens the native multi-select file chooser, Open Location and Skin Browser show Rust placeholder windows, Preferences shows the preferences placeholder, and Quit exits the app.
 - Ported the main prompt mechanics for Play Location and Jump to Time: prompt windows use entry plus Cancel/OK controls, `Ctrl+L` and `Ctrl+J` open the prompts, Play Location records the submitted URI for later playlist integration, and Jump to Time parses seconds or `mm:ss` and updates preview seek state.
+- Added Rust preview keyboard shortcuts for currently ported main-window behavior: transport keys, open-files, shuffle/repeat/no-advance toggles, preferences, prompts, skin-browser placeholder, main shade, playlist/equalizer show-hide, and playlist/equalizer shade shortcuts.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.

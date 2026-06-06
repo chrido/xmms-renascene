@@ -179,18 +179,20 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     {
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
+        let window = window.clone();
+        let drawing_area = drawing_area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
-            if shortcut_matches(key, state, "<Control>l") {
-                main_state.borrow_mut().set_open_location_visible(true);
-                panel_windows.open_location.present();
-                return gtk::glib::Propagation::Stop;
-            }
-            if shortcut_matches(key, state, "<Control>j") {
-                main_state.borrow_mut().set_jump_time_visible(true);
-                panel_windows.jump_time.present();
-                return gtk::glib::Propagation::Stop;
-            }
-            gtk::glib::Propagation::Proceed
+            let Some(shortcut) = keyboard_shortcut_from_event(key, state) else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            handle_keyboard_shortcut(
+                shortcut,
+                &window,
+                &drawing_area,
+                &panel_windows,
+                &main_state,
+            );
+            gtk::glib::Propagation::Stop
         });
     }
     window.add_controller(key_controller);
@@ -212,6 +214,184 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     window.set_child(Some(&drawing_area));
     window.present();
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainKeyboardShortcut {
+    Previous,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    OpenFiles,
+    ToggleRepeat,
+    ToggleShuffle,
+    Preferences,
+    OpenLocation,
+    ToggleNoAdvance,
+    ShadeMain,
+    JumpTime,
+    SkinBrowser,
+    PresentMain,
+    TogglePlaylist,
+    ToggleEqualizer,
+    ShadePlaylist,
+    ShadeEqualizer,
+}
+
+fn keyboard_shortcut_from_event(
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> Option<MainKeyboardShortcut> {
+    [
+        ("z", MainKeyboardShortcut::Previous),
+        ("x", MainKeyboardShortcut::Play),
+        ("c", MainKeyboardShortcut::Pause),
+        ("v", MainKeyboardShortcut::Stop),
+        ("b", MainKeyboardShortcut::Next),
+        ("l", MainKeyboardShortcut::OpenFiles),
+        ("r", MainKeyboardShortcut::ToggleRepeat),
+        ("s", MainKeyboardShortcut::ToggleShuffle),
+        ("<Control>p", MainKeyboardShortcut::Preferences),
+        ("<Control>l", MainKeyboardShortcut::OpenLocation),
+        ("<Control>n", MainKeyboardShortcut::ToggleNoAdvance),
+        ("<Control>w", MainKeyboardShortcut::ShadeMain),
+        ("<Control>j", MainKeyboardShortcut::JumpTime),
+        ("<Alt>s", MainKeyboardShortcut::SkinBrowser),
+        ("<Alt>w", MainKeyboardShortcut::PresentMain),
+        ("<Alt>e", MainKeyboardShortcut::TogglePlaylist),
+        ("<Alt>g", MainKeyboardShortcut::ToggleEqualizer),
+        ("<Control><Shift>w", MainKeyboardShortcut::ShadePlaylist),
+        ("<Control><Alt>w", MainKeyboardShortcut::ShadeEqualizer),
+    ]
+    .into_iter()
+    .find_map(|(accelerator, shortcut)| {
+        shortcut_matches(key, state, accelerator).then_some(shortcut)
+    })
+}
+
+fn handle_keyboard_shortcut(
+    shortcut: MainKeyboardShortcut,
+    window: &gtk::ApplicationWindow,
+    drawing_area: &gtk::DrawingArea,
+    panel_windows: &PanelWindows,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    match shortcut {
+        MainKeyboardShortcut::Previous => {
+            main_state
+                .borrow_mut()
+                .activate_push(MainPushButton::Previous);
+        }
+        MainKeyboardShortcut::Play => {
+            main_state.borrow_mut().activate_push(MainPushButton::Play);
+        }
+        MainKeyboardShortcut::Pause => {
+            main_state.borrow_mut().activate_push(MainPushButton::Pause);
+        }
+        MainKeyboardShortcut::Stop => {
+            main_state.borrow_mut().activate_push(MainPushButton::Stop);
+        }
+        MainKeyboardShortcut::Next => {
+            main_state.borrow_mut().activate_push(MainPushButton::Next);
+        }
+        MainKeyboardShortcut::OpenFiles => {
+            main_state.borrow_mut().set_file_dialog_visible(true);
+            show_open_file_dialog(window);
+        }
+        MainKeyboardShortcut::ToggleRepeat => {
+            main_state
+                .borrow_mut()
+                .activate_toggle(MainToggleButton::Repeat);
+        }
+        MainKeyboardShortcut::ToggleShuffle => {
+            main_state
+                .borrow_mut()
+                .activate_toggle(MainToggleButton::Shuffle);
+        }
+        MainKeyboardShortcut::Preferences => {
+            main_state.borrow_mut().set_preferences_visible(true);
+            panel_windows.preferences.present();
+        }
+        MainKeyboardShortcut::OpenLocation => {
+            main_state.borrow_mut().set_open_location_visible(true);
+            panel_windows.open_location.present();
+        }
+        MainKeyboardShortcut::ToggleNoAdvance => {
+            let mut state = main_state.borrow_mut();
+            let enabled = !state.app_state.playlist.no_advance();
+            state.app_state.playlist.set_no_advance(enabled);
+        }
+        MainKeyboardShortcut::ShadeMain => {
+            {
+                let mut state = main_state.borrow_mut();
+                state.shaded = !state.shaded;
+            }
+            resize_main_window(window, drawing_area, &main_state.borrow());
+        }
+        MainKeyboardShortcut::JumpTime => {
+            main_state.borrow_mut().set_jump_time_visible(true);
+            panel_windows.jump_time.present();
+        }
+        MainKeyboardShortcut::SkinBrowser => {
+            main_state.borrow_mut().set_skin_browser_visible(true);
+            panel_windows.skin_browser.present();
+        }
+        MainKeyboardShortcut::PresentMain => {
+            window.present();
+        }
+        MainKeyboardShortcut::TogglePlaylist => {
+            main_state
+                .borrow_mut()
+                .activate_toggle(MainToggleButton::Playlist);
+            sync_panel_windows(panel_windows, &main_state.borrow());
+        }
+        MainKeyboardShortcut::ToggleEqualizer => {
+            main_state
+                .borrow_mut()
+                .activate_toggle(MainToggleButton::Equalizer);
+            sync_panel_windows(panel_windows, &main_state.borrow());
+        }
+        MainKeyboardShortcut::ShadePlaylist => {
+            {
+                let mut state = main_state.borrow_mut();
+                state.playlist_shaded = !state.playlist_shaded;
+            }
+            sync_single_panel_window(
+                PanelKind::Playlist,
+                &panel_windows.playlist,
+                &panel_windows.playlist_area,
+                &main_state.borrow(),
+            );
+        }
+        MainKeyboardShortcut::ShadeEqualizer => {
+            {
+                let mut state = main_state.borrow_mut();
+                state.equalizer_shaded = !state.equalizer_shaded;
+            }
+            sync_single_panel_window(
+                PanelKind::Equalizer,
+                &panel_windows.equalizer,
+                &panel_windows.equalizer_area,
+                &main_state.borrow(),
+            );
+        }
+    }
+    drawing_area.queue_draw();
+}
+
+fn resize_main_window(
+    window: &gtk::ApplicationWindow,
+    drawing_area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+) {
+    let height = if state.shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        MAIN_WINDOW_HEIGHT
+    };
+    drawing_area.set_content_height(height * DEFAULT_SCALE);
+    window.set_default_size(MAIN_WINDOW_WIDTH * DEFAULT_SCALE, height * DEFAULT_SCALE);
 }
 
 fn build_main_menu_popover(
@@ -1514,6 +1694,26 @@ impl MainWindowUiState {
         self.app_state.playlist.repeat()
     }
 
+    pub(crate) fn no_advance(&self) -> bool {
+        self.app_state.playlist.no_advance()
+    }
+
+    pub(crate) fn set_no_advance(&mut self, enabled: bool) {
+        self.app_state.playlist.set_no_advance(enabled);
+    }
+
+    pub(crate) fn toggle_shaded(&mut self) {
+        self.shaded = !self.shaded;
+    }
+
+    pub(crate) fn toggle_playlist_shaded(&mut self) {
+        self.playlist_shaded = !self.playlist_shaded;
+    }
+
+    pub(crate) fn toggle_equalizer_shaded(&mut self) {
+        self.equalizer_shaded = !self.equalizer_shaded;
+    }
+
     pub(crate) fn volume(&self) -> i32 {
         self.app_state.player.volume()
     }
@@ -1623,7 +1823,7 @@ impl MainWindowUiState {
             .find(|control| self.control_rect(*control).contains(x, y))
     }
 
-    fn activate_push(&mut self, button: MainPushButton) -> UiAction {
+    pub(crate) fn activate_push(&mut self, button: MainPushButton) -> UiAction {
         match button {
             MainPushButton::Close => UiAction::Quit,
             MainPushButton::Minimize => UiAction::Minimize,
@@ -1660,7 +1860,7 @@ impl MainWindowUiState {
         }
     }
 
-    fn activate_toggle(&mut self, toggle: MainToggleButton) {
+    pub(crate) fn activate_toggle(&mut self, toggle: MainToggleButton) {
         match toggle {
             MainToggleButton::Shuffle => {
                 let selected = !self.app_state.playlist.shuffle();
@@ -1995,7 +2195,11 @@ fn shortcut_matches(key: gtk::gdk::Key, state: gtk::gdk::ModifierType, accelerat
     let Some((shortcut_key, shortcut_mods)) = gtk::accelerator_parse(accelerator) else {
         return false;
     };
-    key == shortcut_key && state.contains(shortcut_mods)
+    let relevant_mods = state
+        & (gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::SHIFT_MASK
+            | gtk::gdk::ModifierType::ALT_MASK);
+    key == shortcut_key && relevant_mods == shortcut_mods
 }
 
 fn parse_time_ms(text: &str) -> Option<i64> {
