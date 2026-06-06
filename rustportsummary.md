@@ -67,6 +67,7 @@ Completed so far:
 - Ported Rust playlist row rendering over the skinned playlist background, including selected row background, current-row color, playlist numbering, and duration text.
 - Ported Rust playlist row scrolling and scrollbar dragging, including resized-playlist hit testing and deterministic e2e coverage for visible-row updates.
 - Wired Rust playlist bottom-menu actions for Select All/None/Invert, Remove Selected/Crop/All, and List New, with e2e coverage for row selection and entry mutation.
+- Added a Rust playlist right-click context popover with Remove Selected, Remove Dead Files, Select All, Select None, and Invert Selection actions, including e2e coverage for local dead-file pruning.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.

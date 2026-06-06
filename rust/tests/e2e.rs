@@ -5,7 +5,7 @@ use xmms_resuscitated::e2e::{
 };
 use xmms_resuscitated::player::PlayerState;
 use xmms_resuscitated::playlist::PlaylistSortKey;
-use xmms_resuscitated::ui::{PanelKind, PlaylistMenuKind};
+use xmms_resuscitated::ui::{PanelKind, PlaylistContextAction, PlaylistMenuKind};
 
 #[test]
 fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
@@ -678,6 +678,50 @@ fn playlist_remove_and_list_menu_items_modify_entries() {
         .click_panel(PanelTarget::PlaylistList)
         .activate_playlist_menu_item(0)
         .assert_playlist_len(0);
+}
+
+#[test]
+fn playlist_context_actions_select_and_remove_entries() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..3 {
+        app.accept_open_location(&format!("file:///tmp/context-{index}.mp3"));
+    }
+
+    app.activate_playlist_context_action(PlaylistContextAction::SelectAll)
+        .assert_playlist_selected(0, true)
+        .assert_playlist_selected(1, true)
+        .assert_playlist_selected(2, true)
+        .activate_playlist_context_action(PlaylistContextAction::SelectNone)
+        .assert_playlist_selected(0, false)
+        .assert_playlist_selected(1, false)
+        .assert_playlist_selected(2, false)
+        .select_playlist_entry(1)
+        .activate_playlist_context_action(PlaylistContextAction::RemoveSelected)
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/context-0.mp3")
+        .assert_playlist_entry(1, "file:///tmp/context-2.mp3");
+}
+
+#[test]
+fn playlist_context_remove_dead_keeps_existing_local_files_and_urls() {
+    let root = unique_temp_dir("xmms-rs-context-dead");
+    fs::create_dir_all(&root).unwrap();
+    let existing = root.join("existing.mp3");
+    fs::write(&existing, b"audio").unwrap();
+    let missing = root.join("missing.mp3");
+    let existing_uri = format!("file://{}", existing.display());
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.accept_open_location(existing.to_str().unwrap())
+        .accept_open_location(&format!("file://{}", missing.display()))
+        .accept_open_location("https://example.test/live.mp3")
+        .activate_playlist_context_action(PlaylistContextAction::RemoveDead)
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, &existing_uri)
+        .assert_playlist_entry(1, "https://example.test/live.mp3");
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

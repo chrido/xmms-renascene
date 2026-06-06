@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
-use crate::ui::{MainWindowUiState, PanelKind, PlaylistMenuKind, UiAction};
+use crate::ui::{MainWindowUiState, PanelKind, PlaylistContextAction, PlaylistMenuKind, UiAction};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerSettings {
@@ -265,6 +265,12 @@ impl UiE2e {
         let y = 174 + item as i32 * 18 + 8;
         self.state.playlist_press(x, y0 + (y - 174));
         self.state.playlist_release(x, y0 + (y - 174));
+        self.sync_windows();
+        self
+    }
+
+    pub fn activate_playlist_context_action(&mut self, action: PlaylistContextAction) -> &mut Self {
+        self.state.activate_playlist_context_action(action);
         self.sync_windows();
         self
     }

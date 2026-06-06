@@ -734,6 +734,7 @@ fn build_playlist_window(
     });
 
     add_file_drop_controller(&drawing_area, Rc::clone(main_state), false, false);
+    add_playlist_context_menu(&drawing_area, Rc::clone(main_state), main_area.clone());
 
     {
         let main_state = Rc::clone(main_state);
@@ -760,6 +761,52 @@ fn build_playlist_window(
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
+}
+
+fn add_playlist_context_menu(
+    area: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    main_area: gtk::DrawingArea,
+) {
+    let popover = gtk::Popover::new();
+    popover.set_has_arrow(false);
+    popover.set_parent(area);
+
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    for (label, action) in [
+        ("Remove Selected", PlaylistContextAction::RemoveSelected),
+        ("Remove Dead Files", PlaylistContextAction::RemoveDead),
+        ("Select All", PlaylistContextAction::SelectAll),
+        ("Select None", PlaylistContextAction::SelectNone),
+        ("Invert Selection", PlaylistContextAction::InvertSelection),
+    ] {
+        let button = gtk::Button::with_label(label);
+        button.set_halign(gtk::Align::Fill);
+        let state = Rc::clone(&main_state);
+        let area = area.clone();
+        let main_area = main_area.clone();
+        let popover = popover.clone();
+        button.connect_clicked(move |_| {
+            state.borrow_mut().activate_playlist_context_action(action);
+            popover.popdown();
+            area.queue_draw();
+            main_area.queue_draw();
+        });
+        menu_box.append(&button);
+    }
+    popover.set_child(Some(&menu_box));
+
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3);
+    right_click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let popover = popover.clone();
+        right_click.connect_pressed(move |_gesture, _n_press, x, y| {
+            popover.set_pointing_to(Some(&gtk::gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+            popover.popup();
+        });
+    }
+    area.add_controller(right_click);
 }
 
 fn build_equalizer_presets_popover(
@@ -969,6 +1016,15 @@ pub enum PlaylistMenuKind {
     Select,
     Misc,
     List,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistContextAction {
+    RemoveSelected,
+    RemoveDead,
+    SelectAll,
+    SelectNone,
+    InvertSelection,
 }
 
 impl PlaylistMenuKind {
@@ -1996,6 +2052,34 @@ impl MainWindowUiState {
         } else {
             PanelAction::None
         }
+    }
+
+    pub(crate) fn activate_playlist_context_action(
+        &mut self,
+        action: PlaylistContextAction,
+    ) -> bool {
+        let changed = match action {
+            PlaylistContextAction::RemoveSelected => {
+                self.app_state.playlist.remove_selected_or_current()
+            }
+            PlaylistContextAction::RemoveDead => self.app_state.playlist.remove_dead_files(),
+            PlaylistContextAction::SelectAll => {
+                self.app_state.playlist.select_all(true);
+                true
+            }
+            PlaylistContextAction::SelectNone => {
+                self.app_state.playlist.select_all(false);
+                true
+            }
+            PlaylistContextAction::InvertSelection => {
+                self.app_state.playlist.invert_selection();
+                true
+            }
+        };
+        if changed {
+            self.clamp_playlist_scroll_offset();
+        }
+        changed
     }
 
     fn playlist_visible_entries(&self) -> usize {
