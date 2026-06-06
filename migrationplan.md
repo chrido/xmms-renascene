@@ -216,3 +216,4 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [ ] Remove duplicated C compatibility scaffolding.
   - [x] Make Rust implementation the primary installed app.
   - [ ] Retire or archive the C implementation once parity is proven.
+    - Deferred: keep the C implementation as the non-installed `xmms-c` reference for now.
