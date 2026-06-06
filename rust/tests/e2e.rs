@@ -1,5 +1,6 @@
 use xmms_resuscitated::e2e::{MainTarget, MenuItem, PanelTarget, PlayerSettings, UiE2e, Window};
 use xmms_resuscitated::player::PlayerState;
+use xmms_resuscitated::ui::{PanelKind, PlaylistMenuKind};
 
 #[test]
 fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
@@ -162,6 +163,37 @@ fn playlist_top_right_buttons_shade_and_close_playlist_window() {
 
     app.click_panel(PanelTarget::PlaylistClose)
         .assert_window_hidden(Window::Playlist);
+}
+
+#[test]
+fn floating_panel_titlebars_are_draggable_without_breaking_buttons() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_equalizer_visible(true),
+    );
+
+    app.assert_panel_title_draggable(PanelKind::Equalizer)
+        .assert_panel_title_button_not_draggable(PanelKind::Equalizer)
+        .assert_panel_title_draggable(PanelKind::Playlist)
+        .assert_panel_title_button_not_draggable(PanelKind::Playlist);
+}
+
+#[test]
+fn playlist_bottom_buttons_open_their_submenus() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.assert_no_playlist_menu()
+        .click_panel(PanelTarget::PlaylistAdd)
+        .assert_playlist_menu(PlaylistMenuKind::Add)
+        .click_panel(PanelTarget::PlaylistRemove)
+        .assert_playlist_menu(PlaylistMenuKind::Remove)
+        .click_panel(PanelTarget::PlaylistSelect)
+        .assert_playlist_menu(PlaylistMenuKind::Select)
+        .click_panel(PanelTarget::PlaylistMisc)
+        .assert_playlist_menu(PlaylistMenuKind::Misc)
+        .click_panel(PanelTarget::PlaylistList)
+        .assert_playlist_menu(PlaylistMenuKind::List);
 }
 
 #[test]

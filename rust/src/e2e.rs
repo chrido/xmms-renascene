@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::config::Config;
 use crate::player::PlayerState;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
-use crate::ui::{MainWindowUiState, PanelKind, UiAction};
+use crate::ui::{MainWindowUiState, PanelKind, PlaylistMenuKind, UiAction};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerSettings {
@@ -60,6 +60,11 @@ pub enum PanelTarget {
     EqualizerClose,
     PlaylistShade,
     PlaylistClose,
+    PlaylistAdd,
+    PlaylistRemove,
+    PlaylistSelect,
+    PlaylistMisc,
+    PlaylistList,
 }
 
 impl PanelTarget {
@@ -76,6 +81,21 @@ impl PanelTarget {
             }
             Self::PlaylistClose => {
                 state.panel_click(PanelKind::Playlist, 268, 7);
+            }
+            Self::PlaylistAdd => {
+                state.panel_click(PanelKind::Playlist, 24, 212);
+            }
+            Self::PlaylistRemove => {
+                state.panel_click(PanelKind::Playlist, 53, 212);
+            }
+            Self::PlaylistSelect => {
+                state.panel_click(PanelKind::Playlist, 82, 212);
+            }
+            Self::PlaylistMisc => {
+                state.panel_click(PanelKind::Playlist, 111, 212);
+            }
+            Self::PlaylistList => {
+                state.panel_click(PanelKind::Playlist, 240, 212);
             }
         }
     }
@@ -272,6 +292,40 @@ impl UiE2e {
         assert!(
             !self.state.is_playlist_shaded(),
             "expected playlist to be unshaded"
+        );
+        self
+    }
+
+    pub fn assert_playlist_menu(&mut self, expected: PlaylistMenuKind) -> &mut Self {
+        assert_eq!(
+            self.state.playlist_menu(),
+            Some(expected),
+            "expected playlist {expected:?} menu to be open"
+        );
+        self
+    }
+
+    pub fn assert_no_playlist_menu(&mut self) -> &mut Self {
+        assert_eq!(
+            self.state.playlist_menu(),
+            None,
+            "expected no playlist menu to be open"
+        );
+        self
+    }
+
+    pub fn assert_panel_title_draggable(&mut self, panel: PanelKind) -> &mut Self {
+        assert!(
+            self.state.panel_title_drag_region(panel, 40, 7),
+            "expected {panel:?} titlebar to start a window drag"
+        );
+        self
+    }
+
+    pub fn assert_panel_title_button_not_draggable(&mut self, panel: PanelKind) -> &mut Self {
+        assert!(
+            !self.state.panel_title_drag_region(panel, 268, 7),
+            "expected {panel:?} close button not to start a window drag"
         );
         self
     }

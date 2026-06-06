@@ -46,6 +46,8 @@ Completed so far:
 - Added a Rust UI e2e harness for scripted startup settings, main-window clicks, and window visibility assertions. Current scenarios cover titlebar buttons, visible main menu, transport buttons, shuffle/repeat, sliders, playlist/equalizer toggles, and startup visibility settings.
 - Moved Rust main-window input handling to capture-phase GTK window controllers so clicks reach the skinned controls reliably, and added a visible popover menu for the main menu button.
 - Wired playlist and equalizer top-right titlebar controls in the Rust GTK preview: shade toggles shrink/restore the skinned windows, and close hides the panel and clears the main toggle state.
+- Wired floating equalizer and playlist titlebar drags through GTK4 toplevel movement for the undecorated preview windows.
+- Wired the playlist bottom Add, Remove, Select, Misc, and List buttons to open GTK popover submenus using the C playlist button coordinates.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.

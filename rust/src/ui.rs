@@ -179,9 +179,11 @@ fn build_main_menu_popover(
         let popover = popover.clone();
         let main_state = Rc::clone(main_state);
         preferences.connect_clicked(move |_| {
-            let mut state = main_state.borrow_mut();
-            state.set_menu_visible(false);
-            state.set_preferences_visible(true);
+            {
+                let mut state = main_state.borrow_mut();
+                state.set_menu_visible(false);
+                state.set_preferences_visible(true);
+            }
             popover.popdown();
             preferences_window.present();
         });
@@ -224,7 +226,8 @@ impl PanelWindows {
         main_area: &gtk::DrawingArea,
     ) -> Self {
         let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
-        let (playlist, playlist_area) = build_playlist_window(app, skin, main_state, main_area);
+        let (playlist, playlist_area, _playlist_menu) =
+            build_playlist_window(app, skin, main_state, main_area);
         let preferences = build_preferences_window(app, main_state);
         Self {
             equalizer,
@@ -277,6 +280,7 @@ fn build_equalizer_window(
         Rc::clone(main_state),
         main_area.clone(),
         PanelKind::Equalizer,
+        None,
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
@@ -287,7 +291,7 @@ fn build_playlist_window(
     skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
-) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
+) -> (gtk::ApplicationWindow, gtk::DrawingArea, gtk::Popover) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Playlist")
@@ -324,15 +328,36 @@ fn build_playlist_window(
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
     });
+    let playlist_menu = build_playlist_menu_popover(&drawing_area);
     add_panel_click_controller(
         &window,
         &drawing_area,
         Rc::clone(main_state),
         main_area.clone(),
         PanelKind::Playlist,
+        Some(playlist_menu.clone()),
     );
     window.set_child(Some(&drawing_area));
-    (window, drawing_area)
+    (window, drawing_area, playlist_menu)
+}
+
+fn build_playlist_menu_popover(parent: &gtk::DrawingArea) -> gtk::Popover {
+    let popover = gtk::Popover::builder()
+        .autohide(true)
+        .has_arrow(false)
+        .build();
+    popover.set_parent(parent);
+    popover
+}
+
+fn set_playlist_menu_items(popover: &gtk::Popover, menu: PlaylistMenuKind) {
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for label in menu.labels() {
+        let item = gtk::Button::with_label(label);
+        item.set_halign(gtk::Align::Fill);
+        menu_box.append(&item);
+    }
+    popover.set_child(Some(&menu_box));
 }
 
 fn build_preferences_window(
@@ -366,9 +391,37 @@ fn build_preferences_window(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PanelKind {
+pub enum PanelKind {
     Equalizer,
     Playlist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistMenuKind {
+    Add,
+    Remove,
+    Select,
+    Misc,
+    List,
+}
+
+impl PlaylistMenuKind {
+    fn labels(self) -> &'static [&'static str] {
+        match self {
+            Self::Add => &["Add URL", "Add Directory", "Add File"],
+            Self::Remove => &["Remove Misc", "Remove All", "Crop", "Remove Selected"],
+            Self::Select => &["Invert Selection", "Select None", "Select All"],
+            Self::Misc => &["Sort List", "File Info", "Options"],
+            Self::List => &["New List", "Save List", "Load List"],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelAction {
+    None,
+    Changed,
+    ShowPlaylistMenu(PlaylistMenuKind),
 }
 
 fn add_panel_click_controller(
@@ -377,6 +430,7 @@ fn add_panel_click_controller(
     main_state: Rc<RefCell<MainWindowUiState>>,
     main_area: gtk::DrawingArea,
     kind: PanelKind,
+    playlist_menu: Option<gtk::Popover>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(1);
@@ -384,16 +438,72 @@ fn add_panel_click_controller(
     {
         let area = area.clone();
         let window = window.clone();
+        let main_state = Rc::clone(&main_state);
+        click.connect_pressed(move |gesture, _n_press, x, y| {
+            let (base_x, base_y) =
+                panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            if !main_state
+                .borrow()
+                .panel_title_drag_region(kind, base_x, base_y)
+            {
+                return;
+            }
+
+            let Some(device) = gesture.current_event_device() else {
+                return;
+            };
+            let Some(surface) = window.surface() else {
+                return;
+            };
+            let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
+                return;
+            };
+            toplevel.begin_move(
+                &device,
+                gesture.current_button() as i32,
+                x,
+                y,
+                gesture.current_event_time(),
+            );
+        });
+    }
+    {
+        let area = area.clone();
+        let window = window.clone();
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
-            let changed = main_state.borrow_mut().panel_click(kind, x, y);
-            if changed {
-                sync_single_panel_window(kind, &window, &area, &main_state.borrow());
-                main_area.queue_draw();
+            let action = main_state.borrow_mut().panel_click(kind, x, y);
+            match action {
+                PanelAction::None => {}
+                PanelAction::Changed => {
+                    sync_single_panel_window(kind, &window, &area, &main_state.borrow());
+                    main_area.queue_draw();
+                }
+                PanelAction::ShowPlaylistMenu(menu) => {
+                    if let Some(popover) = playlist_menu.as_ref() {
+                        set_playlist_menu_items(popover, menu);
+                        show_playlist_menu(popover, &area, menu);
+                    }
+                    area.queue_draw();
+                }
             }
         });
     }
     window.add_controller(click);
+}
+
+fn show_playlist_menu(popover: &gtk::Popover, area: &gtk::DrawingArea, menu: PlaylistMenuKind) {
+    let (base_x, base_y, base_width, base_height) = playlist_menu_rect(menu);
+    let scale_x = area.allocated_width().max(1) as f64 / f64::from(PLAYLIST_DEFAULT_WIDTH);
+    let scale_y = area.allocated_height().max(1) as f64 / f64::from(PLAYLIST_DEFAULT_HEIGHT);
+    let rect = gtk::gdk::Rectangle::new(
+        (f64::from(base_x) * scale_x) as i32,
+        (f64::from(base_y) * scale_y) as i32,
+        (f64::from(base_width) * scale_x).max(1.0) as i32,
+        (f64::from(base_height) * scale_y).max(1.0) as i32,
+    );
+    popover.set_pointing_to(Some(&rect));
+    popover.popup();
 }
 
 fn panel_event_to_base_coords(
@@ -527,6 +637,7 @@ pub(crate) struct MainWindowUiState {
     menu_visible: bool,
     equalizer_shaded: bool,
     playlist_shaded: bool,
+    playlist_menu: Option<PlaylistMenuKind>,
     preferences_visible: bool,
     position_position: i32,
     active: Option<MainControl>,
@@ -548,6 +659,7 @@ impl MainWindowUiState {
             menu_visible: false,
             equalizer_shaded: false,
             playlist_shaded: false,
+            playlist_menu: None,
             preferences_visible: false,
             position_position: 0,
             active: None,
@@ -605,6 +717,10 @@ impl MainWindowUiState {
         self.playlist_shaded
     }
 
+    pub(crate) fn playlist_menu(&self) -> Option<PlaylistMenuKind> {
+        self.playlist_menu
+    }
+
     pub(crate) fn is_preferences_visible(&self) -> bool {
         self.preferences_visible
     }
@@ -613,28 +729,54 @@ impl MainWindowUiState {
         self.preferences_visible = visible;
     }
 
-    pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> bool {
-        if !(3..12).contains(&y) {
-            return false;
+    pub(crate) fn panel_title_drag_region(&self, kind: PanelKind, x: i32, y: i32) -> bool {
+        let title_height = match kind {
+            PanelKind::Equalizer => MAIN_TITLEBAR_HEIGHT,
+            PanelKind::Playlist => 20,
+        };
+        y >= 0 && y < title_height && !self.panel_title_button_hit(kind, x, y)
+    }
+
+    pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> PanelAction {
+        if kind == PanelKind::Playlist {
+            self.playlist_menu = None;
         }
 
-        if (264..273).contains(&x) {
-            match kind {
-                PanelKind::Equalizer => self.app_state.config.equalizer_visible = false,
-                PanelKind::Playlist => self.app_state.config.playlist_visible = false,
+        if self.panel_title_button_hit(kind, x, y) {
+            if (264..273).contains(&x) {
+                match kind {
+                    PanelKind::Equalizer => self.app_state.config.equalizer_visible = false,
+                    PanelKind::Playlist => self.app_state.config.playlist_visible = false,
+                }
+                return PanelAction::Changed;
             }
-            return true;
-        }
 
-        if (254..263).contains(&x) {
-            match kind {
-                PanelKind::Equalizer => self.equalizer_shaded = !self.equalizer_shaded,
-                PanelKind::Playlist => self.playlist_shaded = !self.playlist_shaded,
+            if (254..263).contains(&x) {
+                match kind {
+                    PanelKind::Equalizer => self.equalizer_shaded = !self.equalizer_shaded,
+                    PanelKind::Playlist => self.playlist_shaded = !self.playlist_shaded,
+                }
+                return PanelAction::Changed;
             }
-            return true;
         }
 
-        false
+        if kind == PanelKind::Playlist && !self.playlist_shaded {
+            if let Some(menu) = playlist_menu_at(x, y) {
+                self.playlist_menu = Some(menu);
+                return PanelAction::ShowPlaylistMenu(menu);
+            }
+        }
+
+        PanelAction::None
+    }
+
+    fn panel_title_button_hit(&self, kind: PanelKind, x: i32, y: i32) -> bool {
+        (3..12).contains(&y)
+            && match kind {
+                PanelKind::Equalizer | PanelKind::Playlist => {
+                    (254..263).contains(&x) || (264..273).contains(&x)
+                }
+            }
     }
 
     pub(crate) fn player_state(&self) -> PlayerState {
@@ -946,6 +1088,54 @@ fn push_button_rect(button: MainPushButton) -> ControlRect {
     }
 }
 
+fn playlist_menu_at(x: i32, y: i32) -> Option<PlaylistMenuKind> {
+    [
+        (
+            PlaylistMenuKind::Add,
+            ControlRect::new(12, playlist_button_y(), 25, 18),
+        ),
+        (
+            PlaylistMenuKind::Remove,
+            ControlRect::new(41, playlist_button_y(), 25, 18),
+        ),
+        (
+            PlaylistMenuKind::Select,
+            ControlRect::new(70, playlist_button_y(), 25, 18),
+        ),
+        (
+            PlaylistMenuKind::Misc,
+            ControlRect::new(99, playlist_button_y(), 25, 18),
+        ),
+        (
+            PlaylistMenuKind::List,
+            ControlRect::new(PLAYLIST_DEFAULT_WIDTH - 46, playlist_button_y(), 23, 18),
+        ),
+    ]
+    .into_iter()
+    .find_map(|(menu, rect)| rect.contains(x, y).then_some(menu))
+}
+
+fn playlist_menu_rect(menu: PlaylistMenuKind) -> (i32, i32, i32, i32) {
+    let (x, items) = match menu {
+        PlaylistMenuKind::Add => (12, 3),
+        PlaylistMenuKind::Remove => (41, 4),
+        PlaylistMenuKind::Select => (70, 3),
+        PlaylistMenuKind::Misc => (99, 3),
+        PlaylistMenuKind::List => (PLAYLIST_DEFAULT_WIDTH - 46, 3),
+    };
+    let item_height = 18;
+    (
+        x - 1,
+        playlist_button_y() - ((items - 1) * item_height) - 1,
+        25,
+        items * item_height,
+    )
+}
+
+const fn playlist_button_y() -> i32 {
+    PLAYLIST_DEFAULT_HEIGHT - 29
+}
+
 fn toggle_button_rect(toggle: MainToggleButton) -> ControlRect {
     match toggle {
         MainToggleButton::Shuffle => ControlRect::new(164, 89, 46, 15),
@@ -1023,8 +1213,6 @@ fn apply_ui_action(
         }
         UiAction::ShowMenu => {
             show_main_menu(menu_popover, drawing_area);
-            let state = Rc::clone(state);
-            menu_popover.connect_closed(move |_| state.borrow_mut().set_menu_visible(false));
         }
     }
 }
