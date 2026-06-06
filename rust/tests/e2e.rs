@@ -2148,6 +2148,24 @@ fn playlist_context_actions_select_and_remove_entries() {
 }
 
 #[test]
+fn playlist_delete_key_removes_selected_entries_only() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..4 {
+        app.accept_open_location(&format!("file:///tmp/delete-key-{index}.mp3"));
+    }
+
+    app.press_playlist_delete()
+        .assert_playlist_len(4)
+        .select_playlist_entry(1)
+        .select_playlist_entry(3)
+        .press_playlist_delete()
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/delete-key-0.mp3")
+        .assert_playlist_entry(1, "file:///tmp/delete-key-2.mp3");
+}
+
+#[test]
 fn playlist_context_remove_dead_keeps_existing_local_files_and_urls() {
     let root = unique_temp_dir("xmms-rs-context-dead");
     fs::create_dir_all(&root).unwrap();

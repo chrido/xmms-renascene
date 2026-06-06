@@ -408,6 +408,12 @@ fn build_preview_window(
         let window = window.clone();
         let drawing_area = drawing_area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+            if handle_main_playlist_key_pressed(&main_state, key, state) {
+                drawing_area.queue_draw();
+                sync_panel_windows(&panel_windows, &main_state.borrow());
+                resize_main_window(&window, &drawing_area, &main_state.borrow());
+                return gtk::glib::Propagation::Stop;
+            }
             let Some(shortcut) = keyboard_shortcut_from_event(key, state) else {
                 return gtk::glib::Propagation::Proceed;
             };
@@ -612,6 +618,28 @@ fn keyboard_shortcut_from_event(
     .find_map(|(accelerator, shortcut)| {
         shortcut_matches(key, state, accelerator).then_some(shortcut)
     })
+}
+
+fn handle_main_playlist_key_pressed(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    if state.intersects(
+        gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return false;
+    }
+    if key != gtk::gdk::Key::Delete && key != gtk::gdk::Key::KP_Delete {
+        return false;
+    }
+    let mut ui_state = main_state.borrow_mut();
+    if !ui_state.app_state.config.playlist_visible {
+        return false;
+    }
+    ui_state.remove_selected_playlist_entries()
 }
 
 fn handle_keyboard_shortcut(
@@ -1272,6 +1300,9 @@ fn handle_playlist_key_pressed(
             | gtk::gdk::ModifierType::META_MASK,
     ) {
         return false;
+    }
+    if key == gtk::gdk::Key::Delete || key == gtk::gdk::Key::KP_Delete {
+        return main_state.borrow_mut().remove_selected_playlist_entries();
     }
     if key == gtk::gdk::Key::slash {
         main_state.borrow_mut().start_playlist_search();
@@ -4296,6 +4327,10 @@ impl MainWindowUiState {
 
     pub(crate) fn sort_selected_playlist_by(&mut self, key: PlaylistSortKey) {
         self.app_state.playlist.sort_selected_by(key);
+    }
+
+    pub(crate) fn remove_selected_playlist_entries(&mut self) -> bool {
+        self.app_state.playlist.remove_selected()
     }
 
     pub(crate) fn reverse_playlist(&mut self) {

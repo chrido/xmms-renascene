@@ -852,6 +852,12 @@ impl UiE2e {
         self
     }
 
+    pub fn press_playlist_delete(&mut self) -> &mut Self {
+        self.state.remove_selected_playlist_entries();
+        self.sync_windows();
+        self
+    }
+
     pub fn reverse_playlist(&mut self) -> &mut Self {
         self.state.reverse_playlist();
         self.sync_windows();

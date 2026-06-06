@@ -268,6 +268,18 @@ impl Playlist {
         true
     }
 
+    pub fn remove_selected(&mut self) -> bool {
+        let old_position = self.position;
+        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let old_len = self.entries.len();
+        self.entries.retain(|entry| !entry.selected);
+        if self.entries.len() == old_len {
+            return false;
+        }
+        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        true
+    }
+
     pub fn crop_to_selected_or_current(&mut self) -> bool {
         let old_position = self.position;
         let current = old_position.and_then(|position| self.entries.get(position).cloned());
