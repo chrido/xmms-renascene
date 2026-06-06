@@ -9,6 +9,21 @@ pub struct XpmImage {
 }
 
 impl XpmImage {
+    pub fn from_argb_pixels(width: usize, height: usize, argb: Vec<u32>) -> Result<Self, XpmError> {
+        if width == 0 || height == 0 || argb.len() != width * height {
+            return Err(XpmError::InvalidPixels {
+                width,
+                height,
+                len: argb.len(),
+            });
+        }
+        Ok(Self {
+            width,
+            height,
+            argb,
+        })
+    }
+
     pub fn parse(contents: &str) -> Result<Self, XpmError> {
         let strings = extract_strings(contents);
         if strings.is_empty() {
@@ -95,6 +110,11 @@ pub enum XpmError {
         expected: usize,
         actual: usize,
     },
+    InvalidPixels {
+        width: usize,
+        height: usize,
+        len: usize,
+    },
 }
 
 impl fmt::Display for XpmError {
@@ -113,6 +133,12 @@ impl fmt::Display for XpmError {
                 write!(
                     f,
                     "truncated XPM data: expected at least {expected} strings, got {actual}"
+                )
+            }
+            XpmError::InvalidPixels { width, height, len } => {
+                write!(
+                    f,
+                    "invalid ARGB pixel buffer for {width}x{height}: {len} pixels"
                 )
             }
         }

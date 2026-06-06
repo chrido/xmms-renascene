@@ -6,6 +6,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use image::GenericImageView;
 use xpm::XpmImage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -211,25 +212,83 @@ impl DefaultSkin {
                 continue;
             }
 
-            let info = kind.info();
-            let path = dir.join(format!("{}.xpm", info.file_stem));
-            if !path.exists() {
+            let Some(path) = Self::find_skin_file(dir, kind.info().file_stem) else {
                 continue;
-            }
+            };
 
-            let contents = fs::read_to_string(&path)?;
-            let image = XpmImage::parse(&contents).map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("{}: {err}", path.display()),
-                )
-            })?;
+            let image = Self::load_skin_image(&path)?;
             pixmaps.insert(kind, image);
         }
 
         apply_balance_fallback(&mut pixmaps);
 
         Ok(Self { pixmaps })
+    }
+
+    fn find_skin_file(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
+        let lower = name.to_ascii_lowercase();
+        let upper = name.to_ascii_uppercase();
+        let mut title = lower.clone();
+        if let Some(first) = title.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        let cases = [name, lower.as_str(), upper.as_str(), title.as_str()];
+        let exts = [".bmp", ".BMP", ".png", ".PNG", ".xpm", ".XPM"];
+
+        for ext in exts {
+            for case in cases {
+                let path = dir.join(format!("{case}{ext}"));
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn load_skin_image(path: &Path) -> io::Result<XpmImage> {
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("xpm"))
+        {
+            let contents = fs::read_to_string(path)?;
+            return XpmImage::parse(&contents).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{}: {err}", path.display()),
+                )
+            });
+        }
+
+        let decoded = image::open(path).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {err}", path.display()),
+            )
+        })?;
+        let (width, height) = decoded.dimensions();
+        let rgba = decoded.to_rgba8();
+        let mut argb = Vec::with_capacity((width as usize) * (height as usize));
+
+        for pixel in rgba.pixels() {
+            let [r, g, b, mut a] = pixel.0;
+            if r == 48 && g == 255 && b == 50 {
+                a = 0;
+            }
+            let pr = ((u16::from(r) * u16::from(a) + 127) / 255) as u32;
+            let pg = ((u16::from(g) * u16::from(a) + 127) / 255) as u32;
+            let pb = ((u16::from(b) * u16::from(a) + 127) / 255) as u32;
+            argb.push((u32::from(a) << 24) | (pr << 16) | (pg << 8) | pb);
+        }
+
+        XpmImage::from_argb_pixels(width as usize, height as usize, argb).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: {err}", path.display()),
+            )
+        })
     }
 
     pub fn loaded_pixmap_count(&self) -> usize {
@@ -266,5 +325,24 @@ mod tests {
         assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
         assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 275);
         assert!(skin.get(SkinPixmapKind::Balance).is_some());
+    }
+
+    #[test]
+    fn directory_loader_accepts_png_skin_files() {
+        let tmp = std::env::temp_dir().join(format!("xmms-rs-skin-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut image = image::RgbaImage::new(1, 1);
+        image.put_pixel(0, 0, image::Rgba([48, 255, 50, 255]));
+        image.save(tmp.join("main.png")).unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        let main = skin.get(SkinPixmapKind::Main).unwrap();
+        assert_eq!(main.width(), 1);
+        assert_eq!(main.height(), 1);
+        assert_eq!(main.pixel_argb(0, 0), Some(0));
+
+        std::fs::remove_dir_all(tmp).unwrap();
     }
 }

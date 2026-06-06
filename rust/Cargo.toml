@@ -15,3 +15,4 @@ path = "src/main.rs"
 [dependencies]
 cairo = { version = "0.22.0", package = "cairo-rs" }
 gtk = { version = "0.11.3", package = "gtk4", features = ["v4_6"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "bmp"] }
