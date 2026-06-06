@@ -133,6 +133,76 @@ pub struct DefaultSkin {
 }
 
 impl DefaultSkin {
+    pub fn load_bundled() -> io::Result<Self> {
+        const BUNDLED_XPMS: &[(SkinPixmapKind, &str)] = &[
+            (
+                SkinPixmapKind::Main,
+                include_str!("../../../data/defskin/main.xpm"),
+            ),
+            (
+                SkinPixmapKind::CButtons,
+                include_str!("../../../data/defskin/cbuttons.xpm"),
+            ),
+            (
+                SkinPixmapKind::Titlebar,
+                include_str!("../../../data/defskin/titlebar.xpm"),
+            ),
+            (
+                SkinPixmapKind::ShufRep,
+                include_str!("../../../data/defskin/shufrep.xpm"),
+            ),
+            (
+                SkinPixmapKind::Text,
+                include_str!("../../../data/defskin/text.xpm"),
+            ),
+            (
+                SkinPixmapKind::Volume,
+                include_str!("../../../data/defskin/volume.xpm"),
+            ),
+            (
+                SkinPixmapKind::MonoStereo,
+                include_str!("../../../data/defskin/monoster.xpm"),
+            ),
+            (
+                SkinPixmapKind::PlayPause,
+                include_str!("../../../data/defskin/playpaus.xpm"),
+            ),
+            (
+                SkinPixmapKind::Numbers,
+                include_str!("../../../data/defskin/nums_ex.xpm"),
+            ),
+            (
+                SkinPixmapKind::PosBar,
+                include_str!("../../../data/defskin/posbar.xpm"),
+            ),
+            (
+                SkinPixmapKind::PlEdit,
+                include_str!("../../../data/defskin/pledit.xpm"),
+            ),
+            (
+                SkinPixmapKind::EqMain,
+                include_str!("../../../data/defskin/eqmain.xpm"),
+            ),
+            (
+                SkinPixmapKind::EqEx,
+                include_str!("../../../data/defskin/eq_ex.xpm"),
+            ),
+        ];
+
+        let mut pixmaps = BTreeMap::new();
+        for (kind, contents) in BUNDLED_XPMS {
+            let image = XpmImage::parse(contents).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("bundled {}.xpm: {err}", kind.info().file_stem),
+                )
+            })?;
+            pixmaps.insert(*kind, image);
+        }
+        apply_balance_fallback(&mut pixmaps);
+        Ok(Self { pixmaps })
+    }
+
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
         let mut pixmaps = BTreeMap::new();
 
@@ -157,11 +227,7 @@ impl DefaultSkin {
             pixmaps.insert(kind, image);
         }
 
-        if !pixmaps.contains_key(&SkinPixmapKind::Balance) {
-            if let Some(volume) = pixmaps.get(&SkinPixmapKind::Volume).cloned() {
-                pixmaps.insert(SkinPixmapKind::Balance, volume);
-            }
-        }
+        apply_balance_fallback(&mut pixmaps);
 
         Ok(Self { pixmaps })
     }
@@ -175,6 +241,14 @@ impl DefaultSkin {
     }
 }
 
+fn apply_balance_fallback(pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>) {
+    if !pixmaps.contains_key(&SkinPixmapKind::Balance) {
+        if let Some(volume) = pixmaps.get(&SkinPixmapKind::Volume).cloned() {
+            pixmaps.insert(SkinPixmapKind::Balance, volume);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +258,13 @@ mod tests {
         assert_eq!(SkinPixmapKind::Main.info().width, 275);
         assert_eq!(SkinPixmapKind::EqEx.info().height, 50);
         assert_eq!(SkinPixmapKind::Numbers.info().file_stem, "nums_ex");
+    }
+
+    #[test]
+    fn bundled_default_skin_loads_without_filesystem_lookup() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
+        assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 275);
+        assert!(skin.get(SkinPixmapKind::Balance).is_some());
     }
 }

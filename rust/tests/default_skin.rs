@@ -9,8 +9,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 fn parses_all_bundled_default_xpm_files() {
-    let skin_dir = repo_root().join("data").join("defskin");
-    let skin = DefaultSkin::load_from_dir(&skin_dir).unwrap();
+    let skin = DefaultSkin::load_bundled().unwrap();
 
     assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
 
@@ -23,6 +22,7 @@ fn parses_all_bundled_default_xpm_files() {
                 skin.get(SkinPixmapKind::Volume).unwrap().height()
             );
         }
+
         assert_eq!(image.pixels_argb().len(), image.width() * image.height());
     }
 
@@ -30,6 +30,21 @@ fn parses_all_bundled_default_xpm_files() {
     assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().height(), 116);
     assert_eq!(skin.get(SkinPixmapKind::Titlebar).unwrap().width(), 344);
     assert_eq!(skin.get(SkinPixmapKind::EqMain).unwrap().height(), 315);
+}
+
+#[test]
+fn directory_default_skin_loader_matches_bundled_loader() {
+    let skin_dir = repo_root().join("data").join("defskin");
+    let from_dir = DefaultSkin::load_from_dir(&skin_dir).unwrap();
+    let bundled = DefaultSkin::load_bundled().unwrap();
+
+    for kind in SkinPixmapKind::ALL {
+        assert_eq!(
+            from_dir.get(kind).unwrap().pixels_argb(),
+            bundled.get(kind).unwrap().pixels_argb(),
+            "{kind:?}"
+        );
+    }
 }
 
 #[test]

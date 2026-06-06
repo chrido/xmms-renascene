@@ -16,6 +16,7 @@ Completed so far:
 - Ported initial playlist and M3U handling, including podcast metadata markers.
 - Ported a manual XPM parser from the C implementation's behavior.
 - Added a default skin loader for `data/defskin/*.xpm`.
+- Embedded bundled default skin XPM assets in the Rust crate for filesystem-independent startup.
 - Added Cairo conversion for parsed XPM pixels.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
@@ -63,7 +64,7 @@ cd rust
 cargo run
 ```
 
-This loads all default skin pixmaps and prints a CLI smoke message.
+This loads all bundled default skin pixmaps and prints a CLI smoke message.
 
 To open the Rust GTK preview:
 

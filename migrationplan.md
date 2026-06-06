@@ -25,7 +25,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Track window visibility, docking, shading, scale, sticky, easy-move, playlist position, equalizer state, visualization state, and podcast preferences.
 
 - [ ] Complete skin system.
-  - [ ] Load default skin assets from bundled resources.
+  - [x] Load default skin assets from bundled resources.
   - [ ] Load external BMP, PNG, and XPM skin files.
   - [ ] Support `.wsz`, `.zip`, `.tar`, `.tar.gz`, and `.tar.bz2` skin archives.
   - [ ] Port `viscolor.txt` parsing.

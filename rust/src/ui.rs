@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -10,12 +9,12 @@ const MAINWIN_WIDTH: i32 = 275;
 const MAINWIN_HEIGHT: i32 = 116;
 const DEFAULT_SCALE: i32 = 2;
 
-pub fn run_default_skin_preview(skin_dir: PathBuf) {
-    run_preview_application(skin_dir, PreviewMode::Interactive);
+pub fn run_default_skin_preview() {
+    run_preview_application(PreviewMode::Interactive);
 }
 
-pub fn run_default_skin_preview_smoke(skin_dir: PathBuf) {
-    run_preview_application(skin_dir, PreviewMode::Smoke);
+pub fn run_default_skin_preview_smoke() {
+    run_preview_application(PreviewMode::Smoke);
 }
 
 enum PreviewMode {
@@ -23,14 +22,14 @@ enum PreviewMode {
     Smoke,
 }
 
-fn run_preview_application(skin_dir: PathBuf, mode: PreviewMode) {
+fn run_preview_application(mode: PreviewMode) {
     let app = gtk::Application::builder()
         .application_id("org.xmms.Resuscitated.RustPreview")
         .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
     app.connect_activate(move |app| {
-        if let Err(err) = build_preview_window(app, skin_dir.clone()) {
+        if let Err(err) = build_preview_window(app) {
             eprintln!("xmms-rs: failed to create GTK preview: {err}");
             app.quit();
             return;
@@ -45,8 +44,8 @@ fn run_preview_application(skin_dir: PathBuf, mode: PreviewMode) {
     app.run_with_args(&["xmms-rs"]);
 }
 
-fn build_preview_window(app: &gtk::Application, skin_dir: PathBuf) -> Result<(), String> {
-    let skin = DefaultSkin::load_from_dir(&skin_dir).map_err(|err| err.to_string())?;
+fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
+    let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
     let main = skin
         .get(SkinPixmapKind::Main)
         .ok_or_else(|| "default main skin pixmap is missing".to_string())?;
