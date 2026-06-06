@@ -42,7 +42,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Draw docked panel composition for main, equalizer, and playlist windows.
 
 - [ ] Port widget framework.
-  - [ ] Port `Widget` list management and hit testing.
+  - [x] Port `Widget` list management and hit testing.
   - [ ] Port push buttons.
   - [ ] Port toggle buttons.
   - [ ] Port scrolling text boxes.
