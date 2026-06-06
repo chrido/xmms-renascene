@@ -3044,7 +3044,16 @@ fn sync_single_panel_window_from_state(
         let (visible, shaded, width, full_height) = panel_window_values(kind, &state);
         (visible, shaded, width, full_height, state.scale_factor())
     };
-    sync_single_panel_window_values(window, area, visible, shaded, width, full_height, scale);
+    sync_single_panel_window_values(
+        window,
+        area,
+        visible,
+        shaded,
+        width,
+        full_height,
+        scale,
+        kind == PanelKind::Playlist && !shaded,
+    );
 }
 
 fn panel_window_values(kind: PanelKind, state: &MainWindowUiState) -> (bool, bool, i32, i32) {
@@ -3072,6 +3081,7 @@ fn sync_single_panel_window_values(
     width: i32,
     full_height: i32,
     scale: f64,
+    resizable: bool,
 ) {
     if !visible {
         window.hide();
@@ -3084,7 +3094,10 @@ fn sync_single_panel_window_values(
     };
     area.set_content_width(scale_dim(width, scale));
     area.set_content_height(scale_dim(height, scale));
+    window.set_resizable(resizable);
     window.set_default_size(scale_dim(width, scale), scale_dim(height, scale));
+    area.queue_resize();
+    window.queue_resize();
     window.present();
     area.queue_draw();
 }
@@ -3104,6 +3117,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         windows
             .equalizer_area
             .set_content_height(scale_dim(height, scale));
+        windows.equalizer.set_resizable(false);
         windows.equalizer.set_default_size(
             scale_dim(EQUALIZER_WINDOW_WIDTH, scale),
             scale_dim(height, scale),
@@ -3126,10 +3140,13 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         windows
             .playlist_area
             .set_content_height(scale_dim(height, scale));
+        windows.playlist.set_resizable(!state.playlist_shaded);
         windows.playlist.set_default_size(
             scale_dim(state.playlist_width, scale),
             scale_dim(height, scale),
         );
+        windows.playlist_area.queue_resize();
+        windows.playlist.queue_resize();
         windows.playlist.present();
         windows.playlist_area.queue_draw();
     } else {
