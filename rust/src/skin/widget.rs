@@ -616,6 +616,62 @@ impl HorizontalSlider {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberDisplay {
+    widget: Widget,
+    skin: SkinPixmapKind,
+    value: i32,
+}
+
+impl NumberDisplay {
+    pub const WIDTH: i32 = 9;
+    pub const HEIGHT: i32 = 13;
+    pub const BLANK: i32 = 10;
+    pub const DASH: i32 = 11;
+
+    pub fn new(id: WidgetId, x: i32, y: i32, skin: SkinPixmapKind) -> Self {
+        Self {
+            widget: Widget::new(
+                id,
+                WidgetRect {
+                    x,
+                    y,
+                    width: Self::WIDTH,
+                    height: Self::HEIGHT,
+                },
+            ),
+            skin,
+            value: Self::BLANK,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn value(&self) -> i32 {
+        self.value
+    }
+
+    pub fn set_value(&mut self, value: i32) {
+        self.value = value;
+        self.widget.queue_draw();
+    }
+
+    pub fn source(&self) -> SkinSource {
+        let digit = if (0..=Self::DASH).contains(&self.value) {
+            self.value
+        } else {
+            Self::DASH
+        };
+        SkinSource {
+            kind: self.skin,
+            x: digit * Self::WIDTH,
+            y: 0,
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -1041,5 +1097,30 @@ mod tests {
         slider.set_draw_frame(false);
         assert!(!slider.draw_frame());
         assert!(slider.widget().needs_redraw());
+    }
+
+    #[test]
+    fn number_display_defaults_to_blank_and_maps_invalid_to_dash() {
+        let mut number = NumberDisplay::new(WidgetId(5), 3, 4, SkinPixmapKind::Numbers);
+        assert_eq!(number.value(), NumberDisplay::BLANK);
+        assert_eq!(
+            number.source(),
+            SkinSource {
+                kind: SkinPixmapKind::Numbers,
+                x: 90,
+                y: 0
+            }
+        );
+        assert_eq!(number.widget().rect().width, 9);
+        assert_eq!(number.widget().rect().height, 13);
+
+        number.set_value(7);
+        assert_eq!(number.source().x, 63);
+        assert!(number.widget().needs_redraw());
+
+        number.set_value(12);
+        assert_eq!(number.source().x, 99);
+        number.set_value(-1);
+        assert_eq!(number.source().x, 99);
     }
 }
