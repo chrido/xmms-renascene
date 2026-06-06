@@ -9,12 +9,13 @@ use crate::app_state::AppState;
 use crate::player::{equalizer_position_to_db, PlayerState};
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
-    render_playlist_rows, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
-    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
-    PlaylistRowRenderEntry, PlaylistRowsRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    docked_panel_size, render_equalizer_state, render_main_player_state, render_playlist_frame,
+    render_playlist_menu, render_playlist_rows, DockedPanelState, EqualizerControl,
+    EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState,
+    PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowRenderEntry,
+    PlaylistRowsRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
+    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
@@ -1805,6 +1806,41 @@ impl MainWindowUiState {
         PanelVisibility {
             equalizer: self.app_state.config.equalizer_visible,
             playlist: self.app_state.config.playlist_visible,
+        }
+    }
+
+    pub(crate) fn docked_panel_state(&self) -> DockedPanelState {
+        DockedPanelState {
+            main_focused: true,
+            main_shaded: self.shaded,
+            equalizer_visible: self.app_state.config.equalizer_visible,
+            equalizer_detached: self.app_state.config.equalizer_detached,
+            equalizer_focused: self.equalizer_focused || self.equalizer_dragging_title,
+            equalizer_shaded: self.equalizer_shaded,
+            playlist_visible: self.app_state.config.playlist_visible,
+            playlist_detached: self.app_state.config.playlist_detached,
+            playlist_focused: self.playlist_focused || self.playlist_dragging_title,
+            playlist_shaded: self.playlist_shaded,
+            playlist_width: self.playlist_width,
+            playlist_height: self.playlist_height,
+        }
+    }
+
+    pub(crate) fn docked_panel_size(&self) -> (i32, i32) {
+        docked_panel_size(self.docked_panel_state())
+    }
+
+    pub(crate) fn set_panel_detached(&mut self, kind: PanelKind, detached: bool) {
+        match kind {
+            PanelKind::Equalizer => self.app_state.config.equalizer_detached = detached,
+            PanelKind::Playlist => self.app_state.config.playlist_detached = detached,
+        }
+    }
+
+    pub(crate) fn is_panel_detached(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Equalizer => self.app_state.config.equalizer_detached,
+            PanelKind::Playlist => self.app_state.config.playlist_detached,
         }
     }
 

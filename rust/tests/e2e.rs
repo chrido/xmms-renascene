@@ -5,6 +5,9 @@ use xmms_resuscitated::e2e::{
 };
 use xmms_resuscitated::player::PlayerState;
 use xmms_resuscitated::playlist::PlaylistSortKey;
+use xmms_resuscitated::render::{
+    EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+};
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction,
 };
@@ -756,6 +759,55 @@ fn floating_panel_titlebars_are_draggable_without_breaking_buttons() {
         .assert_panel_title_button_not_draggable(PanelKind::Equalizer)
         .assert_panel_title_draggable(PanelKind::Playlist)
         .assert_panel_title_button_not_draggable(PanelKind::Playlist);
+}
+
+#[test]
+fn docked_panel_size_respects_equalizer_detached_and_docked_state() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    );
+
+    app.assert_panel_detached(PanelKind::Equalizer, false)
+        .assert_docked_panel_size((
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT,
+        ))
+        .detach_panel(PanelKind::Equalizer)
+        .assert_panel_detached(PanelKind::Equalizer, true)
+        .assert_docked_panel_size((
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT,
+        ))
+        .dock_panel(PanelKind::Equalizer)
+        .assert_panel_detached(PanelKind::Equalizer, false)
+        .assert_docked_panel_size((
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT,
+        ));
+}
+
+#[test]
+fn docked_panel_size_respects_playlist_detached_and_docked_state() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    );
+
+    app.detach_panel(PanelKind::Playlist)
+        .assert_panel_detached(PanelKind::Playlist, true)
+        .assert_docked_panel_size((
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT,
+        ))
+        .dock_panel(PanelKind::Playlist)
+        .assert_panel_detached(PanelKind::Playlist, false)
+        .assert_docked_panel_size((
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT,
+        ));
 }
 
 #[test]

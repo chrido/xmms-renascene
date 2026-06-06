@@ -823,12 +823,34 @@ impl UiE2e {
         self
     }
 
+    pub fn detach_panel(&mut self, panel: PanelKind) -> &mut Self {
+        self.state.set_panel_detached(panel, true);
+        self.sync_windows();
+        self
+    }
+
+    pub fn dock_panel(&mut self, panel: PanelKind) -> &mut Self {
+        self.state.set_panel_detached(panel, false);
+        self.sync_windows();
+        self
+    }
+
+    pub fn assert_panel_detached(&mut self, panel: PanelKind, expected: bool) -> &mut Self {
+        assert_eq!(self.state.is_panel_detached(panel), expected);
+        self
+    }
+
     pub fn assert_panel_focused(&mut self, panel: PanelKind, expected: bool) -> &mut Self {
         assert_eq!(
             self.state.is_panel_focused(panel),
             expected,
             "expected {panel:?} focused state to be {expected}"
         );
+        self
+    }
+
+    pub fn assert_docked_panel_size(&mut self, expected: (i32, i32)) -> &mut Self {
+        assert_eq!(self.state.docked_panel_size(), expected);
         self
     }
 
