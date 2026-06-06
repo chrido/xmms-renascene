@@ -172,6 +172,42 @@ fn equalizer_graph_uses_skin_color_ramp() {
     assert_ne!(actual & 0x00ff_ffff, 0x0000_ff00);
 }
 
+#[test]
+fn shaded_playlist_title_uses_skin_bitmap_text() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(Format::ARgb32, PLAYLIST_DEFAULT_WIDTH, 14).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_playlist_frame(
+        &cr,
+        &skin,
+        true,
+        true,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+        Some("A"),
+        None
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let text = skin.get(SkinPixmapKind::Text).unwrap();
+    let expected = (0..6_usize)
+        .flat_map(|y| (0..5_usize).map(move |x| (x, y)))
+        .find_map(|(x, y)| {
+            text.pixel_argb(x, y)
+                .filter(|pixel| *pixel != 0)
+                .map(|pixel| (x, y, pixel))
+        })
+        .expect("default text skin should contain visible A pixels");
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = (4 + expected.1) * stride + (4 + expected.0) * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual, expected.2);
+}
+
 fn rendered_visualization_bytes(state: VisualizationRenderState) -> Vec<u8> {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
     let mut surface = ImageSurface::create(Format::ARgb32, 76, 16).unwrap();

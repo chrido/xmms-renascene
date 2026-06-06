@@ -4749,7 +4749,12 @@ impl MainWindowUiState {
             PanelKind::Equalizer => MAIN_TITLEBAR_HEIGHT,
             PanelKind::Playlist => 20,
         };
-        y >= 0 && y < title_height && !self.panel_title_button_hit(kind, x, y)
+        y >= 0
+            && y < title_height
+            && !self.panel_title_button_hit(kind, x, y)
+            && !(kind == PanelKind::Equalizer
+                && self.equalizer_shaded
+                && equalizer_shaded_slider_at(x, y).is_some())
     }
 
     pub(crate) fn main_title_drag_region(&self, x: i32, y: i32) -> bool {
@@ -6626,6 +6631,16 @@ mod tests {
         assert!(!state.main_title_drag_region(254, 4));
         assert!(!state.main_title_drag_region(264, 4));
         assert!(!state.main_title_drag_region(40, MAIN_TITLEBAR_HEIGHT));
+    }
+
+    #[test]
+    fn shaded_equalizer_sliders_are_not_titlebar_drag_regions() {
+        let mut state = MainWindowUiState::default();
+        state.equalizer_shaded = true;
+
+        assert!(!state.panel_title_drag_region(PanelKind::Equalizer, 61, 7));
+        assert!(!state.panel_title_drag_region(PanelKind::Equalizer, 164, 7));
+        assert!(state.panel_title_drag_region(PanelKind::Equalizer, 40, 7));
     }
 
     #[test]

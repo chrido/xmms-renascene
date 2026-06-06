@@ -1520,7 +1520,7 @@ pub fn render_playlist_frame(
             50,
             14,
         )?;
-        draw_playlist_shaded_info(cr, width, shaded_info.unwrap_or(""))?;
+        draw_playlist_shaded_info(cr, skin, width, shaded_info.unwrap_or(""))?;
         return Ok(true);
     }
 
@@ -1751,16 +1751,13 @@ fn playlist_scrollbar_geometry(
     Some((thumb_y, thumb_h))
 }
 
-fn draw_playlist_shaded_info(cr: &Context, width: i32, text: &str) -> Result<(), RenderError> {
-    cr.save()?;
-    cr.set_source_rgb(0.58, 0.82, 0.58);
-    set_playlist_font(cr, "Helvetica");
-    cr.rectangle(4.0, 3.0, f64::from((width - 35).max(1)), 8.0);
-    cr.clip();
-    cr.move_to(4.0, 10.0);
-    cr.show_text(text)?;
-    cr.restore()?;
-    Ok(())
+fn draw_playlist_shaded_info(
+    cr: &Context,
+    skin: &DefaultSkin,
+    width: i32,
+    text: &str,
+) -> Result<(), RenderError> {
+    render_text(cr, skin, text, 4, 4, width - 35)
 }
 
 fn draw_playlist_footer_info(
