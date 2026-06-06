@@ -238,6 +238,8 @@ C ground-truth screenshots:
 Current Rust preview screenshot:
 
 - `rust-preview-screenshots/main-preview.png`
+- `rust-preview-screenshots/playlist-preview.png`
+- `rust-preview-screenshots/equalizer-preview.png`
 - `rust-preview-screenshots/playlist-sizes/rust-playlist-275x232.png`
 - `rust-preview-screenshots/playlist-sizes/rust-playlist-325x232.png`
 - `rust-preview-screenshots/playlist-sizes/rust-playlist-325x280.png`

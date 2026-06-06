@@ -16,7 +16,14 @@ Options:
   screenshot Capture a root-window screenshot after starting the selected version.
 
 Rust preview app args:
-  --show-playlist             Show the playlist window on startup.
+  --playlist / --equalizer    Show floating windows on startup.
+  --dock-playlist / --undock-playlist
+                              Control playlist docking on startup.
+  --dock-equalizer / --undock-equalizer
+                              Control equalizer docking on startup.
+  --shade-main / --shade-playlist / --shade-equalizer
+                              Start windows in WindowShade mode.
+  --skin PATH                 Select a skin path on startup.
   --playlist-size=WIDTHxHEIGHT
                               Show the playlist and set its startup size.
 EOF
