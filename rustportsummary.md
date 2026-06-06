@@ -45,6 +45,8 @@ Completed so far:
 - Added Rust GTK preview windows for the equalizer and playlist; the main-window EQ and PL toggle buttons now show and hide those skinned windows.
 - Added a Rust UI e2e harness for scripted startup settings, main-window clicks, and window visibility assertions. Current scenarios cover titlebar buttons, visible main menu, transport buttons, shuffle/repeat, sliders, playlist/equalizer toggles, and startup visibility settings.
 - Moved Rust main-window input handling to capture-phase GTK window controllers so clicks reach the skinned controls reliably, and added a visible popover menu for the main menu button.
+- Wired playlist and equalizer top-right titlebar controls in the Rust GTK preview: shade toggles shrink/restore the skinned windows, and close hides the panel and clears the main toggle state.
+- Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
 - Re-captured `rust-preview-screenshots/main-preview.png` and compared it to `reference-screenshots/main-reset.png`; the latest ImageMagick AE and RMSE metrics are both `0`.

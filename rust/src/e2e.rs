@@ -2,7 +2,7 @@ use crate::app_state::AppState;
 use crate::config::Config;
 use crate::player::PlayerState;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
-use crate::ui::{MainWindowUiState, UiAction};
+use crate::ui::{MainWindowUiState, PanelKind, UiAction};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerSettings {
@@ -44,6 +44,7 @@ pub enum Window {
     Player,
     Playlist,
     Equalizer,
+    Preferences,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +52,38 @@ pub enum MainTarget {
     Push(MainPushButton),
     Toggle(MainToggleButton),
     Slider(MainSlider, i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelTarget {
+    EqualizerShade,
+    EqualizerClose,
+    PlaylistShade,
+    PlaylistClose,
+}
+
+impl PanelTarget {
+    fn click(self, state: &mut MainWindowUiState) {
+        match self {
+            Self::EqualizerShade => {
+                state.panel_click(PanelKind::Equalizer, 258, 7);
+            }
+            Self::EqualizerClose => {
+                state.panel_click(PanelKind::Equalizer, 268, 7);
+            }
+            Self::PlaylistShade => {
+                state.panel_click(PanelKind::Playlist, 258, 7);
+            }
+            Self::PlaylistClose => {
+                state.panel_click(PanelKind::Playlist, 268, 7);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuItem {
+    Preferences,
 }
 
 impl MainTarget {
@@ -104,6 +137,7 @@ pub struct UiE2e {
     state: MainWindowUiState,
     playlist_visible: bool,
     equalizer_visible: bool,
+    preferences_visible: bool,
 }
 
 impl UiE2e {
@@ -114,6 +148,7 @@ impl UiE2e {
             state: MainWindowUiState::from_app_state(AppState::from_config(settings.config)),
             playlist_visible: false,
             equalizer_visible: false,
+            preferences_visible: false,
         };
         harness.sync_windows();
         harness
@@ -130,6 +165,23 @@ impl UiE2e {
     pub fn click_at(&mut self, x: i32, y: i32) -> &mut Self {
         let action = self.state.click(x, y);
         self.apply_action(action);
+        self.sync_windows();
+        self
+    }
+
+    pub fn click_panel(&mut self, target: PanelTarget) -> &mut Self {
+        target.click(&mut self.state);
+        self.sync_windows();
+        self
+    }
+
+    pub fn click_menu_item(&mut self, item: MenuItem) -> &mut Self {
+        match item {
+            MenuItem::Preferences => {
+                self.state.set_menu_visible(false);
+                self.state.set_preferences_visible(true);
+            }
+        }
         self.sync_windows();
         self
     }
@@ -192,6 +244,38 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_equalizer_shaded(&mut self) -> &mut Self {
+        assert!(
+            self.state.is_equalizer_shaded(),
+            "expected equalizer to be shaded"
+        );
+        self
+    }
+
+    pub fn assert_equalizer_unshaded(&mut self) -> &mut Self {
+        assert!(
+            !self.state.is_equalizer_shaded(),
+            "expected equalizer to be unshaded"
+        );
+        self
+    }
+
+    pub fn assert_playlist_shaded(&mut self) -> &mut Self {
+        assert!(
+            self.state.is_playlist_shaded(),
+            "expected playlist to be shaded"
+        );
+        self
+    }
+
+    pub fn assert_playlist_unshaded(&mut self) -> &mut Self {
+        assert!(
+            !self.state.is_playlist_shaded(),
+            "expected playlist to be unshaded"
+        );
+        self
+    }
+
     pub fn assert_player_state(&mut self, expected: PlayerState) -> &mut Self {
         assert_eq!(self.state.player_state(), expected);
         self
@@ -227,6 +311,7 @@ impl UiE2e {
             Window::Player => self.main_visible,
             Window::Playlist => self.playlist_visible,
             Window::Equalizer => self.equalizer_visible,
+            Window::Preferences => self.preferences_visible,
         }
     }
 
@@ -238,6 +323,7 @@ impl UiE2e {
                 self.main_visible = false;
                 self.playlist_visible = false;
                 self.equalizer_visible = false;
+                self.preferences_visible = false;
             }
         }
     }
@@ -249,6 +335,7 @@ impl UiE2e {
         let visibility = self.state.panel_visibility();
         self.playlist_visible = visibility.playlist;
         self.equalizer_visible = visibility.equalizer;
+        self.preferences_visible = self.state.is_preferences_visible();
     }
 }
 

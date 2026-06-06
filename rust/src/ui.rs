@@ -70,8 +70,13 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let panel_windows = Rc::new(PanelWindows::new(app, &skin));
-    let menu_popover = Rc::new(build_main_menu_popover(app, &drawing_area));
+    let panel_windows = Rc::new(PanelWindows::new(app, &skin, &main_state, &drawing_area));
+    let menu_popover = Rc::new(build_main_menu_popover(
+        app,
+        &drawing_area,
+        &panel_windows.preferences,
+        &main_state,
+    ));
 
     {
         let skin = Rc::clone(&skin);
@@ -148,7 +153,12 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
     Ok(())
 }
 
-fn build_main_menu_popover(app: &gtk::Application, parent: &gtk::DrawingArea) -> gtk::Popover {
+fn build_main_menu_popover(
+    app: &gtk::Application,
+    parent: &gtk::DrawingArea,
+    preferences_window: &gtk::ApplicationWindow,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) -> gtk::Popover {
     let popover = gtk::Popover::builder()
         .autohide(true)
         .has_arrow(false)
@@ -156,16 +166,31 @@ fn build_main_menu_popover(app: &gtk::Application, parent: &gtk::DrawingArea) ->
     popover.set_parent(parent);
 
     let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    for label in [
-        "Open Files...",
-        "Open Location...",
-        "Preferences",
-        "Skin Browser",
-    ] {
+    for label in ["Open Files...", "Open Location..."] {
         let item = gtk::Button::with_label(label);
         item.set_halign(gtk::Align::Fill);
         menu_box.append(&item);
     }
+
+    let preferences = gtk::Button::with_label("Preferences");
+    preferences.set_halign(gtk::Align::Fill);
+    {
+        let preferences_window = preferences_window.clone();
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        preferences.connect_clicked(move |_| {
+            let mut state = main_state.borrow_mut();
+            state.set_menu_visible(false);
+            state.set_preferences_visible(true);
+            popover.popdown();
+            preferences_window.present();
+        });
+    }
+    menu_box.append(&preferences);
+
+    let skin_browser = gtk::Button::with_label("Skin Browser");
+    skin_browser.set_halign(gtk::Align::Fill);
+    menu_box.append(&skin_browser);
 
     let quit = gtk::Button::with_label("Quit");
     quit.set_halign(gtk::Align::Fill);
@@ -176,20 +201,37 @@ fn build_main_menu_popover(app: &gtk::Application, parent: &gtk::DrawingArea) ->
     menu_box.append(&quit);
 
     popover.set_child(Some(&menu_box));
+    {
+        let main_state = Rc::clone(main_state);
+        popover.connect_closed(move |_| main_state.borrow_mut().set_menu_visible(false));
+    }
     popover
 }
 
-#[derive(Debug, Clone)]
 struct PanelWindows {
     equalizer: gtk::ApplicationWindow,
+    equalizer_area: gtk::DrawingArea,
     playlist: gtk::ApplicationWindow,
+    playlist_area: gtk::DrawingArea,
+    preferences: gtk::ApplicationWindow,
 }
 
 impl PanelWindows {
-    fn new(app: &gtk::Application, skin: &Rc<DefaultSkin>) -> Self {
+    fn new(
+        app: &gtk::Application,
+        skin: &Rc<DefaultSkin>,
+        main_state: &Rc<RefCell<MainWindowUiState>>,
+        main_area: &gtk::DrawingArea,
+    ) -> Self {
+        let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
+        let (playlist, playlist_area) = build_playlist_window(app, skin, main_state, main_area);
+        let preferences = build_preferences_window(app, main_state);
         Self {
-            equalizer: build_equalizer_window(app, skin),
-            playlist: build_playlist_window(app, skin),
+            equalizer,
+            equalizer_area,
+            playlist,
+            playlist_area,
+            preferences,
         }
     }
 }
@@ -197,7 +239,9 @@ impl PanelWindows {
 fn build_equalizer_window(
     app: &gtk::Application,
     skin: &Rc<DefaultSkin>,
-) -> gtk::ApplicationWindow {
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Equalizer")
@@ -211,20 +255,39 @@ fn build_equalizer_window(
         .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
         .build();
     let skin = Rc::clone(skin);
+    let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
+        let shaded = state.borrow().equalizer_shaded;
+        let base_height = if shaded {
+            MAIN_TITLEBAR_HEIGHT
+        } else {
+            EQUALIZER_WINDOW_HEIGHT
+        };
         cr.scale(
             width as f64 / EQUALIZER_WINDOW_WIDTH as f64,
-            height as f64 / EQUALIZER_WINDOW_HEIGHT as f64,
+            height as f64 / base_height as f64,
         );
-        if let Err(err) = render_equalizer_background(cr, &skin, true, false) {
+        if let Err(err) = render_equalizer_background(cr, &skin, true, shaded) {
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
     });
+    add_panel_click_controller(
+        &window,
+        &drawing_area,
+        Rc::clone(main_state),
+        main_area.clone(),
+        PanelKind::Equalizer,
+    );
     window.set_child(Some(&drawing_area));
-    window
+    (window, drawing_area)
 }
 
-fn build_playlist_window(app: &gtk::Application, skin: &Rc<DefaultSkin>) -> gtk::ApplicationWindow {
+fn build_playlist_window(
+    app: &gtk::Application,
+    skin: &Rc<DefaultSkin>,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Playlist")
@@ -238,36 +301,204 @@ fn build_playlist_window(app: &gtk::Application, skin: &Rc<DefaultSkin>) -> gtk:
         .content_height(PLAYLIST_DEFAULT_HEIGHT * DEFAULT_SCALE)
         .build();
     let skin = Rc::clone(skin);
+    let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
+        let shaded = state.borrow().playlist_shaded;
+        let base_height = if shaded {
+            MAIN_TITLEBAR_HEIGHT
+        } else {
+            PLAYLIST_DEFAULT_HEIGHT
+        };
         cr.scale(
             width as f64 / PLAYLIST_DEFAULT_WIDTH as f64,
-            height as f64 / PLAYLIST_DEFAULT_HEIGHT as f64,
+            height as f64 / base_height as f64,
         );
         if let Err(err) = render_playlist_frame(
             cr,
             &skin,
             true,
-            false,
+            shaded,
             PLAYLIST_DEFAULT_WIDTH,
             PLAYLIST_DEFAULT_HEIGHT,
         ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
     });
+    add_panel_click_controller(
+        &window,
+        &drawing_area,
+        Rc::clone(main_state),
+        main_area.clone(),
+        PanelKind::Playlist,
+    );
     window.set_child(Some(&drawing_area));
+    (window, drawing_area)
+}
+
+fn build_preferences_window(
+    app: &gtk::Application,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) -> gtk::ApplicationWindow {
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title("Preferences")
+        .default_width(560)
+        .default_height(520)
+        .build();
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    content.append(&gtk::Label::new(Some(
+        "Preferences UI placeholder for the Rust port",
+    )));
+    window.set_child(Some(&content));
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_close_request(move |window| {
+            main_state.borrow_mut().set_preferences_visible(false);
+            window.hide();
+            gtk::glib::Propagation::Stop
+        });
+    }
     window
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelKind {
+    Equalizer,
+    Playlist,
+}
+
+fn add_panel_click_controller(
+    window: &gtk::ApplicationWindow,
+    area: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    main_area: gtk::DrawingArea,
+    kind: PanelKind,
+) {
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let window = window.clone();
+        click.connect_released(move |_gesture, _n_press, x, y| {
+            let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            let changed = main_state.borrow_mut().panel_click(kind, x, y);
+            if changed {
+                sync_single_panel_window(kind, &window, &area, &main_state.borrow());
+                main_area.queue_draw();
+            }
+        });
+    }
+    window.add_controller(click);
+}
+
+fn panel_event_to_base_coords(
+    kind: PanelKind,
+    area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+    x: f64,
+    y: f64,
+) -> (i32, i32) {
+    let (base_width, base_height) = match kind {
+        PanelKind::Equalizer => (
+            EQUALIZER_WINDOW_WIDTH,
+            if state.equalizer_shaded {
+                MAIN_TITLEBAR_HEIGHT
+            } else {
+                EQUALIZER_WINDOW_HEIGHT
+            },
+        ),
+        PanelKind::Playlist => (
+            PLAYLIST_DEFAULT_WIDTH,
+            if state.playlist_shaded {
+                MAIN_TITLEBAR_HEIGHT
+            } else {
+                PLAYLIST_DEFAULT_HEIGHT
+            },
+        ),
+    };
+    let width = area.allocated_width().max(1) as f64;
+    let height = area.allocated_height().max(1) as f64;
+    (
+        (x / (width / f64::from(base_width))) as i32,
+        (y / (height / f64::from(base_height))) as i32,
+    )
+}
+
+fn sync_single_panel_window(
+    kind: PanelKind,
+    window: &gtk::ApplicationWindow,
+    area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+) {
+    let (visible, shaded, width, full_height) = match kind {
+        PanelKind::Equalizer => (
+            state.app_state.config.equalizer_visible,
+            state.equalizer_shaded,
+            EQUALIZER_WINDOW_WIDTH,
+            EQUALIZER_WINDOW_HEIGHT,
+        ),
+        PanelKind::Playlist => (
+            state.app_state.config.playlist_visible,
+            state.playlist_shaded,
+            PLAYLIST_DEFAULT_WIDTH,
+            PLAYLIST_DEFAULT_HEIGHT,
+        ),
+    };
+    if !visible {
+        window.hide();
+        return;
+    }
+    let height = if shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        full_height
+    };
+    area.set_content_height(height * DEFAULT_SCALE);
+    window.set_default_size(width * DEFAULT_SCALE, height * DEFAULT_SCALE);
+    area.queue_draw();
 }
 
 fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     let visibility = state.panel_visibility();
     if visibility.equalizer {
+        let height = if state.equalizer_shaded {
+            MAIN_TITLEBAR_HEIGHT
+        } else {
+            EQUALIZER_WINDOW_HEIGHT
+        };
+        windows
+            .equalizer_area
+            .set_content_height(height * DEFAULT_SCALE);
+        windows.equalizer.set_default_size(
+            EQUALIZER_WINDOW_WIDTH * DEFAULT_SCALE,
+            height * DEFAULT_SCALE,
+        );
         windows.equalizer.present();
+        windows.equalizer_area.queue_draw();
     } else {
         windows.equalizer.hide();
     }
 
     if visibility.playlist {
+        let height = if state.playlist_shaded {
+            MAIN_TITLEBAR_HEIGHT
+        } else {
+            PLAYLIST_DEFAULT_HEIGHT
+        };
+        windows
+            .playlist_area
+            .set_content_height(height * DEFAULT_SCALE);
+        windows.playlist.set_default_size(
+            PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE,
+            height * DEFAULT_SCALE,
+        );
         windows.playlist.present();
+        windows.playlist_area.queue_draw();
     } else {
         windows.playlist.hide();
     }
@@ -294,6 +525,9 @@ pub(crate) struct MainWindowUiState {
     app_state: AppState,
     shaded: bool,
     menu_visible: bool,
+    equalizer_shaded: bool,
+    playlist_shaded: bool,
+    preferences_visible: bool,
     position_position: i32,
     active: Option<MainControl>,
     active_inside: bool,
@@ -312,6 +546,9 @@ impl MainWindowUiState {
             app_state,
             shaded: false,
             menu_visible: false,
+            equalizer_shaded: false,
+            playlist_shaded: false,
+            preferences_visible: false,
             position_position: 0,
             active: None,
             active_inside: false,
@@ -358,6 +595,46 @@ impl MainWindowUiState {
 
     pub(crate) fn set_menu_visible(&mut self, visible: bool) {
         self.menu_visible = visible;
+    }
+
+    pub(crate) fn is_equalizer_shaded(&self) -> bool {
+        self.equalizer_shaded
+    }
+
+    pub(crate) fn is_playlist_shaded(&self) -> bool {
+        self.playlist_shaded
+    }
+
+    pub(crate) fn is_preferences_visible(&self) -> bool {
+        self.preferences_visible
+    }
+
+    pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
+        self.preferences_visible = visible;
+    }
+
+    pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> bool {
+        if !(3..12).contains(&y) {
+            return false;
+        }
+
+        if (264..273).contains(&x) {
+            match kind {
+                PanelKind::Equalizer => self.app_state.config.equalizer_visible = false,
+                PanelKind::Playlist => self.app_state.config.playlist_visible = false,
+            }
+            return true;
+        }
+
+        if (254..263).contains(&x) {
+            match kind {
+                PanelKind::Equalizer => self.equalizer_shaded = !self.equalizer_shaded,
+                PanelKind::Playlist => self.playlist_shaded = !self.playlist_shaded,
+            }
+            return true;
+        }
+
+        false
     }
 
     pub(crate) fn player_state(&self) -> PlayerState {

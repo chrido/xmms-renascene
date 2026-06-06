@@ -1,4 +1,4 @@
-use xmms_resuscitated::e2e::{MainTarget, PlayerSettings, UiE2e, Window};
+use xmms_resuscitated::e2e::{MainTarget, MenuItem, PanelTarget, PlayerSettings, UiE2e, Window};
 use xmms_resuscitated::player::PlayerState;
 
 #[test]
@@ -9,7 +9,10 @@ fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
         .assert_window_visible(Window::Player)
         .assert_player_not_minimized()
         .assert_player_unshaded()
-        .assert_menu_visible();
+        .assert_menu_visible()
+        .click_menu_item(MenuItem::Preferences)
+        .assert_menu_hidden()
+        .assert_window_visible(Window::Preferences);
 
     app.click(MainTarget::MINIMIZE)
         .assert_window_visible(Window::Player)
@@ -119,6 +122,46 @@ fn equalizer_button_opens_and_closes_equalizer_window() {
 
     app.click(MainTarget::EQUALIZER)
         .assert_window_hidden(Window::Equalizer);
+}
+
+#[test]
+fn equalizer_top_right_buttons_shade_and_close_equalizer_window() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.click(MainTarget::EQUALIZER)
+        .assert_window_visible(Window::Equalizer)
+        .assert_equalizer_unshaded();
+
+    app.click_panel(PanelTarget::EqualizerShade)
+        .assert_window_visible(Window::Equalizer)
+        .assert_equalizer_shaded();
+
+    app.click_panel(PanelTarget::EqualizerShade)
+        .assert_window_visible(Window::Equalizer)
+        .assert_equalizer_unshaded();
+
+    app.click_panel(PanelTarget::EqualizerClose)
+        .assert_window_hidden(Window::Equalizer);
+}
+
+#[test]
+fn playlist_top_right_buttons_shade_and_close_playlist_window() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.click(MainTarget::PLAYLIST)
+        .assert_window_visible(Window::Playlist)
+        .assert_playlist_unshaded();
+
+    app.click_panel(PanelTarget::PlaylistShade)
+        .assert_window_visible(Window::Playlist)
+        .assert_playlist_shaded();
+
+    app.click_panel(PanelTarget::PlaylistShade)
+        .assert_window_visible(Window::Playlist)
+        .assert_playlist_unshaded();
+
+    app.click_panel(PanelTarget::PlaylistClose)
+        .assert_window_hidden(Window::Playlist);
 }
 
 #[test]
