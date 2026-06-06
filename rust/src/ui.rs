@@ -19,14 +19,14 @@ use crate::player::{
 };
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    docked_panel_size, equalizer_window_height, main_window_height, render_equalizer_state,
-    render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
-    DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
-    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
-    PlaylistRowRenderEntry, PlaylistRowsRenderState, VisualizationRenderState,
-    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
-    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
-    PLAYLIST_MIN_WIDTH,
+    docked_panel_size, equalizer_window_height, main_window_height, playlist_window_height,
+    render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
+    render_playlist_rows, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
+    MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
+    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
+    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::widget::{
     PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode,
@@ -191,6 +191,25 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         click.connect_pressed(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            if let Some((kind, panel_x, panel_y)) = main_state.borrow().docked_panel_at(x, y) {
+                match kind {
+                    PanelKind::Equalizer => {
+                        if main_state.borrow_mut().equalizer_press(panel_x, panel_y) {
+                            drawing_area.queue_draw();
+                        }
+                    }
+                    PanelKind::Playlist => {
+                        let pressed = main_state.borrow_mut().playlist_press(panel_x, panel_y)
+                            || main_state
+                                .borrow_mut()
+                                .playlist_scrollbar_press(panel_x, panel_y);
+                        if pressed {
+                            drawing_area.queue_draw();
+                        }
+                    }
+                }
+                return;
+            }
             main_state.borrow_mut().press(x, y);
             drawing_area.queue_draw();
         });
@@ -204,6 +223,36 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            if let Some((kind, panel_x, panel_y)) = main_state.borrow().docked_panel_at(x, y) {
+                let action = {
+                    let mut state = main_state.borrow_mut();
+                    match kind {
+                        PanelKind::Equalizer => {
+                            let title_action = state.panel_click(kind, panel_x, panel_y);
+                            if title_action == PanelAction::None {
+                                state.equalizer_release(panel_x, panel_y)
+                            } else {
+                                title_action
+                            }
+                        }
+                        PanelKind::Playlist => {
+                            if state.playlist_scrollbar_release() {
+                                PanelAction::Changed
+                            } else if state.playlist_menu_pressed() {
+                                state.playlist_release(panel_x, panel_y)
+                            } else {
+                                state.panel_click(kind, panel_x, panel_y)
+                            }
+                        }
+                    }
+                };
+                if action == PanelAction::Changed {
+                    sync_panel_windows(&panel_windows, &main_state.borrow());
+                    resize_main_window(&window, &drawing_area, &main_state.borrow());
+                }
+                drawing_area.queue_draw();
+                return;
+            }
             let action = main_state.borrow_mut().release(x, y);
             apply_ui_action(
                 action,
@@ -227,6 +276,25 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            if let Some((kind, panel_x, panel_y)) = main_state.borrow().docked_panel_at(x, y) {
+                let changed = match kind {
+                    PanelKind::Equalizer => {
+                        main_state.borrow_mut().equalizer_motion(panel_x, panel_y)
+                    }
+                    PanelKind::Playlist => {
+                        let scrolled = main_state
+                            .borrow_mut()
+                            .playlist_scrollbar_motion(panel_x, panel_y);
+                        let menu_changed =
+                            main_state.borrow_mut().playlist_motion(panel_x, panel_y);
+                        scrolled || menu_changed
+                    }
+                };
+                if changed {
+                    drawing_area.queue_draw();
+                }
+                return;
+            }
             if main_state.borrow_mut().motion(x, y) {
                 drawing_area.queue_draw();
             }
@@ -3074,6 +3142,26 @@ impl MainWindowUiState {
 
     pub(crate) fn docked_panel_size(&self) -> (i32, i32) {
         docked_panel_size(self.docked_panel_state())
+    }
+
+    pub(crate) fn docked_panel_at(&self, x: i32, y: i32) -> Option<(PanelKind, i32, i32)> {
+        let mut offset_y = main_window_height(self.shaded);
+        if self.app_state.config.equalizer_visible && !self.app_state.config.equalizer_detached {
+            let height = equalizer_window_height(self.equalizer_shaded);
+            if x >= 0 && x < EQUALIZER_WINDOW_WIDTH && y >= offset_y && y < offset_y + height {
+                return Some((PanelKind::Equalizer, x, y - offset_y));
+            }
+            offset_y += height;
+        }
+
+        if self.app_state.config.playlist_visible && !self.app_state.config.playlist_detached {
+            let height = playlist_window_height(self.playlist_shaded, self.playlist_height);
+            if x >= 0 && x < self.playlist_width && y >= offset_y && y < offset_y + height {
+                return Some((PanelKind::Playlist, x, y - offset_y));
+            }
+        }
+
+        None
     }
 
     pub(crate) fn set_panel_detached(&mut self, kind: PanelKind, detached: bool) {

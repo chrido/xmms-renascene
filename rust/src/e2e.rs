@@ -9,7 +9,9 @@ use crate::mpris::{
 };
 use crate::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use crate::playlist::PlaylistSortKey;
-use crate::render::{MainPushButton, MainSlider, MainToggleButton};
+use crate::render::{
+    equalizer_window_height, main_window_height, MainPushButton, MainSlider, MainToggleButton,
+};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
@@ -135,48 +137,51 @@ pub enum PanelTarget {
 }
 
 impl PanelTarget {
-    fn click(self, state: &mut MainWindowUiState) {
+    fn point(self, state: &MainWindowUiState) -> (PanelKind, i32, i32) {
         let (playlist_width, playlist_height) = state.playlist_size();
         let playlist_button_y = playlist_height - 20;
         match self {
-            Self::EqualizerShade => {
-                state.panel_click(PanelKind::Equalizer, 258, 7);
-            }
-            Self::EqualizerClose => {
-                state.panel_click(PanelKind::Equalizer, 268, 7);
+            Self::EqualizerShade => (PanelKind::Equalizer, 258, 7),
+            Self::EqualizerClose => (PanelKind::Equalizer, 268, 7),
+            Self::EqualizerOn => (PanelKind::Equalizer, 20, 24),
+            Self::EqualizerAuto => (PanelKind::Equalizer, 50, 24),
+            Self::EqualizerPresets => (PanelKind::Equalizer, 230, 24),
+            Self::PlaylistShade => (PanelKind::Playlist, 258, 7),
+            Self::PlaylistClose => (PanelKind::Playlist, 268, 7),
+            Self::PlaylistAdd => (PanelKind::Playlist, 24, playlist_button_y),
+            Self::PlaylistRemove => (PanelKind::Playlist, 53, playlist_button_y),
+            Self::PlaylistSelect => (PanelKind::Playlist, 82, playlist_button_y),
+            Self::PlaylistMisc => (PanelKind::Playlist, 111, playlist_button_y),
+            Self::PlaylistList => (PanelKind::Playlist, playlist_width - 35, playlist_button_y),
+        }
+    }
+
+    fn click(self, state: &mut MainWindowUiState) {
+        let (kind, x, y) = self.point(state);
+        match self {
+            Self::EqualizerShade | Self::EqualizerClose => {
+                state.panel_click(kind, x, y);
             }
             Self::EqualizerOn => {
-                state.equalizer_press(20, 24);
-                state.equalizer_release(20, 24);
+                state.equalizer_press(x, y);
+                state.equalizer_release(x, y);
             }
             Self::EqualizerAuto => {
-                state.equalizer_press(50, 24);
-                state.equalizer_release(50, 24);
+                state.equalizer_press(x, y);
+                state.equalizer_release(x, y);
             }
             Self::EqualizerPresets => {
-                state.equalizer_press(230, 24);
-                state.equalizer_release(230, 24);
+                state.equalizer_press(x, y);
+                state.equalizer_release(x, y);
             }
-            Self::PlaylistShade => {
-                state.panel_click(PanelKind::Playlist, 258, 7);
-            }
-            Self::PlaylistClose => {
-                state.panel_click(PanelKind::Playlist, 268, 7);
-            }
-            Self::PlaylistAdd => {
-                state.panel_click(PanelKind::Playlist, 24, playlist_button_y);
-            }
-            Self::PlaylistRemove => {
-                state.panel_click(PanelKind::Playlist, 53, playlist_button_y);
-            }
-            Self::PlaylistSelect => {
-                state.panel_click(PanelKind::Playlist, 82, playlist_button_y);
-            }
-            Self::PlaylistMisc => {
-                state.panel_click(PanelKind::Playlist, 111, playlist_button_y);
-            }
-            Self::PlaylistList => {
-                state.panel_click(PanelKind::Playlist, playlist_width - 35, playlist_button_y);
+            Self::PlaylistShade
+            | Self::PlaylistClose
+            | Self::PlaylistAdd
+            | Self::PlaylistRemove
+            | Self::PlaylistSelect
+            | Self::PlaylistMisc
+            | Self::PlaylistList => {
+                state.panel_click(kind, x, y);
             }
         }
     }
@@ -319,6 +324,35 @@ impl UiE2e {
 
     pub fn click_panel(&mut self, target: PanelTarget) -> &mut Self {
         target.click(&mut self.state);
+        self.sync_windows();
+        self
+    }
+
+    pub fn click_docked_panel(&mut self, target: PanelTarget) -> &mut Self {
+        let (kind, x, y) = target.point(&self.state);
+        let mut offset_y = main_window_height(self.state.is_shaded());
+        if kind == PanelKind::Playlist
+            && self.state.app_state_mut().config.equalizer_visible
+            && !self.state.app_state_mut().config.equalizer_detached
+        {
+            offset_y += equalizer_window_height(self.state.is_equalizer_shaded());
+        }
+        let Some((actual_kind, panel_x, panel_y)) = self.state.docked_panel_at(x, y + offset_y)
+        else {
+            panic!("expected {target:?} to hit a docked panel");
+        };
+        assert_eq!(actual_kind, kind);
+        match actual_kind {
+            PanelKind::Equalizer => {
+                let title_action = self.state.panel_click(actual_kind, panel_x, panel_y);
+                if title_action == PanelAction::None {
+                    self.state.equalizer_release(panel_x, panel_y);
+                }
+            }
+            PanelKind::Playlist => {
+                self.state.panel_click(actual_kind, panel_x, panel_y);
+            }
+        }
         self.sync_windows();
         self
     }
