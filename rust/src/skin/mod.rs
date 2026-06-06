@@ -3,8 +3,9 @@ pub mod xpm;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io;
-use std::path::Path;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 use image::GenericImageView;
 use xpm::XpmImage;
@@ -225,7 +226,42 @@ impl DefaultSkin {
         Ok(Self { pixmaps })
     }
 
-    fn find_skin_file(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
+    pub fn load_from_path(path: &Path) -> io::Result<Self> {
+        if path.is_dir() {
+            Self::load_from_dir(path)
+        } else {
+            Self::load_from_archive(path)
+        }
+    }
+
+    fn load_from_archive(path: &Path) -> io::Result<Self> {
+        let entries = archive_entries(path)?;
+        let mut pixmaps = BTreeMap::new();
+
+        for kind in SkinPixmapKind::ALL {
+            if kind == SkinPixmapKind::Balance {
+                continue;
+            }
+
+            let Some((name, contents)) = find_archive_skin_entry(&entries, kind.info().file_stem)
+            else {
+                continue;
+            };
+
+            let image = Self::load_skin_image_bytes(
+                &format!("{}:{name}", path.display()),
+                Path::new(name),
+                contents,
+            )?;
+            pixmaps.insert(kind, image);
+        }
+
+        apply_balance_fallback(&mut pixmaps);
+
+        Ok(Self { pixmaps })
+    }
+
+    fn find_skin_file(dir: &Path, name: &str) -> Option<PathBuf> {
         let lower = name.to_ascii_lowercase();
         let upper = name.to_ascii_uppercase();
         let mut title = lower.clone();
@@ -248,26 +284,28 @@ impl DefaultSkin {
     }
 
     fn load_skin_image(path: &Path) -> io::Result<XpmImage> {
+        let contents = fs::read(path)?;
+        Self::load_skin_image_bytes(&path.display().to_string(), path, &contents)
+    }
+
+    fn load_skin_image_bytes(label: &str, path: &Path, contents: &[u8]) -> io::Result<XpmImage> {
         if path
             .extension()
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("xpm"))
         {
-            let contents = fs::read_to_string(path)?;
-            return XpmImage::parse(&contents).map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("{}: {err}", path.display()),
-                )
+            let contents = std::str::from_utf8(contents).map_err(|err| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("{label}: {err}"))
+            });
+            return contents.and_then(|contents| {
+                XpmImage::parse(contents).map_err(|err| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("{label}: {err}"))
+                })
             });
         }
 
-        let decoded = image::open(path).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{}: {err}", path.display()),
-            )
-        })?;
+        let decoded = image::load_from_memory(contents)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{label}: {err}")))?;
         let (width, height) = decoded.dimensions();
         let rgba = decoded.to_rgba8();
         let mut argb = Vec::with_capacity((width as usize) * (height as usize));
@@ -283,12 +321,8 @@ impl DefaultSkin {
             argb.push((u32::from(a) << 24) | (pr << 16) | (pg << 8) | pb);
         }
 
-        XpmImage::from_argb_pixels(width as usize, height as usize, argb).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{}: {err}", path.display()),
-            )
-        })
+        XpmImage::from_argb_pixels(width as usize, height as usize, argb)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{label}: {err}")))
     }
 
     pub fn loaded_pixmap_count(&self) -> usize {
@@ -298,6 +332,102 @@ impl DefaultSkin {
     pub fn get(&self, kind: SkinPixmapKind) -> Option<&XpmImage> {
         self.pixmaps.get(&kind)
     }
+}
+
+fn archive_entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if name.ends_with(".zip") || name.ends_with(".wsz") {
+        return zip_archive_entries(path);
+    }
+
+    if name.ends_with(".tar") {
+        let file = File::open(path)?;
+        return tar_archive_entries(file);
+    }
+
+    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        let file = File::open(path)?;
+        return tar_archive_entries(flate2::read::GzDecoder::new(file));
+    }
+
+    if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") {
+        let file = File::open(path)?;
+        return tar_archive_entries(bzip2::read::BzDecoder::new(file));
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("unsupported skin archive format: {}", path.display()),
+    ))
+}
+
+fn zip_archive_entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
+    let file = File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(zip_error)?;
+    let mut entries = Vec::new();
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(zip_error)?;
+        if entry.is_dir() {
+            continue;
+        }
+
+        let mut contents = Vec::new();
+        entry.read_to_end(&mut contents)?;
+        entries.push((entry.name().to_string(), contents));
+    }
+
+    Ok(entries)
+}
+
+fn tar_archive_entries<R: Read>(reader: R) -> io::Result<Vec<(String, Vec<u8>)>> {
+    let mut archive = tar::Archive::new(reader);
+    let mut entries = Vec::new();
+
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+
+        let path = entry.path()?.to_string_lossy().into_owned();
+        let mut contents = Vec::new();
+        entry.read_to_end(&mut contents)?;
+        entries.push((path, contents));
+    }
+
+    Ok(entries)
+}
+
+fn zip_error(err: zip::result::ZipError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err)
+}
+
+fn find_archive_skin_entry<'a>(
+    entries: &'a [(String, Vec<u8>)],
+    name: &str,
+) -> Option<(&'a str, &'a [u8])> {
+    for extension in ["bmp", "png", "xpm"] {
+        for (entry_name, contents) in entries {
+            let entry_path = Path::new(entry_name);
+            let Some(stem) = entry_path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let Some(entry_extension) = entry_path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            if stem.eq_ignore_ascii_case(name) && entry_extension.eq_ignore_ascii_case(extension) {
+                return Some((entry_name, contents));
+            }
+        }
+    }
+
+    None
 }
 
 fn apply_balance_fallback(pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>) {
@@ -311,6 +441,16 @@ fn apply_balance_fallback(pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use std::io::Write;
+
+    const ONE_PIXEL_XPM: &str = r#"
+/* XPM */
+static char * main_xpm[] = {
+"1 1 1 1",
+". c #010203",
+"."};
+"#;
 
     #[test]
     fn pixmap_info_matches_original_xmms_dimensions() {
@@ -344,5 +484,55 @@ mod tests {
         assert_eq!(main.pixel_argb(0, 0), Some(0));
 
         std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn path_loader_accepts_wsz_zip_skin_archives() {
+        let path =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-zip.wsz", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let file = File::create(&path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive.start_file("Example/Main.xpm", options).unwrap();
+        archive.write_all(ONE_PIXEL_XPM.as_bytes()).unwrap();
+        archive.finish().unwrap();
+
+        let skin = DefaultSkin::load_from_path(&path).unwrap();
+        let main = skin.get(SkinPixmapKind::Main).unwrap();
+        assert_eq!(main.width(), 1);
+        assert_eq!(main.height(), 1);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn path_loader_accepts_tar_gz_skin_archives() {
+        let path = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-test-{}-tar.tar.gz",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let file = File::create(&path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(ONE_PIXEL_XPM.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "Example/main.xpm", Cursor::new(ONE_PIXEL_XPM))
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+
+        let skin = DefaultSkin::load_from_path(&path).unwrap();
+        let main = skin.get(SkinPixmapKind::Main).unwrap();
+        assert_eq!(main.width(), 1);
+        assert_eq!(main.height(), 1);
+
+        std::fs::remove_file(path).unwrap();
     }
 }

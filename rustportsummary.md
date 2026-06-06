@@ -18,6 +18,7 @@ Completed so far:
 - Added a default skin loader for `data/defskin/*.xpm`.
 - Embedded bundled default skin XPM assets in the Rust crate for filesystem-independent startup.
 - Added external skin directory loading for BMP, PNG, and XPM pixmap files, including the Winamp green transparency key.
+- Added path-based external skin loading for directories plus `.wsz`, `.zip`, `.tar`, `.tar.gz`, and `.tar.bz2` archives.
 - Added Cairo conversion for parsed XPM pixels.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
@@ -39,7 +40,7 @@ Completed so far:
 | `rust/src/config.rs` | Initial Rust config model and defaults |
 | `rust/src/player.rs` | Initial player state model |
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
-| `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, and external BMP/PNG/XPM skin file loading |
+| `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, and skin archive loading |
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
 | `rust/src/skin/widget.rs` | Initial widget/visualization enums |
 | `rust/src/render.rs` | XPM-to-Cairo surface conversion |
@@ -54,6 +55,7 @@ Current Rust dependencies:
 - `gtk4` via crate rename `gtk`, with GTK 4.6 feature enabled.
 - `cairo-rs` via crate rename `cairo`.
 - `image` with PNG and BMP support for external skin pixmap files.
+- `zip`, `tar`, `flate2`, and `bzip2` for external skin archives.
 
 The existing C application remains built by Meson and still depends on GTK4, GStreamer, libsoup, json-glib, libxml2, and optional libarchive.
 
