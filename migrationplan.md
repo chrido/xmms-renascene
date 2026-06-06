@@ -66,7 +66,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port file and directory open dialogs.
   - [x] Port update timer behavior.
 
-- [ ] Complete playlist model.
+- [x] Complete playlist model.
   - [x] Add files, directories, URLs, Spotify tracks, and podcast entries.
   - [x] Preserve recursive directory import and media-extension filtering.
   - [x] Preserve M3U load/save including `#EXTINF` and `#XMMSPODCAST` markers.
@@ -76,12 +76,12 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port reverse and randomize.
   - [x] Port duration indexing with GStreamer discoverer.
 
-- [ ] Port playlist window.
+- [x] Port playlist window.
   - [x] Render playlist background and rows.
   - [x] Port scrolling and scrollbar dragging.
-  - [ ] Port resizing.
-  - [ ] Port shaded mode.
-  - [ ] Port docked/detached mode.
+  - [x] Port resizing.
+  - [x] Port shaded mode.
+  - [x] Port docked/detached mode.
   - [x] Port add/remove/select/misc/list menus.
   - [x] Port context menu.
   - [x] Port selection, crop, remove dead, and physical delete actions.
@@ -117,14 +117,14 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port peaks and falloff speeds.
   - [x] Port VU mode and refresh divisor.
 
-- [ ] Port preferences window.
-  - [ ] Port playback/output preferences.
-  - [ ] Port playlist options.
-  - [ ] Port font controls.
-  - [ ] Port title format control.
-  - [ ] Port visualization controls.
-  - [ ] Port podcast cache TTL and refresh interval controls.
-  - [ ] Preserve immediate apply/save behavior.
+- [x] Port preferences window.
+  - [x] Port playback/output preferences.
+  - [x] Port playlist options.
+  - [x] Port font controls.
+  - [x] Port title format control.
+  - [x] Port visualization controls.
+  - [x] Port podcast cache TTL and refresh interval controls.
+  - [x] Preserve immediate apply/save behavior.
 
 - [x] Port skin browser.
   - [x] Discover user skins in `~/.config/xmms/Skins/`.
@@ -141,7 +141,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Switch output device while preserving playback state.
   - [x] Include Spotify devices when authenticated.
 
-- [ ] Port MPRIS D-Bus interface.
+- [x] Port MPRIS D-Bus interface.
   - [x] Own `org.mpris.MediaPlayer2.xmms_resuscitated`.
   - [x] Add deterministic Rust MPRIS model and e2e surface.
   - [x] Implement `org.mpris.MediaPlayer2` root property semantics.
@@ -186,7 +186,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 - [ ] Port session and command-line behavior.
   - [ ] Preserve `G_APPLICATION_HANDLES_COMMAND_LINE`.
   - [ ] Preserve `XMMS_NON_UNIQUE`.
-  - [ ] Port `--playlist`, `--equalizer`, docking, undocking, shading, `--reset`, `--skin`, and playlist menu options.
+  - [x] Port `--playlist`, `--equalizer`, docking, undocking, shading, `--reset`, `--skin`, and playlist menu options.
   - [ ] Port secondary activation behavior.
   - [ ] Port GTK session save/restore where available.
   - [ ] Preserve fallback save on shutdown/query-end.

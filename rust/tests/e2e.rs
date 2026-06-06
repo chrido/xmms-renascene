@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use xmms_resuscitated::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
 };
@@ -64,6 +65,29 @@ fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
         .assert_window_hidden(Window::Player)
         .assert_window_hidden(Window::Playlist)
         .assert_window_hidden(Window::Equalizer);
+}
+
+#[test]
+fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
+    let status = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
+        .args([
+            "--gtk-smoke",
+            "--playlist",
+            "--equalizer",
+            "--shade",
+            "--playlist-shaded",
+            "--equalizer-shaded",
+            "--playlist-undocked",
+            "--equalizer-undocked",
+            "--reset",
+            "--skin",
+            "/tmp/example.wsz",
+            "--playlist-size=325x280",
+        ])
+        .status()
+        .unwrap();
+
+    assert!(status.success());
 }
 
 #[test]

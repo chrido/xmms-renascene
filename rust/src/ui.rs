@@ -35,10 +35,18 @@ use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
     pub show_playlist: bool,
+    pub show_equalizer: bool,
+    pub main_shaded: bool,
+    pub playlist_shaded: bool,
+    pub equalizer_shaded: bool,
+    pub playlist_detached: bool,
+    pub equalizer_detached: bool,
     pub playlist_size: Option<(i32, i32)>,
+    pub reset: bool,
+    pub skin_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,7 +75,7 @@ fn run_preview_application(mode: PreviewMode, options: PreviewOptions) {
         .build();
 
     app.connect_activate(move |app| {
-        if let Err(err) = build_preview_window(app, options) {
+        if let Err(err) = build_preview_window(app, options.clone()) {
             eprintln!("xmms-rs: failed to create GTK preview: {err}");
             app.quit();
             return;
@@ -93,6 +101,17 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         }
         if options.show_playlist || options.playlist_size.is_some() {
             state.app_state.config.playlist_visible = true;
+        }
+        if options.show_equalizer {
+            state.app_state.config.equalizer_visible = true;
+        }
+        state.shaded = options.main_shaded;
+        state.playlist_shaded = options.playlist_shaded;
+        state.equalizer_shaded = options.equalizer_shaded;
+        state.app_state.config.playlist_detached = options.playlist_detached;
+        state.app_state.config.equalizer_detached = options.equalizer_detached;
+        if let Some(skin_path) = options.skin_path {
+            state.app_state.config.skin = Some(skin_path.clone());
         }
     }
 

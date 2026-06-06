@@ -39,8 +39,39 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
     let mut options = PreviewOptions::default();
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
-        if arg == "--show-playlist" {
+        if arg == "--show-playlist" || arg == "--playlist" {
             options.show_playlist = true;
+        } else if arg == "--equalizer" {
+            options.show_equalizer = true;
+        } else if arg == "--shade" || arg == "--main-shaded" {
+            options.main_shaded = true;
+        } else if arg == "--playlist-shaded" {
+            options.show_playlist = true;
+            options.playlist_shaded = true;
+        } else if arg == "--equalizer-shaded" {
+            options.show_equalizer = true;
+            options.equalizer_shaded = true;
+        } else if arg == "--playlist-undocked" {
+            options.show_playlist = true;
+            options.playlist_detached = true;
+        } else if arg == "--playlist-docked" {
+            options.show_playlist = true;
+            options.playlist_detached = false;
+        } else if arg == "--equalizer-undocked" {
+            options.show_equalizer = true;
+            options.equalizer_detached = true;
+        } else if arg == "--equalizer-docked" {
+            options.show_equalizer = true;
+            options.equalizer_detached = false;
+        } else if arg == "--reset" {
+            options.reset = true;
+        } else if let Some(value) = arg.strip_prefix("--skin=") {
+            options.skin_path = Some(value.to_string());
+        } else if arg == "--skin" {
+            let Some(value) = iter.next() else {
+                return Err("--skin requires PATH".to_string());
+            };
+            options.skin_path = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("--playlist-size=") {
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
@@ -92,5 +123,33 @@ mod tests {
     #[test]
     fn rejects_malformed_playlist_size() {
         assert!(parse_preview_options(&args(&["--gtk", "--playlist-size=bad"])).is_err());
+    }
+
+    #[test]
+    fn parses_session_style_startup_flags() {
+        let options = parse_preview_options(&args(&[
+            "--gtk",
+            "--playlist",
+            "--equalizer",
+            "--shade",
+            "--playlist-shaded",
+            "--equalizer-shaded",
+            "--playlist-undocked",
+            "--equalizer-undocked",
+            "--reset",
+            "--skin",
+            "/tmp/skin.wsz",
+        ]))
+        .unwrap();
+
+        assert!(options.show_playlist);
+        assert!(options.show_equalizer);
+        assert!(options.main_shaded);
+        assert!(options.playlist_shaded);
+        assert!(options.equalizer_shaded);
+        assert!(options.playlist_detached);
+        assert!(options.equalizer_detached);
+        assert!(options.reset);
+        assert_eq!(options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
     }
 }
