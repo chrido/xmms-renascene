@@ -1,6 +1,10 @@
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use gtk::glib::{self, ChecksumType};
+
+use crate::playlist::Playlist;
 
 pub const FETCH_LIMIT: usize = 5 * 1024 * 1024;
 pub const BUFFER_SIZE: usize = 8192;
@@ -85,6 +89,19 @@ pub fn parse_feed(feed_xml: &str, feed_url: &str) -> Vec<PodcastEpisode> {
     episodes
 }
 
+pub fn add_feed_to_playlist(playlist: &mut Playlist, feed_xml: &str, feed_url: &str) -> usize {
+    let episodes = parse_feed(feed_xml, feed_url);
+    for episode in &episodes {
+        playlist.add_podcast_entry(
+            &episode.url,
+            Some(episode.title.clone()),
+            Some(episode.feed.clone()),
+            episode.guid.clone(),
+        );
+    }
+    episodes.len()
+}
+
 pub fn cache_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("podcast-cache")
 }
@@ -95,8 +112,44 @@ pub fn cache_path_for_url(config_dir: &Path, url: &str) -> PathBuf {
     cache_dir(config_dir).join(hash.as_str())
 }
 
+pub fn ensure_cache_dir(config_dir: &Path) -> io::Result<PathBuf> {
+    let dir = cache_dir(config_dir);
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+pub fn write_cache_file(config_dir: &Path, url: &str, bytes: &[u8]) -> io::Result<PathBuf> {
+    ensure_cache_dir(config_dir)?;
+    let path = cache_path_for_url(config_dir, url);
+    let tmp = path.with_extension("part");
+    if let Err(err) = fs::write(&tmp, bytes) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    if let Err(err) = fs::rename(&tmp, &path) {
+        let _ = fs::remove_file(&tmp);
+        return Err(err);
+    }
+    Ok(path)
+}
+
 pub fn file_uri_for_cache(path: &Path) -> String {
     format!("file://{}", path.display())
+}
+
+pub fn cache_file_is_fresh(path: &Path, now_unix: i64, ttl_days: i32) -> io::Result<bool> {
+    let metadata = fs::metadata(path)?;
+    let modified_unix = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    Ok(cache_is_fresh(
+        metadata.len(),
+        modified_unix,
+        now_unix,
+        ttl_days,
+    ))
 }
 
 pub fn cache_is_fresh(size: u64, modified_unix: i64, now_unix: i64, ttl_days: i32) -> bool {
@@ -121,6 +174,30 @@ pub fn stale_cache_files(
         .collect()
 }
 
+pub fn cleanup_cache_dir(config_dir: &Path, now_unix: i64, ttl_days: i32) -> io::Result<usize> {
+    let dir = cache_dir(config_dir);
+    let mut removed = 0;
+    if !dir.exists() {
+        return Ok(0);
+    }
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with(".part") || !path.is_file() {
+            continue;
+        }
+        if !cache_file_is_fresh(&path, now_unix, ttl_days)? {
+            fs::remove_file(&path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 pub fn status_should_retry(status: u16) -> bool {
     status == 429 || status == 503
 }
@@ -137,6 +214,20 @@ pub fn retry_delay_seconds(retry_after: Option<&str>, attempt: u32) -> u32 {
 pub fn refresh_interval_seconds(minutes: i32) -> u32 {
     let minutes = if minutes > 0 { minutes } else { 60 };
     (minutes as u32) * 60
+}
+
+pub fn discover_cached_duration_ms(cache_path: &Path) -> Result<Option<i64>, String> {
+    gstreamer::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
+    let uri = file_uri_for_cache(cache_path);
+    let discoverer = gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
+        .map_err(|err| format!("failed to create GStreamer discoverer: {err}"))?;
+    let info = discoverer
+        .discover_uri(&uri)
+        .map_err(|err| format!("failed to discover podcast cache file {uri}: {err}"))?;
+    Ok(info
+        .duration()
+        .map(|duration| duration.mseconds() as i64)
+        .filter(|duration| *duration > 0))
 }
 
 pub fn prepare_playback_uri(
@@ -343,5 +434,60 @@ mod tests {
             ),
             "file:///tmp/cache"
         );
+    }
+
+    #[test]
+    fn importing_feed_adds_podcast_entries_to_playlist() {
+        let mut playlist = Playlist::new();
+        let added = add_feed_to_playlist(
+            &mut playlist,
+            r#"<rss><channel><item><title>Episode</title><guid>g1</guid><enclosure url="one.mp3"/></item></channel></rss>"#,
+            "https://example.test/feed.xml",
+        );
+
+        assert_eq!(added, 1);
+        assert_eq!(playlist.len(), 1);
+        let entry = &playlist.entries()[0];
+        assert!(entry.is_podcast);
+        assert_eq!(entry.filename, "https://example.test/one.mp3");
+        assert_eq!(entry.title, "Episode");
+        assert_eq!(
+            entry.podcast_feed.as_deref(),
+            Some("https://example.test/feed.xml")
+        );
+        assert_eq!(entry.podcast_guid.as_deref(), Some("g1"));
+    }
+
+    #[test]
+    fn cache_write_and_freshness_use_sha_path_and_part_file_cleanup() {
+        let root =
+            std::env::temp_dir().join(format!("xmms-rs-podcast-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let path =
+            write_cache_file(&root, "https://example.test/audio.wav", b"cached bytes").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"cached bytes");
+        assert!(!path.with_extension("part").exists());
+        assert!(cache_file_is_fresh(&path, i64::MAX, 0).is_ok());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cleanup_cache_dir_removes_stale_files_but_keeps_part_files() {
+        let root =
+            std::env::temp_dir().join(format!("xmms-rs-podcast-cleanup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dir = ensure_cache_dir(&root).unwrap();
+        let stale = dir.join("stale");
+        let part = dir.join("stale.part");
+        fs::write(&stale, b"old").unwrap();
+        fs::write(&part, b"old").unwrap();
+
+        assert_eq!(cleanup_cache_dir(&root, i64::MAX, 0).unwrap(), 1);
+        assert!(!stale.exists());
+        assert!(part.exists());
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

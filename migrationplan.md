@@ -173,11 +173,12 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [ ] Fetch RSS and Atom feeds.
   - [x] Parse RSS/Atom enclosures, media content URLs, and enclosure links.
   - [x] Preserve feed/guid metadata and title fallbacks.
-  - [ ] Cache podcast downloads under config dir.
+  - [x] Import parsed feed episodes into the playlist model with existing GUID/URL de-duplication.
+  - [x] Cache podcast downloads under config dir.
   - [x] Add deterministic SHA-256 cache path, freshness, TTL cleanup, playback URI, retry, and refresh-interval helpers.
-  - [ ] Discover cached duration with GStreamer.
+  - [x] Discover cached duration with GStreamer.
   - [ ] Retry 429 and 503 downloads with backoff.
-  - [ ] Cleanup cache by TTL.
+  - [x] Cleanup cache by TTL.
   - [ ] Refresh feeds on timer.
   - [ ] Skip failed current podcast item when needed.
 

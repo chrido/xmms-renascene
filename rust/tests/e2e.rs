@@ -5,11 +5,12 @@ use xmms_resuscitated::e2e::{
 };
 use xmms_resuscitated::mpris::{MprisCommand, MprisEvent};
 use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState};
-use xmms_resuscitated::playlist::PlaylistSortKey;
+use xmms_resuscitated::playlist::{Playlist, PlaylistSortKey};
 use xmms_resuscitated::podcast::{
-    cache_is_fresh, cache_path_for_url, classify_url_response, parse_feed, prepare_playback_uri,
-    refresh_interval_seconds, retry_delay_seconds, stale_cache_files, status_should_retry,
-    PodcastCacheEntry, PodcastUrlKind,
+    add_feed_to_playlist, cache_file_is_fresh, cache_is_fresh, cache_path_for_url,
+    classify_url_response, cleanup_cache_dir, discover_cached_duration_ms, parse_feed,
+    prepare_playback_uri, refresh_interval_seconds, retry_delay_seconds, stale_cache_files,
+    status_should_retry, write_cache_file, PodcastCacheEntry, PodcastUrlKind,
 };
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
@@ -1940,6 +1941,16 @@ fn podcast_e2e_cache_paths_freshness_cleanup_and_playback_uri_follow_c_defaults(
         format!("file://{}", cache.display())
     );
 
+    let cache_dir = root.join("podcast-cache");
+    fs::create_dir_all(&cache_dir).unwrap();
+    let stale_path = cache_dir.join("stale-file");
+    let part_path = cache_dir.join("stale-file.part");
+    fs::write(&stale_path, b"stale").unwrap();
+    fs::write(&part_path, b"partial").unwrap();
+    assert_eq!(cleanup_cache_dir(&root, i64::MAX, 0).unwrap(), 1);
+    assert!(!stale_path.exists());
+    assert!(part_path.exists());
+
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1953,4 +1964,62 @@ fn podcast_e2e_retry_and_refresh_scheduling_match_c() {
     assert_eq!(retry_delay_seconds(None, 4), 16);
     assert_eq!(refresh_interval_seconds(0), 60 * 60);
     assert_eq!(refresh_interval_seconds(5), 5 * 60);
+}
+
+#[test]
+fn podcast_e2e_imports_parsed_feed_into_playlist_with_deduplication() {
+    let mut playlist = Playlist::new();
+    let feed = r#"
+        <rss><channel>
+          <item><title>Episode One</title><guid>g1</guid><enclosure url="one.mp3"/></item>
+          <item><title>Episode One Updated</title><guid>g1</guid><enclosure url="one-new.mp3"/></item>
+        </channel></rss>
+    "#;
+
+    assert_eq!(
+        add_feed_to_playlist(&mut playlist, feed, "https://example.test/feed.xml"),
+        2
+    );
+    assert_eq!(playlist.len(), 1);
+    assert_eq!(playlist.entries()[0].title, "Episode One Updated");
+    assert_eq!(playlist.entries()[0].podcast_guid.as_deref(), Some("g1"));
+}
+
+#[test]
+fn podcast_e2e_writes_cache_file_and_discovers_cached_duration() {
+    let root = unique_temp_dir("xmms-rs-podcast-cache-write");
+    fs::create_dir_all(&root).unwrap();
+    let path =
+        write_cache_file(&root, "https://example.test/audio.wav", &silent_wav_bytes()).unwrap();
+
+    assert!(path.exists());
+    assert!(!path.with_extension("part").exists());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!(cache_file_is_fresh(&path, now, 0).unwrap());
+    assert!(discover_cached_duration_ms(&path).unwrap().unwrap() >= 1_000);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn silent_wav_bytes() -> Vec<u8> {
+    let sample_rate = 8_000u32;
+    let samples = 8_000u32;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + samples).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&8u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&samples.to_le_bytes());
+    bytes.extend(std::iter::repeat_n(128u8, samples as usize));
+    bytes
 }
