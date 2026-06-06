@@ -37,7 +37,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 - [ ] Complete Cairo renderer.
   - [x] Implement skin pixmap blitting with source/destination rectangles.
   - [x] Match transparency and scaling behavior.
-  - [ ] Draw focused/unfocused titlebars.
+  - [x] Draw focused/unfocused titlebars.
   - [ ] Draw normal and WindowShade main-player states.
   - [ ] Draw docked panel composition for main, equalizer, and playlist windows.
 

@@ -3,6 +3,10 @@ use std::fmt;
 use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
 
 use crate::skin::xpm::XpmImage;
+use crate::skin::{DefaultSkin, SkinPixmapKind};
+
+pub const MAIN_WINDOW_WIDTH: i32 = 275;
+pub const MAIN_TITLEBAR_HEIGHT: i32 = 14;
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -157,6 +161,35 @@ pub fn apply_window_scale(
     true
 }
 
+pub fn render_main_titlebar(
+    cr: &Context,
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+) -> Result<bool, RenderError> {
+    let Some(titlebar) = skin.get(SkinPixmapKind::Titlebar) else {
+        return Ok(false);
+    };
+    let titlebar = surface_from_xpm(titlebar)?;
+    let ysrc = match (shaded, focused) {
+        (true, true) => 29,
+        (true, false) => 42,
+        (false, true) => 0,
+        (false, false) => 15,
+    };
+
+    blit_surface_rect(
+        cr,
+        &titlebar,
+        27,
+        ysrc,
+        0,
+        0,
+        MAIN_WINDOW_WIDTH,
+        MAIN_TITLEBAR_HEIGHT,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +290,54 @@ mod tests {
         assert_eq!(matrix.xx(), 2.0);
         assert_eq!(matrix.yy(), 2.0);
         assert!(!apply_window_scale(&cr, 0, 10, 10, 5));
+    }
+
+    #[test]
+    fn renders_main_titlebar_focused_and_unfocused_rows() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let titlebar = surface_from_xpm(skin.get(SkinPixmapKind::Titlebar).unwrap()).unwrap();
+
+        let mut focused_dest =
+            ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT).unwrap();
+        let focused_cr = Context::new(&focused_dest).unwrap();
+        assert!(render_main_titlebar(&focused_cr, &skin, true, false).unwrap());
+        drop(focused_cr);
+        focused_dest.flush();
+
+        let mut unfocused_dest =
+            ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT).unwrap();
+        let unfocused_cr = Context::new(&unfocused_dest).unwrap();
+        assert!(render_main_titlebar(&unfocused_cr, &skin, false, false).unwrap());
+        drop(unfocused_cr);
+        unfocused_dest.flush();
+
+        let mut titlebar = titlebar;
+        let titlebar_stride = titlebar.stride() as usize;
+        let titlebar_data = titlebar.data().unwrap();
+        let focused_source_offset = titlebar_stride * 0 + 27 * 4;
+        let unfocused_source_offset = titlebar_stride * 15 + 27 * 4;
+        let expected_focused = u32::from_ne_bytes(
+            titlebar_data[focused_source_offset..focused_source_offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+        let expected_unfocused = u32::from_ne_bytes(
+            titlebar_data[unfocused_source_offset..unfocused_source_offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+
+        let focused_data = focused_dest.data().unwrap();
+        assert_eq!(
+            u32::from_ne_bytes(focused_data[0..4].try_into().unwrap()),
+            expected_focused
+        );
+        drop(focused_data);
+
+        let unfocused_data = unfocused_dest.data().unwrap();
+        assert_eq!(
+            u32::from_ne_bytes(unfocused_data[0..4].try_into().unwrap()),
+            expected_unfocused
+        );
     }
 }
