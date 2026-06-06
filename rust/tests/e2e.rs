@@ -34,6 +34,40 @@ fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
 }
 
 #[test]
+fn main_menu_items_trigger_their_preview_actions() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.click(MainTarget::MENU)
+        .assert_menu_visible()
+        .click_menu_item(MenuItem::OpenFiles)
+        .assert_menu_hidden()
+        .assert_file_dialog_visible();
+
+    app.click(MainTarget::MENU)
+        .assert_menu_visible()
+        .click_menu_item(MenuItem::OpenLocation)
+        .assert_menu_hidden()
+        .assert_window_visible(Window::OpenLocation);
+
+    app.click(MainTarget::MENU)
+        .assert_menu_visible()
+        .click_menu_item(MenuItem::Preferences)
+        .assert_menu_hidden()
+        .assert_window_visible(Window::Preferences);
+
+    app.click(MainTarget::MENU)
+        .assert_menu_visible()
+        .click_menu_item(MenuItem::SkinBrowser)
+        .assert_menu_hidden()
+        .assert_window_visible(Window::SkinBrowser);
+
+    app.click(MainTarget::MENU)
+        .assert_menu_visible()
+        .click_menu_item(MenuItem::Quit)
+        .assert_window_hidden(Window::Player);
+}
+
+#[test]
 fn transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

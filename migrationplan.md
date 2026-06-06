@@ -58,7 +58,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port transport controls to Rust UI hit testing and runtime player state.
   - [x] Port volume, balance, and position sliders to Rust UI hit testing and runtime state.
   - [x] Port shaded mode controls for main-window shade/unshade.
-  - [ ] Port menu actions.
+  - [x] Port menu actions.
   - [ ] Port prompts: play location and jump to time.
   - [ ] Port keyboard shortcuts.
   - [ ] Port drag-and-drop file handling.

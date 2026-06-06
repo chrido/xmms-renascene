@@ -91,8 +91,11 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     sync_panel_windows(&panel_windows, &main_state.borrow());
     let menu_popover = Rc::new(build_main_menu_popover(
         app,
+        &window,
         &drawing_area,
         &panel_windows.preferences,
+        &panel_windows.open_location,
+        &panel_windows.skin_browser,
         &main_state,
     ));
 
@@ -187,8 +190,11 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
 
 fn build_main_menu_popover(
     app: &gtk::Application,
+    parent_window: &gtk::ApplicationWindow,
     parent: &gtk::DrawingArea,
     preferences_window: &gtk::ApplicationWindow,
+    open_location_window: &gtk::ApplicationWindow,
+    skin_browser_window: &gtk::ApplicationWindow,
     main_state: &Rc<RefCell<MainWindowUiState>>,
 ) -> gtk::Popover {
     let popover = gtk::Popover::builder()
@@ -198,11 +204,37 @@ fn build_main_menu_popover(
     popover.set_parent(parent);
 
     let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    for label in ["Open Files...", "Open Location..."] {
-        let item = gtk::Button::with_label(label);
-        item.set_halign(gtk::Align::Fill);
-        menu_box.append(&item);
+    let open_files = gtk::Button::with_label("Open Files...");
+    open_files.set_halign(gtk::Align::Fill);
+    {
+        let parent_window = parent_window.clone();
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        open_files.connect_clicked(move |_| {
+            main_state.borrow_mut().set_menu_visible(false);
+            popover.popdown();
+            show_open_file_dialog(&parent_window);
+        });
     }
+    menu_box.append(&open_files);
+
+    let open_location = gtk::Button::with_label("Open Location...");
+    open_location.set_halign(gtk::Align::Fill);
+    {
+        let open_location_window = open_location_window.clone();
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        open_location.connect_clicked(move |_| {
+            {
+                let mut state = main_state.borrow_mut();
+                state.set_menu_visible(false);
+                state.set_open_location_visible(true);
+            }
+            popover.popdown();
+            open_location_window.present();
+        });
+    }
+    menu_box.append(&open_location);
 
     let preferences = gtk::Button::with_label("Preferences");
     preferences.set_halign(gtk::Align::Fill);
@@ -224,13 +256,33 @@ fn build_main_menu_popover(
 
     let skin_browser = gtk::Button::with_label("Skin Browser");
     skin_browser.set_halign(gtk::Align::Fill);
+    {
+        let skin_browser_window = skin_browser_window.clone();
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        skin_browser.connect_clicked(move |_| {
+            {
+                let mut state = main_state.borrow_mut();
+                state.set_menu_visible(false);
+                state.set_skin_browser_visible(true);
+            }
+            popover.popdown();
+            skin_browser_window.present();
+        });
+    }
     menu_box.append(&skin_browser);
 
     let quit = gtk::Button::with_label("Quit");
     quit.set_halign(gtk::Align::Fill);
     {
         let app = app.clone();
-        quit.connect_clicked(move |_| app.quit());
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        quit.connect_clicked(move |_| {
+            main_state.borrow_mut().set_menu_visible(false);
+            popover.popdown();
+            app.quit();
+        });
     }
     menu_box.append(&quit);
 
@@ -248,6 +300,8 @@ struct PanelWindows {
     playlist: gtk::ApplicationWindow,
     playlist_area: gtk::DrawingArea,
     preferences: gtk::ApplicationWindow,
+    open_location: gtk::ApplicationWindow,
+    skin_browser: gtk::ApplicationWindow,
 }
 
 impl PanelWindows {
@@ -260,12 +314,16 @@ impl PanelWindows {
         let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
         let (playlist, playlist_area) = build_playlist_window(app, skin, main_state, main_area);
         let preferences = build_preferences_window(app, main_state);
+        let open_location = build_open_location_window(app, main_state);
+        let skin_browser = build_skin_browser_window(app, main_state);
         Self {
             equalizer,
             equalizer_area,
             playlist,
             playlist_area,
             preferences,
+            open_location,
+            skin_browser,
         }
     }
 }
@@ -441,25 +499,73 @@ fn build_preferences_window(
     app: &gtk::Application,
     main_state: &Rc<RefCell<MainWindowUiState>>,
 ) -> gtk::ApplicationWindow {
+    build_placeholder_window(
+        app,
+        main_state,
+        "Preferences",
+        560,
+        520,
+        "Preferences UI placeholder for the Rust port",
+        MainWindowUiState::set_preferences_visible,
+    )
+}
+
+fn build_open_location_window(
+    app: &gtk::Application,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) -> gtk::ApplicationWindow {
+    build_placeholder_window(
+        app,
+        main_state,
+        "Open Location",
+        420,
+        120,
+        "Open Location placeholder for the Rust port",
+        MainWindowUiState::set_open_location_visible,
+    )
+}
+
+fn build_skin_browser_window(
+    app: &gtk::Application,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) -> gtk::ApplicationWindow {
+    build_placeholder_window(
+        app,
+        main_state,
+        "Skin Browser",
+        520,
+        420,
+        "Skin Browser placeholder for the Rust port",
+        MainWindowUiState::set_skin_browser_visible,
+    )
+}
+
+fn build_placeholder_window(
+    app: &gtk::Application,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    title: &str,
+    default_width: i32,
+    default_height: i32,
+    label: &str,
+    set_visible: fn(&mut MainWindowUiState, bool),
+) -> gtk::ApplicationWindow {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Preferences")
-        .default_width(560)
-        .default_height(520)
+        .title(title)
+        .default_width(default_width)
+        .default_height(default_height)
         .build();
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.set_margin_top(12);
     content.set_margin_bottom(12);
     content.set_margin_start(12);
     content.set_margin_end(12);
-    content.append(&gtk::Label::new(Some(
-        "Preferences UI placeholder for the Rust port",
-    )));
+    content.append(&gtk::Label::new(Some(label)));
     window.set_child(Some(&content));
     {
         let main_state = Rc::clone(main_state);
         window.connect_close_request(move |window| {
-            main_state.borrow_mut().set_preferences_visible(false);
+            set_visible(&mut main_state.borrow_mut(), false);
             window.hide();
             gtk::glib::Propagation::Stop
         });
@@ -827,6 +933,8 @@ pub(crate) struct MainWindowUiState {
     playlist_menu_hover: Option<usize>,
     playlist_menu_pressed: bool,
     preferences_visible: bool,
+    open_location_visible: bool,
+    skin_browser_visible: bool,
     file_dialog_visible: bool,
     position_position: i32,
     active: Option<MainControl>,
@@ -865,6 +973,8 @@ impl MainWindowUiState {
             playlist_menu_hover: None,
             playlist_menu_pressed: false,
             preferences_visible: false,
+            open_location_visible: false,
+            skin_browser_visible: false,
             file_dialog_visible: false,
             position_position: 0,
             active: None,
@@ -962,6 +1072,22 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
         self.preferences_visible = visible;
+    }
+
+    pub(crate) fn is_open_location_visible(&self) -> bool {
+        self.open_location_visible
+    }
+
+    pub(crate) fn set_open_location_visible(&mut self, visible: bool) {
+        self.open_location_visible = visible;
+    }
+
+    pub(crate) fn is_skin_browser_visible(&self) -> bool {
+        self.skin_browser_visible
+    }
+
+    pub(crate) fn set_skin_browser_visible(&mut self, visible: bool) {
+        self.skin_browser_visible = visible;
     }
 
     pub(crate) fn is_file_dialog_visible(&self) -> bool {
@@ -1692,6 +1818,7 @@ fn show_open_file_dialog(parent: &gtk::ApplicationWindow) {
         Some("Open"),
         Some("Cancel"),
     );
+    dialog.set_select_multiple(true);
     let dialog_for_response = dialog.clone();
     dialog.connect_response(move |_, _response| dialog_for_response.destroy());
     dialog.show();

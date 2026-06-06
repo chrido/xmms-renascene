@@ -45,6 +45,8 @@ pub enum Window {
     Playlist,
     Equalizer,
     Preferences,
+    OpenLocation,
+    SkinBrowser,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +122,11 @@ impl PanelTarget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
+    OpenFiles,
+    OpenLocation,
     Preferences,
+    SkinBrowser,
+    Quit,
 }
 
 impl MainTarget {
@@ -175,6 +181,8 @@ pub struct UiE2e {
     playlist_visible: bool,
     equalizer_visible: bool,
     preferences_visible: bool,
+    open_location_visible: bool,
+    skin_browser_visible: bool,
     file_dialog_visible: bool,
 }
 
@@ -187,6 +195,8 @@ impl UiE2e {
             playlist_visible: false,
             equalizer_visible: false,
             preferences_visible: false,
+            open_location_visible: false,
+            skin_browser_visible: false,
             file_dialog_visible: false,
         };
         harness.sync_windows();
@@ -254,10 +264,23 @@ impl UiE2e {
     }
 
     pub fn click_menu_item(&mut self, item: MenuItem) -> &mut Self {
+        self.state.set_menu_visible(false);
         match item {
+            MenuItem::OpenFiles => {
+                self.file_dialog_visible = true;
+                self.state.set_file_dialog_visible(true);
+            }
+            MenuItem::OpenLocation => {
+                self.state.set_open_location_visible(true);
+            }
             MenuItem::Preferences => {
-                self.state.set_menu_visible(false);
                 self.state.set_preferences_visible(true);
+            }
+            MenuItem::SkinBrowser => {
+                self.state.set_skin_browser_visible(true);
+            }
+            MenuItem::Quit => {
+                self.apply_action(UiAction::Quit);
             }
         }
         self.sync_windows();
@@ -485,6 +508,8 @@ impl UiE2e {
             Window::Playlist => self.playlist_visible,
             Window::Equalizer => self.equalizer_visible,
             Window::Preferences => self.preferences_visible,
+            Window::OpenLocation => self.open_location_visible,
+            Window::SkinBrowser => self.skin_browser_visible,
         }
     }
 
@@ -517,6 +542,8 @@ impl UiE2e {
                 self.playlist_visible = false;
                 self.equalizer_visible = false;
                 self.preferences_visible = false;
+                self.open_location_visible = false;
+                self.skin_browser_visible = false;
             }
         }
     }
@@ -529,6 +556,8 @@ impl UiE2e {
         self.playlist_visible = visibility.playlist;
         self.equalizer_visible = visibility.equalizer;
         self.preferences_visible = self.state.is_preferences_visible();
+        self.open_location_visible = self.state.is_open_location_visible();
+        self.skin_browser_visible = self.state.is_skin_browser_visible();
     }
 
     fn drag_equalizer_slider(&mut self, x: i32, position: i32) -> &mut Self {

@@ -52,6 +52,7 @@ Completed so far:
 - Added playlist resizing for the Rust preview, including startup sizing, current-size hit testing, and frame tiling at resized dimensions.
 - Added the shaded playlist frame and compact title/time overlay.
 - Wired the main player eject/open button to a native file chooser dialog in the GTK preview.
+- Wired the main menu actions in the GTK preview: Open Files opens the native multi-select file chooser, Open Location and Skin Browser show Rust placeholder windows, Preferences shows the preferences placeholder, and Quit exits the app.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.
@@ -200,7 +201,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, and menu behavior. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, complete playlist data operations, audio-connected equalizer behavior, MPRIS, Spotify, podcasts, output device selection UI, full preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, and menu behavior. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, complete playlist data operations, audio-connected equalizer behavior, MPRIS, Spotify, podcasts, output device selection UI, real Open Location/Skin Browser implementations, full preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 
