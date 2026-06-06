@@ -2,7 +2,7 @@ use std::fmt;
 
 use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
 
-use crate::skin::widget::TextBox;
+use crate::skin::widget::{PlayStatusValue, TextBox};
 use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
 
@@ -292,32 +292,139 @@ pub fn render_main_player(
     Ok(rendered)
 }
 
-pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool, RenderError> {
-    let mut rendered = render_main_player(cr, skin, true, false)?;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainPushButton {
+    Menu,
+    Minimize,
+    Shade,
+    Close,
+    Previous,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Eject,
+}
 
-    let push_buttons = [
-        (SkinPixmapKind::Titlebar, 0, 0, 6, 3, 9, 9),
-        (SkinPixmapKind::Titlebar, 9, 0, 244, 3, 9, 9),
-        (SkinPixmapKind::Titlebar, 0, 18, 254, 3, 9, 9),
-        (SkinPixmapKind::Titlebar, 18, 0, 264, 3, 9, 9),
-        (SkinPixmapKind::CButtons, 0, 0, 16, 88, 23, 18),
-        (SkinPixmapKind::CButtons, 23, 0, 39, 88, 23, 18),
-        (SkinPixmapKind::CButtons, 46, 0, 62, 88, 23, 18),
-        (SkinPixmapKind::CButtons, 69, 0, 85, 88, 23, 18),
-        (SkinPixmapKind::CButtons, 92, 0, 108, 88, 22, 18),
-        (SkinPixmapKind::CButtons, 114, 0, 136, 89, 22, 16),
-        (SkinPixmapKind::ShufRep, 28, 0, 164, 89, 46, 15),
-        (SkinPixmapKind::ShufRep, 0, 0, 210, 89, 28, 15),
-        (SkinPixmapKind::ShufRep, 0, 61, 219, 58, 23, 12),
-        (SkinPixmapKind::ShufRep, 23, 61, 242, 58, 23, 12),
-    ];
-    for (kind, sx, sy, dx, dy, width, height) in push_buttons {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainToggleButton {
+    Shuffle,
+    Repeat,
+    Equalizer,
+    Playlist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainSlider {
+    Volume,
+    Balance,
+    Position,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainWindowRenderState {
+    pub focused: bool,
+    pub shaded: bool,
+    pub title: String,
+    pub bitrate_text: String,
+    pub frequency_text: String,
+    pub volume_position: i32,
+    pub balance_position: i32,
+    pub position_position: i32,
+    pub shuffle_selected: bool,
+    pub repeat_selected: bool,
+    pub equalizer_selected: bool,
+    pub playlist_selected: bool,
+    pub pressed_push: Option<MainPushButton>,
+    pub pressed_toggle: Option<MainToggleButton>,
+    pub pressed_slider: Option<MainSlider>,
+    pub play_status: PlayStatusValue,
+    pub channels: i32,
+}
+
+impl Default for MainWindowRenderState {
+    fn default() -> Self {
+        Self {
+            focused: true,
+            shaded: false,
+            title: "XMMS Resuscitated".to_string(),
+            bitrate_text: String::new(),
+            frequency_text: String::new(),
+            volume_position: 51,
+            balance_position: 12,
+            position_position: 0,
+            shuffle_selected: false,
+            repeat_selected: false,
+            equalizer_selected: false,
+            playlist_selected: false,
+            pressed_push: None,
+            pressed_toggle: None,
+            pressed_slider: None,
+            play_status: PlayStatusValue::Stopped,
+            channels: 0,
+        }
+    }
+}
+
+pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool, RenderError> {
+    render_main_player_state(cr, skin, &MainWindowRenderState::default())
+}
+
+pub fn render_main_player_state(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: &MainWindowRenderState,
+) -> Result<bool, RenderError> {
+    let mut rendered = render_main_player(cr, skin, state.focused, state.shaded)?;
+
+    for button in [
+        MainPushButton::Menu,
+        MainPushButton::Minimize,
+        MainPushButton::Shade,
+        MainPushButton::Close,
+    ] {
+        let (kind, sx, sy, dx, dy, width, height) =
+            main_push_button_rect(button, state.pressed_push == Some(button));
         rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
     }
 
-    render_text(cr, skin, "XMMS Resuscitated", 111, 27, 153)?;
-    render_text(cr, skin, "", 111, 43, 15)?;
-    render_text(cr, skin, "", 156, 43, 10)?;
+    if state.shaded {
+        return Ok(rendered);
+    }
+
+    for button in [
+        MainPushButton::Previous,
+        MainPushButton::Play,
+        MainPushButton::Pause,
+        MainPushButton::Stop,
+        MainPushButton::Next,
+        MainPushButton::Eject,
+    ] {
+        let (kind, sx, sy, dx, dy, width, height) =
+            main_push_button_rect(button, state.pressed_push == Some(button));
+        rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
+    }
+
+    for toggle in [
+        MainToggleButton::Shuffle,
+        MainToggleButton::Repeat,
+        MainToggleButton::Equalizer,
+        MainToggleButton::Playlist,
+    ] {
+        let selected = match toggle {
+            MainToggleButton::Shuffle => state.shuffle_selected,
+            MainToggleButton::Repeat => state.repeat_selected,
+            MainToggleButton::Equalizer => state.equalizer_selected,
+            MainToggleButton::Playlist => state.playlist_selected,
+        };
+        let (kind, sx, sy, dx, dy, width, height) =
+            main_toggle_button_rect(toggle, selected, state.pressed_toggle == Some(toggle));
+        rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
+    }
+
+    render_text(cr, skin, &state.title, 111, 27, 153)?;
+    render_text(cr, skin, &state.bitrate_text, 111, 43, 15)?;
+    render_text(cr, skin, &state.frequency_text, 156, 43, 10)?;
 
     rendered |= render_horizontal_slider(
         cr,
@@ -328,14 +435,18 @@ pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool
             y: 57,
             width: 68,
             height: 13,
-            position: 51,
-            knob_source_x: 15,
+            position: state.volume_position.clamp(0, 51),
+            knob_source_x: if state.pressed_slider == Some(MainSlider::Volume) {
+                0
+            } else {
+                15
+            },
             knob_source_y: 422,
             knob_width: 14,
             knob_height: 11,
             frame_height: 15,
             frame_offset: 0,
-            frame: 27,
+            frame: ((state.volume_position.clamp(0, 51) as f64 / 51.0) * 27.0) as i32,
         },
     )?;
     rendered |= render_horizontal_slider(
@@ -347,14 +458,18 @@ pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool
             y: 57,
             width: 38,
             height: 13,
-            position: 12,
-            knob_source_x: 15,
+            position: state.balance_position.clamp(0, 24),
+            knob_source_x: if state.pressed_slider == Some(MainSlider::Balance) {
+                0
+            } else {
+                15
+            },
             knob_source_y: 422,
             knob_width: 14,
             knob_height: 11,
             frame_height: 15,
             frame_offset: 0,
-            frame: 13,
+            frame: ((state.balance_position.clamp(0, 24) as f64 / 24.0) * 27.0) as i32,
         },
     )?;
     rendered |= render_horizontal_slider(
@@ -366,8 +481,12 @@ pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool
             y: 72,
             width: 248,
             height: 10,
-            position: 0,
-            knob_source_x: 248,
+            position: state.position_position.clamp(0, 219),
+            knob_source_x: if state.pressed_slider == Some(MainSlider::Position) {
+                278
+            } else {
+                248
+            },
             knob_source_y: 0,
             knob_width: 29,
             knob_height: 10,
@@ -382,10 +501,160 @@ pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool
     }
 
     render_visualization_reset(cr, skin, 24, 43, 76)?;
-    rendered |= render_mono_stereo(cr, skin, 0, 212, 41)?;
-    rendered |= blit_skin_rect(cr, skin, SkinPixmapKind::PlayPause, 0, 18, 24, 28, 11, 9)?;
+    rendered |= render_mono_stereo(cr, skin, state.channels, 212, 41)?;
+    let status_y = match state.play_status {
+        PlayStatusValue::Playing => 0,
+        PlayStatusValue::Paused => 9,
+        PlayStatusValue::Stopped => 18,
+    };
+    rendered |= blit_skin_rect(
+        cr,
+        skin,
+        SkinPixmapKind::PlayPause,
+        0,
+        status_y,
+        24,
+        28,
+        11,
+        9,
+    )?;
 
     Ok(rendered)
+}
+
+fn main_push_button_rect(
+    button: MainPushButton,
+    pressed: bool,
+) -> (SkinPixmapKind, i32, i32, i32, i32, i32, i32) {
+    match button {
+        MainPushButton::Menu => (
+            SkinPixmapKind::Titlebar,
+            0,
+            if pressed { 9 } else { 0 },
+            6,
+            3,
+            9,
+            9,
+        ),
+        MainPushButton::Minimize => (
+            SkinPixmapKind::Titlebar,
+            9,
+            if pressed { 9 } else { 0 },
+            244,
+            3,
+            9,
+            9,
+        ),
+        MainPushButton::Shade => (
+            SkinPixmapKind::Titlebar,
+            if pressed { 9 } else { 0 },
+            18,
+            254,
+            3,
+            9,
+            9,
+        ),
+        MainPushButton::Close => (
+            SkinPixmapKind::Titlebar,
+            18,
+            if pressed { 9 } else { 0 },
+            264,
+            3,
+            9,
+            9,
+        ),
+        MainPushButton::Previous => (
+            SkinPixmapKind::CButtons,
+            0,
+            if pressed { 18 } else { 0 },
+            16,
+            88,
+            23,
+            18,
+        ),
+        MainPushButton::Play => (
+            SkinPixmapKind::CButtons,
+            23,
+            if pressed { 18 } else { 0 },
+            39,
+            88,
+            23,
+            18,
+        ),
+        MainPushButton::Pause => (
+            SkinPixmapKind::CButtons,
+            46,
+            if pressed { 18 } else { 0 },
+            62,
+            88,
+            23,
+            18,
+        ),
+        MainPushButton::Stop => (
+            SkinPixmapKind::CButtons,
+            69,
+            if pressed { 18 } else { 0 },
+            85,
+            88,
+            23,
+            18,
+        ),
+        MainPushButton::Next => (
+            SkinPixmapKind::CButtons,
+            92,
+            if pressed { 18 } else { 0 },
+            108,
+            88,
+            22,
+            18,
+        ),
+        MainPushButton::Eject => (
+            SkinPixmapKind::CButtons,
+            114,
+            if pressed { 16 } else { 0 },
+            136,
+            89,
+            22,
+            16,
+        ),
+    }
+}
+
+fn main_toggle_button_rect(
+    toggle: MainToggleButton,
+    selected: bool,
+    pressed: bool,
+) -> (SkinPixmapKind, i32, i32, i32, i32, i32, i32) {
+    let row = match (selected, pressed) {
+        (false, false) => 0,
+        (false, true) => 15,
+        (true, false) => 30,
+        (true, true) => 45,
+    };
+    match toggle {
+        MainToggleButton::Shuffle => (SkinPixmapKind::ShufRep, 28, row, 164, 89, 46, 15),
+        MainToggleButton::Repeat => (SkinPixmapKind::ShufRep, 0, row, 210, 89, 28, 15),
+        MainToggleButton::Equalizer => {
+            let x = match (selected, pressed) {
+                (false, false) => 0,
+                (false, true) => 46,
+                (true, false) => 0,
+                (true, true) => 46,
+            };
+            let y = if selected { 73 } else { 61 };
+            (SkinPixmapKind::ShufRep, x, y, 219, 58, 23, 12)
+        }
+        MainToggleButton::Playlist => {
+            let x = match (selected, pressed) {
+                (false, false) => 23,
+                (false, true) => 69,
+                (true, false) => 23,
+                (true, true) => 69,
+            };
+            let y = if selected { 73 } else { 61 };
+            (SkinPixmapKind::ShufRep, x, y, 242, 58, 23, 12)
+        }
+    }
 }
 
 struct SliderRenderSpec {
