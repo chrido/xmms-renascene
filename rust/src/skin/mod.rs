@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 use image::GenericImageView;
 use xpm::XpmImage;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinEntry {
+    pub name: String,
+    pub path: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SkinPixmapKind {
     Main,
@@ -417,6 +423,99 @@ impl DefaultSkin {
     pub fn playlist_colors(&self) -> PlaylistColors {
         self.playlist_colors
     }
+}
+
+pub fn discover_skins_in_dirs<I, P>(dirs: I) -> io::Result<Vec<SkinEntry>>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut skins = Vec::new();
+    for dir in dirs {
+        scan_skin_dir(dir.as_ref(), &mut skins)?;
+    }
+    skins.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    Ok(skins)
+}
+
+pub fn skin_browser_search_dirs(
+    user_config_dir: &Path,
+    home_dir: &Path,
+    system_skin_dir: &Path,
+    skinsdir_env: Option<&str>,
+) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        user_config_dir.join("xmms").join("Skins"),
+        home_dir.join(".xmms").join("Skins"),
+        system_skin_dir.to_path_buf(),
+    ];
+    if let Some(skinsdir_env) = skinsdir_env {
+        dirs.extend(
+            skinsdir_env
+                .split(':')
+                .filter(|dir| !dir.is_empty())
+                .map(PathBuf::from),
+        );
+    }
+    dirs
+}
+
+fn scan_skin_dir(dir: &Path, skins: &mut Vec<SkinEntry>) -> io::Result<()> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Ok(());
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with('.') {
+            continue;
+        }
+
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() || (file_type.is_file() && is_skin_archive_path(&path)) {
+            skins.push(SkinEntry {
+                name: skin_display_name(&path),
+                path,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_skin_archive_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ["zip", "wsz", "tgz", "gz", "bz2"]
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
+}
+
+fn skin_display_name(path: &Path) -> String {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return path.display().to_string();
+    };
+
+    let mut name = file_name.to_string();
+    if is_skin_archive_path(path) {
+        if let Some((base, _ext)) = name.rsplit_once('.') {
+            name = base.to_string();
+        }
+        if name.to_ascii_lowercase().strip_suffix(".tar").is_some() {
+            name.truncate(name.len() - 4);
+        }
+    }
+    name
 }
 
 fn archive_entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {

@@ -8,6 +8,7 @@ use xmms_resuscitated::playlist::PlaylistSortKey;
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
 };
+use xmms_resuscitated::skin::skin_browser_search_dirs;
 use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
@@ -526,6 +527,98 @@ fn update_timer_advances_position_while_playing_only() {
         .press_shortcut(Shortcut::Stop)
         .update_timer_tick(1_000)
         .assert_position(0);
+}
+
+#[test]
+fn skin_browser_discovers_user_and_system_skins_sorted_like_c() {
+    let root = unique_temp_dir("xmms-rs-skin-browser-discover");
+    let user_skins = root.join("user").join("xmms").join("Skins");
+    let system_skins = root.join("system").join("Skins");
+    fs::create_dir_all(user_skins.join("Zed Skin")).unwrap();
+    fs::create_dir_all(user_skins.join(".hidden")).unwrap();
+    fs::create_dir_all(system_skins.join("Classic")).unwrap();
+    fs::write(user_skins.join("Blue.wsz"), b"archive").unwrap();
+    fs::write(user_skins.join("not-a-skin.txt"), b"ignored").unwrap();
+
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+    app.open_preferences_page(PreferencesPage::Fonts)
+        .click_menu_item(MenuItem::SkinBrowser)
+        .assert_window_visible(Window::SkinBrowser)
+        .scan_skin_browser_dirs(&[user_skins.clone(), system_skins.clone()])
+        .assert_skin_browser_entries(&["Blue", "Classic", "Zed Skin"])
+        .assert_selected_skin_index(0)
+        .assert_selected_skin_path(None);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn skin_browser_selects_default_and_installed_skin_paths() {
+    let root = unique_temp_dir("xmms-rs-skin-browser-select");
+    let skins = root.join("Skins");
+    fs::create_dir_all(skins.join("Classic")).unwrap();
+    fs::write(skins.join("Packed.tar.gz"), b"archive").unwrap();
+
+    let classic = skins.join("Classic");
+    let packed = skins.join("Packed.tar.gz");
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.scan_skin_browser_dirs(&[skins.clone()])
+        .assert_skin_browser_entries(&["Classic", "Packed"])
+        .select_skin_browser_index(1)
+        .assert_selected_skin_index(1)
+        .assert_selected_skin_path(Some(classic.as_path()))
+        .assert_skin_reload_count(1)
+        .select_skin_browser_index(2)
+        .assert_selected_skin_index(2)
+        .assert_selected_skin_path(Some(packed.as_path()))
+        .assert_skin_reload_count(2)
+        .select_skin_browser_index(0)
+        .assert_selected_skin_index(0)
+        .assert_selected_skin_path(None)
+        .assert_skin_reload_count(3)
+        .reload_skin()
+        .assert_skin_reload_count(4);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn skin_browser_search_path_covers_user_legacy_system_and_env_dirs() {
+    let root = unique_temp_dir("xmms-rs-skin-browser-paths");
+    let user_config = root.join("config");
+    let home = root.join("home");
+    let system = root.join("system").join("Skins");
+    let env_one = root.join("env-one");
+    let env_two = root.join("env-two");
+
+    for dir in [
+        user_config.join("xmms").join("Skins"),
+        home.join(".xmms").join("Skins"),
+        system.clone(),
+        env_one.clone(),
+        env_two.clone(),
+    ] {
+        fs::create_dir_all(dir.join("Skin")).unwrap();
+    }
+
+    let dirs = skin_browser_search_dirs(
+        &user_config,
+        &home,
+        &system,
+        Some(&format!("{}:{}", env_one.display(), env_two.display())),
+    );
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+    app.scan_skin_browser_dirs(&dirs)
+        .assert_skin_browser_entries(&["Skin", "Skin", "Skin", "Skin", "Skin"]);
+
+    assert_eq!(dirs[0], user_config.join("xmms").join("Skins"));
+    assert_eq!(dirs[1], home.join(".xmms").join("Skins"));
+    assert_eq!(dirs[2], system);
+    assert_eq!(dirs[3], env_one);
+    assert_eq!(dirs[4], env_two);
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

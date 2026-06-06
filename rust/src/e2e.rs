@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::path::PathBuf;
 
 use crate::app_state::AppState;
 use crate::config::Config;
@@ -1062,6 +1063,55 @@ impl UiE2e {
             self.state.preference_podcast_refresh_interval_minutes(),
             expected
         );
+        self
+    }
+
+    pub fn scan_skin_browser_dirs(&mut self, dirs: &[PathBuf]) -> &mut Self {
+        self.state
+            .scan_skin_browser_dirs(dirs)
+            .expect("skin browser directory scan should succeed");
+        self
+    }
+
+    pub fn assert_skin_browser_entries(&mut self, expected: &[&str]) -> &mut Self {
+        let actual: Vec<&str> = self
+            .state
+            .skin_browser_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(actual, expected);
+        self
+    }
+
+    pub fn select_skin_browser_index(&mut self, index: usize) -> &mut Self {
+        assert!(
+            self.state.select_skin_browser_index(index),
+            "expected skin index {index} to be selectable"
+        );
+        self
+    }
+
+    pub fn assert_selected_skin_index(&mut self, expected: usize) -> &mut Self {
+        assert_eq!(self.state.selected_skin_index(), expected);
+        self
+    }
+
+    pub fn assert_selected_skin_path(&mut self, expected: Option<&Path>) -> &mut Self {
+        assert_eq!(
+            self.state.selected_skin().map(PathBuf::from),
+            expected.map(PathBuf::from)
+        );
+        self
+    }
+
+    pub fn reload_skin(&mut self) -> &mut Self {
+        self.state.reload_skin();
+        self
+    }
+
+    pub fn assert_skin_reload_count(&mut self, expected: u32) -> &mut Self {
+        assert_eq!(self.state.skin_reload_count(), expected);
         self
     }
 

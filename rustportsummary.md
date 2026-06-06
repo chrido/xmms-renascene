@@ -85,6 +85,7 @@ Completed so far:
 - Added e2e-visible Rust docked panel state for equalizer/playlist detach and reattach flows, covering docked composition size changes when panels are detached.
 - Wired the Rust visualization widget into main-window rendering and timer updates, covering analyzer/scope/off/milkdrop modes, bars/lines, normal/fire/vertical-line analyzer colors, peaks/falloff, shaded VU mode, and refresh divisors with e2e tests.
 - Added a Rust preferences state/e2e surface plus a tabbed GTK preferences shell, covering immediate application of audio, playlist, docking, font, title, visualization, podcast, and default-reset settings.
+- Added Rust skin browser discovery/search-path behavior for user, legacy, system, and `SKINSDIR` skin directories plus deterministic e2e coverage for sorted discovery, archive display names, default/custom selection, and reload requests.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.

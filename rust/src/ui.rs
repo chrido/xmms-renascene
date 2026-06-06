@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::io;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,7 +23,7 @@ use crate::skin::widget::{
     PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode,
     VisVuMode, Visualization, WidgetId,
 };
-use crate::skin::DefaultSkin;
+use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry};
 
 const DEFAULT_SCALE: i32 = 2;
 
@@ -1806,6 +1807,9 @@ pub(crate) struct MainWindowUiState {
     open_location_visible: bool,
     jump_time_visible: bool,
     skin_browser_visible: bool,
+    skin_browser_entries: Vec<SkinEntry>,
+    selected_skin_index: usize,
+    skin_reload_count: u32,
     file_dialog_visible: bool,
     directory_dialog_visible: bool,
     last_open_location: Option<String>,
@@ -1864,6 +1868,9 @@ impl MainWindowUiState {
             open_location_visible: false,
             jump_time_visible: false,
             skin_browser_visible: false,
+            skin_browser_entries: Vec::new(),
+            selected_skin_index: 0,
+            skin_reload_count: 0,
             file_dialog_visible: false,
             directory_dialog_visible: false,
             last_open_location: None,
@@ -2087,6 +2094,60 @@ impl MainWindowUiState {
 
     pub(crate) fn set_skin_browser_visible(&mut self, visible: bool) {
         self.skin_browser_visible = visible;
+    }
+
+    pub(crate) fn scan_skin_browser_dirs<P: AsRef<Path>>(&mut self, dirs: &[P]) -> io::Result<()> {
+        self.skin_browser_entries = discover_skins_in_dirs(dirs)?;
+        self.selected_skin_index = self
+            .app_state
+            .config
+            .skin
+            .as_deref()
+            .and_then(|current| {
+                self.skin_browser_entries
+                    .iter()
+                    .position(|entry| entry.path == Path::new(current))
+                    .map(|index| index + 1)
+            })
+            .unwrap_or(0);
+        Ok(())
+    }
+
+    pub(crate) fn skin_browser_entries(&self) -> &[SkinEntry] {
+        &self.skin_browser_entries
+    }
+
+    pub(crate) fn selected_skin_index(&self) -> usize {
+        self.selected_skin_index
+    }
+
+    pub(crate) fn selected_skin(&self) -> Option<&str> {
+        self.app_state.config.skin.as_deref()
+    }
+
+    pub(crate) fn select_skin_browser_index(&mut self, index: usize) -> bool {
+        if index == 0 {
+            self.app_state.config.skin = None;
+            self.selected_skin_index = 0;
+            self.reload_skin();
+            return true;
+        }
+
+        let Some(entry) = self.skin_browser_entries.get(index - 1) else {
+            return false;
+        };
+        self.app_state.config.skin = Some(entry.path.display().to_string());
+        self.selected_skin_index = index;
+        self.reload_skin();
+        true
+    }
+
+    pub(crate) fn reload_skin(&mut self) {
+        self.skin_reload_count = self.skin_reload_count.saturating_add(1);
+    }
+
+    pub(crate) fn skin_reload_count(&self) -> u32 {
+        self.skin_reload_count
     }
 
     pub(crate) fn is_file_dialog_visible(&self) -> bool {

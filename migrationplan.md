@@ -126,12 +126,12 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [ ] Port podcast cache TTL and refresh interval controls.
   - [ ] Preserve immediate apply/save behavior.
 
-- [ ] Port skin browser.
-  - [ ] Discover user skins in `~/.config/xmms/Skins/`.
-  - [ ] Discover system skins in installed data directory.
-  - [ ] Preview/select installed skin directories and archives.
-  - [ ] Port reload skin behavior.
-  - [ ] Port Alt+S shortcut integration.
+- [x] Port skin browser.
+  - [x] Discover user skins in `~/.config/xmms/Skins/`.
+  - [x] Discover system skins in installed data directory.
+  - [x] Preview/select installed skin directories and archives.
+  - [x] Port reload skin behavior.
+  - [x] Port Alt+S shortcut integration.
 
 - [ ] Port output device picker.
   - [ ] Enumerate GStreamer audio sink devices.
