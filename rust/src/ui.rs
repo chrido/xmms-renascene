@@ -244,7 +244,7 @@ fn build_preview_window(
     {
         let drawing_area = drawing_area.clone();
         let main_state = Rc::clone(&main_state);
-        click.connect_pressed(move |_gesture, n_press, x, y| {
+        click.connect_pressed(move |gesture, n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
@@ -263,10 +263,16 @@ fn build_preview_window(
                             drawing_area.queue_draw();
                             return;
                         }
-                        let pressed = main_state.borrow_mut().playlist_press(panel_x, panel_y)
-                            || main_state
-                                .borrow_mut()
-                                .playlist_scrollbar_press(panel_x, panel_y);
+                        let ctrl_pressed = gesture
+                            .current_event_state()
+                            .contains(gtk::gdk::ModifierType::CONTROL_MASK);
+                        let pressed = main_state.borrow_mut().playlist_press_with_ctrl(
+                            panel_x,
+                            panel_y,
+                            ctrl_pressed,
+                        ) || main_state
+                            .borrow_mut()
+                            .playlist_scrollbar_press(panel_x, panel_y);
                         if pressed {
                             drawing_area.queue_draw();
                         }
@@ -2697,7 +2703,14 @@ fn add_panel_click_controller(
                         area.queue_draw();
                         return;
                     }
-                    if main_state.borrow_mut().playlist_press(base_x, base_y) {
+                    let ctrl_pressed = gesture
+                        .current_event_state()
+                        .contains(gtk::gdk::ModifierType::CONTROL_MASK);
+                    if main_state.borrow_mut().playlist_press_with_ctrl(
+                        base_x,
+                        base_y,
+                        ctrl_pressed,
+                    ) {
                         area.queue_draw();
                         return;
                     }
@@ -4785,6 +4798,10 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_press(&mut self, x: i32, y: i32) -> bool {
+        self.playlist_press_with_ctrl(x, y, false)
+    }
+
+    pub(crate) fn playlist_press_with_ctrl(&mut self, x: i32, y: i32, ctrl_pressed: bool) -> bool {
         if let Some(item) = self.playlist_menu_item_at(x, y) {
             self.playlist_menu_hover = Some(item);
             self.playlist_menu_pressed = true;
@@ -4797,6 +4814,17 @@ impl MainWindowUiState {
         let Some(index) = self.playlist_entry_at(x, y) else {
             return false;
         };
+        if ctrl_pressed {
+            if let Some(entry) = self.app_state.playlist.entries_mut().get_mut(index) {
+                entry.selected = !entry.selected;
+            }
+            self.playlist_last_click = None;
+            self.playlist_pending_double_click = None;
+            self.playlist_drag_index = None;
+            self.playlist_drag_moved = false;
+            return true;
+        }
+
         let now = Instant::now();
         let is_double_click = self
             .playlist_last_click

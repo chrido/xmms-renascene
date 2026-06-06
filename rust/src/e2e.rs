@@ -505,6 +505,17 @@ impl UiE2e {
         self
     }
 
+    pub fn ctrl_click_playlist_row(&mut self, index: usize) -> &mut Self {
+        let y = self.playlist_row_y(index);
+        assert!(
+            self.state.playlist_press_with_ctrl(20, y, true),
+            "expected Ctrl+playlist row {index} press to toggle selection"
+        );
+        self.state.playlist_entry_release();
+        self.sync_windows();
+        self
+    }
+
     pub fn double_click_playlist_row(&mut self, index: usize) -> &mut Self {
         let y = self.playlist_row_y(index);
         assert!(

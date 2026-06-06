@@ -864,6 +864,31 @@ fn clicked_playlist_rows_update_single_selection() {
 }
 
 #[test]
+fn ctrl_clicking_playlist_rows_toggles_multiple_selection() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist([
+        "file:///music/4-zulu.ogg",
+        "file:///music/3-charlie.ogg",
+        "file:///music/2-bravo.ogg",
+        "file:///music/1-alpha.ogg",
+    ])
+    .click_playlist_row(0)
+    .assert_playlist_entry_selected(0, true)
+    .ctrl_click_playlist_row(2)
+    .assert_playlist_entry_selected(0, true)
+    .assert_playlist_entry_selected(1, false)
+    .assert_playlist_entry_selected(2, true)
+    .assert_playlist_entry_selected(3, false)
+    .ctrl_click_playlist_row(0)
+    .assert_playlist_entry_selected(0, false)
+    .assert_playlist_entry_selected(2, true)
+    .click_playlist_row(3)
+    .assert_playlist_entry_selected(2, false)
+    .assert_playlist_entry_selected(3, true);
+}
+
+#[test]
 fn double_clicking_playlist_row_starts_that_entry() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
