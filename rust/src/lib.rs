@@ -6,4 +6,5 @@ pub mod player;
 pub mod playlist;
 pub mod render;
 pub mod skin;
+pub mod spotify;
 pub mod ui;

@@ -152,8 +152,8 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 
 - [ ] Port Spotify integration.
   - [ ] Preserve PKCE auth flow.
-  - [ ] Preserve built-in client ID behavior.
-  - [ ] Preserve refresh token storage in `spotify.conf`.
+  - [x] Preserve built-in client ID behavior.
+  - [x] Preserve refresh token storage in `spotify.conf`.
   - [ ] Port token refresh.
   - [ ] Port playlist fetch.
   - [ ] Port playlist track fetch.

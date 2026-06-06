@@ -13,6 +13,10 @@ use xmms_resuscitated::skin::skin_browser_search_dirs;
 use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
+use xmms_resuscitated::spotify::{
+    authorization_url, config_path as spotify_config_path, SpotifyAuthConfig, CLIENT_ID,
+    REDIRECT_URI,
+};
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
 };
@@ -278,6 +282,37 @@ fn spotify_and_podcast_entries_are_available_to_e2e_playlist_state() {
         .assert_playlist_title(0, "Spotify Song")
         .assert_playlist_entry(1, "https://example.test/episode.mp3")
         .assert_playlist_title(1, "Podcast Episode");
+}
+
+#[test]
+fn spotify_auth_config_and_url_match_c_contract() {
+    let dir = unique_temp_dir("spotify-auth");
+    let path = spotify_config_path(&dir);
+
+    let missing = SpotifyAuthConfig::load_from_file(&path).unwrap();
+    assert!(!missing.is_authenticated());
+
+    SpotifyAuthConfig {
+        refresh_token: Some("stored-refresh-token".to_string()),
+    }
+    .save_to_file(&path)
+    .unwrap();
+
+    let loaded = SpotifyAuthConfig::load_from_file(&path).unwrap();
+    assert_eq!(
+        loaded.refresh_token.as_deref(),
+        Some("stored-refresh-token")
+    );
+    assert!(loaded.is_authenticated());
+
+    let auth_url = authorization_url("pkce-challenge");
+    assert!(auth_url.contains(&format!("client_id={CLIENT_ID}")));
+    assert!(auth_url.contains(&format!("redirect_uri={REDIRECT_URI}")));
+    assert!(auth_url.contains("scope=user-read-playback-state%20user-modify-playback-state"));
+    assert!(auth_url.contains("code_challenge_method=S256"));
+    assert!(auth_url.contains("code_challenge=pkce-challenge"));
+
+    fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
