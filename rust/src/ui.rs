@@ -5,7 +5,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 
@@ -3071,6 +3071,9 @@ pub(crate) struct MainWindowUiState {
     playlist_docked_resizing: bool,
     playlist_resize_drag_offset_y: i32,
     playlist_drag_index: Option<usize>,
+    playlist_drag_moved: bool,
+    playlist_last_click: Option<(usize, Instant)>,
+    playlist_pending_double_click: Option<usize>,
     playlist_search_active: bool,
     playlist_search_query: String,
     playlist_load_dialog_visible: bool,
@@ -3169,6 +3172,9 @@ impl MainWindowUiState {
             playlist_docked_resizing: false,
             playlist_resize_drag_offset_y: 0,
             playlist_drag_index: None,
+            playlist_drag_moved: false,
+            playlist_last_click: None,
+            playlist_pending_double_click: None,
             playlist_search_active: false,
             playlist_search_query: String::new(),
             playlist_load_dialog_visible: false,
@@ -4744,6 +4750,16 @@ impl MainWindowUiState {
         let Some(index) = self.playlist_entry_at(x, y) else {
             return false;
         };
+        let now = Instant::now();
+        let is_double_click = self
+            .playlist_last_click
+            .is_some_and(|(last_index, last_time)| {
+                last_index == index && now.duration_since(last_time) <= Duration::from_millis(500)
+            });
+
+        self.playlist_last_click = Some((index, now));
+        self.playlist_pending_double_click = is_double_click.then_some(index);
+        self.playlist_drag_moved = false;
         self.select_single_playlist_entry(index);
         self.playlist_drag_index = Some(index);
         true
@@ -4756,11 +4772,18 @@ impl MainWindowUiState {
         let Some(index) = self.playlist_entry_at(x, y) else {
             return false;
         };
+        self.activate_playlist_entry(index);
+        true
+    }
+
+    fn activate_playlist_entry(&mut self, index: usize) {
         self.select_single_playlist_entry(index);
+        self.playlist_last_click = None;
+        self.playlist_pending_double_click = None;
         self.playlist_drag_index = None;
+        self.playlist_drag_moved = false;
         self.app_state.playlist.set_position(index);
         self.start_current_playlist_playback();
-        true
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
@@ -4769,6 +4792,8 @@ impl MainWindowUiState {
                 return false;
             };
             if self.app_state.playlist.move_entry(from, to) {
+                self.playlist_drag_moved = true;
+                self.playlist_pending_double_click = None;
                 self.playlist_drag_index = Some(to);
                 self.scroll_playlist_entry_into_view(to);
                 return true;
@@ -4786,7 +4811,16 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_entry_release(&mut self) -> bool {
-        self.playlist_drag_index.take().is_some()
+        let was_pressed = self.playlist_drag_index.take().is_some();
+        if was_pressed {
+            if let Some(index) = self.playlist_pending_double_click.take() {
+                if !self.playlist_drag_moved {
+                    self.activate_playlist_entry(index);
+                }
+            }
+        }
+        self.playlist_drag_moved = false;
+        was_pressed
     }
 
     pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
