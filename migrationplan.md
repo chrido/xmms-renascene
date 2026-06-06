@@ -211,8 +211,8 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Validate Spotify and podcast flows manually or with mocked services.
 
 - [ ] Cleanup after parity.
-  - [ ] Remove temporary working-first unsafe code where practical.
-  - [ ] Replace manual XPM parser with a library if still desired.
+  - [x] Remove temporary working-first unsafe code where practical.
+  - [x] Replace manual XPM parser with a library if still desired.
   - [ ] Remove duplicated C compatibility scaffolding.
   - [x] Make Rust implementation the primary installed app.
   - [ ] Retire or archive the C implementation once parity is proven.
