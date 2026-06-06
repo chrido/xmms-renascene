@@ -1,5 +1,6 @@
 use crate::app_state::AppState;
 use crate::config::Config;
+use crate::player::PlayerState;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
 use crate::ui::{MainWindowUiState, UiAction};
 
@@ -53,15 +54,20 @@ pub enum MainTarget {
 }
 
 impl MainTarget {
+    pub const MENU: Self = Self::Push(MainPushButton::Menu);
+    pub const MINIMIZE: Self = Self::Push(MainPushButton::Minimize);
+    pub const SHADE: Self = Self::Push(MainPushButton::Shade);
+    pub const CLOSE: Self = Self::Push(MainPushButton::Close);
+    pub const PREVIOUS: Self = Self::Push(MainPushButton::Previous);
+    pub const PLAY: Self = Self::Push(MainPushButton::Play);
+    pub const PAUSE: Self = Self::Push(MainPushButton::Pause);
+    pub const STOP: Self = Self::Push(MainPushButton::Stop);
+    pub const NEXT: Self = Self::Push(MainPushButton::Next);
+    pub const EJECT: Self = Self::Push(MainPushButton::Eject);
     pub const PLAYLIST: Self = Self::Toggle(MainToggleButton::Playlist);
     pub const EQUALIZER: Self = Self::Toggle(MainToggleButton::Equalizer);
     pub const SHUFFLE: Self = Self::Toggle(MainToggleButton::Shuffle);
     pub const REPEAT: Self = Self::Toggle(MainToggleButton::Repeat);
-    pub const PLAY: Self = Self::Push(MainPushButton::Play);
-    pub const PAUSE: Self = Self::Push(MainPushButton::Pause);
-    pub const STOP: Self = Self::Push(MainPushButton::Stop);
-    pub const CLOSE: Self = Self::Push(MainPushButton::Close);
-    pub const SHADE: Self = Self::Push(MainPushButton::Shade);
 
     pub fn volume(position: i32) -> Self {
         Self::Slider(MainSlider::Volume, position)
@@ -82,7 +88,10 @@ impl MainTarget {
             Self::Slider(slider, position) => {
                 let rect = slider_rect(slider);
                 let position = position.clamp(0, slider_max(slider));
-                (rect.x + position, rect.y + rect.height / 2)
+                (
+                    rect.x + position + slider_knob_width(slider) / 2,
+                    rect.y + rect.height / 2,
+                )
             }
         }
     }
@@ -91,6 +100,7 @@ impl MainTarget {
 #[derive(Debug, Clone)]
 pub struct UiE2e {
     main_visible: bool,
+    main_minimized: bool,
     state: MainWindowUiState,
     playlist_visible: bool,
     equalizer_visible: bool,
@@ -100,6 +110,7 @@ impl UiE2e {
     pub fn start_player(settings: PlayerSettings) -> Self {
         let mut harness = Self {
             main_visible: true,
+            main_minimized: false,
             state: MainWindowUiState::from_app_state(AppState::from_config(settings.config)),
             playlist_visible: false,
             equalizer_visible: false,
@@ -123,7 +134,7 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_window_visible(&self, window: Window) -> &Self {
+    pub fn assert_window_visible(&mut self, window: Window) -> &mut Self {
         assert!(
             self.is_window_visible(window),
             "expected {window:?} window to be visible"
@@ -131,11 +142,67 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_window_hidden(&self, window: Window) -> &Self {
+    pub fn assert_window_hidden(&mut self, window: Window) -> &mut Self {
         assert!(
             !self.is_window_visible(window),
             "expected {window:?} window to be hidden"
         );
+        self
+    }
+
+    pub fn assert_player_minimized(&mut self) -> &mut Self {
+        assert!(
+            self.main_minimized,
+            "expected player window to be minimized"
+        );
+        self
+    }
+
+    pub fn assert_player_not_minimized(&mut self) -> &mut Self {
+        assert!(
+            !self.main_minimized,
+            "expected player window not to be minimized"
+        );
+        self
+    }
+
+    pub fn assert_player_shaded(&mut self) -> &mut Self {
+        assert!(self.state.is_shaded(), "expected player to be shaded");
+        self
+    }
+
+    pub fn assert_player_unshaded(&mut self) -> &mut Self {
+        assert!(!self.state.is_shaded(), "expected player to be unshaded");
+        self
+    }
+
+    pub fn assert_player_state(&mut self, expected: PlayerState) -> &mut Self {
+        assert_eq!(self.state.player_state(), expected);
+        self
+    }
+
+    pub fn assert_shuffle(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.shuffle(), expected);
+        self
+    }
+
+    pub fn assert_repeat(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.repeat(), expected);
+        self
+    }
+
+    pub fn assert_volume(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.volume(), expected);
+        self
+    }
+
+    pub fn assert_balance(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.balance(), expected);
+        self
+    }
+
+    pub fn assert_position(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.position(), expected);
         self
     }
 
@@ -148,10 +215,14 @@ impl UiE2e {
     }
 
     fn apply_action(&mut self, action: UiAction) {
-        if action == UiAction::Quit {
-            self.main_visible = false;
-            self.playlist_visible = false;
-            self.equalizer_visible = false;
+        match action {
+            UiAction::None | UiAction::Resize => {}
+            UiAction::Minimize => self.main_minimized = true,
+            UiAction::Quit => {
+                self.main_visible = false;
+                self.playlist_visible = false;
+                self.equalizer_visible = false;
+            }
         }
     }
 
@@ -223,5 +294,12 @@ fn slider_max(slider: MainSlider) -> i32 {
         MainSlider::Volume => 51,
         MainSlider::Balance => 24,
         MainSlider::Position => 219,
+    }
+}
+
+fn slider_knob_width(slider: MainSlider) -> i32 {
+    match slider {
+        MainSlider::Volume | MainSlider::Balance => 14,
+        MainSlider::Position => 29,
     }
 }

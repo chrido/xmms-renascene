@@ -303,6 +303,34 @@ impl MainWindowUiState {
         }
     }
 
+    pub(crate) fn is_shaded(&self) -> bool {
+        self.shaded
+    }
+
+    pub(crate) fn player_state(&self) -> PlayerState {
+        self.app_state.player.state()
+    }
+
+    pub(crate) fn shuffle(&self) -> bool {
+        self.app_state.playlist.shuffle()
+    }
+
+    pub(crate) fn repeat(&self) -> bool {
+        self.app_state.playlist.repeat()
+    }
+
+    pub(crate) fn volume(&self) -> i32 {
+        self.app_state.player.volume()
+    }
+
+    pub(crate) fn balance(&self) -> i32 {
+        self.app_state.player.balance()
+    }
+
+    pub(crate) fn position(&self) -> i32 {
+        self.position_position
+    }
+
     pub(crate) fn click(&mut self, x: i32, y: i32) -> UiAction {
         self.press(x, y);
         self.release(x, y)
