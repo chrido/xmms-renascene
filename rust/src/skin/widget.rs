@@ -981,6 +981,59 @@ impl PlayStatusIndicator {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimpleButton {
+    widget: Widget,
+    pressed: bool,
+    inside: bool,
+}
+
+impl SimpleButton {
+    pub fn new(id: WidgetId, rect: WidgetRect) -> Self {
+        Self {
+            widget: Widget::new(id, rect),
+            pressed: false,
+            inside: false,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
+    }
+
+    pub fn is_inside(&self) -> bool {
+        self.inside
+    }
+
+    pub fn press(&mut self, button: u32) {
+        if button != 1 {
+            return;
+        }
+        self.pressed = true;
+        self.inside = true;
+    }
+
+    pub fn release(&mut self, button: u32) -> bool {
+        if button != 1 {
+            return false;
+        }
+        let activated = self.pressed && self.inside;
+        self.pressed = false;
+        activated
+    }
+
+    pub fn motion(&mut self, x: i32, y: i32) {
+        if !self.pressed {
+            return;
+        }
+        self.inside = self.widget.rect().contains(x, y);
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -1510,5 +1563,32 @@ mod tests {
 
         indicator.set_status(PlayStatusValue::Paused);
         assert_eq!(indicator.source().y, 9);
+    }
+
+    #[test]
+    fn simple_button_activates_only_on_left_release_inside() {
+        let mut button = SimpleButton::new(
+            WidgetId(9),
+            WidgetRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+        );
+
+        button.press(2);
+        assert!(!button.is_pressed());
+
+        button.press(1);
+        assert!(button.is_pressed());
+        assert!(button.is_inside());
+        button.motion(20, 20);
+        assert!(!button.is_inside());
+        assert!(!button.release(1));
+
+        button.press(1);
+        assert!(button.release(1));
+        assert!(!button.is_pressed());
     }
 }

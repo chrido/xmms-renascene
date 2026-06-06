@@ -41,7 +41,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Draw normal and WindowShade main-player states.
   - [x] Draw docked panel composition for main, equalizer, and playlist windows.
 
-- [ ] Port widget framework.
+- [x] Port widget framework.
   - [x] Port `Widget` list management and hit testing.
   - [x] Port push buttons.
   - [x] Port toggle buttons.
@@ -51,7 +51,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port visualization widget state.
   - [x] Port mono/stereo indicator.
   - [x] Port play-status indicator.
-  - [ ] Port simple invisible hit-area buttons.
+  - [x] Port simple invisible hit-area buttons.
 
 - [ ] Port main window.
   - [ ] Recreate exact main player layout and skin coordinates.
