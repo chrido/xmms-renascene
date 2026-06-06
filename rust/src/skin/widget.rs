@@ -466,6 +466,156 @@ impl TextBox {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HorizontalSlider {
+    widget: Widget,
+    skin: SkinPixmapKind,
+    knob_normal: SkinSource,
+    knob_pressed: SkinSource,
+    knob_width: i32,
+    knob_height: i32,
+    frame_height: i32,
+    frame_offset: i32,
+    min: i32,
+    max: i32,
+    position: i32,
+    draw_frame: bool,
+    pressed: bool,
+    press_offset: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HorizontalSliderSpec {
+    pub id: WidgetId,
+    pub rect: WidgetRect,
+    pub skin: SkinPixmapKind,
+    pub knob_normal: SkinSource,
+    pub knob_pressed: SkinSource,
+    pub knob_width: i32,
+    pub knob_height: i32,
+    pub frame_height: i32,
+    pub frame_offset: i32,
+    pub min: i32,
+    pub max: i32,
+}
+
+impl HorizontalSlider {
+    pub fn new(spec: HorizontalSliderSpec) -> Self {
+        Self {
+            widget: Widget::new(spec.id, spec.rect),
+            skin: spec.skin,
+            knob_normal: spec.knob_normal,
+            knob_pressed: spec.knob_pressed,
+            knob_width: spec.knob_width,
+            knob_height: spec.knob_height,
+            frame_height: spec.frame_height,
+            frame_offset: spec.frame_offset,
+            min: spec.min,
+            max: spec.max,
+            position: spec.min,
+            draw_frame: true,
+            pressed: false,
+            press_offset: 0,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn position(&self) -> i32 {
+        self.position
+    }
+
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
+    }
+
+    pub fn draw_frame(&self) -> bool {
+        self.draw_frame
+    }
+
+    pub fn set_draw_frame(&mut self, draw_frame: bool) {
+        self.draw_frame = draw_frame;
+        self.widget.queue_draw();
+    }
+
+    pub fn set_position(&mut self, position: i32) {
+        self.position = self.clamp_position(position);
+        self.widget.queue_draw();
+    }
+
+    pub fn current_knob_source(&self) -> SkinSource {
+        if self.pressed {
+            self.knob_pressed
+        } else {
+            self.knob_normal
+        }
+    }
+
+    pub fn knob_destination_x(&self) -> i32 {
+        self.widget.rect().x + self.position
+    }
+
+    pub fn knob_size(&self) -> (i32, i32) {
+        (self.knob_width, self.knob_height)
+    }
+
+    pub fn frame_source(&self, frame: i32) -> SkinSource {
+        SkinSource {
+            kind: self.skin,
+            x: self.frame_offset,
+            y: frame * self.frame_height,
+        }
+    }
+
+    pub fn press(&mut self, x: i32, button: u32) -> Option<i32> {
+        if button != 1 {
+            return None;
+        }
+
+        self.pressed = true;
+        let knob_x = self.widget.rect().x + self.position;
+        let mut changed = None;
+        if x >= knob_x && x < knob_x + self.knob_width {
+            self.press_offset = x - knob_x;
+        } else {
+            self.press_offset = self.knob_width / 2;
+            let position = self.clamp_position(x - self.widget.rect().x - self.press_offset);
+            if self.position != position {
+                self.position = position;
+                changed = Some(self.position);
+            }
+        }
+        self.widget.queue_draw();
+        changed
+    }
+
+    pub fn motion(&mut self, x: i32) -> Option<i32> {
+        if !self.pressed {
+            return None;
+        }
+
+        let position = self.clamp_position(x - self.widget.rect().x - self.press_offset);
+        self.position = position;
+        self.widget.queue_draw();
+        Some(position)
+    }
+
+    pub fn release(&mut self, button: u32) -> Option<i32> {
+        if button != 1 {
+            return None;
+        }
+        self.pressed = false;
+        self.widget.queue_draw();
+        Some(self.position)
+    }
+
+    fn clamp_position(&self, position: i32) -> i32 {
+        position.clamp(self.min, self.max)
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -817,5 +967,79 @@ mod tests {
         assert_eq!(TextBox::glyph_source('?'), Some((50, 12)));
         assert_eq!(TextBox::glyph_source(' '), None);
         assert_eq!(TextBox::glyph_source('~'), None);
+    }
+
+    fn slider_spec() -> HorizontalSliderSpec {
+        HorizontalSliderSpec {
+            id: WidgetId(4),
+            rect: WidgetRect {
+                x: 10,
+                y: 20,
+                width: 100,
+                height: 10,
+            },
+            skin: SkinPixmapKind::PosBar,
+            knob_normal: SkinSource {
+                kind: SkinPixmapKind::PosBar,
+                x: 0,
+                y: 0,
+            },
+            knob_pressed: SkinSource {
+                kind: SkinPixmapKind::PosBar,
+                x: 0,
+                y: 10,
+            },
+            knob_width: 10,
+            knob_height: 10,
+            frame_height: 10,
+            frame_offset: 20,
+            min: 0,
+            max: 90,
+        }
+    }
+
+    #[test]
+    fn horizontal_slider_press_inside_knob_keeps_drag_offset() {
+        let mut slider = HorizontalSlider::new(slider_spec());
+        slider.set_position(20);
+
+        assert_eq!(slider.press(35, 1), None);
+        assert!(slider.is_pressed());
+        assert_eq!(slider.current_knob_source(), slider_spec().knob_pressed);
+        assert_eq!(slider.motion(45), Some(30));
+        assert_eq!(slider.position(), 30);
+        assert_eq!(slider.release(1), Some(30));
+        assert!(!slider.is_pressed());
+    }
+
+    #[test]
+    fn horizontal_slider_press_outside_knob_jumps_and_clamps() {
+        let mut slider = HorizontalSlider::new(slider_spec());
+
+        assert_eq!(slider.press(200, 1), Some(90));
+        assert_eq!(slider.position(), 90);
+        assert_eq!(slider.motion(-50), Some(0));
+        assert_eq!(slider.release(2), None);
+        assert!(slider.is_pressed());
+        assert_eq!(slider.release(1), Some(0));
+    }
+
+    #[test]
+    fn horizontal_slider_frame_and_draw_flags_match_c_state() {
+        let mut slider = HorizontalSlider::new(slider_spec());
+        assert!(slider.draw_frame());
+        assert_eq!(
+            slider.frame_source(3),
+            SkinSource {
+                kind: SkinPixmapKind::PosBar,
+                x: 20,
+                y: 30
+            }
+        );
+        assert_eq!(slider.knob_destination_x(), 10);
+        assert_eq!(slider.knob_size(), (10, 10));
+        slider.set_draw_frame(false);
+        assert!(!slider.draw_frame());
+        assert!(slider.widget().needs_redraw());
     }
 }

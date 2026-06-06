@@ -46,7 +46,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port push buttons.
   - [x] Port toggle buttons.
   - [x] Port scrolling text boxes.
-  - [ ] Port horizontal sliders.
+  - [x] Port horizontal sliders.
   - [ ] Port numeric time display.
   - [ ] Port visualization widget state.
   - [ ] Port mono/stereo indicator.
