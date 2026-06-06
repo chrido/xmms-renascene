@@ -53,7 +53,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port play-status indicator.
   - [x] Port simple invisible hit-area buttons.
 
-- [ ] Port main window.
+- [x] Port main window.
   - [x] Recreate exact main reset-state layout and skin coordinates for visual parity.
   - [x] Port transport controls to Rust UI hit testing and runtime player state.
   - [x] Port volume, balance, and position sliders to Rust UI hit testing and runtime state.
@@ -61,7 +61,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port menu actions.
   - [x] Port prompts: play location and jump to time.
   - [x] Port keyboard shortcuts for currently ported actions.
-  - [ ] Complete feature-dependent keyboard shortcuts as their target features land.
+  - [x] Complete feature-dependent keyboard shortcuts as their target features land.
   - [x] Port drag-and-drop file handling.
   - [x] Port file and directory open dialogs.
   - [x] Port update timer behavior.

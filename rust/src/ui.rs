@@ -2444,6 +2444,45 @@ impl MainWindowUiState {
         self.skin_reload_count
     }
 
+    pub(crate) fn toggle_sticky(&mut self) {
+        self.app_state.config.sticky = !self.app_state.config.sticky;
+    }
+
+    pub(crate) fn sticky(&self) -> bool {
+        self.app_state.config.sticky
+    }
+
+    pub(crate) fn toggle_double_size(&mut self) {
+        if self.app_state.config.scale_factor <= 1.0 {
+            self.app_state.config.scale_factor = 2.0;
+            self.app_state.config.doublesize = true;
+        } else {
+            self.app_state.config.scale_factor = 1.0;
+            self.app_state.config.doublesize = false;
+        }
+    }
+
+    pub(crate) fn double_size(&self) -> bool {
+        self.app_state.config.doublesize
+    }
+
+    pub(crate) fn show_current_file_info(&mut self) {
+        self.last_playlist_file_info = self
+            .app_state
+            .playlist
+            .position()
+            .and_then(|position| self.app_state.playlist.entries().get(position))
+            .or_else(|| self.app_state.playlist.entries().first())
+            .map(|entry| entry.title.clone());
+    }
+
+    pub(crate) fn play_first_playlist_entry(&mut self) {
+        if !self.app_state.playlist.is_empty() {
+            self.app_state.playlist.set_position(0);
+            self.app_state.player.mark_playing();
+        }
+    }
+
     pub(crate) fn set_spotify_authenticated(&mut self, authenticated: bool) {
         self.spotify_authenticated = authenticated;
     }

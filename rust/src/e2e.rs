@@ -199,10 +199,17 @@ pub enum Shortcut {
     ShadeMain,
     JumpTime,
     SkinBrowser,
+    ReloadSkin,
     TogglePlaylist,
     ToggleEqualizer,
     ShadePlaylist,
     ShadeEqualizer,
+    TimerElapsed,
+    TimerRemaining,
+    ToggleSticky,
+    ToggleDoubleSize,
+    FileInfo,
+    PlayFirst,
 }
 
 impl MainTarget {
@@ -518,6 +525,9 @@ impl UiE2e {
             Shortcut::SkinBrowser => {
                 self.state.set_skin_browser_visible(true);
             }
+            Shortcut::ReloadSkin => {
+                self.state.reload_skin();
+            }
             Shortcut::TogglePlaylist => {
                 self.state.activate_toggle(MainToggleButton::Playlist);
             }
@@ -530,6 +540,12 @@ impl UiE2e {
             Shortcut::ShadeEqualizer => {
                 self.state.toggle_equalizer_shaded();
             }
+            Shortcut::TimerElapsed => self.state.set_preference_timer_remaining(false),
+            Shortcut::TimerRemaining => self.state.set_preference_timer_remaining(true),
+            Shortcut::ToggleSticky => self.state.toggle_sticky(),
+            Shortcut::ToggleDoubleSize => self.state.toggle_double_size(),
+            Shortcut::FileInfo => self.state.show_current_file_info(),
+            Shortcut::PlayFirst => self.state.play_first_playlist_entry(),
         }
         self.sync_windows();
         self
@@ -1201,6 +1217,16 @@ impl UiE2e {
 
     pub fn assert_skin_reload_count(&mut self, expected: u32) -> &mut Self {
         assert_eq!(self.state.skin_reload_count(), expected);
+        self
+    }
+
+    pub fn assert_sticky(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.sticky(), expected);
+        self
+    }
+
+    pub fn assert_double_size(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.double_size(), expected);
         self
     }
 

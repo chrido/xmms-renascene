@@ -285,6 +285,8 @@ fn main_keyboard_shortcuts_trigger_preview_actions() {
 
     app.press_shortcut(Shortcut::OpenFiles)
         .assert_file_dialog_visible()
+        .press_shortcut(Shortcut::ReloadSkin)
+        .assert_skin_reload_count(1)
         .assert_shuffle(false)
         .press_shortcut(Shortcut::ToggleShuffle)
         .assert_shuffle(true)
@@ -294,10 +296,33 @@ fn main_keyboard_shortcuts_trigger_preview_actions() {
         .assert_no_advance(false)
         .press_shortcut(Shortcut::ToggleNoAdvance)
         .assert_no_advance(true)
+        .press_shortcut(Shortcut::TimerRemaining)
+        .assert_preference_timer_remaining(true)
+        .press_shortcut(Shortcut::TimerElapsed)
+        .assert_preference_timer_remaining(false)
+        .press_shortcut(Shortcut::ToggleSticky)
+        .assert_sticky(true)
+        .press_shortcut(Shortcut::ToggleDoubleSize)
+        .assert_double_size(false)
         .press_shortcut(Shortcut::Preferences)
         .assert_window_visible(Window::Preferences)
         .press_shortcut(Shortcut::SkinBrowser)
         .assert_window_visible(Window::SkinBrowser);
+}
+
+#[test]
+fn main_feature_shortcuts_file_info_and_play_first_are_wired() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.accept_open_location("file:///tmp/first.mp3")
+        .accept_open_location("file:///tmp/second.mp3")
+        .press_shortcut(Shortcut::Next)
+        .assert_playlist_position(Some(1))
+        .press_shortcut(Shortcut::FileInfo)
+        .assert_last_playlist_file_info("second")
+        .press_shortcut(Shortcut::PlayFirst)
+        .assert_playlist_position(Some(0))
+        .assert_player_state(PlayerState::Playing);
 }
 
 #[test]
