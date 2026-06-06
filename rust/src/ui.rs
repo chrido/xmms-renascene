@@ -191,7 +191,8 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         click.connect_pressed(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
-            if let Some((kind, panel_x, panel_y)) = main_state.borrow().docked_panel_at(x, y) {
+            let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
+            if let Some((kind, panel_x, panel_y)) = docked_panel {
                 match kind {
                     PanelKind::Equalizer => {
                         if main_state.borrow_mut().equalizer_press(panel_x, panel_y) {
@@ -223,7 +224,8 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
-            if let Some((kind, panel_x, panel_y)) = main_state.borrow().docked_panel_at(x, y) {
+            let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
+            if let Some((kind, panel_x, panel_y)) = docked_panel {
                 let action = {
                     let mut state = main_state.borrow_mut();
                     match kind {
@@ -276,7 +278,8 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
-            if let Some((kind, panel_x, panel_y)) = main_state.borrow().docked_panel_at(x, y) {
+            let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
+            if let Some((kind, panel_x, panel_y)) = docked_panel {
                 let changed = match kind {
                     PanelKind::Equalizer => {
                         main_state.borrow_mut().equalizer_motion(panel_x, panel_y)
