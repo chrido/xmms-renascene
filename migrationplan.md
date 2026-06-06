@@ -78,7 +78,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 
 - [ ] Port playlist window.
   - [x] Render playlist background and rows.
-  - [ ] Port scrolling and scrollbar dragging.
+  - [x] Port scrolling and scrollbar dragging.
   - [ ] Port resizing.
   - [ ] Port shaded mode.
   - [ ] Port docked/detached mode.

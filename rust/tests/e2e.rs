@@ -664,6 +664,21 @@ fn resized_playlist_bottom_buttons_use_current_geometry() {
 }
 
 #[test]
+fn playlist_scrollbar_drag_updates_visible_rows() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..30 {
+        app.accept_open_location(&format!("file:///tmp/scroll-{index:02}.mp3"));
+    }
+
+    app.assert_playlist_scroll_offset(0)
+        .assert_visible_playlist_entry(0, "file:///tmp/scroll-00.mp3")
+        .drag_playlist_scrollbar_to_bottom()
+        .assert_playlist_scroll_offset(15)
+        .assert_visible_playlist_entry(0, "file:///tmp/scroll-15.mp3");
+}
+
+#[test]
 fn floating_panel_titlebars_track_active_window_state() {
     let mut app = UiE2e::start_player(
         PlayerSettings::default()

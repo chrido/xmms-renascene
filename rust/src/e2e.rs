@@ -272,6 +272,21 @@ impl UiE2e {
         self
     }
 
+    pub fn drag_playlist_scrollbar_to_bottom(&mut self) -> &mut Self {
+        let (width, height) = self.state.playlist_size();
+        let x = width - 12;
+        let start_y = 20;
+        let end_y = height - 39;
+        assert!(
+            self.state.playlist_scrollbar_press(x, start_y),
+            "expected playlist scrollbar press to start dragging"
+        );
+        self.state.playlist_scrollbar_motion(x, end_y);
+        self.state.playlist_scrollbar_release();
+        self.sync_windows();
+        self
+    }
+
     pub fn start_playlist_size(&mut self, width: i32, height: i32) -> &mut Self {
         self.state.set_playlist_size(width, height);
         self.state.set_playlist_visible(true);
@@ -641,6 +656,16 @@ impl UiE2e {
 
     pub fn assert_playlist_size(&mut self, width: i32, height: i32) -> &mut Self {
         assert_eq!(self.state.playlist_size(), (width, height));
+        self
+    }
+
+    pub fn assert_playlist_scroll_offset(&mut self, expected: usize) -> &mut Self {
+        assert_eq!(self.state.playlist_scroll_offset(), expected);
+        self
+    }
+
+    pub fn assert_visible_playlist_entry(&mut self, row: usize, expected: &str) -> &mut Self {
+        assert_eq!(self.state.visible_playlist_entry_uri(row), Some(expected));
         self
     }
 

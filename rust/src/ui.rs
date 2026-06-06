@@ -703,7 +703,8 @@ fn build_playlist_window(
                 .collect();
             let row_state = PlaylistRowsRenderState {
                 entries: rows,
-                scroll_offset: 0,
+                scroll_offset: state.playlist_scroll_offset,
+                scrollbar_dragging: state.playlist_scrollbar_dragging,
                 show_numbers: state.app_state.config.show_numbers_in_pl,
                 width: playlist_width,
                 height: playlist_height,
@@ -1031,6 +1032,13 @@ fn add_panel_click_controller(
                         area.queue_draw();
                         return;
                     }
+                    if main_state
+                        .borrow_mut()
+                        .playlist_scrollbar_press(base_x, base_y)
+                    {
+                        area.queue_draw();
+                        return;
+                    }
                     if main_state.borrow().playlist_resize_region(base_x, base_y) {
                         let Some(device) = gesture.current_event_device() else {
                             return;
@@ -1089,6 +1097,8 @@ fn add_panel_click_controller(
                 } else {
                     title_action
                 }
+            } else if main_state.borrow_mut().playlist_scrollbar_release() {
+                PanelAction::Changed
             } else if main_state.borrow().playlist_menu_pressed() {
                 main_state.borrow_mut().playlist_release(x, y)
             } else {
@@ -1129,7 +1139,9 @@ fn add_panel_click_controller(
                     }
                 }
                 PanelKind::Playlist => {
-                    if main_state.borrow_mut().playlist_motion(x, y) {
+                    let scrolled = main_state.borrow_mut().playlist_scrollbar_motion(x, y);
+                    let menu_changed = main_state.borrow_mut().playlist_motion(x, y);
+                    if scrolled || menu_changed {
                         area.queue_draw();
                     }
                 }
@@ -1332,6 +1344,9 @@ pub(crate) struct MainWindowUiState {
     playlist_menu: Option<PlaylistMenuKind>,
     playlist_menu_hover: Option<usize>,
     playlist_menu_pressed: bool,
+    playlist_scroll_offset: usize,
+    playlist_scrollbar_dragging: bool,
+    playlist_scrollbar_drag_offset: i32,
     preferences_visible: bool,
     open_location_visible: bool,
     jump_time_visible: bool,
@@ -1377,6 +1392,9 @@ impl MainWindowUiState {
             playlist_menu: None,
             playlist_menu_hover: None,
             playlist_menu_pressed: false,
+            playlist_scroll_offset: 0,
+            playlist_scrollbar_dragging: false,
+            playlist_scrollbar_drag_offset: 0,
             preferences_visible: false,
             open_location_visible: false,
             jump_time_visible: false,
@@ -1472,6 +1490,10 @@ impl MainWindowUiState {
         (self.playlist_width, self.playlist_height)
     }
 
+    pub(crate) fn playlist_scroll_offset(&self) -> usize {
+        self.playlist_scroll_offset
+    }
+
     pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
         self.app_state.config.playlist_visible = visible;
     }
@@ -1558,6 +1580,12 @@ impl MainWindowUiState {
             .entries()
             .get(index)
             .map(|entry| entry.length_ms)
+    }
+
+    pub(crate) fn visible_playlist_entry_uri(&self, row: usize) -> Option<&str> {
+        self.playlist_scroll_offset
+            .checked_add(row)
+            .and_then(|index| self.playlist_entry_uri(index))
     }
 
     pub(crate) fn playlist_position(&self) -> Option<usize> {
@@ -1698,6 +1726,7 @@ impl MainWindowUiState {
         let changed = self.playlist_width != width || self.playlist_height != height;
         self.playlist_width = width;
         self.playlist_height = height;
+        self.clamp_playlist_scroll_offset();
         changed
     }
 
@@ -1856,6 +1885,40 @@ impl MainWindowUiState {
         !self.playlist_shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
     }
 
+    pub(crate) fn playlist_scrollbar_press(&mut self, x: i32, y: i32) -> bool {
+        let Some((thumb_y, thumb_h)) = self.playlist_scrollbar_geometry() else {
+            return false;
+        };
+        if !self.playlist_scrollbar_region(x, y) {
+            return false;
+        }
+        self.playlist_scrollbar_dragging = true;
+        self.playlist_scrollbar_drag_offset = if y >= thumb_y && y < thumb_y + thumb_h {
+            y - thumb_y
+        } else {
+            thumb_h / 2
+        };
+        self.update_playlist_scroll_from_thumb_y(y - self.playlist_scrollbar_drag_offset);
+        true
+    }
+
+    pub(crate) fn playlist_scrollbar_motion(&mut self, x: i32, y: i32) -> bool {
+        if !self.playlist_scrollbar_dragging {
+            return false;
+        }
+        let old = self.playlist_scroll_offset;
+        let _ = x;
+        self.update_playlist_scroll_from_thumb_y(y - self.playlist_scrollbar_drag_offset);
+        old != self.playlist_scroll_offset
+    }
+
+    pub(crate) fn playlist_scrollbar_release(&mut self) -> bool {
+        let was_dragging = self.playlist_scrollbar_dragging;
+        self.playlist_scrollbar_dragging = false;
+        self.playlist_scrollbar_drag_offset = 0;
+        was_dragging
+    }
+
     pub(crate) fn playlist_press(&mut self, x: i32, y: i32) -> bool {
         let Some(item) = self.playlist_menu_item_at(x, y) else {
             return false;
@@ -1885,6 +1948,66 @@ impl MainWindowUiState {
         } else {
             PanelAction::None
         }
+    }
+
+    fn playlist_visible_entries(&self) -> usize {
+        ((self.playlist_height - 58).max(0) / 11) as usize
+    }
+
+    fn playlist_max_scroll(&self) -> usize {
+        self.app_state
+            .playlist
+            .len()
+            .saturating_sub(self.playlist_visible_entries())
+    }
+
+    fn clamp_playlist_scroll_offset(&mut self) {
+        self.playlist_scroll_offset = self.playlist_scroll_offset.min(self.playlist_max_scroll());
+    }
+
+    fn playlist_scrollbar_region(&self, x: i32, y: i32) -> bool {
+        !self.playlist_shaded
+            && x >= self.playlist_width - 15
+            && x < self.playlist_width - 7
+            && y >= 20
+            && y < self.playlist_height - 38
+    }
+
+    fn playlist_scrollbar_geometry(&self) -> Option<(i32, i32)> {
+        let visible = self.playlist_visible_entries();
+        let total = self.app_state.playlist.len();
+        if total <= visible || visible == 0 {
+            return None;
+        }
+        let list_h = self.playlist_height - 58;
+        let thumb_h = 18;
+        let max_scroll = total - visible;
+        let max_thumb_pos = (list_h - thumb_h).max(0);
+        let thumb_y = 20
+            + ((self.playlist_scroll_offset.min(max_scroll) as i32 * max_thumb_pos)
+                / max_scroll.max(1) as i32);
+        Some((thumb_y, thumb_h))
+    }
+
+    fn update_playlist_scroll_from_thumb_y(&mut self, thumb_y: i32) {
+        let visible = self.playlist_visible_entries();
+        let total = self.app_state.playlist.len();
+        if total <= visible || visible == 0 {
+            self.playlist_scroll_offset = 0;
+            return;
+        }
+        let list_h = self.playlist_height - 58;
+        let thumb_h = 18;
+        let max_scroll = total - visible;
+        let max_thumb_pos = (list_h - thumb_h).max(0);
+        if max_thumb_pos <= 0 {
+            self.playlist_scroll_offset = 0;
+            return;
+        }
+        let thumb_pos = (thumb_y - 20).clamp(0, max_thumb_pos);
+        self.playlist_scroll_offset = ((thumb_pos as usize * max_scroll)
+            + (max_thumb_pos as usize / 2))
+            / max_thumb_pos as usize;
     }
 
     fn playlist_menu_item_at(&self, x: i32, y: i32) -> Option<usize> {

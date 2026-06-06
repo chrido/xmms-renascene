@@ -66,6 +66,7 @@ pub struct PlaylistRowRenderEntry {
 pub struct PlaylistRowsRenderState {
     pub entries: Vec<PlaylistRowRenderEntry>,
     pub scroll_offset: usize,
+    pub scrollbar_dragging: bool,
     pub show_numbers: bool,
     pub width: i32,
     pub height: i32,
@@ -1268,7 +1269,44 @@ pub fn render_playlist_rows(
         cr.show_text(&title)?;
     }
 
+    if let Some((thumb_y, thumb_h)) =
+        playlist_scrollbar_geometry(state.entries.len(), visible, state.scroll_offset, height)
+    {
+        if let Some(pledit) = skin.get(SkinPixmapKind::PlEdit) {
+            let pledit = surface_from_xpm(pledit)?;
+            blit_surface_rect(
+                cr,
+                &pledit,
+                if state.scrollbar_dragging { 52 } else { 61 },
+                53,
+                width - 15,
+                thumb_y,
+                8,
+                thumb_h,
+            )?;
+        }
+    }
+
     Ok(true)
+}
+
+fn playlist_scrollbar_geometry(
+    total_entries: usize,
+    visible_entries: usize,
+    scroll_offset: usize,
+    height: i32,
+) -> Option<(i32, i32)> {
+    if total_entries <= visible_entries || visible_entries == 0 {
+        return None;
+    }
+    let list_y = 20;
+    let list_h = height.max(PLAYLIST_MIN_HEIGHT) - 58;
+    let thumb_h = 18;
+    let max_scroll = total_entries - visible_entries;
+    let max_thumb_pos = (list_h - thumb_h).max(0);
+    let thumb_y = list_y
+        + ((scroll_offset.min(max_scroll) as i32 * max_thumb_pos) / max_scroll.max(1) as i32);
+    Some((thumb_y, thumb_h))
 }
 
 fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError> {
