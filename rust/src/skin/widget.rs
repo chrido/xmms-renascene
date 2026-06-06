@@ -1,3 +1,5 @@
+use super::SkinPixmapKind;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WidgetId(pub usize);
 
@@ -110,6 +112,109 @@ impl WidgetList {
             .iter()
             .rev()
             .find(|widget| widget.contains(x, y))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkinSource {
+    pub kind: SkinPixmapKind,
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushButton {
+    widget: Widget,
+    normal: SkinSource,
+    pressed_source: SkinSource,
+    pressed: bool,
+    inside: bool,
+    allow_draw: bool,
+}
+
+impl PushButton {
+    pub fn new(
+        id: WidgetId,
+        rect: WidgetRect,
+        normal: SkinSource,
+        pressed_source: SkinSource,
+    ) -> Self {
+        Self {
+            widget: Widget::new(id, rect),
+            normal,
+            pressed_source,
+            pressed: false,
+            inside: false,
+            allow_draw: true,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn widget_mut(&mut self) -> &mut Widget {
+        &mut self.widget
+    }
+
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
+    }
+
+    pub fn is_inside(&self) -> bool {
+        self.inside
+    }
+
+    pub fn allow_draw(&self) -> bool {
+        self.allow_draw
+    }
+
+    pub fn set_allow_draw(&mut self, allow_draw: bool) {
+        if self.allow_draw != allow_draw {
+            self.allow_draw = allow_draw;
+            self.widget.queue_draw();
+        }
+    }
+
+    pub fn current_source(&self) -> Option<SkinSource> {
+        if !self.allow_draw {
+            return None;
+        }
+        if self.pressed && self.inside {
+            Some(self.pressed_source)
+        } else {
+            Some(self.normal)
+        }
+    }
+
+    pub fn press(&mut self, button: u32) {
+        if button != 1 {
+            return;
+        }
+        self.pressed = true;
+        self.inside = true;
+        self.widget.queue_draw();
+    }
+
+    pub fn release(&mut self, button: u32) -> bool {
+        if button != 1 {
+            return false;
+        }
+        let activated = self.pressed && self.inside;
+        self.pressed = false;
+        self.widget.queue_draw();
+        activated
+    }
+
+    pub fn motion(&mut self, x: i32, y: i32) {
+        if !self.pressed {
+            return;
+        }
+        let was_inside = self.inside;
+        self.inside = self.widget.rect().contains(x, y);
+        if was_inside != self.inside {
+            self.widget.queue_draw();
+        }
     }
 }
 
@@ -279,5 +384,73 @@ mod tests {
         assert!(list.get(id).unwrap().needs_redraw());
         list.get_mut(id).unwrap().clear_redraw();
         assert!(!list.get(id).unwrap().needs_redraw());
+    }
+
+    #[test]
+    fn push_button_tracks_press_motion_release_like_c() {
+        let normal = SkinSource {
+            kind: SkinPixmapKind::CButtons,
+            x: 0,
+            y: 0,
+        };
+        let pressed = SkinSource {
+            kind: SkinPixmapKind::CButtons,
+            x: 0,
+            y: 18,
+        };
+        let mut button = PushButton::new(
+            WidgetId(1),
+            WidgetRect {
+                x: 10,
+                y: 10,
+                width: 5,
+                height: 5,
+            },
+            normal,
+            pressed,
+        );
+
+        assert_eq!(button.current_source(), Some(normal));
+        button.press(2);
+        assert!(!button.is_pressed());
+
+        button.press(1);
+        assert!(button.is_pressed());
+        assert!(button.is_inside());
+        assert_eq!(button.current_source(), Some(pressed));
+
+        button.motion(20, 20);
+        assert!(!button.is_inside());
+        assert_eq!(button.current_source(), Some(normal));
+        assert!(!button.release(1));
+
+        button.press(1);
+        assert!(button.release(1));
+        assert!(!button.is_pressed());
+    }
+
+    #[test]
+    fn push_button_allow_draw_controls_source_and_queues_redraw() {
+        let source = SkinSource {
+            kind: SkinPixmapKind::Titlebar,
+            x: 0,
+            y: 0,
+        };
+        let mut button = PushButton::new(
+            WidgetId(1),
+            WidgetRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            source,
+            source,
+        );
+
+        button.set_allow_draw(false);
+        assert!(!button.allow_draw());
+        assert!(button.widget().needs_redraw());
+        assert_eq!(button.current_source(), None);
     }
 }
