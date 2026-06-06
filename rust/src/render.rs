@@ -28,6 +28,8 @@ pub struct EqualizerRenderState {
     pub pressed_control: Option<EqualizerControl>,
     pub preamp_position: i32,
     pub band_positions: [i32; 10],
+    pub volume_position: i32,
+    pub balance_position: i32,
 }
 
 impl Default for EqualizerRenderState {
@@ -40,6 +42,8 @@ impl Default for EqualizerRenderState {
             pressed_control: None,
             preamp_position: 50,
             band_positions: [50; 10],
+            volume_position: 94,
+            balance_position: 19,
         }
     }
 }
@@ -1340,6 +1344,7 @@ pub fn render_equalizer_state(
 ) -> Result<bool, RenderError> {
     let mut rendered = render_equalizer_background(cr, skin, state.focused, state.shaded)?;
     if state.shaded {
+        rendered |= render_shaded_equalizer_sliders(cr, skin, state)?;
         return Ok(rendered);
     }
 
@@ -1396,9 +1401,74 @@ pub fn render_equalizer_state(
     for (idx, position) in state.band_positions.iter().enumerate() {
         rendered |= draw_eq_slider(cr, &eqmain, 78 + idx as i32 * 18, *position)?;
     }
+
     draw_eq_graph(cr, eqmain_image, &state.band_positions)?;
 
     Ok(rendered)
+}
+
+fn render_shaded_equalizer_sliders(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: &EqualizerRenderState,
+) -> Result<bool, RenderError> {
+    let volume_position = state.volume_position.clamp(0, 94);
+    let balance_position = state.balance_position.clamp(0, 39);
+    let mut rendered = render_horizontal_slider(
+        cr,
+        skin,
+        SliderRenderSpec {
+            kind: SkinPixmapKind::EqEx,
+            x: 61,
+            y: 4,
+            width: 97,
+            height: 8,
+            position: volume_position,
+            knob_source_x: shaded_eq_volume_knob_x(volume_position),
+            knob_source_y: 30,
+            knob_width: 3,
+            knob_height: 7,
+            frame_height: 4,
+            frame_offset: 61,
+            frame: 1,
+        },
+    )?;
+    rendered |= render_horizontal_slider(
+        cr,
+        skin,
+        SliderRenderSpec {
+            kind: SkinPixmapKind::EqEx,
+            x: 164,
+            y: 4,
+            width: 42,
+            height: 8,
+            position: balance_position,
+            knob_source_x: shaded_eq_balance_knob_x(balance_position),
+            knob_source_y: 30,
+            knob_width: 3,
+            knob_height: 7,
+            frame_height: 4,
+            frame_offset: 164,
+            frame: 1,
+        },
+    )?;
+    Ok(rendered)
+}
+
+fn shaded_eq_volume_knob_x(position: i32) -> i32 {
+    match position {
+        value if value < 32 => 1,
+        value if value < 63 => 4,
+        _ => 7,
+    }
+}
+
+fn shaded_eq_balance_knob_x(position: i32) -> i32 {
+    match position {
+        value if value < 13 => 11,
+        value if value < 26 => 14,
+        _ => 17,
+    }
 }
 
 fn draw_eq_toggle_button(

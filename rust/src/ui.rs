@@ -3507,6 +3507,8 @@ impl MainWindowUiState {
                 .filter(|_| self.equalizer_pressed_inside),
             preamp_position: self.equalizer_preamp_position,
             band_positions: self.equalizer_band_positions,
+            volume_position: volume_to_eq_shaded_position(self.app_state.player.volume()),
+            balance_position: balance_to_eq_shaded_position(self.app_state.player.balance()),
         }
     }
 
@@ -6134,12 +6136,20 @@ fn position_to_volume(position: i32) -> i32 {
     ((position.clamp(0, 51) * 100) as f64 / 51.0) as i32
 }
 
+fn volume_to_eq_shaded_position(volume: i32) -> i32 {
+    ((volume.clamp(0, 100) * 94 + 50) / 100).clamp(0, 94)
+}
+
 fn balance_to_position(balance: i32) -> i32 {
     (12 + (balance.clamp(-100, 100) * 12) / 100).clamp(0, 24)
 }
 
 fn position_to_balance(position: i32) -> i32 {
     (((position.clamp(0, 24) - 12) * 100) as f64 / 12.0) as i32
+}
+
+fn balance_to_eq_shaded_position(balance: i32) -> i32 {
+    (19 + (balance.clamp(-100, 100) * 19) / 100).clamp(0, 39)
 }
 
 fn format_duration(milliseconds: i64) -> String {

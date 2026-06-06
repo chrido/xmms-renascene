@@ -173,6 +173,44 @@ fn equalizer_graph_uses_skin_color_ramp() {
 }
 
 #[test]
+fn shaded_equalizer_draws_volume_and_balance_slider_handles() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(Format::ARgb32, 275, 14).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_equalizer_state(
+        &cr,
+        &skin,
+        &EqualizerRenderState {
+            shaded: true,
+            volume_position: 45,
+            balance_position: 30,
+            ..EqualizerRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let eq_ex = skin.get(SkinPixmapKind::EqEx).unwrap();
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    for (source_x, dest_x) in [(4_usize, 61_usize + 45), (17_usize, 164_usize + 30)] {
+        let (dx, dy, expected) = (0..7_usize)
+            .flat_map(|y| (0..3_usize).map(move |x| (x, y)))
+            .find_map(|(x, y)| {
+                eq_ex
+                    .pixel_argb(source_x + x, 30 + y)
+                    .filter(|pixel| *pixel != 0)
+                    .map(|pixel| (x, y, pixel))
+            })
+            .expect("default eq_ex skin should contain visible shaded slider knob pixels");
+        let offset = (4 + dy) * stride + (dest_x + dx) * 4;
+        let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn shaded_playlist_title_uses_skin_bitmap_text() {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
     let mut surface = ImageSurface::create(Format::ARgb32, PLAYLIST_DEFAULT_WIDTH, 14).unwrap();
