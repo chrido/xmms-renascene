@@ -73,6 +73,7 @@ Completed so far:
 - Wired Rust playlist List menu load/save actions to native file dialogs and the Rust M3U model, with e2e coverage for opening each dialog, writing M3U output, and replacing entries from loaded playlists.
 - Wired Rust playlist Add URL/File/Directory submenu actions to the existing location prompt and append-mode file/directory dialogs, with e2e coverage for each action.
 - Completed Rust playlist Misc submenu wiring: Sort opens a GTK sort popover covering every list/selection sort plus randomize/reverse, File Info records the selected/current entry title, and Options records activation; all actions have e2e coverage.
+- Added the first Rust GStreamer playback backend construction slice: it initializes GStreamer, creates a `playbin` pipeline, disables video with `fakesink`, and wires an audio sink bin starting at `audioconvert`, optionally passing through `audiopanorama`, `equalizer-10bands`, and `spectrum`, then ending at `autoaudiosink`.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
@@ -112,6 +113,7 @@ Completed so far:
 Current Rust dependencies:
 
 - `gtk4` via crate rename `gtk`, with GTK 4.6 feature enabled.
+- `gstreamer` and `gstreamer-pbutils` for playback backend construction and playlist duration discovery.
 - `cairo-rs` via crate rename `cairo`.
 - `image` with PNG and BMP support for external skin pixmap files.
 - `image-extras` with XPM support for primary XPM decoding.

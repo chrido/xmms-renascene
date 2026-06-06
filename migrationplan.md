@@ -89,9 +89,9 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port playlist load/save dialogs.
 
 - [ ] Port GStreamer player.
-  - [ ] Create `playbin` pipeline.
-  - [ ] Build audio sink chain: `audioconvert`, `audiopanorama`, `equalizer-10bands`, `spectrum`, sink.
-  - [ ] Disable video with fake sink.
+  - [x] Create `playbin` pipeline.
+  - [x] Build audio sink chain: `audioconvert`, `audiopanorama`, `equalizer-10bands`, `spectrum`, sink.
+  - [x] Disable video with fake sink.
   - [ ] Port bus handling for EOS, errors, duration changes, tags, and spectrum messages.
   - [ ] Port play, stop, pause, unpause, toggle pause, seek, position, and duration.
   - [ ] Port bitrate, frequency, and channel reporting.
