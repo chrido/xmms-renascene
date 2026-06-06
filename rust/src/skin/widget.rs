@@ -841,6 +841,85 @@ impl Visualization {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndicatorSegment {
+    pub source: SkinSource,
+    pub dest_x: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonoStereoIndicator {
+    widget: Widget,
+    skin: SkinPixmapKind,
+    channels: i32,
+}
+
+impl MonoStereoIndicator {
+    pub const WIDTH: i32 = 56;
+    pub const HEIGHT: i32 = 12;
+
+    pub fn new(id: WidgetId, x: i32, y: i32, skin: SkinPixmapKind) -> Self {
+        Self {
+            widget: Widget::new(
+                id,
+                WidgetRect {
+                    x,
+                    y,
+                    width: Self::WIDTH,
+                    height: Self::HEIGHT,
+                },
+            ),
+            skin,
+            channels: 0,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn channels(&self) -> i32 {
+        self.channels
+    }
+
+    pub fn set_channels(&mut self, channels: i32) {
+        self.channels = channels;
+        self.widget.queue_draw();
+    }
+
+    pub fn segments(&self) -> [IndicatorSegment; 2] {
+        let (stereo_y, mono_y) = match self.channels {
+            2 => (0, 12),
+            1 => (12, 0),
+            _ => (12, 12),
+        };
+        [
+            IndicatorSegment {
+                source: SkinSource {
+                    kind: self.skin,
+                    x: 0,
+                    y: stereo_y,
+                },
+                dest_x: 0,
+                width: 29,
+                height: 12,
+            },
+            IndicatorSegment {
+                source: SkinSource {
+                    kind: self.skin,
+                    x: 29,
+                    y: mono_y,
+                },
+                dest_x: 29,
+                width: 27,
+                height: 12,
+            },
+        ]
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -1329,5 +1408,30 @@ mod tests {
         assert!(vis.widget().needs_redraw());
         assert_eq!(Visualization::level(0.5), 8);
         assert_eq!(Visualization::level(2.0), 16);
+    }
+
+    #[test]
+    fn mono_stereo_indicator_maps_channels_to_segments() {
+        let mut indicator = MonoStereoIndicator::new(WidgetId(7), 1, 2, SkinPixmapKind::MonoStereo);
+        assert_eq!(indicator.widget().rect().width, 56);
+        assert_eq!(indicator.widget().rect().height, 12);
+
+        indicator.set_channels(2);
+        let stereo = indicator.segments();
+        assert_eq!(stereo[0].source.y, 0);
+        assert_eq!(stereo[1].source.y, 12);
+        assert!(indicator.widget().needs_redraw());
+
+        indicator.set_channels(1);
+        let mono = indicator.segments();
+        assert_eq!(mono[0].source.y, 12);
+        assert_eq!(mono[1].source.y, 0);
+
+        indicator.set_channels(0);
+        let inactive = indicator.segments();
+        assert_eq!(inactive[0].source.y, 12);
+        assert_eq!(inactive[1].source.y, 12);
+        assert_eq!(inactive[0].width, 29);
+        assert_eq!(inactive[1].width, 27);
     }
 }

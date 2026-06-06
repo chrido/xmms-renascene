@@ -37,6 +37,7 @@ Completed so far:
 - Ported horizontal slider state, click-to-jump, drag offsets, clamping, frame source calculation, and release/motion results.
 - Ported numeric time display state, default blank value, digit source mapping, dash fallback, and redraw behavior.
 - Ported visualization widget state, defaults, data/peak clamping, decay, milkdrop phase/energy updates, and redraw behavior.
+- Ported mono/stereo indicator state and C-compatible active/inactive segment source mapping.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
@@ -59,7 +60,7 @@ Completed so far:
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
 | `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, skin archives, visualization colors, and playlist colors |
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
-| `rust/src/skin/widget.rs` | Widget list/hit-testing model, push/toggle/textbox/slider/number/visualization state, and visualization enums |
+| `rust/src/skin/widget.rs` | Widget list/hit-testing model, push/toggle/textbox/slider/number/visualization/indicator state, and visualization enums |
 | `rust/src/render.rs` | XPM-to-Cairo surface conversion |
 | `rust/src/ui.rs` | GTK preview window and smoke mode |
 | `rust/tests/default_skin.rs` | Default skin parsing tests |
