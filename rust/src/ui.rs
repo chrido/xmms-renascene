@@ -217,13 +217,14 @@ fn build_playlist_window(app: &gtk::Application, skin: &Rc<DefaultSkin>) -> gtk:
 }
 
 fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
-    if state.app_state.config.equalizer_visible {
+    let visibility = state.panel_visibility();
+    if visibility.equalizer {
         windows.equalizer.present();
     } else {
         windows.equalizer.hide();
     }
 
-    if state.app_state.config.playlist_visible {
+    if visibility.playlist {
         windows.playlist.present();
     } else {
         windows.playlist.hide();
@@ -238,7 +239,7 @@ enum MainControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UiAction {
+pub(crate) enum UiAction {
     None,
     Quit,
     Minimize,
@@ -246,7 +247,7 @@ enum UiAction {
 }
 
 #[derive(Debug, Clone)]
-struct MainWindowUiState {
+pub(crate) struct MainWindowUiState {
     app_state: AppState,
     shaded: bool,
     position_position: i32,
@@ -257,8 +258,14 @@ struct MainWindowUiState {
 
 impl Default for MainWindowUiState {
     fn default() -> Self {
+        Self::from_app_state(AppState::default())
+    }
+}
+
+impl MainWindowUiState {
+    pub(crate) fn from_app_state(app_state: AppState) -> Self {
         Self {
-            app_state: AppState::default(),
+            app_state,
             shaded: false,
             position_position: 0,
             active: None,
@@ -266,9 +273,7 @@ impl Default for MainWindowUiState {
             slider_press_offset: 0,
         }
     }
-}
 
-impl MainWindowUiState {
     fn render_state(&self) -> MainWindowRenderState {
         MainWindowRenderState {
             shaded: self.shaded,
@@ -291,7 +296,19 @@ impl MainWindowUiState {
         }
     }
 
-    fn press(&mut self, x: i32, y: i32) {
+    pub(crate) fn panel_visibility(&self) -> PanelVisibility {
+        PanelVisibility {
+            equalizer: self.app_state.config.equalizer_visible,
+            playlist: self.app_state.config.playlist_visible,
+        }
+    }
+
+    pub(crate) fn click(&mut self, x: i32, y: i32) -> UiAction {
+        self.press(x, y);
+        self.release(x, y)
+    }
+
+    pub(crate) fn press(&mut self, x: i32, y: i32) {
         let Some(control) = self.hit_test(x, y) else {
             self.active = None;
             self.active_inside = false;
@@ -305,7 +322,7 @@ impl MainWindowUiState {
         }
     }
 
-    fn motion(&mut self, x: i32, y: i32) -> bool {
+    pub(crate) fn motion(&mut self, x: i32, y: i32) -> bool {
         let Some(active) = self.active else {
             return false;
         };
@@ -327,7 +344,7 @@ impl MainWindowUiState {
         }
     }
 
-    fn release(&mut self, x: i32, y: i32) -> UiAction {
+    pub(crate) fn release(&mut self, x: i32, y: i32) -> UiAction {
         let Some(active) = self.active.take() else {
             self.active_inside = false;
             return UiAction::None;
@@ -516,6 +533,12 @@ impl MainWindowUiState {
             MainSlider::Position => ControlRect::new(16, 72, 248, 10),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PanelVisibility {
+    pub(crate) equalizer: bool,
+    pub(crate) playlist: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

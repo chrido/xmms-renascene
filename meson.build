@@ -93,6 +93,10 @@ if cargo.found()
     command: [cargo, 'test', '--manifest-path', rust_manifest],
   )
 
+  run_target('rust-e2e',
+    command: [cargo, 'test', '--manifest-path', rust_manifest, '--test', 'e2e'],
+  )
+
   run_target('rust-smoke',
     command: [cargo, 'run', '--manifest-path', rust_manifest, '--quiet'],
   )

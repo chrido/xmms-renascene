@@ -43,6 +43,7 @@ Completed so far:
 - Added a GTK preview window that renders the default main reset state, including titlebar buttons, transport buttons, toggle buttons, text boxes, volume/balance/position sliders, blank time numbers, visualization grid, mono/stereo indicator, and stopped play-status indicator.
 - Wired the Rust main-window GTK preview to click and motion controllers: titlebar close/minimize/shade, play/pause/stop/previous/next/eject press states, shuffle/repeat/equalizer/playlist toggles, and volume/balance/position slider dragging now update Rust runtime state and redraw.
 - Added Rust GTK preview windows for the equalizer and playlist; the main-window EQ and PL toggle buttons now show and hide those skinned windows.
+- Added a Rust UI e2e harness for scripted startup settings, main-window clicks, and window visibility assertions, with an initial playlist-button scenario.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
 - Re-captured `rust-preview-screenshots/main-preview.png` and compared it to `reference-screenshots/main-reset.png`; the latest ImageMagick AE and RMSE metrics are both `0`.
@@ -63,12 +64,14 @@ Completed so far:
 | `rust/src/config.rs` | Initial Rust config model and defaults |
 | `rust/src/player.rs` | Initial player state model |
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
+| `rust/src/e2e.rs` | Rust UI e2e harness for scripted settings, clicks, and assertions |
 | `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, skin archives, visualization colors, and playlist colors |
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
 | `rust/src/skin/widget.rs` | Widget list/hit-testing model, all initial widget state machines, and visualization enums |
 | `rust/src/render.rs` | XPM-to-Cairo conversion, skin blitting, docked panel rendering, and main reset-state composition |
 | `rust/src/ui.rs` | GTK preview windows, smoke mode, interactive main-window control state, and EQ/playlist preview window visibility |
 | `rust/tests/default_skin.rs` | Default skin parsing tests |
+| `rust/tests/e2e.rs` | Rust UI e2e scenarios |
 | `rust/tests/render.rs` | Cairo render tests |
 
 ## Dependencies
@@ -126,6 +129,13 @@ xvfb-run -a -s '-screen 0 1024x768x24' \
   cargo run -- --gtk-smoke
 ```
 
+Rust UI e2e scenarios:
+
+```sh
+cd rust
+cargo test --test e2e
+```
+
 Existing C application build:
 
 ```sh
@@ -138,6 +148,7 @@ Meson Rust validation targets:
 meson compile -C builddir
 meson compile -C builddir rust-fmt
 meson compile -C builddir rust-test
+meson compile -C builddir rust-e2e
 meson compile -C builddir rust-smoke
 meson compile -C builddir rust-gtk-smoke
 ```

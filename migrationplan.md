@@ -196,6 +196,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 - [ ] Add parity validation.
   - [ ] Keep Rust unit tests for pure logic.
   - [ ] Add Rust integration tests for playlist/config/skin fixtures.
+  - [x] Add Rust UI e2e harness for scripted player settings, clicks, and window visibility assertions.
   - [ ] Add GTK smoke tests under Xvfb.
   - [ ] Capture Rust screenshots for main, playlist, and equalizer windows.
   - [ ] Compare visually against `reference-screenshots/`.
