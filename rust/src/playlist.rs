@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,6 +7,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const MEDIA_EXTENSIONS: &[&str] = &[
     "mp3", "ogg", "flac", "wav", "m4a", "aac", "opus", "wma", "mp4", "webm",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistSortKey {
+    Title,
+    Filename,
+    Path,
+    Date,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistEntry {
@@ -258,6 +267,15 @@ impl Playlist {
         }
     }
 
+    pub fn sort_by(&mut self, key: PlaylistSortKey) {
+        let current = self
+            .position
+            .and_then(|position| self.entries.get(position).cloned());
+        self.entries
+            .sort_by(|left, right| compare_entries(left, right, key));
+        self.refresh_position(current.as_ref());
+    }
+
     pub fn set_shuffle(&mut self, enabled: bool) {
         self.shuffle = enabled;
         if enabled {
@@ -354,6 +372,17 @@ impl Playlist {
             let j = (seed as usize) % (i + 1);
             self.shuffle_order.swap(i, j);
         }
+    }
+
+    fn refresh_position(&mut self, current: Option<&PlaylistEntry>) {
+        self.invalidate_shuffle_order();
+        self.position = if let Some(current) = current {
+            self.entries.iter().position(|entry| entry == current)
+        } else if self.entries.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
     }
 
     pub fn load_m3u_file(path: &Path) -> io::Result<Self> {
@@ -517,6 +546,56 @@ fn normalize_playlist_path(line: &str, base_dir: &Path) -> String {
 
     let path: PathBuf = base_dir.join(line);
     path.to_string_lossy().into_owned()
+}
+
+fn compare_entries(left: &PlaylistEntry, right: &PlaylistEntry, key: PlaylistSortKey) -> Ordering {
+    match key {
+        PlaylistSortKey::Title => compare_ascii_case_insensitive(&left.title, &right.title),
+        PlaylistSortKey::Filename => {
+            let left = entry_path_for_compare(left);
+            let right = entry_path_for_compare(right);
+            compare_ascii_case_insensitive(path_basename(&left), path_basename(&right))
+        }
+        PlaylistSortKey::Path => compare_ascii_case_insensitive(
+            &entry_path_for_compare(left),
+            &entry_path_for_compare(right),
+        ),
+        PlaylistSortKey::Date => compare_entries_by_date(left, right),
+    }
+}
+
+fn compare_entries_by_date(left: &PlaylistEntry, right: &PlaylistEntry) -> Ordering {
+    let left_path = entry_path_for_compare(left);
+    let right_path = entry_path_for_compare(right);
+    let left_modified = fs::metadata(&left_path).and_then(|metadata| metadata.modified());
+    let right_modified = fs::metadata(&right_path).and_then(|metadata| metadata.modified());
+
+    match (left_modified, right_modified) {
+        (Ok(left_time), Ok(right_time)) => match left_time.cmp(&right_time) {
+            Ordering::Equal => Ordering::Equal,
+            Ordering::Less => Ordering::Less,
+            Ordering::Greater => Ordering::Greater,
+        },
+        (Ok(_), Err(_)) => Ordering::Less,
+        (Err(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => compare_entries(left, right, PlaylistSortKey::Filename),
+    }
+}
+
+fn entry_path_for_compare(entry: &PlaylistEntry) -> String {
+    file_uri_to_path(&entry.filename)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| entry.filename.clone())
+}
+
+fn path_basename(path: &str) -> &str {
+    path.rsplit_once('/')
+        .map(|(_, basename)| basename)
+        .unwrap_or(path)
+}
+
+fn compare_ascii_case_insensitive(left: &str, right: &str) -> Ordering {
+    left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
 }
 
 fn is_media_file(path: &Path) -> bool {
@@ -721,6 +800,75 @@ mod tests {
         assert_eq!(playlist.position(), Some(1));
         assert!(!playlist.skip_failed_current());
         assert_eq!(playlist.position(), Some(1));
+    }
+
+    #[test]
+    fn sort_by_title_filename_and_path_preserves_current_entry() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/Beta/b_song.ogg");
+        playlist.add_uri("file:///music/Alpha/c_song.ogg");
+        playlist.add_uri("file:///music/Gamma/a_song.ogg");
+        playlist.entries[0].title = "Zulu".to_string();
+        playlist.entries[1].title = "alpha".to_string();
+        playlist.entries[2].title = "Echo".to_string();
+        playlist.set_position(0);
+
+        playlist.sort_by(PlaylistSortKey::Title);
+        assert_eq!(playlist.entries()[0].title, "alpha");
+        assert_eq!(playlist.entries()[1].title, "Echo");
+        assert_eq!(playlist.entries()[2].title, "Zulu");
+        assert_eq!(playlist.position(), Some(2));
+
+        playlist.sort_by(PlaylistSortKey::Filename);
+        assert_eq!(
+            playlist.entries()[0].filename,
+            "file:///music/Gamma/a_song.ogg"
+        );
+        assert_eq!(
+            playlist.entries()[1].filename,
+            "file:///music/Beta/b_song.ogg"
+        );
+        assert_eq!(
+            playlist.entries()[2].filename,
+            "file:///music/Alpha/c_song.ogg"
+        );
+        assert_eq!(playlist.position(), Some(1));
+
+        playlist.sort_by(PlaylistSortKey::Path);
+        assert_eq!(
+            playlist.entries()[0].filename,
+            "file:///music/Alpha/c_song.ogg"
+        );
+        assert_eq!(
+            playlist.entries()[1].filename,
+            "file:///music/Beta/b_song.ogg"
+        );
+        assert_eq!(
+            playlist.entries()[2].filename,
+            "file:///music/Gamma/a_song.ogg"
+        );
+        assert_eq!(playlist.position(), Some(1));
+    }
+
+    #[test]
+    fn sort_by_date_uses_file_mtime_then_filename_fallback() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let older = root.join("older.ogg");
+        let newer = root.join("newer.ogg");
+        fs::write(&older, b"old").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&newer, b"new").unwrap();
+
+        let mut playlist = Playlist::new();
+        playlist.add_path(&newer);
+        playlist.add_path(&older);
+        playlist.sort_by(PlaylistSortKey::Date);
+
+        assert_eq!(playlist.entries()[0].filename, path_to_file_uri(&older));
+        assert_eq!(playlist.entries()[1].filename, path_to_file_uri(&newer));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn unique_temp_dir() -> PathBuf {
