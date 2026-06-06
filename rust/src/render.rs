@@ -1080,6 +1080,27 @@ pub fn render_playlist_frame(
         return Ok(false);
     };
     let pledit = surface_from_xpm(pledit)?;
+
+    if shaded {
+        blit_surface_rect(cr, &pledit, 72, 42, 0, 0, 25, 14)?;
+        let count = (width - 75) / 25;
+        for i in 0..count {
+            blit_surface_rect(cr, &pledit, 72, 57, (i * 25) + 25, 0, 25, 14)?;
+        }
+        blit_surface_rect(
+            cr,
+            &pledit,
+            99,
+            if focused { 42 } else { 57 },
+            width - 50,
+            0,
+            50,
+            14,
+        )?;
+        draw_playlist_shaded_info(cr, width)?;
+        return Ok(true);
+    }
+
     let title_y = if focused { 0 } else { 21 };
 
     let colors = skin.playlist_colors();
@@ -1131,14 +1152,27 @@ pub fn render_playlist_frame(
     blit_surface_rect(cr, &pledit, 26, title_y, (width / 2) - 50, 0, 100, 20)?;
     blit_surface_rect(cr, &pledit, 153, title_y, width - 25, 0, 25, 20)?;
 
-    if shaded {
-        return Ok(true);
-    }
-
     for i in 0..(height - 58) / 29 {
         let ydest = (i * 29) + 20;
         blit_surface_rect(cr, &pledit, 0, 42, 0, ydest, 12, 29)?;
         blit_surface_rect(cr, &pledit, 32, 42, width - 19, ydest, 19, 29)?;
+    }
+
+    fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError> {
+        cr.save()?;
+        cr.set_source_rgb(0.58, 0.82, 0.58);
+        cr.select_font_face(
+            "Helvetica",
+            cairo::FontSlant::Normal,
+            cairo::FontWeight::Bold,
+        );
+        cr.set_font_size(8.0);
+        cr.rectangle(4.0, 3.0, f64::from((width - 35).max(1)), 8.0);
+        cr.clip();
+        cr.move_to(4.0, 10.0);
+        cr.show_text("1. No file loaded                         0:00/0:00")?;
+        cr.restore()?;
+        Ok(())
     }
     blit_surface_rect(cr, &pledit, 0, 72, 0, height - 38, 125, 38)?;
 

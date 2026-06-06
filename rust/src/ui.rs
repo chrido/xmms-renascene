@@ -10,7 +10,8 @@ use crate::render::{
     EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton,
     MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
     EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
-    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
@@ -296,7 +297,7 @@ fn build_playlist_window(
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Playlist")
-        .resizable(false)
+        .resizable(true)
         .decorated(false)
         .default_width(PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE)
         .default_height(PLAYLIST_DEFAULT_HEIGHT * DEFAULT_SCALE)
@@ -311,27 +312,24 @@ fn build_playlist_window(
         let state = state.borrow();
         let shaded = state.playlist_shaded;
         let focused = state.playlist_focused || state.playlist_dragging_title;
+        let playlist_width = state.playlist_width;
+        let playlist_height = state.playlist_height;
         let base_height = if shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
-            PLAYLIST_DEFAULT_HEIGHT
+            playlist_height
         };
         cr.scale(
-            width as f64 / PLAYLIST_DEFAULT_WIDTH as f64,
+            width as f64 / playlist_width as f64,
             height as f64 / base_height as f64,
         );
-        if let Err(err) = render_playlist_frame(
-            cr,
-            &skin,
-            focused,
-            shaded,
-            PLAYLIST_DEFAULT_WIDTH,
-            PLAYLIST_DEFAULT_HEIGHT,
-        ) {
+        if let Err(err) =
+            render_playlist_frame(cr, &skin, focused, shaded, playlist_width, playlist_height)
+        {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
         if let Some(menu) = state.playlist_menu() {
-            let (x, y, _, _) = playlist_menu_rect(menu);
+            let (x, y, _, _) = playlist_menu_rect(menu, playlist_width, playlist_height);
             if let Err(err) = cr.save() {
                 eprintln!("xmms-rs: failed to save playlist menu render state: {err}");
                 return;
@@ -339,7 +337,7 @@ fn build_playlist_window(
             cr.translate(f64::from(x), f64::from(y));
             let render_state = PlaylistMenuRenderState {
                 kind: menu.render_kind(),
-                hover: Some(menu.item_count().saturating_sub(1)),
+                hover: state.playlist_menu_hover(),
             };
             if let Err(err) = render_playlist_menu(cr, &skin, render_state) {
                 eprintln!("xmms-rs: failed to render playlist menu: {err}");
@@ -349,6 +347,21 @@ fn build_playlist_window(
             }
         }
     });
+    {
+        let main_state = Rc::clone(main_state);
+        drawing_area.connect_resize(move |area, width, height| {
+            let mut state = main_state.borrow_mut();
+            let base_height = if state.playlist_shaded {
+                state.playlist_height
+            } else {
+                (height / DEFAULT_SCALE).max(PLAYLIST_MIN_HEIGHT)
+            };
+            if state.set_playlist_size((width / DEFAULT_SCALE).max(PLAYLIST_MIN_WIDTH), base_height)
+            {
+                area.queue_draw();
+            }
+        });
+    }
     add_panel_click_controller(
         &window,
         &drawing_area,
@@ -494,6 +507,30 @@ fn add_panel_click_controller(
                     && main_state.borrow_mut().equalizer_press(base_x, base_y)
                 {
                     area.queue_draw();
+                } else if kind == PanelKind::Playlist {
+                    if main_state.borrow_mut().playlist_press(base_x, base_y) {
+                        area.queue_draw();
+                        return;
+                    }
+                    if main_state.borrow().playlist_resize_region(base_x, base_y) {
+                        let Some(device) = gesture.current_event_device() else {
+                            return;
+                        };
+                        let Some(surface) = window.surface() else {
+                            return;
+                        };
+                        let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
+                            return;
+                        };
+                        toplevel.begin_resize(
+                            gtk::gdk::SurfaceEdge::SouthEast,
+                            Some(&device),
+                            gesture.current_button() as i32,
+                            x,
+                            y,
+                            gesture.current_event_time(),
+                        );
+                    }
                 }
                 return;
             }
@@ -533,6 +570,8 @@ fn add_panel_click_controller(
                 } else {
                     title_action
                 }
+            } else if main_state.borrow().playlist_menu_pressed() {
+                main_state.borrow_mut().playlist_release(x, y)
             } else {
                 main_state.borrow_mut().panel_click(kind, x, y)
             };
@@ -563,12 +602,18 @@ fn add_panel_click_controller(
         let area = area.clone();
         let main_state = Rc::clone(&main_state);
         motion.connect_motion(move |_motion, x, y| {
-            if kind != PanelKind::Equalizer {
-                return;
-            }
             let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
-            if main_state.borrow_mut().equalizer_motion(x, y) {
-                area.queue_draw();
+            match kind {
+                PanelKind::Equalizer => {
+                    if main_state.borrow_mut().equalizer_motion(x, y) {
+                        area.queue_draw();
+                    }
+                }
+                PanelKind::Playlist => {
+                    if main_state.borrow_mut().playlist_motion(x, y) {
+                        area.queue_draw();
+                    }
+                }
             }
         });
     }
@@ -623,11 +668,11 @@ fn panel_event_to_base_coords(
             },
         ),
         PanelKind::Playlist => (
-            PLAYLIST_DEFAULT_WIDTH,
+            state.playlist_width,
             if state.playlist_shaded {
                 MAIN_TITLEBAR_HEIGHT
             } else {
-                PLAYLIST_DEFAULT_HEIGHT
+                state.playlist_height
             },
         ),
     };
@@ -655,8 +700,8 @@ fn sync_single_panel_window(
         PanelKind::Playlist => (
             state.app_state.config.playlist_visible,
             state.playlist_shaded,
-            PLAYLIST_DEFAULT_WIDTH,
-            PLAYLIST_DEFAULT_HEIGHT,
+            state.playlist_width,
+            state.playlist_height,
         ),
     };
     if !visible {
@@ -668,6 +713,7 @@ fn sync_single_panel_window(
     } else {
         full_height
     };
+    area.set_content_width(width * DEFAULT_SCALE);
     area.set_content_height(height * DEFAULT_SCALE);
     window.set_default_size(width * DEFAULT_SCALE, height * DEFAULT_SCALE);
     area.queue_draw();
@@ -698,15 +744,17 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         let height = if state.playlist_shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
-            PLAYLIST_DEFAULT_HEIGHT
+            state.playlist_height
         };
         windows
             .playlist_area
+            .set_content_width(state.playlist_width * DEFAULT_SCALE);
+        windows
+            .playlist_area
             .set_content_height(height * DEFAULT_SCALE);
-        windows.playlist.set_default_size(
-            PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE,
-            height * DEFAULT_SCALE,
-        );
+        windows
+            .playlist
+            .set_default_size(state.playlist_width * DEFAULT_SCALE, height * DEFAULT_SCALE);
         windows.playlist.present();
         windows.playlist_area.queue_draw();
     } else {
@@ -728,6 +776,7 @@ pub(crate) enum UiAction {
     Minimize,
     Resize,
     ShowMenu,
+    OpenFileDialog,
 }
 
 #[derive(Debug, Clone)]
@@ -748,8 +797,13 @@ pub(crate) struct MainWindowUiState {
     playlist_shaded: bool,
     playlist_focused: bool,
     playlist_dragging_title: bool,
+    playlist_width: i32,
+    playlist_height: i32,
     playlist_menu: Option<PlaylistMenuKind>,
+    playlist_menu_hover: Option<usize>,
+    playlist_menu_pressed: bool,
     preferences_visible: bool,
+    file_dialog_visible: bool,
     position_position: i32,
     active: Option<MainControl>,
     active_inside: bool,
@@ -769,7 +823,7 @@ impl MainWindowUiState {
             shaded: false,
             menu_visible: false,
             equalizer_shaded: false,
-            equalizer_focused: false,
+            equalizer_focused: true,
             equalizer_dragging_title: false,
             equalizer_active: true,
             equalizer_automatic: false,
@@ -779,10 +833,15 @@ impl MainWindowUiState {
             equalizer_preamp_position: 50,
             equalizer_band_positions: [50; 10],
             playlist_shaded: false,
-            playlist_focused: false,
+            playlist_focused: true,
             playlist_dragging_title: false,
+            playlist_width: PLAYLIST_DEFAULT_WIDTH,
+            playlist_height: PLAYLIST_DEFAULT_HEIGHT,
             playlist_menu: None,
+            playlist_menu_hover: None,
+            playlist_menu_pressed: false,
             preferences_visible: false,
+            file_dialog_visible: false,
             position_position: 0,
             active: None,
             active_inside: false,
@@ -857,12 +916,41 @@ impl MainWindowUiState {
         self.playlist_menu
     }
 
+    pub(crate) fn playlist_menu_hover(&self) -> Option<usize> {
+        self.playlist_menu_hover
+    }
+
+    pub(crate) fn playlist_menu_pressed(&self) -> bool {
+        self.playlist_menu_pressed
+    }
+
+    pub(crate) fn playlist_size(&self) -> (i32, i32) {
+        (self.playlist_width, self.playlist_height)
+    }
+
     pub(crate) fn is_preferences_visible(&self) -> bool {
         self.preferences_visible
     }
 
     pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
         self.preferences_visible = visible;
+    }
+
+    pub(crate) fn is_file_dialog_visible(&self) -> bool {
+        self.file_dialog_visible
+    }
+
+    pub(crate) fn set_file_dialog_visible(&mut self, visible: bool) {
+        self.file_dialog_visible = visible;
+    }
+
+    pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
+        let width = width.max(PLAYLIST_MIN_WIDTH);
+        let height = height.max(PLAYLIST_MIN_HEIGHT);
+        let changed = self.playlist_width != width || self.playlist_height != height;
+        self.playlist_width = width;
+        self.playlist_height = height;
+        changed
     }
 
     pub(crate) fn set_panel_dragging(&mut self, kind: PanelKind, dragging: bool) {
@@ -1009,9 +1097,56 @@ impl MainWindowUiState {
         y >= 0 && y < title_height && !self.panel_title_button_hit(kind, x, y)
     }
 
+    pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {
+        !self.playlist_shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
+    }
+
+    pub(crate) fn playlist_press(&mut self, x: i32, y: i32) -> bool {
+        let Some(item) = self.playlist_menu_item_at(x, y) else {
+            return false;
+        };
+        self.playlist_menu_hover = Some(item);
+        self.playlist_menu_pressed = true;
+        true
+    }
+
+    pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
+        if self.playlist_menu.is_none() {
+            return false;
+        }
+        let item = self.playlist_menu_item_at(x, y);
+        let changed = self.playlist_menu_hover != item;
+        self.playlist_menu_hover = item;
+        changed
+    }
+
+    pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
+        let activated = self.playlist_menu_item_at(x, y) == self.playlist_menu_hover;
+        self.playlist_menu = None;
+        self.playlist_menu_hover = None;
+        self.playlist_menu_pressed = false;
+        if activated {
+            PanelAction::Changed
+        } else {
+            PanelAction::None
+        }
+    }
+
+    fn playlist_menu_item_at(&self, x: i32, y: i32) -> Option<usize> {
+        let menu = self.playlist_menu?;
+        let (menu_x, menu_y, menu_width, menu_height) =
+            playlist_menu_rect(menu, self.playlist_width, self.playlist_height);
+        if x < menu_x || x >= menu_x + menu_width || y < menu_y || y >= menu_y + menu_height {
+            return None;
+        }
+        Some(((y - menu_y) / 18) as usize)
+    }
+
     pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> PanelAction {
         if kind == PanelKind::Playlist {
             self.playlist_menu = None;
+            self.playlist_menu_hover = None;
+            self.playlist_menu_pressed = false;
         }
 
         if self.panel_title_button_hit(kind, x, y) {
@@ -1033,8 +1168,9 @@ impl MainWindowUiState {
         }
 
         if kind == PanelKind::Playlist && !self.playlist_shaded {
-            if let Some(menu) = playlist_menu_at(x, y) {
+            if let Some(menu) = playlist_menu_at(x, y, self.playlist_width, self.playlist_height) {
                 self.playlist_menu = Some(menu);
+                self.playlist_menu_hover = Some(menu.item_count().saturating_sub(1));
                 return PanelAction::ShowPlaylistMenu(menu);
             }
         }
@@ -1205,7 +1341,7 @@ impl MainWindowUiState {
                 self.position_position = 0;
                 UiAction::None
             }
-            MainPushButton::Eject => UiAction::None,
+            MainPushButton::Eject => UiAction::OpenFileDialog,
         }
     }
 
@@ -1381,52 +1517,52 @@ fn equalizer_slider_at(x: i32, y: i32) -> Option<EqualizerSlider> {
     })
 }
 
-fn playlist_menu_at(x: i32, y: i32) -> Option<PlaylistMenuKind> {
+fn playlist_menu_at(x: i32, y: i32, width: i32, height: i32) -> Option<PlaylistMenuKind> {
     [
         (
             PlaylistMenuKind::Add,
-            ControlRect::new(12, playlist_button_y(), 25, 18),
+            ControlRect::new(12, playlist_button_y(height), 25, 18),
         ),
         (
             PlaylistMenuKind::Remove,
-            ControlRect::new(41, playlist_button_y(), 25, 18),
+            ControlRect::new(41, playlist_button_y(height), 25, 18),
         ),
         (
             PlaylistMenuKind::Select,
-            ControlRect::new(70, playlist_button_y(), 25, 18),
+            ControlRect::new(70, playlist_button_y(height), 25, 18),
         ),
         (
             PlaylistMenuKind::Misc,
-            ControlRect::new(99, playlist_button_y(), 25, 18),
+            ControlRect::new(99, playlist_button_y(height), 25, 18),
         ),
         (
             PlaylistMenuKind::List,
-            ControlRect::new(PLAYLIST_DEFAULT_WIDTH - 46, playlist_button_y(), 23, 18),
+            ControlRect::new(width - 46, playlist_button_y(height), 23, 18),
         ),
     ]
     .into_iter()
     .find_map(|(menu, rect)| rect.contains(x, y).then_some(menu))
 }
 
-fn playlist_menu_rect(menu: PlaylistMenuKind) -> (i32, i32, i32, i32) {
+fn playlist_menu_rect(menu: PlaylistMenuKind, width: i32, height: i32) -> (i32, i32, i32, i32) {
     let (x, items) = match menu {
         PlaylistMenuKind::Add => (12, 3),
         PlaylistMenuKind::Remove => (41, 4),
         PlaylistMenuKind::Select => (70, 3),
         PlaylistMenuKind::Misc => (99, 3),
-        PlaylistMenuKind::List => (PLAYLIST_DEFAULT_WIDTH - 46, 3),
+        PlaylistMenuKind::List => (width - 46, 3),
     };
     let item_height = 18;
     (
         x - 1,
-        playlist_button_y() - ((items - 1) * item_height) - 1,
+        playlist_button_y(height) - ((items - 1) * item_height) - 1,
         25,
         items * item_height,
     )
 }
 
-const fn playlist_button_y() -> i32 {
-    PLAYLIST_DEFAULT_HEIGHT - 29
+const fn playlist_button_y(height: i32) -> i32 {
+    height - 29
 }
 
 fn toggle_button_rect(toggle: MainToggleButton) -> ControlRect {
@@ -1507,7 +1643,23 @@ fn apply_ui_action(
         UiAction::ShowMenu => {
             show_main_menu(menu_popover, drawing_area);
         }
+        UiAction::OpenFileDialog => {
+            show_open_file_dialog(window);
+        }
     }
+}
+
+fn show_open_file_dialog(parent: &gtk::ApplicationWindow) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Open Files"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        Some("Open"),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |_, _response| dialog_for_response.destroy());
+    dialog.show();
 }
 
 fn show_main_menu(menu_popover: &gtk::Popover, drawing_area: &gtk::DrawingArea) {

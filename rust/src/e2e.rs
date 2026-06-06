@@ -173,6 +173,7 @@ pub struct UiE2e {
     playlist_visible: bool,
     equalizer_visible: bool,
     preferences_visible: bool,
+    file_dialog_visible: bool,
 }
 
 impl UiE2e {
@@ -184,6 +185,7 @@ impl UiE2e {
             playlist_visible: false,
             equalizer_visible: false,
             preferences_visible: false,
+            file_dialog_visible: false,
         };
         harness.sync_windows();
         harness
@@ -207,6 +209,23 @@ impl UiE2e {
     pub fn click_panel(&mut self, target: PanelTarget) -> &mut Self {
         target.click(&mut self.state);
         self.sync_windows();
+        self
+    }
+
+    pub fn press_playlist_menu_item(&mut self, item: usize) -> &mut Self {
+        let y = 174 + item as i32 * 18 + 8;
+        self.state.playlist_press(240, y);
+        self
+    }
+
+    pub fn hover_playlist_menu_item(&mut self, item: usize) -> &mut Self {
+        let y = 174 + item as i32 * 18 + 8;
+        self.state.playlist_motion(240, y);
+        self
+    }
+
+    pub fn resize_playlist(&mut self, width: i32, height: i32) -> &mut Self {
+        self.state.set_playlist_size(width, height);
         self
     }
 
@@ -238,6 +257,14 @@ impl UiE2e {
         assert!(
             self.is_window_visible(window),
             "expected {window:?} window to be visible"
+        );
+        self
+    }
+
+    pub fn assert_file_dialog_visible(&mut self) -> &mut Self {
+        assert!(
+            self.file_dialog_visible || self.state.is_file_dialog_visible(),
+            "expected open file dialog to be visible"
         );
         self
     }
@@ -342,6 +369,20 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_playlist_menu_hover(&mut self, expected: Option<usize>) -> &mut Self {
+        assert_eq!(
+            self.state.playlist_menu_hover(),
+            expected,
+            "expected playlist menu hover to be {expected:?}"
+        );
+        self
+    }
+
+    pub fn assert_playlist_size(&mut self, width: i32, height: i32) -> &mut Self {
+        assert_eq!(self.state.playlist_size(), (width, height));
+        self
+    }
+
     pub fn assert_panel_title_draggable(&mut self, panel: PanelKind) -> &mut Self {
         assert!(
             self.state.panel_title_drag_region(panel, 40, 7),
@@ -425,6 +466,10 @@ impl UiE2e {
     fn apply_action(&mut self, action: UiAction) {
         match action {
             UiAction::None | UiAction::Resize | UiAction::ShowMenu => {}
+            UiAction::OpenFileDialog => {
+                self.file_dialog_visible = true;
+                self.state.set_file_dialog_visible(true);
+            }
             UiAction::Minimize => self.main_minimized = true,
             UiAction::Quit => {
                 self.main_visible = false;

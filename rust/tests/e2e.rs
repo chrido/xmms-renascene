@@ -61,7 +61,8 @@ fn transport_buttons_update_player_state_and_position() {
 
     app.click(MainTarget::EJECT)
         .assert_window_visible(Window::Player)
-        .assert_player_state(PlayerState::Stopped);
+        .assert_player_state(PlayerState::Stopped)
+        .assert_file_dialog_visible();
 }
 
 #[test]
@@ -223,7 +224,23 @@ fn playlist_bottom_buttons_open_their_submenus() {
         .click_panel(PanelTarget::PlaylistMisc)
         .assert_playlist_menu(PlaylistMenuKind::Misc)
         .click_panel(PanelTarget::PlaylistList)
-        .assert_playlist_menu(PlaylistMenuKind::List);
+        .assert_playlist_menu(PlaylistMenuKind::List)
+        .assert_playlist_menu_hover(Some(2))
+        .press_playlist_menu_item(1)
+        .assert_playlist_menu_hover(Some(1))
+        .hover_playlist_menu_item(0)
+        .assert_playlist_menu_hover(Some(0));
+}
+
+#[test]
+fn playlist_can_resize_from_default_dimensions() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.assert_playlist_size(275, 232)
+        .resize_playlist(325, 280)
+        .assert_playlist_size(325, 280)
+        .resize_playlist(100, 80)
+        .assert_playlist_size(275, 116);
 }
 
 #[test]
