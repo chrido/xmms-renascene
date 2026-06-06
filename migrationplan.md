@@ -30,7 +30,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Support `.wsz`, `.zip`, `.tar`, `.tar.gz`, and `.tar.bz2` skin archives.
   - [x] Port `viscolor.txt` parsing.
   - [x] Port `pledit.txt` playlist color parsing.
-  - [ ] Preserve `numbers` fallback for `nums_ex`.
+  - [x] Preserve `numbers` fallback for `nums_ex`.
   - [ ] Preserve balance-from-volume fallback.
   - [ ] Replace manual XPM parser with a library in a later cleanup phase.
 

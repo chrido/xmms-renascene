@@ -261,11 +261,20 @@ impl DefaultSkin {
                 continue;
             }
 
-            let Some(path) = Self::find_skin_file(dir, kind.info().file_stem) else {
+            let mut numbers_fallback = false;
+            let mut path = Self::find_skin_file(dir, kind.info().file_stem);
+            if path.is_none() && kind == SkinPixmapKind::Numbers {
+                path = Self::find_skin_file(dir, "numbers");
+                numbers_fallback = path.is_some();
+            }
+            let Some(path) = path else {
                 continue;
             };
 
-            let image = Self::load_skin_image(&path)?;
+            let mut image = Self::load_skin_image(&path)?;
+            if numbers_fallback {
+                image = expand_numbers_fallback(image);
+            }
             pixmaps.insert(kind, image);
         }
 
@@ -297,16 +306,24 @@ impl DefaultSkin {
                 continue;
             }
 
-            let Some((name, contents)) = find_archive_skin_entry(&entries, kind.info().file_stem)
-            else {
+            let mut numbers_fallback = false;
+            let mut entry = find_archive_skin_entry(&entries, kind.info().file_stem);
+            if entry.is_none() && kind == SkinPixmapKind::Numbers {
+                entry = find_archive_skin_entry(&entries, "numbers");
+                numbers_fallback = entry.is_some();
+            }
+            let Some((name, contents)) = entry else {
                 continue;
             };
 
-            let image = Self::load_skin_image_bytes(
+            let mut image = Self::load_skin_image_bytes(
                 &format!("{}:{name}", path.display()),
                 Path::new(name),
                 contents,
             )?;
+            if numbers_fallback {
+                image = expand_numbers_fallback(image);
+            }
             pixmaps.insert(kind, image);
         }
 
@@ -658,6 +675,28 @@ fn apply_balance_fallback(pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>) {
     }
 }
 
+fn expand_numbers_fallback(image: XpmImage) -> XpmImage {
+    if image.width() < 99 || image.height() < 13 {
+        return image;
+    }
+
+    let mut argb = vec![0; 108 * image.height()];
+    for y in 0..13 {
+        for x in 0..99 {
+            argb[(y * 108) + x] = image.pixel_argb(x, y).unwrap_or(0);
+        }
+        for x in 99..108 {
+            argb[(y * 108) + x] = image.pixel_argb(x - 9, y).unwrap_or(0);
+        }
+        for x in 101..106 {
+            argb[(y * 108) + x] = image.pixel_argb(x - 81, y).unwrap_or(0);
+        }
+    }
+
+    XpmImage::from_argb_pixels(108, image.height(), argb)
+        .expect("expanded numbers fallback dimensions are valid")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,6 +783,28 @@ static char * main_xpm[] = {
             skin.playlist_colors().selected_bg,
             DEFAULT_PLAYLIST_COLORS.selected_bg
         );
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn directory_loader_expands_legacy_numbers_fallback() {
+        let tmp =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-numbers", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut image = image::RgbaImage::new(99, 13);
+        image.put_pixel(20, 6, image::Rgba([1, 2, 3, 255]));
+        image.put_pixel(90, 6, image::Rgba([4, 5, 6, 255]));
+        image.save(tmp.join("numbers.png")).unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        let numbers = skin.get(SkinPixmapKind::Numbers).unwrap();
+        assert_eq!(numbers.width(), 108);
+        assert_eq!(numbers.height(), 13);
+        assert_eq!(numbers.pixel_argb(99, 6), Some(0xff040506));
+        assert_eq!(numbers.pixel_argb(101, 6), Some(0xff010203));
 
         std::fs::remove_dir_all(tmp).unwrap();
     }
