@@ -1,6 +1,7 @@
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::player::PlayerState;
+use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
 use crate::ui::{MainWindowUiState, PanelKind, PlaylistMenuKind, UiAction};
 
@@ -418,6 +419,46 @@ impl UiE2e {
         self
     }
 
+    pub fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) -> &mut Self {
+        self.state.add_spotify_entry(uri, title, duration_ms);
+        self.sync_windows();
+        self
+    }
+
+    pub fn add_podcast_entry(
+        &mut self,
+        uri: &str,
+        title: &str,
+        feed: &str,
+        guid: &str,
+    ) -> &mut Self {
+        self.state.add_podcast_entry(
+            uri,
+            Some(title.to_string()),
+            Some(feed.to_string()),
+            Some(guid.to_string()),
+        );
+        self.sync_windows();
+        self
+    }
+
+    pub fn select_playlist_entry(&mut self, index: usize) -> &mut Self {
+        self.state.set_playlist_entry_selected(index, true);
+        self
+    }
+
+    pub fn sort_playlist_by(&mut self, key: PlaylistSortKey) -> &mut Self {
+        self.state.sort_playlist_by(key);
+        self.sync_windows();
+        self
+    }
+
+    pub fn sort_selected_playlist_by(&mut self, key: PlaylistSortKey) -> &mut Self {
+        self.state.sort_selected_playlist_by(key);
+        self.sync_windows();
+        self
+    }
+
     pub fn update_timer_tick(&mut self, elapsed_ms: u32) -> &mut Self {
         self.state.update_timer_tick(elapsed_ms);
         self
@@ -692,6 +733,11 @@ impl UiE2e {
 
     pub fn assert_playlist_entry(&mut self, index: usize, expected: &str) -> &mut Self {
         assert_eq!(self.state.playlist_entry_uri(index), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_title(&mut self, index: usize, expected: &str) -> &mut Self {
+        assert_eq!(self.state.playlist_entry_title(index), Some(expected));
         self
     }
 

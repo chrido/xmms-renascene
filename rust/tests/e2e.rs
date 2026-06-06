@@ -4,6 +4,7 @@ use xmms_resuscitated::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
 };
 use xmms_resuscitated::player::PlayerState;
+use xmms_resuscitated::playlist::PlaylistSortKey;
 use xmms_resuscitated::ui::{PanelKind, PlaylistMenuKind};
 
 #[test]
@@ -249,6 +250,102 @@ fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
         .assert_player_state(PlayerState::Playing);
 
     fs::remove_dir_all(music_dir).unwrap();
+}
+
+#[test]
+fn spotify_and_podcast_entries_are_available_to_e2e_playlist_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_spotify_entry("spotify:track:123", "Spotify Song", 123_000)
+        .add_podcast_entry(
+            "https://example.test/episode.mp3",
+            "Podcast Episode",
+            "https://example.test/feed.xml",
+            "episode-1",
+        )
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "spotify:track:123")
+        .assert_playlist_title(0, "Spotify Song")
+        .assert_playlist_entry(1, "https://example.test/episode.mp3")
+        .assert_playlist_title(1, "Podcast Episode");
+}
+
+#[test]
+fn playlist_sort_e2e_orders_entries_and_preserves_current_item() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist([
+        "file:///music/Beta/b_song.ogg",
+        "file:///music/Alpha/c_song.ogg",
+        "file:///music/Gamma/a_song.ogg",
+    ])
+    .click(MainTarget::NEXT)
+    .assert_playlist_position(Some(0))
+    .sort_playlist_by(PlaylistSortKey::Filename)
+    .assert_playlist_entry(0, "file:///music/Gamma/a_song.ogg")
+    .assert_playlist_entry(1, "file:///music/Beta/b_song.ogg")
+    .assert_playlist_entry(2, "file:///music/Alpha/c_song.ogg")
+    .assert_playlist_position(Some(1))
+    .sort_playlist_by(PlaylistSortKey::Path)
+    .assert_playlist_entry(0, "file:///music/Alpha/c_song.ogg")
+    .assert_playlist_entry(1, "file:///music/Beta/b_song.ogg")
+    .assert_playlist_entry(2, "file:///music/Gamma/a_song.ogg")
+    .assert_playlist_position(Some(1));
+}
+
+#[test]
+fn playlist_sort_e2e_supports_title_and_date_keys() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_spotify_entry("spotify:track:z", "Zulu", 1_000)
+        .add_spotify_entry("spotify:track:a", "alpha", 1_000)
+        .add_spotify_entry("spotify:track:e", "Echo", 1_000)
+        .sort_playlist_by(PlaylistSortKey::Title)
+        .assert_playlist_entry(0, "spotify:track:a")
+        .assert_playlist_title(0, "alpha")
+        .assert_playlist_entry(1, "spotify:track:e")
+        .assert_playlist_title(1, "Echo")
+        .assert_playlist_entry(2, "spotify:track:z")
+        .assert_playlist_title(2, "Zulu");
+
+    let music_dir = unique_temp_dir("xmms-rs-e2e-sort-date");
+    fs::create_dir_all(&music_dir).unwrap();
+    let older = music_dir.join("older.ogg");
+    let newer = music_dir.join("newer.ogg");
+    fs::write(&older, b"old").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&newer, b"new").unwrap();
+
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+    app.drop_on_playlist([file_uri(&newer), file_uri(&older)])
+        .sort_playlist_by(PlaylistSortKey::Date)
+        .assert_playlist_entry(0, &file_uri(&older))
+        .assert_playlist_entry(1, &file_uri(&newer));
+
+    fs::remove_dir_all(music_dir).unwrap();
+}
+
+#[test]
+fn selected_playlist_sort_e2e_reorders_only_selected_rows() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist([
+        "file:///music/4-zulu.ogg",
+        "file:///music/3-charlie.ogg",
+        "file:///music/2-bravo.ogg",
+        "file:///music/1-alpha.ogg",
+    ])
+    .click(MainTarget::NEXT)
+    .assert_playlist_position(Some(0))
+    .select_playlist_entry(0)
+    .select_playlist_entry(2)
+    .select_playlist_entry(3)
+    .sort_selected_playlist_by(PlaylistSortKey::Filename)
+    .assert_playlist_entry(0, "file:///music/1-alpha.ogg")
+    .assert_playlist_entry(1, "file:///music/3-charlie.ogg")
+    .assert_playlist_entry(2, "file:///music/2-bravo.ogg")
+    .assert_playlist_entry(3, "file:///music/4-zulu.ogg")
+    .assert_playlist_position(Some(3));
 }
 
 #[test]

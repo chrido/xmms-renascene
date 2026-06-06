@@ -6,6 +6,7 @@ use gtk::prelude::*;
 
 use crate::app_state::AppState;
 use crate::player::PlayerState;
+use crate::playlist::PlaylistSortKey;
 use crate::render::{
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
     EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton,
@@ -380,11 +381,11 @@ fn handle_keyboard_shortcut(
                 let mut state = main_state.borrow_mut();
                 state.playlist_shaded = !state.playlist_shaded;
             }
-            sync_single_panel_window(
+            sync_single_panel_window_from_state(
                 PanelKind::Playlist,
                 &panel_windows.playlist,
                 &panel_windows.playlist_area,
-                &main_state.borrow(),
+                main_state,
             );
         }
         MainKeyboardShortcut::ShadeEqualizer => {
@@ -392,11 +393,11 @@ fn handle_keyboard_shortcut(
                 let mut state = main_state.borrow_mut();
                 state.equalizer_shaded = !state.equalizer_shaded;
             }
-            sync_single_panel_window(
+            sync_single_panel_window_from_state(
                 PanelKind::Equalizer,
                 &panel_windows.equalizer,
                 &panel_windows.equalizer_area,
-                &main_state.borrow(),
+                main_state,
             );
         }
     }
@@ -1070,7 +1071,7 @@ fn add_panel_click_controller(
             match action {
                 PanelAction::None => {}
                 PanelAction::Changed => {
-                    sync_single_panel_window(kind, &window, &area, &main_state.borrow());
+                    sync_single_panel_window_from_state(kind, &window, &area, &main_state);
                     main_area.queue_draw();
                 }
                 PanelAction::ShowPlaylistMenu(menu) => {
@@ -1169,13 +1170,21 @@ fn panel_event_to_base_coords(
     )
 }
 
-fn sync_single_panel_window(
+fn sync_single_panel_window_from_state(
     kind: PanelKind,
     window: &gtk::ApplicationWindow,
     area: &gtk::DrawingArea,
-    state: &MainWindowUiState,
+    state: &Rc<RefCell<MainWindowUiState>>,
 ) {
-    let (visible, shaded, width, full_height) = match kind {
+    let (visible, shaded, width, full_height) = {
+        let state = state.borrow();
+        panel_window_values(kind, &state)
+    };
+    sync_single_panel_window_values(window, area, visible, shaded, width, full_height);
+}
+
+fn panel_window_values(kind: PanelKind, state: &MainWindowUiState) -> (bool, bool, i32, i32) {
+    match kind {
         PanelKind::Equalizer => (
             state.app_state.config.equalizer_visible,
             state.equalizer_shaded,
@@ -1188,7 +1197,17 @@ fn sync_single_panel_window(
             state.playlist_width,
             state.playlist_height,
         ),
-    };
+    }
+}
+
+fn sync_single_panel_window_values(
+    window: &gtk::ApplicationWindow,
+    area: &gtk::DrawingArea,
+    visible: bool,
+    shaded: bool,
+    width: i32,
+    full_height: i32,
+) {
     if !visible {
         window.hide();
         return;
@@ -1499,8 +1518,46 @@ impl MainWindowUiState {
             .map(|entry| entry.filename.as_str())
     }
 
+    pub(crate) fn playlist_entry_title(&self, index: usize) -> Option<&str> {
+        self.app_state
+            .playlist
+            .entries()
+            .get(index)
+            .map(|entry| entry.title.as_str())
+    }
+
     pub(crate) fn playlist_position(&self) -> Option<usize> {
         self.app_state.playlist.position()
+    }
+
+    pub(crate) fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
+        self.app_state.playlist.add_spotify(uri, title, duration_ms);
+    }
+
+    pub(crate) fn add_podcast_entry(
+        &mut self,
+        uri: &str,
+        title: Option<String>,
+        feed: Option<String>,
+        guid: Option<String>,
+    ) {
+        self.app_state
+            .playlist
+            .add_podcast_entry(uri, title, feed, guid);
+    }
+
+    pub(crate) fn set_playlist_entry_selected(&mut self, index: usize, selected: bool) {
+        if let Some(entry) = self.app_state.playlist.entries_mut().get_mut(index) {
+            entry.selected = selected;
+        }
+    }
+
+    pub(crate) fn sort_playlist_by(&mut self, key: PlaylistSortKey) {
+        self.app_state.playlist.sort_by(key);
+    }
+
+    pub(crate) fn sort_selected_playlist_by(&mut self, key: PlaylistSortKey) {
+        self.app_state.playlist.sort_selected_by(key);
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {

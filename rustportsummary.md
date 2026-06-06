@@ -61,6 +61,8 @@ Completed so far:
 - Ported Rust playlist navigation state for next, previous, EOF/no-advance, repeat wraparound, shuffle ordering, and failed-current skip handling; main prev/next controls now update playlist position and preview playback state.
 - Ported Rust playlist sorting by title, filename, path, and file date, preserving the current playlist entry across sort operations.
 - Ported Rust selected-entry playlist sorting so only selected rows are sorted and reinserted at their original selected indices.
+- Expanded deterministic Rust e2e coverage for playlist Spotify/podcast entries, all playlist sort keys, selected-entry sorting, and close-button behavior.
+- Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.

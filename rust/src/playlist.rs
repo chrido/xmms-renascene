@@ -85,6 +85,10 @@ impl Playlist {
         &self.entries
     }
 
+    pub fn entries_mut(&mut self) -> &mut [PlaylistEntry] {
+        &mut self.entries
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
