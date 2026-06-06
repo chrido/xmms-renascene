@@ -289,10 +289,14 @@ pub struct UiE2e {
 
 impl UiE2e {
     pub fn start_player(settings: PlayerSettings) -> Self {
+        Self::start_from_app_state(AppState::from_config(settings.config))
+    }
+
+    pub fn start_from_app_state(app_state: AppState) -> Self {
         let mut harness = Self {
             main_visible: true,
             main_minimized: false,
-            state: MainWindowUiState::from_app_state(AppState::from_config(settings.config)),
+            state: MainWindowUiState::from_app_state(app_state),
             playlist_visible: false,
             equalizer_visible: false,
             preferences_visible: false,
@@ -867,6 +871,18 @@ impl UiE2e {
     pub fn update_timer_tick(&mut self, elapsed_ms: u32) -> &mut Self {
         self.state.update_timer_tick(elapsed_ms);
         self.sync_windows();
+        self
+    }
+
+    pub fn set_stream_channels(&mut self, channels: i32) -> &mut Self {
+        self.state.set_stream_channels_for_e2e(channels);
+        self
+    }
+
+    pub fn save_runtime_snapshot(&mut self, config_path: &Path, playlist_path: &Path) -> &mut Self {
+        self.state
+            .save_runtime_snapshot_for_e2e(config_path, playlist_path)
+            .expect("runtime snapshot should save");
         self
     }
 
@@ -1787,6 +1803,16 @@ impl UiE2e {
 
     pub fn assert_main_time_digits(&mut self, expected: [i32; 5]) -> &mut Self {
         assert_eq!(self.state.main_time_digits(), expected);
+        self
+    }
+
+    pub fn assert_main_channels(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.main_channels(), expected);
+        self
+    }
+
+    pub fn assert_playback_position_ms(&mut self, expected: i64) -> &mut Self {
+        assert_eq!(self.state.playback_position_ms(), expected);
         self
     }
 

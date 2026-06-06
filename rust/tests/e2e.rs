@@ -202,6 +202,45 @@ fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
 }
 
 #[test]
+fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options() {
+    let root = unique_temp_dir("xmms-rs-runtime-session-save");
+    let config_path = root.join("config");
+    let playlist_path = root.join("playlist.m3u");
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist([
+        "file:///music/session-one.ogg",
+        "file:///music/session-two.ogg",
+    ])
+    .click(MainTarget::NEXT)
+    .click(MainTarget::NEXT)
+    .click(MainTarget::SHUFFLE)
+    .click(MainTarget::REPEAT)
+    .accept_jump_time("1:23")
+    .save_runtime_snapshot(&config_path, &playlist_path);
+
+    let loaded = load_saved_state(&config_path, &playlist_path, false).unwrap();
+    assert!(loaded.config.playlist_visible);
+    assert!(loaded.playlist.shuffle());
+    assert!(loaded.playlist.repeat());
+    assert_eq!(loaded.playlist.position(), Some(1));
+    assert_eq!(loaded.config.playback_position_ms, 83_000);
+    assert_eq!(
+        loaded.playlist.entries()[1].filename,
+        "file:///music/session-two.ogg"
+    );
+
+    let mut restored = UiE2e::start_from_app_state(loaded);
+    restored
+        .assert_playlist_position(Some(1))
+        .assert_shuffle(true)
+        .assert_repeat(true)
+        .assert_playback_position_ms(83_000);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn main_menu_items_trigger_their_preview_actions() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
@@ -1350,6 +1389,17 @@ fn transport_buttons_update_player_state_and_position() {
         .assert_window_visible(Window::Player)
         .assert_player_state(PlayerState::Stopped)
         .assert_file_dialog_visible();
+}
+
+#[test]
+fn mono_stereo_indicator_tracks_stream_channel_count() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.assert_main_channels(0)
+        .set_stream_channels(2)
+        .assert_main_channels(2)
+        .set_stream_channels(1)
+        .assert_main_channels(1);
 }
 
 #[test]

@@ -26,6 +26,7 @@ pub struct Config {
     pub shuffle: bool,
     pub repeat: bool,
     pub playlist_position: i32,
+    pub playback_position_ms: i64,
     pub equalizer_visible: bool,
     pub equalizer_detached: bool,
     pub equalizer_active: bool,
@@ -88,6 +89,7 @@ impl Default for Config {
             shuffle: false,
             repeat: false,
             playlist_position: -1,
+            playback_position_ms: 0,
             equalizer_visible: false,
             equalizer_detached: false,
             equalizer_active: true,
@@ -163,6 +165,9 @@ impl Config {
         cfg.repeat = get_bool(&keys, "repeat").unwrap_or(cfg.repeat);
         cfg.playlist_position =
             get_i32(&keys, "playlist_position").unwrap_or(cfg.playlist_position);
+        cfg.playback_position_ms = get_i64(&keys, "playback_position_ms")
+            .unwrap_or(cfg.playback_position_ms)
+            .max(0);
         cfg.equalizer_visible =
             get_bool(&keys, "equalizer_visible").unwrap_or(cfg.equalizer_visible);
         cfg.equalizer_detached =
@@ -244,6 +249,7 @@ impl Config {
         push_bool(&mut out, "shuffle", self.shuffle);
         push_bool(&mut out, "repeat", self.repeat);
         push_i32(&mut out, "playlist_position", self.playlist_position);
+        push_i64(&mut out, "playback_position_ms", self.playback_position_ms);
         push_bool(&mut out, "equalizer_visible", self.equalizer_visible);
         push_bool(&mut out, "equalizer_detached", self.equalizer_detached);
         push_bool(&mut out, "equalizer_active", self.equalizer_active);
@@ -329,6 +335,10 @@ fn get_i32(keys: &BTreeMap<String, String>, key: &str) -> Option<i32> {
     keys.get(key)?.parse().ok()
 }
 
+fn get_i64(keys: &BTreeMap<String, String>, key: &str) -> Option<i64> {
+    keys.get(key)?.parse().ok()
+}
+
 fn get_f64(keys: &BTreeMap<String, String>, key: &str) -> Option<f64> {
     keys.get(key)?.parse().ok()
 }
@@ -342,6 +352,10 @@ fn get_bool(keys: &BTreeMap<String, String>, key: &str) -> Option<bool> {
 }
 
 fn push_i32(out: &mut String, key: &str, value: i32) {
+    out.push_str(&format!("{key}={value}\n"));
+}
+
+fn push_i64(out: &mut String, key: &str, value: i64) {
     out.push_str(&format!("{key}={value}\n"));
 }
 

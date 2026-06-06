@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::app_state::AppState;
 use crate::config::Config;
@@ -199,6 +199,24 @@ pub fn save_fallback_state(
     app_state.playlist.save_m3u_file(playlist_path)
 }
 
+pub fn fallback_state_paths(config_dir: &Path) -> (PathBuf, PathBuf) {
+    let dir = config_dir.join("xmms-resuscitated");
+    (dir.join("config"), dir.join("playlist.m3u"))
+}
+
+pub fn default_config_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("XMMS_RS_CONFIG_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = std::env::var_os("HOME") {
+        return PathBuf::from(path).join(".config");
+    }
+    PathBuf::from(".")
+}
+
 pub fn load_saved_state(
     config_path: &Path,
     playlist_path: &Path,
@@ -220,6 +238,7 @@ pub fn load_saved_state(
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => return Err(err),
         }
+        app_state.apply_config_to_runtime();
     }
     Ok(app_state)
 }

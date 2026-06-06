@@ -30,6 +30,9 @@ use crate::render::{
     MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
+use crate::session::{
+    default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
+};
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
     VisScopeMode, VisVuMode, Visualization, WidgetId,
@@ -90,7 +93,8 @@ fn run_preview_application(mode: PreviewMode, options: PreviewOptions) {
     });
 
     app.connect_activate(move |app| {
-        if let Err(err) = build_preview_window(app, options.clone()) {
+        let persist_session = matches!(mode, PreviewMode::Interactive);
+        if let Err(err) = build_preview_window(app, options.clone(), persist_session) {
             eprintln!("xmms-rs: failed to create GTK preview: {err}");
             app.quit();
             return;
@@ -105,10 +109,21 @@ fn run_preview_application(mode: PreviewMode, options: PreviewOptions) {
     app.run_with_args(&["xmms-rs"]);
 }
 
-fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Result<(), String> {
+fn build_preview_window(
+    app: &gtk::Application,
+    options: PreviewOptions,
+    persist_session: bool,
+) -> Result<(), String> {
     let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
     let skin = Rc::new(skin);
-    let main_state = Rc::new(RefCell::new(MainWindowUiState::default()));
+    let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
+    let app_state = if persist_session {
+        load_saved_state(&config_path, &playlist_path, options.reset)
+            .map_err(|err| format!("failed to load saved state: {err}"))?
+    } else {
+        AppState::default()
+    };
+    let main_state = Rc::new(RefCell::new(MainWindowUiState::from_app_state(app_state)));
     {
         let mut state = main_state.borrow_mut();
         match GStreamerBackend::new() {
@@ -142,6 +157,33 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         .default_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
         .default_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .build();
+    if persist_session {
+        let main_state = Rc::clone(&main_state);
+        let config_path = config_path.clone();
+        let playlist_path = playlist_path.clone();
+        window.connect_close_request(move |_| {
+            if let Err(err) = main_state
+                .borrow_mut()
+                .save_runtime_snapshot(&config_path, &playlist_path)
+            {
+                eprintln!("xmms-rs: failed to save session: {err}");
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    if persist_session {
+        let main_state = Rc::clone(&main_state);
+        let config_path = config_path.clone();
+        let playlist_path = playlist_path.clone();
+        app.connect_shutdown(move |_| {
+            if let Err(err) = main_state
+                .borrow_mut()
+                .save_runtime_snapshot(&config_path, &playlist_path)
+            {
+                eprintln!("xmms-rs: failed to save session: {err}");
+            }
+        });
+    }
 
     let drawing_area = gtk::DrawingArea::builder()
         .content_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
@@ -3154,12 +3196,23 @@ impl MainWindowUiState {
             active_inside: false,
             slider_press_offset: 0,
         };
+        state.playback_position_ms = state.app_state.config.playback_position_ms.max(0);
+        state.position_position = state.position_slider_position();
         state.apply_visualization_preferences();
         state
     }
 
     pub(crate) fn app_state_mut(&mut self) -> &mut AppState {
         &mut self.app_state
+    }
+
+    fn save_runtime_snapshot(
+        &mut self,
+        config_path: &Path,
+        playlist_path: &Path,
+    ) -> io::Result<()> {
+        self.app_state.config.playback_position_ms = self.playback_position_ms.max(0);
+        save_fallback_state(&mut self.app_state, config_path, playlist_path)
     }
 
     pub(crate) fn set_playback_backend(&mut self, backend: Rc<RefCell<GStreamerBackend>>) {
@@ -3194,6 +3247,7 @@ impl MainWindowUiState {
                 PlayerState::Paused => PlayStatusValue::Paused,
                 PlayerState::Playing => PlayStatusValue::Playing,
             },
+            channels: self.app_state.player.channels(),
             visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
         }
@@ -4125,6 +4179,10 @@ impl MainWindowUiState {
         self.app_state.player.spotify_position_ms()
     }
 
+    pub(crate) fn playback_position_ms(&self) -> i64 {
+        self.playback_position_ms
+    }
+
     pub(crate) fn last_playback_request(&self) -> Option<&str> {
         self.playback_requests.last().map(String::as_str)
     }
@@ -4135,6 +4193,20 @@ impl MainWindowUiState {
 
     pub(crate) fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
         self.app_state.playlist.add_spotify(uri, title, duration_ms);
+    }
+
+    pub(crate) fn set_stream_channels_for_e2e(&mut self, channels: i32) {
+        self.app_state
+            .player
+            .set_stream_info(None, None, Some(channels));
+    }
+
+    pub(crate) fn save_runtime_snapshot_for_e2e(
+        &mut self,
+        config_path: &Path,
+        playlist_path: &Path,
+    ) -> io::Result<()> {
+        self.save_runtime_snapshot(config_path, playlist_path)
     }
 
     pub(crate) fn add_podcast_entry(
@@ -5067,6 +5139,10 @@ impl MainWindowUiState {
 
     pub(crate) fn main_time_digits(&self) -> [i32; 5] {
         self.time_digits()
+    }
+
+    pub(crate) fn main_channels(&self) -> i32 {
+        self.render_state().channels
     }
 
     pub(crate) fn set_preference_output_device(&mut self, device: Option<String>) {
