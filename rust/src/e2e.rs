@@ -1873,6 +1873,28 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_shaded_main_time_text(
+        &mut self,
+        expected_min: &str,
+        expected_sec: &str,
+    ) -> &mut Self {
+        assert_eq!(
+            self.state.shaded_main_time_text(),
+            (expected_min.to_string(), expected_sec.to_string())
+        );
+        self
+    }
+
+    pub fn assert_shaded_main_position_visible(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.shaded_main_position_visible(), expected);
+        self
+    }
+
+    pub fn assert_shaded_main_position(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.shaded_main_position(), expected);
+        self
+    }
+
     pub fn assert_main_channels(&mut self, expected: i32) -> &mut Self {
         assert_eq!(self.state.main_channels(), expected);
         self

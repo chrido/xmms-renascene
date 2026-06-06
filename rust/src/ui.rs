@@ -3398,7 +3398,11 @@ impl MainWindowUiState {
             volume_position: volume_to_position(self.app_state.player.volume()),
             balance_position: balance_to_position(self.app_state.player.balance()),
             position_position: self.position_slider_position(),
+            shaded_position_position: self.shaded_position_slider_position(),
+            shaded_position_visible: self.shaded_position_slider_visible(),
             time_digits: self.time_digits(),
+            shaded_time_min: self.shaded_time_min_text(),
+            shaded_time_sec: self.shaded_time_sec_text(),
             shuffle_selected: self.app_state.playlist.shuffle(),
             repeat_selected: self.app_state.playlist.repeat(),
             equalizer_selected: self.app_state.config.equalizer_visible,
@@ -3511,6 +3515,21 @@ impl MainWindowUiState {
             / duration_ms) as i32
     }
 
+    fn shaded_position_slider_visible(&self) -> bool {
+        self.app_state.player.state() != PlayerState::Stopped
+            && self
+                .current_duration_ms()
+                .is_some_and(|duration| duration > 0)
+    }
+
+    fn shaded_position_slider_position(&self) -> i32 {
+        let Some(duration_ms) = self.current_duration_ms().filter(|duration| *duration > 0) else {
+            return 1;
+        };
+        (((self.playback_position_ms.clamp(0, duration_ms) * 12) / duration_ms) as i32 + 1)
+            .clamp(1, 13)
+    }
+
     fn display_time_ms(&self) -> i64 {
         let elapsed = self.playback_position_ms.max(0);
         if self.app_state.config.timer_mode == TimerMode::Remaining {
@@ -3546,6 +3565,38 @@ impl MainWindowUiState {
             ((seconds % 60) / 10) as i32,
             (seconds % 10) as i32,
         ]
+    }
+
+    fn shaded_time_parts(&self) -> (String, String) {
+        if self.app_state.player.state() == PlayerState::Stopped {
+            return ("   ".to_string(), "  ".to_string());
+        }
+        let display_ms = self.display_time_ms();
+        let mut seconds = (display_ms / 1000).max(0);
+        if seconds > i64::from(99 * 60) {
+            seconds /= 60;
+        }
+        let prefix = if self.app_state.config.timer_mode == TimerMode::Remaining
+            && self
+                .current_duration_ms()
+                .is_some_and(|duration| duration > 0)
+        {
+            '-'
+        } else {
+            ' '
+        };
+        (
+            format!("{prefix}{:02}", seconds / 60),
+            format!("{:02}", seconds % 60),
+        )
+    }
+
+    fn shaded_time_min_text(&self) -> String {
+        self.shaded_time_parts().0
+    }
+
+    fn shaded_time_sec_text(&self) -> String {
+        self.shaded_time_parts().1
     }
 
     fn make_visualization_render_state(&self) -> VisualizationRenderState {
@@ -5403,6 +5454,18 @@ impl MainWindowUiState {
         self.time_digits()
     }
 
+    pub(crate) fn shaded_main_time_text(&self) -> (String, String) {
+        self.shaded_time_parts()
+    }
+
+    pub(crate) fn shaded_main_position_visible(&self) -> bool {
+        self.shaded_position_slider_visible()
+    }
+
+    pub(crate) fn shaded_main_position(&self) -> i32 {
+        self.shaded_position_slider_position()
+    }
+
     pub(crate) fn main_channels(&self) -> i32 {
         self.render_state().channels
     }
@@ -5882,6 +5945,7 @@ impl MainWindowUiState {
             ]);
         } else {
             controls.extend([
+                MainControl::Slider(MainSlider::Position),
                 MainControl::Push(MainPushButton::Eject),
                 MainControl::Push(MainPushButton::Next),
                 MainControl::Push(MainPushButton::Stop),
@@ -5893,6 +5957,12 @@ impl MainWindowUiState {
 
         controls
             .into_iter()
+            .filter(|control| match control {
+                MainControl::Slider(MainSlider::Position) if self.shaded => {
+                    self.shaded_position_slider_visible()
+                }
+                _ => true,
+            })
             .find(|control| self.control_rect(*control).contains(x, y))
     }
 
@@ -5967,7 +6037,7 @@ impl MainWindowUiState {
 
     fn begin_slider_drag(&mut self, slider: MainSlider, x: i32) {
         let rect = self.slider_rect(slider);
-        let knob_width = slider_knob_width(slider);
+        let knob_width = self.slider_knob_width(slider);
         let position = self.slider_position(slider);
         let knob_x = rect.x + position;
         if x >= knob_x && x < knob_x + knob_width {
@@ -5979,7 +6049,7 @@ impl MainWindowUiState {
     }
 
     fn set_slider_position(&mut self, slider: MainSlider, position: i32) -> bool {
-        let position = position.clamp(0, slider_max(slider));
+        let position = position.clamp(self.slider_min(slider), self.slider_max(slider));
         let old_position = self.slider_position(slider);
         if old_position == position {
             return false;
@@ -6004,10 +6074,13 @@ impl MainWindowUiState {
                 if let Some(duration_ms) =
                     self.current_duration_ms().filter(|duration| *duration > 0)
                 {
-                    self.set_playback_position_ms(
+                    let position_ms = if self.shaded {
+                        (duration_ms * i64::from(position - 1)) / 12
+                    } else {
                         (duration_ms * i64::from(position))
-                            / i64::from(slider_max(MainSlider::Position)),
-                    );
+                            / i64::from(slider_max(MainSlider::Position))
+                    };
+                    self.set_playback_position_ms(position_ms);
                 }
             }
         }
@@ -6019,7 +6092,29 @@ impl MainWindowUiState {
         match slider {
             MainSlider::Volume => volume_to_position(self.app_state.player.volume()),
             MainSlider::Balance => balance_to_position(self.app_state.player.balance()),
+            MainSlider::Position if self.shaded => self.shaded_position_slider_position(),
             MainSlider::Position => self.position_slider_position(),
+        }
+    }
+
+    fn slider_min(&self, slider: MainSlider) -> i32 {
+        match slider {
+            MainSlider::Position if self.shaded => 1,
+            _ => 0,
+        }
+    }
+
+    fn slider_max(&self, slider: MainSlider) -> i32 {
+        match slider {
+            MainSlider::Position if self.shaded => 13,
+            _ => slider_max(slider),
+        }
+    }
+
+    fn slider_knob_width(&self, slider: MainSlider) -> i32 {
+        match slider {
+            MainSlider::Position if self.shaded => 3,
+            _ => slider_knob_width(slider),
         }
     }
 
@@ -6049,6 +6144,9 @@ impl MainWindowUiState {
             MainControl::Push(button) if self.shaded => shaded_push_button_rect(button),
             MainControl::Push(button) => push_button_rect(button),
             MainControl::Toggle(toggle) => toggle_button_rect(toggle),
+            MainControl::Slider(MainSlider::Position) if self.shaded => {
+                ControlRect::new(226, 4, 17, 7)
+            }
             MainControl::Slider(slider) => self.slider_rect(slider),
         }
     }
@@ -6057,6 +6155,7 @@ impl MainWindowUiState {
         match slider {
             MainSlider::Volume => ControlRect::new(107, 57, 68, 13),
             MainSlider::Balance => ControlRect::new(177, 57, 38, 13),
+            MainSlider::Position if self.shaded => ControlRect::new(226, 4, 17, 7),
             MainSlider::Position => ControlRect::new(16, 72, 248, 10),
         }
     }

@@ -443,9 +443,13 @@ pub struct MainWindowRenderState {
     pub bitrate_text: String,
     pub frequency_text: String,
     pub time_digits: [i32; 5],
+    pub shaded_time_min: String,
+    pub shaded_time_sec: String,
     pub volume_position: i32,
     pub balance_position: i32,
     pub position_position: i32,
+    pub shaded_position_position: i32,
+    pub shaded_position_visible: bool,
     pub shuffle_selected: bool,
     pub repeat_selected: bool,
     pub equalizer_selected: bool,
@@ -467,9 +471,13 @@ impl Default for MainWindowRenderState {
             bitrate_text: String::new(),
             frequency_text: String::new(),
             time_digits: [NumberDisplay::BLANK; 5],
+            shaded_time_min: "   ".to_string(),
+            shaded_time_sec: "  ".to_string(),
             volume_position: 51,
             balance_position: 12,
             position_position: 0,
+            shaded_position_position: 1,
+            shaded_position_visible: false,
             shuffle_selected: false,
             repeat_selected: false,
             equalizer_selected: false,
@@ -508,6 +516,11 @@ pub fn render_main_player_state(
 
     if state.shaded {
         render_windowshade_visualization(cr, skin, 79, 5, &state.visualization)?;
+        render_text(cr, skin, &state.shaded_time_min, 130, 4, 15)?;
+        render_text(cr, skin, &state.shaded_time_sec, 147, 4, 10)?;
+        if state.shaded_position_visible {
+            render_shaded_position_slider(cr, skin, state)?;
+        }
         return Ok(rendered);
     }
 
@@ -823,6 +836,38 @@ fn render_horizontal_slider(
         spec.knob_height,
     )?;
     Ok(rendered)
+}
+
+fn render_shaded_position_slider(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: &MainWindowRenderState,
+) -> Result<bool, RenderError> {
+    let position = state.shaded_position_position.clamp(1, 13);
+    let knob_source_x = if state.pressed_slider == Some(MainSlider::Position) {
+        match position {
+            1..=5 => 17,
+            6..=8 => 20,
+            _ => 23,
+        }
+    } else {
+        match position {
+            1..=5 => 17,
+            6..=8 => 20,
+            _ => 23,
+        }
+    };
+    blit_skin_rect(
+        cr,
+        skin,
+        SkinPixmapKind::Titlebar,
+        knob_source_x,
+        36,
+        226 + position,
+        4,
+        3,
+        7,
+    )
 }
 
 fn render_number(

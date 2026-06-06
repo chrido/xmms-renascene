@@ -499,6 +499,26 @@ fn shaded_transport_controls_trigger_playback_actions() {
 }
 
 #[test]
+fn shaded_player_displays_time_and_position_slider() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_spotify_entry("spotify:track:one", "Song", 130_000)
+        .press_shortcut(Shortcut::PlayFirst)
+        .click(MainTarget::SHADE)
+        .assert_player_shaded()
+        .assert_shaded_main_position_visible(true)
+        .update_timer_tick(65_000)
+        .assert_shaded_main_time_text(" 01", "05")
+        .assert_shaded_main_position(7)
+        .click_at(242, 7)
+        .assert_playback_position_ms(130_000)
+        .assert_position(219)
+        .click(MainTarget::STOP)
+        .assert_shaded_main_time_text("   ", "  ")
+        .assert_shaded_main_position_visible(false);
+}
+
+#[test]
 fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
