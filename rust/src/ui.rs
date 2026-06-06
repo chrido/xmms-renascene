@@ -312,7 +312,7 @@ fn build_preview_window(
                 return;
             }
             main_state.borrow_mut().press(base_x, base_y);
-            sync_preferences_options_controls(&panel_windows.preferences, &main_state.borrow());
+            sync_preferences_options_controls(&panel_windows.preferences, &main_state);
             drawing_area.queue_draw();
         });
     }
@@ -378,7 +378,7 @@ fn build_preview_window(
                 &menu_popover,
                 &main_state,
             );
-            sync_preferences_options_controls(&panel_windows.preferences, &main_state.borrow());
+            sync_preferences_options_controls(&panel_windows.preferences, &main_state);
             sync_panel_windows(&panel_windows, &main_state.borrow());
             resize_main_window(&window, &drawing_area, &main_state.borrow());
             drawing_area.queue_draw();
@@ -424,7 +424,7 @@ fn build_preview_window(
                 return;
             }
             if main_state.borrow_mut().motion(x, y) {
-                sync_preferences_options_controls(&panel_windows.preferences, &main_state.borrow());
+                sync_preferences_options_controls(&panel_windows.preferences, &main_state);
                 drawing_area.queue_draw();
             }
         });
@@ -1765,13 +1765,17 @@ fn set_spin_value_if_changed(spin: &gtk::SpinButton, value: i32) {
 
 fn sync_preferences_options_controls(
     preferences_window: &gtk::ApplicationWindow,
-    state: &MainWindowUiState,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
 ) {
+    let (volume, balance) = {
+        let state = main_state.borrow();
+        (state.volume(), state.balance())
+    };
     if let Some(spin) = find_spin_button_by_name(preferences_window, PREFERENCES_VOLUME_WIDGET) {
-        set_spin_value_if_changed(&spin, state.volume());
+        set_spin_value_if_changed(&spin, volume);
     }
     if let Some(spin) = find_spin_button_by_name(preferences_window, PREFERENCES_BALANCE_WIDGET) {
-        set_spin_value_if_changed(&spin, state.balance());
+        set_spin_value_if_changed(&spin, balance);
     }
 }
 
