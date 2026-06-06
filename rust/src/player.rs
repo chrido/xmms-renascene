@@ -165,6 +165,9 @@ impl GStreamerBackend {
     }
 
     pub fn play_uri(&self, uri: &str) -> Result<(), String> {
+        if self.requested_state.get() != PlayerState::Stopped {
+            self.set_state(gst::State::Ready)?;
+        }
         self.pipeline.set_property("uri", Some(uri));
         self.requested_uri.replace(Some(uri.to_string()));
         self.set_state(gst::State::Playing)
@@ -927,6 +930,13 @@ mod tests {
 
         backend.play_uri(&uri).expect("play should request playing");
         assert_eq!(backend.uri().as_deref(), Some(uri.as_str()));
+
+        let next_uri = silent_wav_uri("play-uri-next");
+        backend
+            .play_uri(&next_uri)
+            .expect("playing a second URI should switch media");
+        assert_eq!(backend.uri().as_deref(), Some(next_uri.as_str()));
+        assert_eq!(backend.playback_state(), PlayerState::Playing);
 
         backend.stop().expect("stop should request the null state");
         assert_eq!(backend.playback_state(), PlayerState::Stopped);
