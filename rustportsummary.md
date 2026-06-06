@@ -47,9 +47,9 @@ Completed so far:
 - Moved Rust main-window input handling to capture-phase GTK window controllers so clicks reach the skinned controls reliably, and added a visible popover menu for the main menu button.
 - Wired playlist and equalizer top-right titlebar controls in the Rust GTK preview: shade toggles shrink/restore the skinned windows, and close hides the panel and clears the main toggle state.
 - Wired floating equalizer and playlist titlebar drags through GTK4 toplevel movement for the undecorated preview windows.
-- Wired panel titlebar focus/drag skin state so floating playlist/equalizer windows redraw their active titlebar skin while moving.
+- Wired panel titlebar focus/drag skin state so floating playlist/equalizer windows redraw active/inactive titlebar skins while moving or when GTK window activation changes.
 - Wired the playlist bottom Add, Remove, Select, Misc, and List buttons to open skinned in-window submenus using the C playlist button and menu source coordinates, including selected-row skin state on press/hover.
-- Added playlist resizing for the Rust preview, including current-size hit testing and frame tiling at resized dimensions.
+- Added playlist resizing for the Rust preview, including startup sizing, current-size hit testing, and frame tiling at resized dimensions.
 - Added the shaded playlist frame and compact title/time overlay.
 - Wired the main player eject/open button to a native file chooser dialog in the GTK preview.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
@@ -112,6 +112,13 @@ To open the Rust GTK preview:
 ```sh
 cd rust
 cargo run -- --gtk
+```
+
+To open the Rust GTK preview with the playlist visible at a specific size:
+
+```sh
+cd rust
+cargo run -- --gtk --playlist-size=325x280
 ```
 
 To run the self-closing GTK smoke path:
@@ -180,6 +187,10 @@ C ground-truth screenshots:
 Current Rust preview screenshot:
 
 - `rust-preview-screenshots/main-preview.png`
+- `rust-preview-screenshots/playlist-sizes/rust-playlist-275x232.png`
+- `rust-preview-screenshots/playlist-sizes/rust-playlist-325x232.png`
+- `rust-preview-screenshots/playlist-sizes/rust-playlist-325x280.png`
+- `rust-preview-screenshots/playlist-sizes/rust-playlist-500x320.png`
 - `rust-preview-screenshots/diffs/main-ae-diff.png`
 - `rust-preview-screenshots/diffs/main-ae.txt`
 - `rust-preview-screenshots/diffs/main-rmse.txt`
@@ -189,7 +200,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows. Playback controls only update Rust runtime state until the GStreamer backend is ported, and the playlist/equalizer windows are not yet fully interactive. The Rust port still lacks full playback, playlist UI behavior, equalizer UI behavior, MPRIS, Spotify, podcasts, output device selection UI, preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, and menu behavior. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, complete playlist data operations, audio-connected equalizer behavior, MPRIS, Spotify, podcasts, output device selection UI, full preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 

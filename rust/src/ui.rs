@@ -18,12 +18,18 @@ use crate::skin::DefaultSkin;
 
 const DEFAULT_SCALE: i32 = 2;
 
-pub fn run_default_skin_preview() {
-    run_preview_application(PreviewMode::Interactive);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PreviewOptions {
+    pub show_playlist: bool,
+    pub playlist_size: Option<(i32, i32)>,
 }
 
-pub fn run_default_skin_preview_smoke() {
-    run_preview_application(PreviewMode::Smoke);
+pub fn run_default_skin_preview(options: PreviewOptions) {
+    run_preview_application(PreviewMode::Interactive, options);
+}
+
+pub fn run_default_skin_preview_smoke(options: PreviewOptions) {
+    run_preview_application(PreviewMode::Smoke, options);
 }
 
 enum PreviewMode {
@@ -31,14 +37,14 @@ enum PreviewMode {
     Smoke,
 }
 
-fn run_preview_application(mode: PreviewMode) {
+fn run_preview_application(mode: PreviewMode, options: PreviewOptions) {
     let app = gtk::Application::builder()
         .application_id("org.xmms.Resuscitated.RustPreview")
         .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
     app.connect_activate(move |app| {
-        if let Err(err) = build_preview_window(app) {
+        if let Err(err) = build_preview_window(app, options) {
             eprintln!("xmms-rs: failed to create GTK preview: {err}");
             app.quit();
             return;
@@ -53,10 +59,19 @@ fn run_preview_application(mode: PreviewMode) {
     app.run_with_args(&["xmms-rs"]);
 }
 
-fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
+fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Result<(), String> {
     let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
     let skin = Rc::new(skin);
     let main_state = Rc::new(RefCell::new(MainWindowUiState::default()));
+    {
+        let mut state = main_state.borrow_mut();
+        if let Some((width, height)) = options.playlist_size {
+            state.set_playlist_size(width, height);
+        }
+        if options.show_playlist || options.playlist_size.is_some() {
+            state.app_state.config.playlist_visible = true;
+        }
+    }
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -73,6 +88,7 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         .focusable(true)
         .build();
     let panel_windows = Rc::new(PanelWindows::new(app, &skin, &main_state, &drawing_area));
+    sync_panel_windows(&panel_windows, &main_state.borrow());
     let menu_popover = Rc::new(build_main_menu_popover(
         app,
         &drawing_area,
@@ -149,6 +165,20 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         });
     }
     window.add_controller(motion);
+
+    {
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        window.connect_is_active_notify(move |window| {
+            if window.is_active() {
+                let mut state = main_state.borrow_mut();
+                state.set_panel_focused(PanelKind::Equalizer, false);
+                state.set_panel_focused(PanelKind::Playlist, false);
+                panel_windows.equalizer_area.queue_draw();
+                panel_windows.playlist_area.queue_draw();
+            }
+        });
+    }
 
     window.set_child(Some(&drawing_area));
     window.present();
@@ -294,17 +324,18 @@ fn build_playlist_window(
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
 ) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
+    let (playlist_width, playlist_height) = main_state.borrow().playlist_size();
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Playlist")
         .resizable(true)
         .decorated(false)
-        .default_width(PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE)
-        .default_height(PLAYLIST_DEFAULT_HEIGHT * DEFAULT_SCALE)
+        .default_width(playlist_width * DEFAULT_SCALE)
+        .default_height(playlist_height * DEFAULT_SCALE)
         .build();
     let drawing_area = gtk::DrawingArea::builder()
-        .content_width(PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE)
-        .content_height(PLAYLIST_DEFAULT_HEIGHT * DEFAULT_SCALE)
+        .content_width(playlist_width * DEFAULT_SCALE)
+        .content_height(playlist_height * DEFAULT_SCALE)
         .build();
     let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
@@ -619,23 +650,16 @@ fn add_panel_click_controller(
     }
     window.add_controller(motion);
 
-    let focus = gtk::EventControllerFocus::new();
     {
         let area = area.clone();
         let main_state = Rc::clone(&main_state);
-        focus.connect_enter(move |_focus| {
-            main_state.borrow_mut().set_panel_focused(kind, true);
+        window.connect_is_active_notify(move |window| {
+            main_state
+                .borrow_mut()
+                .set_panel_focused(kind, window.is_active());
             area.queue_draw();
         });
     }
-    {
-        let area = area.clone();
-        focus.connect_leave(move |_focus| {
-            main_state.borrow_mut().set_panel_focused(kind, false);
-            area.queue_draw();
-        });
-    }
-    window.add_controller(focus);
 }
 
 fn show_equalizer_presets_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
@@ -823,7 +847,7 @@ impl MainWindowUiState {
             shaded: false,
             menu_visible: false,
             equalizer_shaded: false,
-            equalizer_focused: true,
+            equalizer_focused: false,
             equalizer_dragging_title: false,
             equalizer_active: true,
             equalizer_automatic: false,
@@ -833,7 +857,7 @@ impl MainWindowUiState {
             equalizer_preamp_position: 50,
             equalizer_band_positions: [50; 10],
             playlist_shaded: false,
-            playlist_focused: true,
+            playlist_focused: false,
             playlist_dragging_title: false,
             playlist_width: PLAYLIST_DEFAULT_WIDTH,
             playlist_height: PLAYLIST_DEFAULT_HEIGHT,
@@ -928,6 +952,10 @@ impl MainWindowUiState {
         (self.playlist_width, self.playlist_height)
     }
 
+    pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
+        self.app_state.config.playlist_visible = visible;
+    }
+
     pub(crate) fn is_preferences_visible(&self) -> bool {
         self.preferences_visible
     }
@@ -964,6 +992,13 @@ impl MainWindowUiState {
         match kind {
             PanelKind::Equalizer => self.equalizer_focused = focused,
             PanelKind::Playlist => self.playlist_focused = focused,
+        }
+    }
+
+    pub(crate) fn is_panel_focused(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Equalizer => self.equalizer_focused,
+            PanelKind::Playlist => self.playlist_focused,
         }
     }
 

@@ -1,15 +1,23 @@
 use xmms_resuscitated::skin::DefaultSkin;
-use xmms_resuscitated::ui;
+use xmms_resuscitated::ui::{self, PreviewOptions};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    let preview_options = match parse_preview_options(&args) {
+        Ok(options) => options,
+        Err(err) => {
+            eprintln!("xmms-rs: {err}");
+            std::process::exit(2);
+        }
+    };
+
     if args.iter().any(|arg| arg == "--gtk") {
-        ui::run_default_skin_preview();
+        ui::run_default_skin_preview(preview_options);
         return;
     }
     if args.iter().any(|arg| arg == "--gtk-smoke") {
-        ui::run_default_skin_preview_smoke();
+        ui::run_default_skin_preview_smoke(preview_options);
         return;
     }
 
@@ -24,5 +32,65 @@ fn main() {
             eprintln!("xmms-rs: failed to load default skin: {err}");
             std::process::exit(1);
         }
+    }
+}
+
+fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
+    let mut options = PreviewOptions::default();
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        if arg == "--show-playlist" {
+            options.show_playlist = true;
+        } else if let Some(value) = arg.strip_prefix("--playlist-size=") {
+            options.playlist_size = Some(parse_playlist_size(value)?);
+            options.show_playlist = true;
+        } else if arg == "--playlist-size" {
+            let Some(value) = iter.next() else {
+                return Err("--playlist-size requires WIDTHxHEIGHT".to_string());
+            };
+            options.playlist_size = Some(parse_playlist_size(value)?);
+            options.show_playlist = true;
+        }
+    }
+    Ok(options)
+}
+
+fn parse_playlist_size(value: &str) -> Result<(i32, i32), String> {
+    let Some((width, height)) = value.split_once('x').or_else(|| value.split_once('X')) else {
+        return Err(format!(
+            "invalid playlist size '{value}', expected WIDTHxHEIGHT"
+        ));
+    };
+    let width = width
+        .parse::<i32>()
+        .map_err(|_| format!("invalid playlist width in '{value}'"))?;
+    let height = height
+        .parse::<i32>()
+        .map_err(|_| format!("invalid playlist height in '{value}'"))?;
+    Ok((width, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(args: &[&str]) -> Vec<String> {
+        std::iter::once("xmms-rs")
+            .chain(args.iter().copied())
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn parses_playlist_size_preview_option() {
+        let options = parse_preview_options(&args(&["--gtk", "--playlist-size=325x280"])).unwrap();
+
+        assert_eq!(options.playlist_size, Some((325, 280)));
+        assert!(options.show_playlist);
+    }
+
+    #[test]
+    fn rejects_malformed_playlist_size() {
+        assert!(parse_preview_options(&args(&["--gtk", "--playlist-size=bad"])).is_err());
     }
 }

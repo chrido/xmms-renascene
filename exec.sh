@@ -14,6 +14,11 @@ Options:
   --rust      Start the Rust version (default).
   --c         Start the C version.
   screenshot Capture a root-window screenshot after starting the selected version.
+
+Rust preview app args:
+  --show-playlist             Show the playlist window on startup.
+  --playlist-size=WIDTHxHEIGHT
+                              Show the playlist and set its startup size.
 EOF
 }
 

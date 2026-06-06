@@ -244,6 +244,45 @@ fn playlist_can_resize_from_default_dimensions() {
 }
 
 #[test]
+fn playlist_startup_size_opens_playlist_at_requested_dimensions() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.start_playlist_size(325, 280)
+        .assert_window_visible(Window::Playlist)
+        .assert_playlist_size(325, 280);
+}
+
+#[test]
+fn resized_playlist_bottom_buttons_use_current_geometry() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.resize_playlist(325, 280)
+        .click_panel(PanelTarget::PlaylistAdd)
+        .assert_playlist_menu(PlaylistMenuKind::Add)
+        .click_panel(PanelTarget::PlaylistList)
+        .assert_playlist_menu(PlaylistMenuKind::List)
+        .assert_playlist_menu_hover(Some(2))
+        .press_playlist_menu_item(1)
+        .assert_playlist_menu_hover(Some(1));
+}
+
+#[test]
+fn floating_panel_titlebars_track_active_window_state() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_equalizer_visible(true),
+    );
+
+    app.assert_panel_focused(PanelKind::Playlist, false)
+        .assert_panel_focused(PanelKind::Equalizer, false)
+        .focus_panel(PanelKind::Playlist, true)
+        .assert_panel_focused(PanelKind::Playlist, true)
+        .focus_panel(PanelKind::Playlist, false)
+        .assert_panel_focused(PanelKind::Playlist, false);
+}
+
+#[test]
 fn startup_settings_can_open_equalizer_and_playlist() {
     let mut app = UiE2e::start_player(
         PlayerSettings::default()

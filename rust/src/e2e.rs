@@ -72,6 +72,8 @@ pub enum PanelTarget {
 
 impl PanelTarget {
     fn click(self, state: &mut MainWindowUiState) {
+        let (playlist_width, playlist_height) = state.playlist_size();
+        let playlist_button_y = playlist_height - 20;
         match self {
             Self::EqualizerShade => {
                 state.panel_click(PanelKind::Equalizer, 258, 7);
@@ -98,19 +100,19 @@ impl PanelTarget {
                 state.panel_click(PanelKind::Playlist, 268, 7);
             }
             Self::PlaylistAdd => {
-                state.panel_click(PanelKind::Playlist, 24, 212);
+                state.panel_click(PanelKind::Playlist, 24, playlist_button_y);
             }
             Self::PlaylistRemove => {
-                state.panel_click(PanelKind::Playlist, 53, 212);
+                state.panel_click(PanelKind::Playlist, 53, playlist_button_y);
             }
             Self::PlaylistSelect => {
-                state.panel_click(PanelKind::Playlist, 82, 212);
+                state.panel_click(PanelKind::Playlist, 82, playlist_button_y);
             }
             Self::PlaylistMisc => {
-                state.panel_click(PanelKind::Playlist, 111, 212);
+                state.panel_click(PanelKind::Playlist, 111, playlist_button_y);
             }
             Self::PlaylistList => {
-                state.panel_click(PanelKind::Playlist, 240, 212);
+                state.panel_click(PanelKind::Playlist, playlist_width - 35, playlist_button_y);
             }
         }
     }
@@ -213,19 +215,28 @@ impl UiE2e {
     }
 
     pub fn press_playlist_menu_item(&mut self, item: usize) -> &mut Self {
+        let (x, y0) = self.playlist_menu_anchor();
         let y = 174 + item as i32 * 18 + 8;
-        self.state.playlist_press(240, y);
+        self.state.playlist_press(x, y0 + (y - 174));
         self
     }
 
     pub fn hover_playlist_menu_item(&mut self, item: usize) -> &mut Self {
+        let (x, y0) = self.playlist_menu_anchor();
         let y = 174 + item as i32 * 18 + 8;
-        self.state.playlist_motion(240, y);
+        self.state.playlist_motion(x, y0 + (y - 174));
         self
     }
 
     pub fn resize_playlist(&mut self, width: i32, height: i32) -> &mut Self {
         self.state.set_playlist_size(width, height);
+        self
+    }
+
+    pub fn start_playlist_size(&mut self, width: i32, height: i32) -> &mut Self {
+        self.state.set_playlist_size(width, height);
+        self.state.set_playlist_visible(true);
+        self.sync_windows();
         self
     }
 
@@ -383,6 +394,20 @@ impl UiE2e {
         self
     }
 
+    pub fn focus_panel(&mut self, panel: PanelKind, focused: bool) -> &mut Self {
+        self.state.set_panel_focused(panel, focused);
+        self
+    }
+
+    pub fn assert_panel_focused(&mut self, panel: PanelKind, expected: bool) -> &mut Self {
+        assert_eq!(
+            self.state.is_panel_focused(panel),
+            expected,
+            "expected {panel:?} focused state to be {expected}"
+        );
+        self
+    }
+
     pub fn assert_panel_title_draggable(&mut self, panel: PanelKind) -> &mut Self {
         assert!(
             self.state.panel_title_drag_region(panel, 40, 7),
@@ -461,6 +486,22 @@ impl UiE2e {
             Window::Equalizer => self.equalizer_visible,
             Window::Preferences => self.preferences_visible,
         }
+    }
+
+    fn playlist_menu_anchor(&self) -> (i32, i32) {
+        let menu = self
+            .state
+            .playlist_menu()
+            .expect("expected a playlist menu to be open");
+        let (width, height) = self.state.playlist_size();
+        let (x, items) = match menu {
+            PlaylistMenuKind::Add => (12, 3),
+            PlaylistMenuKind::Remove => (41, 4),
+            PlaylistMenuKind::Select => (70, 3),
+            PlaylistMenuKind::Misc => (99, 3),
+            PlaylistMenuKind::List => (width - 46, 3),
+        };
+        (x + 12, height - 29 - ((items - 1) * 18) - 1)
     }
 
     fn apply_action(&mut self, action: UiAction) {

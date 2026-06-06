@@ -1158,22 +1158,6 @@ pub fn render_playlist_frame(
         blit_surface_rect(cr, &pledit, 32, 42, width - 19, ydest, 19, 29)?;
     }
 
-    fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError> {
-        cr.save()?;
-        cr.set_source_rgb(0.58, 0.82, 0.58);
-        cr.select_font_face(
-            "Helvetica",
-            cairo::FontSlant::Normal,
-            cairo::FontWeight::Bold,
-        );
-        cr.set_font_size(8.0);
-        cr.rectangle(4.0, 3.0, f64::from((width - 35).max(1)), 8.0);
-        cr.clip();
-        cr.move_to(4.0, 10.0);
-        cr.show_text("1. No file loaded                         0:00/0:00")?;
-        cr.restore()?;
-        Ok(())
-    }
     blit_surface_rect(cr, &pledit, 0, 72, 0, height - 38, 125, 38)?;
 
     count = (width - 275) / 25;
@@ -1191,6 +1175,23 @@ pub fn render_playlist_frame(
     cr.fill()?;
 
     Ok(true)
+}
+
+fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError> {
+    cr.save()?;
+    cr.set_source_rgb(0.58, 0.82, 0.58);
+    cr.select_font_face(
+        "Helvetica",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(8.0);
+    cr.rectangle(4.0, 3.0, f64::from((width - 35).max(1)), 8.0);
+    cr.clip();
+    cr.move_to(4.0, 10.0);
+    cr.show_text("1. No file loaded                         0:00/0:00")?;
+    cr.restore()?;
+    Ok(())
 }
 
 pub fn render_playlist_menu(
