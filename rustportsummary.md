@@ -72,6 +72,7 @@ Completed so far:
 - Ported Rust playlist incremental search, including `/` startup, printable query input, Backspace editing, Escape/Enter close behavior, case-insensitive row matching, scroll-to-match, skinned search overlay rendering, and e2e coverage.
 - Wired Rust playlist List menu load/save actions to native file dialogs and the Rust M3U model, with e2e coverage for opening each dialog, writing M3U output, and replacing entries from loaded playlists.
 - Wired Rust playlist Add URL/File/Directory submenu actions to the existing location prompt and append-mode file/directory dialogs, with e2e coverage for each action.
+- Completed Rust playlist Misc submenu wiring: Sort opens a GTK sort popover covering every list/selection sort plus randomize/reverse, File Info records the selected/current entry title, and Options records activation; all actions have e2e coverage.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.

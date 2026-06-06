@@ -5,7 +5,9 @@ use xmms_resuscitated::e2e::{
 };
 use xmms_resuscitated::player::PlayerState;
 use xmms_resuscitated::playlist::PlaylistSortKey;
-use xmms_resuscitated::ui::{PanelKind, PlaylistContextAction, PlaylistMenuKind};
+use xmms_resuscitated::ui::{
+    PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction,
+};
 
 #[test]
 fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
@@ -371,6 +373,108 @@ fn playlist_reverse_and_randomize_e2e_preserve_current_entry() {
     .randomize_playlist()
     .assert_playlist_len(4)
     .assert_current_playlist_entry("file:///music/two.ogg");
+}
+
+#[test]
+fn playlist_misc_sort_menu_actions_cover_each_list_sort() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.drop_on_playlist([
+        "file:///music/Beta/b_song.ogg",
+        "file:///music/Alpha/c_song.ogg",
+        "file:///music/Gamma/a_song.ogg",
+    ])
+    .click_panel(PanelTarget::PlaylistMisc)
+    .activate_playlist_menu_item(0)
+    .activate_playlist_sort_action(PlaylistSortAction::ListByFilename)
+    .assert_playlist_entry(0, "file:///music/Gamma/a_song.ogg")
+    .assert_playlist_entry(1, "file:///music/Beta/b_song.ogg")
+    .assert_playlist_entry(2, "file:///music/Alpha/c_song.ogg")
+    .activate_playlist_sort_action(PlaylistSortAction::ListByPath)
+    .assert_playlist_entry(0, "file:///music/Alpha/c_song.ogg")
+    .assert_playlist_entry(1, "file:///music/Beta/b_song.ogg")
+    .assert_playlist_entry(2, "file:///music/Gamma/a_song.ogg");
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.add_spotify_entry("spotify:track:z", "Zulu", 1_000)
+        .add_spotify_entry("spotify:track:a", "alpha", 1_000)
+        .add_spotify_entry("spotify:track:e", "Echo", 1_000)
+        .activate_playlist_sort_action(PlaylistSortAction::ListByTitle)
+        .assert_playlist_entry(0, "spotify:track:a")
+        .assert_playlist_entry(1, "spotify:track:e")
+        .assert_playlist_entry(2, "spotify:track:z");
+
+    let music_dir = unique_temp_dir("xmms-rs-misc-sort-date");
+    fs::create_dir_all(&music_dir).unwrap();
+    let older = music_dir.join("older.ogg");
+    let newer = music_dir.join("newer.ogg");
+    fs::write(&older, b"old").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&newer, b"new").unwrap();
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.drop_on_playlist([file_uri(&newer), file_uri(&older)])
+        .activate_playlist_sort_action(PlaylistSortAction::ListByDate)
+        .assert_playlist_entry(0, &file_uri(&older))
+        .assert_playlist_entry(1, &file_uri(&newer))
+        .activate_playlist_sort_action(PlaylistSortAction::ReverseList)
+        .assert_playlist_entry(0, &file_uri(&newer))
+        .assert_playlist_entry(1, &file_uri(&older))
+        .activate_playlist_sort_action(PlaylistSortAction::RandomizeList)
+        .assert_playlist_len(2);
+
+    fs::remove_dir_all(music_dir).unwrap();
+}
+
+#[test]
+fn playlist_misc_sort_menu_actions_cover_each_selected_sort() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.add_spotify_entry("spotify:track:z", "Zulu", 1_000)
+        .add_spotify_entry("spotify:track:middle", "middle", 1_000)
+        .add_spotify_entry("spotify:track:a", "alpha", 1_000)
+        .select_playlist_entry(0)
+        .select_playlist_entry(2)
+        .activate_playlist_sort_action(PlaylistSortAction::SelectionByTitle)
+        .assert_playlist_entry(0, "spotify:track:a")
+        .assert_playlist_entry(1, "spotify:track:middle")
+        .assert_playlist_entry(2, "spotify:track:z");
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.drop_on_playlist([
+        "file:///music/4-zulu.ogg",
+        "file:///music/3-charlie.ogg",
+        "file:///music/2-bravo.ogg",
+        "file:///music/1-alpha.ogg",
+    ])
+    .select_playlist_entry(0)
+    .select_playlist_entry(2)
+    .select_playlist_entry(3)
+    .activate_playlist_sort_action(PlaylistSortAction::SelectionByFilename)
+    .assert_playlist_entry(0, "file:///music/1-alpha.ogg")
+    .assert_playlist_entry(1, "file:///music/3-charlie.ogg")
+    .assert_playlist_entry(2, "file:///music/2-bravo.ogg")
+    .assert_playlist_entry(3, "file:///music/4-zulu.ogg")
+    .activate_playlist_sort_action(PlaylistSortAction::SelectionByPath)
+    .assert_playlist_entry(0, "file:///music/1-alpha.ogg")
+    .assert_playlist_entry(1, "file:///music/3-charlie.ogg")
+    .assert_playlist_entry(2, "file:///music/2-bravo.ogg")
+    .assert_playlist_entry(3, "file:///music/4-zulu.ogg")
+    .activate_playlist_sort_action(PlaylistSortAction::SelectionByDate)
+    .assert_playlist_len(4);
+}
+
+#[test]
+fn playlist_misc_file_info_and_options_actions_are_wired() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.add_spotify_entry("spotify:track:one", "Info Target", 1_000)
+        .add_spotify_entry("spotify:track:two", "Other Track", 1_000)
+        .select_playlist_entry(0)
+        .click_panel(PanelTarget::PlaylistMisc)
+        .activate_playlist_menu_item(1)
+        .assert_last_playlist_file_info("Info Target")
+        .click_panel(PanelTarget::PlaylistMisc)
+        .activate_playlist_menu_item(2)
+        .assert_playlist_options_opened();
 }
 
 #[test]

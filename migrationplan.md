@@ -82,7 +82,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [ ] Port resizing.
   - [ ] Port shaded mode.
   - [ ] Port docked/detached mode.
-  - [ ] Port add/remove/select/misc/list menus.
+  - [x] Port add/remove/select/misc/list menus.
   - [x] Port context menu.
   - [x] Port selection, crop, remove dead, and physical delete actions.
   - [x] Port search behavior.

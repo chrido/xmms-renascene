@@ -643,6 +643,7 @@ fn build_equalizer_window(
         PanelKind::Equalizer,
         Some(presets_menu),
         None,
+        None,
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
@@ -768,6 +769,11 @@ fn build_playlist_window(
         PanelKind::Playlist,
         None,
         Some(open_location_window.clone()),
+        Some(build_playlist_sort_popover(
+            &drawing_area,
+            main_state,
+            main_area,
+        )),
     );
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
@@ -951,6 +957,80 @@ fn show_playlist_delete_confirmation(
     layout.append(&buttons);
     window.set_child(Some(&layout));
     window.present();
+}
+
+fn build_playlist_sort_popover(
+    parent: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+) -> gtk::Popover {
+    let popover = gtk::Popover::builder()
+        .autohide(true)
+        .has_arrow(false)
+        .build();
+    popover.set_parent(parent);
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for (label, action) in [
+        ("Sort List: By Title", PlaylistSortAction::ListByTitle),
+        ("Sort List: By Filename", PlaylistSortAction::ListByFilename),
+        (
+            "Sort List: By Path + Filename",
+            PlaylistSortAction::ListByPath,
+        ),
+        ("Sort List: By Date", PlaylistSortAction::ListByDate),
+        (
+            "Sort Selection: By Title",
+            PlaylistSortAction::SelectionByTitle,
+        ),
+        (
+            "Sort Selection: By Filename",
+            PlaylistSortAction::SelectionByFilename,
+        ),
+        (
+            "Sort Selection: By Path + Filename",
+            PlaylistSortAction::SelectionByPath,
+        ),
+        (
+            "Sort Selection: By Date",
+            PlaylistSortAction::SelectionByDate,
+        ),
+        ("Randomize List", PlaylistSortAction::RandomizeList),
+        ("Reverse List", PlaylistSortAction::ReverseList),
+    ] {
+        let item = gtk::Button::with_label(label);
+        item.set_halign(gtk::Align::Fill);
+        {
+            let main_state = Rc::clone(main_state);
+            let parent = parent.clone();
+            let main_area = main_area.clone();
+            let popover = popover.clone();
+            item.connect_clicked(move |_| {
+                main_state
+                    .borrow_mut()
+                    .activate_playlist_sort_action(action);
+                popover.popdown();
+                parent.queue_draw();
+                main_area.queue_draw();
+            });
+        }
+        menu_box.append(&item);
+    }
+    popover.set_child(Some(&menu_box));
+    popover
+}
+
+fn show_playlist_sort_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
+    let width = area.allocated_width().max(1) as f64;
+    let height = area.allocated_height().max(1) as f64;
+    let rect = gtk::gdk::Rectangle::new(
+        (99.0 * (width / f64::from(PLAYLIST_DEFAULT_WIDTH))) as i32,
+        (f64::from(PLAYLIST_DEFAULT_HEIGHT - 29) * (height / f64::from(PLAYLIST_DEFAULT_HEIGHT)))
+            as i32,
+        25,
+        1,
+    );
+    popover.set_pointing_to(Some(&rect));
+    popover.popup();
 }
 
 fn build_equalizer_presets_popover(
@@ -1172,6 +1252,20 @@ pub enum PlaylistContextAction {
     InvertSelection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistSortAction {
+    ListByTitle,
+    ListByFilename,
+    ListByPath,
+    ListByDate,
+    SelectionByTitle,
+    SelectionByFilename,
+    SelectionByPath,
+    SelectionByDate,
+    RandomizeList,
+    ReverseList,
+}
+
 impl PlaylistMenuKind {
     fn render_kind(self) -> PlaylistMenuRenderKind {
         match self {
@@ -1197,6 +1291,7 @@ pub(crate) enum PanelAction {
     OpenLocationWindow,
     OpenPlaylistLoadDialog,
     OpenPlaylistSaveDialog,
+    ShowPlaylistSortMenu,
     ShowPlaylistMenu(PlaylistMenuKind),
     ShowEqualizerPresets,
 }
@@ -1215,6 +1310,7 @@ fn add_panel_click_controller(
     kind: PanelKind,
     equalizer_presets_menu: Option<gtk::Popover>,
     open_location_window: Option<gtk::ApplicationWindow>,
+    playlist_sort_menu: Option<gtk::Popover>,
 ) {
     let click = gtk::GestureClick::new();
     click.set_button(1);
@@ -1347,6 +1443,12 @@ fn add_panel_click_controller(
                         .borrow_mut()
                         .set_playlist_save_dialog_visible(true);
                     show_playlist_save_dialog(&window, Rc::clone(&main_state));
+                }
+                PanelAction::ShowPlaylistSortMenu => {
+                    if let Some(popover) = playlist_sort_menu.as_ref() {
+                        show_playlist_sort_menu(popover, &area);
+                    }
+                    area.queue_draw();
                 }
                 PanelAction::ShowPlaylistMenu(menu) => {
                     let _ = menu;
@@ -1589,6 +1691,8 @@ pub(crate) struct MainWindowUiState {
     playlist_search_query: String,
     playlist_load_dialog_visible: bool,
     playlist_save_dialog_visible: bool,
+    last_playlist_file_info: Option<String>,
+    playlist_options_opened: bool,
     preferences_visible: bool,
     open_location_visible: bool,
     jump_time_visible: bool,
@@ -1641,6 +1745,8 @@ impl MainWindowUiState {
             playlist_search_query: String::new(),
             playlist_load_dialog_visible: false,
             playlist_save_dialog_visible: false,
+            last_playlist_file_info: None,
+            playlist_options_opened: false,
             preferences_visible: false,
             open_location_visible: false,
             jump_time_visible: false,
@@ -1814,6 +1920,14 @@ impl MainWindowUiState {
 
     pub(crate) fn set_playlist_save_dialog_visible(&mut self, visible: bool) {
         self.playlist_save_dialog_visible = visible;
+    }
+
+    pub(crate) fn last_playlist_file_info(&self) -> Option<&str> {
+        self.last_playlist_file_info.as_deref()
+    }
+
+    pub(crate) fn playlist_options_opened(&self) -> bool {
+        self.playlist_options_opened
     }
 
     pub(crate) fn load_playlist_file(&mut self, path: &Path) -> std::io::Result<()> {
@@ -2280,6 +2394,19 @@ impl MainWindowUiState {
             (PlaylistMenuKind::Add, 0) => return PanelAction::OpenLocationWindow,
             (PlaylistMenuKind::Add, 1) => return PanelAction::OpenDirectoryDialog,
             (PlaylistMenuKind::Add, 2) => return PanelAction::OpenFileDialog,
+            (PlaylistMenuKind::Misc, 0) => return PanelAction::ShowPlaylistSortMenu,
+            (PlaylistMenuKind::Misc, 1) => {
+                self.last_playlist_file_info = self
+                    .selected_playlist_index()
+                    .or_else(|| self.app_state.playlist.position())
+                    .and_then(|index| self.app_state.playlist.entries().get(index))
+                    .map(|entry| entry.title.clone());
+                true
+            }
+            (PlaylistMenuKind::Misc, 2) => {
+                self.playlist_options_opened = true;
+                true
+            }
             (PlaylistMenuKind::Remove, 1) => {
                 self.app_state.playlist.clear();
                 true
@@ -2349,6 +2476,43 @@ impl MainWindowUiState {
             self.clamp_playlist_scroll_offset();
         }
         changed
+    }
+
+    pub(crate) fn activate_playlist_sort_action(&mut self, action: PlaylistSortAction) -> bool {
+        match action {
+            PlaylistSortAction::ListByTitle => {
+                self.app_state.playlist.sort_by(PlaylistSortKey::Title)
+            }
+            PlaylistSortAction::ListByFilename => {
+                self.app_state.playlist.sort_by(PlaylistSortKey::Filename)
+            }
+            PlaylistSortAction::ListByPath => {
+                self.app_state.playlist.sort_by(PlaylistSortKey::Path)
+            }
+            PlaylistSortAction::ListByDate => {
+                self.app_state.playlist.sort_by(PlaylistSortKey::Date)
+            }
+            PlaylistSortAction::SelectionByTitle => self
+                .app_state
+                .playlist
+                .sort_selected_by(PlaylistSortKey::Title),
+            PlaylistSortAction::SelectionByFilename => self
+                .app_state
+                .playlist
+                .sort_selected_by(PlaylistSortKey::Filename),
+            PlaylistSortAction::SelectionByPath => self
+                .app_state
+                .playlist
+                .sort_selected_by(PlaylistSortKey::Path),
+            PlaylistSortAction::SelectionByDate => self
+                .app_state
+                .playlist
+                .sort_selected_by(PlaylistSortKey::Date),
+            PlaylistSortAction::RandomizeList => self.app_state.playlist.randomize(),
+            PlaylistSortAction::ReverseList => self.app_state.playlist.reverse(),
+        }
+        self.clamp_playlist_scroll_offset();
+        true
     }
 
     fn update_playlist_search_match(&mut self) {

@@ -6,7 +6,8 @@ use crate::player::PlayerState;
 use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
 use crate::ui::{
-    MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind, UiAction,
+    MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind,
+    PlaylistSortAction, UiAction,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -278,8 +279,15 @@ impl UiE2e {
             PanelAction::OpenPlaylistSaveDialog => {
                 self.state.set_playlist_save_dialog_visible(true)
             }
+            PanelAction::ShowPlaylistSortMenu => {}
             _ => {}
         }
+        self.sync_windows();
+        self
+    }
+
+    pub fn activate_playlist_sort_action(&mut self, action: PlaylistSortAction) -> &mut Self {
+        self.state.activate_playlist_sort_action(action);
         self.sync_windows();
         self
     }
@@ -651,6 +659,19 @@ impl UiE2e {
         assert!(
             self.state.is_playlist_save_dialog_visible(),
             "expected playlist save dialog to be visible"
+        );
+        self
+    }
+
+    pub fn assert_last_playlist_file_info(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.last_playlist_file_info(), Some(expected));
+        self
+    }
+
+    pub fn assert_playlist_options_opened(&mut self) -> &mut Self {
+        assert!(
+            self.state.playlist_options_opened(),
+            "expected playlist options action to be opened"
         );
         self
     }
