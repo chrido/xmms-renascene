@@ -1766,6 +1766,31 @@ fn preferences_font_and_title_pages_apply_text_controls_immediately() {
 }
 
 #[test]
+fn title_format_updates_main_title_and_shaded_playlist_info() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.add_playlist_uri("file:///music/Artist%20Name%20-%20Track_Name.ogg")
+        .press_shortcut(Shortcut::PlayFirst)
+        .set_preference_title_format("%p/%t")
+        .assert_main_title("Artist Name/Track Name")
+        .press_shortcut(Shortcut::ShadePlaylist)
+        .assert_playlist_shaded()
+        .assert_shaded_playlist_info("1. Artist Name - Track Name");
+}
+
+#[test]
+fn playlist_font_preference_and_visualization_feed_render_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.set_preference_playlist_font("Monospace")
+        .assert_playlist_row_font("Monospace")
+        .set_visualization_mode(VisMode::Analyzer)
+        .feed_visualization_data(4, 0.9)
+        .tick_visualization(100)
+        .assert_visualization_band_at_least(4, 0.8);
+}
+
+#[test]
 fn preferences_visualization_page_applies_controls_immediately() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

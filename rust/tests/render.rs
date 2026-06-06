@@ -67,7 +67,8 @@ fn renders_playlist_rows_with_selected_background() {
         true,
         false,
         PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT
+        PLAYLIST_DEFAULT_HEIGHT,
+        None
     )
     .unwrap());
     assert!(render_playlist_rows(
@@ -92,6 +93,7 @@ fn renders_playlist_rows_with_selected_background() {
             scrollbar_dragging: false,
             search_query: Some("Beta".to_string()),
             show_numbers: true,
+            font_family: "Helvetica".to_string(),
             width: PLAYLIST_DEFAULT_WIDTH,
             height: PLAYLIST_DEFAULT_HEIGHT,
         }

@@ -707,6 +707,7 @@ fn render_docked_ui_state(
             state.playlist_shaded,
             state.playlist_width,
             state.playlist_height,
+            Some(&state.shaded_playlist_info()),
         )?;
         if !state.playlist_shaded {
             let current = state.app_state.playlist.position();
@@ -731,6 +732,7 @@ fn render_docked_ui_state(
                     .playlist_search_active
                     .then(|| state.playlist_search_query.clone()),
                 show_numbers: state.app_state.config.show_numbers_in_pl,
+                font_family: state.app_state.config.playlist_font.clone(),
                 width: state.playlist_width,
                 height: state.playlist_height,
             };
@@ -1016,9 +1018,15 @@ fn build_playlist_window(
             width as f64 / playlist_width as f64,
             height as f64 / base_height as f64,
         );
-        if let Err(err) =
-            render_playlist_frame(cr, &skin, focused, shaded, playlist_width, playlist_height)
-        {
+        if let Err(err) = render_playlist_frame(
+            cr,
+            &skin,
+            focused,
+            shaded,
+            playlist_width,
+            playlist_height,
+            Some(&state.shaded_playlist_info()),
+        ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
         if !shaded {
@@ -1044,6 +1052,7 @@ fn build_playlist_window(
                     .playlist_search_active
                     .then(|| state.playlist_search_query.clone()),
                 show_numbers: state.app_state.config.show_numbers_in_pl,
+                font_family: state.app_state.config.playlist_font.clone(),
                 width: playlist_width,
                 height: playlist_height,
             };
@@ -3067,6 +3076,7 @@ impl MainWindowUiState {
 
     fn render_state(&self) -> MainWindowRenderState {
         MainWindowRenderState {
+            title: self.formatted_current_title(),
             shaded: self.shaded,
             volume_position: volume_to_position(self.app_state.player.volume()),
             balance_position: balance_to_position(self.app_state.player.balance()),
@@ -3086,6 +3096,47 @@ impl MainWindowUiState {
             visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
         }
+    }
+
+    pub(crate) fn formatted_current_title(&self) -> String {
+        let Some(position) = self.app_state.playlist.position() else {
+            return "XMMS Resuscitated".to_string();
+        };
+        let Some(entry) = self.app_state.playlist.entries().get(position) else {
+            return "XMMS Resuscitated".to_string();
+        };
+        format_title_for_preferences(
+            &self.app_state.config.title_format,
+            &entry.filename,
+            &entry.title,
+        )
+    }
+
+    pub(crate) fn shaded_playlist_info(&self) -> String {
+        let Some(position) = self.app_state.playlist.position() else {
+            return String::new();
+        };
+        let Some(entry) = self.app_state.playlist.entries().get(position) else {
+            return String::new();
+        };
+
+        let title = normalize_playlist_display_text(&entry.title, &self.app_state.config);
+        let prefix = if self.app_state.config.show_numbers_in_pl {
+            format!("{}. ", position + 1)
+        } else {
+            String::new()
+        };
+        let suffix = if entry.length_ms >= 0 {
+            format!(" {}", format_duration(entry.length_ms))
+        } else {
+            String::new()
+        };
+        let max_len = ((self.playlist_width - 35) / 5)
+            .saturating_sub(prefix.len() as i32)
+            .saturating_sub(suffix.len() as i32)
+            .max(0) as usize;
+        let title = ellipsize_chars(&title, max_len);
+        format!("{prefix}{title:<max_len$}{suffix}")
     }
 
     fn make_visualization_render_state(&self) -> VisualizationRenderState {
@@ -4936,6 +4987,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
+        self.poll_playback_backend();
         if self.app_state.player.state() != PlayerState::Playing {
             self.update_accumulator_ms = 0;
             self.visualization_tick_counter = 0;
@@ -4968,6 +5020,34 @@ impl MainWindowUiState {
             self.visualization.tick(data);
         }
         true
+    }
+
+    fn poll_playback_backend(&mut self) {
+        let Some(backend) = self.playback_backend.as_ref().map(Rc::clone) else {
+            return;
+        };
+        match backend.borrow().poll_bus_events() {
+            Ok(events) => {
+                for event in events {
+                    self.app_state.player.apply_playback_event(&event);
+                }
+            }
+            Err(err) => eprintln!("xmms-rs: failed to poll playback backend: {err}"),
+        }
+        let backend = backend.borrow();
+        let stream_info = backend.audio_stream_info();
+        self.app_state
+            .player
+            .set_stream_info(None, stream_info.frequency, stream_info.channels);
+        if let Some(duration_ms) = backend.duration_ms() {
+            self.app_state.player.apply_playback_event(
+                &crate::player::PlaybackEvent::DurationChanged(Some(duration_ms)),
+            );
+        }
+        if let Some(position_ms) = backend.position_ms() {
+            self.position_position =
+                ((position_ms / 1000) as i32).clamp(0, slider_max(MainSlider::Position));
+        }
     }
 
     pub(crate) fn playlist_eof_reached(&mut self) {
@@ -5397,6 +5477,118 @@ fn balance_to_position(balance: i32) -> i32 {
 
 fn position_to_balance(position: i32) -> i32 {
     (((position.clamp(0, 24) - 12) * 100) as f64 / 12.0) as i32
+}
+
+fn format_duration(milliseconds: i64) -> String {
+    let seconds = (milliseconds.max(0) / 1000) as i32;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn format_title_for_preferences(format: &str, filename: &str, title: &str) -> String {
+    let fallback_title = if title.trim().is_empty() {
+        filename_title(filename)
+    } else {
+        percent_decode_spaces(title.trim()).replace('_', " ")
+    };
+    let (artist, track_title) = split_artist_title(&fallback_title);
+    let file_title = filename_title(filename);
+    let format = if format.trim().is_empty() {
+        "%p - %t"
+    } else {
+        format.trim()
+    };
+
+    let mut output = String::new();
+    let mut chars = format.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            output.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('p') => output.push_str(artist.unwrap_or("")),
+            Some('t') => output.push_str(track_title),
+            Some('f') => output.push_str(&file_title),
+            Some('a') | Some('g') => {}
+            Some('%') => output.push('%'),
+            Some(other) => {
+                output.push('%');
+                output.push(other);
+            }
+            None => output.push('%'),
+        }
+    }
+
+    cleanup_formatted_title(&output).unwrap_or(fallback_title)
+}
+
+fn split_artist_title(title: &str) -> (Option<&str>, &str) {
+    title
+        .split_once(" - ")
+        .map(|(artist, track)| (Some(artist.trim()), track.trim()))
+        .unwrap_or((None, title.trim()))
+}
+
+fn filename_title(filename: &str) -> String {
+    let without_query = filename.split(['?', '#']).next().unwrap_or(filename);
+    let decoded = percent_decode_spaces(without_query);
+    let path = decoded
+        .strip_prefix("file://")
+        .unwrap_or(decoded.as_str())
+        .trim_end_matches('/');
+    let basename = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
+    let stem = basename
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(basename);
+    stem.replace('_', " ")
+}
+
+fn percent_decode_spaces(text: &str) -> String {
+    text.replace("%20", " ")
+}
+
+fn cleanup_formatted_title(text: &str) -> Option<String> {
+    let mut cleaned = text.trim().to_string();
+    for prefix in ["- ", ":", "/", "|"] {
+        cleaned = cleaned.trim_start_matches(prefix).trim_start().to_string();
+    }
+    for suffix in [" -", ":", "/", "|"] {
+        cleaned = cleaned.trim_end_matches(suffix).trim_end().to_string();
+    }
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
+fn normalize_playlist_display_text(text: &str, config: &Config) -> String {
+    let mut normalized = text.to_string();
+    if config.convert_underscore {
+        normalized = normalized.replace('_', " ");
+    }
+    if config.convert_twenty {
+        normalized = normalized.replace("%20", " ");
+    }
+    normalized
+}
+
+fn ellipsize_chars(text: &str, max_len: usize) -> String {
+    let char_count = text.chars().count();
+    if char_count <= max_len {
+        return text.to_string();
+    }
+    if max_len > 3 {
+        let mut truncated: String = text.chars().take(max_len - 3).collect();
+        truncated.push_str("...");
+        truncated
+    } else {
+        text.chars().take(max_len).collect()
+    }
 }
 
 fn eq_shaded_position_to_volume(position: i32) -> i32 {

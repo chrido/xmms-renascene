@@ -71,6 +71,7 @@ pub struct PlaylistRowsRenderState {
     pub scrollbar_dragging: bool,
     pub search_query: Option<String>,
     pub show_numbers: bool,
+    pub font_family: String,
     pub width: i32,
     pub height: i32,
 }
@@ -499,6 +500,7 @@ pub fn render_main_player_state(
     }
 
     if state.shaded {
+        render_windowshade_visualization(cr, skin, 79, 5, &state.visualization)?;
         return Ok(rendered);
     }
 
@@ -1433,6 +1435,7 @@ pub fn render_playlist_frame(
     shaded: bool,
     width: i32,
     height: i32,
+    shaded_info: Option<&str>,
 ) -> Result<bool, RenderError> {
     let width = width.max(PLAYLIST_MIN_WIDTH);
     let height = playlist_window_height(shaded, height);
@@ -1457,7 +1460,7 @@ pub fn render_playlist_frame(
             50,
             14,
         )?;
-        draw_playlist_shaded_info(cr, width)?;
+        draw_playlist_shaded_info(cr, width, shaded_info.unwrap_or(""))?;
         return Ok(true);
     }
 
@@ -1560,12 +1563,7 @@ pub fn render_playlist_rows(
     );
     cr.fill()?;
 
-    cr.select_font_face(
-        "Helvetica",
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Normal,
-    );
-    cr.set_font_size(8.0);
+    set_playlist_font(cr, &state.font_family);
     let baseline = cr.font_extents()?.ascent().ceil() as i32;
     let visible = (list_h / entry_h).max(0) as usize;
     for row in 0..visible {
@@ -1661,12 +1659,7 @@ fn draw_playlist_search(
     );
     cr.stroke()?;
 
-    cr.select_font_face(
-        "Helvetica",
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Normal,
-    );
-    cr.set_font_size(8.0);
+    set_playlist_font(cr, "Helvetica");
     set_rgb(cr, colors.normal);
     let display = ellipsize_text(cr, format!("/{query}"), w - 6)?;
     let extents = cr.text_extents(&display)?;
@@ -1697,21 +1690,29 @@ fn playlist_scrollbar_geometry(
     Some((thumb_y, thumb_h))
 }
 
-fn draw_playlist_shaded_info(cr: &Context, width: i32) -> Result<(), RenderError> {
+fn draw_playlist_shaded_info(cr: &Context, width: i32, text: &str) -> Result<(), RenderError> {
     cr.save()?;
     cr.set_source_rgb(0.58, 0.82, 0.58);
-    cr.select_font_face(
-        "Helvetica",
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Bold,
-    );
-    cr.set_font_size(8.0);
+    set_playlist_font(cr, "Helvetica");
     cr.rectangle(4.0, 3.0, f64::from((width - 35).max(1)), 8.0);
     cr.clip();
     cr.move_to(4.0, 10.0);
-    cr.show_text("1. No file loaded                         0:00/0:00")?;
+    cr.show_text(text)?;
     cr.restore()?;
     Ok(())
+}
+
+fn set_playlist_font(cr: &Context, family: &str) {
+    cr.select_font_face(
+        if family.trim().is_empty() {
+            "Helvetica"
+        } else {
+            family.trim()
+        },
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(9.0);
 }
 
 fn set_rgb(cr: &Context, color: [u8; 3]) {
@@ -1739,8 +1740,17 @@ fn ellipsize_text(cr: &Context, mut text: String, max_width: i32) -> Result<Stri
     if max_width <= 0 {
         return Ok(String::new());
     }
-    while !text.is_empty() && cr.text_extents(&text)?.width() > f64::from(max_width) {
-        text.pop();
+    if cr.text_extents(&text)?.width() <= f64::from(max_width) {
+        return Ok(text);
+    }
+    while text.chars().count() > 4 {
+        let mut truncated = text.chars().collect::<Vec<_>>();
+        truncated.truncate(truncated.len() - 1);
+        text = truncated.into_iter().collect();
+        let candidate = format!("{text}...");
+        if cr.text_extents(&candidate)?.width() <= f64::from(max_width) {
+            return Ok(candidate);
+        }
     }
     Ok(text)
 }
@@ -1934,6 +1944,7 @@ pub fn render_docked_panels(
             state.playlist_shaded,
             state.playlist_width,
             state.playlist_height,
+            None,
         )?;
         cr.restore()?;
     }

@@ -1466,6 +1466,21 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_main_title(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.formatted_current_title(), expected);
+        self
+    }
+
+    pub fn assert_shaded_playlist_info(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.shaded_playlist_info().trim_end(), expected);
+        self
+    }
+
+    pub fn assert_playlist_row_font(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.preference_playlist_font(), expected);
+        self
+    }
+
     pub fn set_visualization_mode(&mut self, mode: VisMode) -> &mut Self {
         self.state.set_visualization_mode(mode);
         self
