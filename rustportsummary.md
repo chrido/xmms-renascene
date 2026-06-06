@@ -25,6 +25,7 @@ Completed so far:
 - Preserved the C balance-from-volume fallback when a skin omits `balance.*`.
 - Switched XPM loading to prefer the `image-extras` XPM decoder, retaining the compatibility parser only as a fallback for XMMS skin quirks.
 - Added Cairo conversion for parsed XPM pixels.
+- Added a C-compatible Cairo skin blitter with source/destination rectangles, source clipping, nearest filtering, and pad extend.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.

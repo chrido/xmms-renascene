@@ -35,7 +35,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Replace manual XPM parser with a library in a later cleanup phase.
 
 - [ ] Complete Cairo renderer.
-  - [ ] Implement skin pixmap blitting with source/destination rectangles.
+  - [x] Implement skin pixmap blitting with source/destination rectangles.
   - [ ] Match transparency and scaling behavior.
   - [ ] Draw focused/unfocused titlebars.
   - [ ] Draw normal and WindowShade main-player states.
