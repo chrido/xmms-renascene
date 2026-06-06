@@ -17,10 +17,12 @@ use xmms_resuscitated::spotify::{
     authorization_url, config_path as spotify_config_path, parse_devices_response,
     parse_playback_state_response, parse_playlist_tracks_response, parse_playlists_response,
     play_track_body, playlist_tracks_endpoint, playlists_endpoint, preferred_device_id,
-    SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest, CLIENT_ID, REDIRECT_URI,
+    SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest, SpotifyPlaylist, SpotifyTrack,
+    CLIENT_ID, REDIRECT_URI,
 };
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
+    SpotifyChooserPage,
 };
 
 #[test]
@@ -439,6 +441,75 @@ fn spotify_uri_playback_updates_player_state_like_c_player() {
         .execute_mpris_command(MprisCommand::Next)
         .assert_player_state(PlayerState::Playing)
         .assert_player_spotify_mode(false);
+}
+
+#[test]
+fn spotify_playlist_window_auth_selection_import_and_empty_states_are_wired() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.click_menu_item(MenuItem::Spotify)
+        .assert_spotify_auth_prompt_visible(true)
+        .assert_spotify_window_visible(false)
+        .assert_spotify_status("Authentication required")
+        .set_spotify_authenticated(true)
+        .click_menu_item(MenuItem::Spotify)
+        .assert_spotify_window_visible(true)
+        .assert_spotify_page(SpotifyChooserPage::Playlists)
+        .assert_spotify_status("Loading playlists...")
+        .receive_spotify_playlists(Vec::new())
+        .assert_spotify_status("0 playlists")
+        .set_spotify_error("Failed to load playlists")
+        .assert_spotify_status("Failed to load playlists")
+        .receive_spotify_playlists(vec![SpotifyPlaylist {
+            id: "playlist-id".to_string(),
+            name: "Favorites".to_string(),
+            total_tracks: 2,
+            uri: "spotify:playlist:favorites".to_string(),
+        }])
+        .assert_spotify_playlists(&["Favorites"])
+        .select_spotify_playlist(0)
+        .assert_spotify_last_track_request(Some("playlist-id"))
+        .assert_spotify_status("Loading tracks...")
+        .receive_spotify_tracks(vec![
+            SpotifyTrack {
+                id: "one".to_string(),
+                name: "One".to_string(),
+                artist: Some("Artist".to_string()),
+                album: Some("Album".to_string()),
+                uri: "spotify:track:one".to_string(),
+                duration_ms: 1_000,
+            },
+            SpotifyTrack {
+                id: "two".to_string(),
+                name: "Two".to_string(),
+                artist: None,
+                album: None,
+                uri: "spotify:track:two".to_string(),
+                duration_ms: 2_000,
+            },
+        ])
+        .assert_spotify_page(SpotifyChooserPage::Tracks)
+        .assert_spotify_status("2 tracks")
+        .assert_spotify_tracks(&["1. Artist - One", "2. Unknown - Two"])
+        .spotify_back_to_playlists()
+        .assert_spotify_page(SpotifyChooserPage::Playlists)
+        .receive_spotify_tracks(vec![SpotifyTrack {
+            id: "three".to_string(),
+            name: "Three".to_string(),
+            artist: Some("Artist".to_string()),
+            album: None,
+            uri: "spotify:track:three".to_string(),
+            duration_ms: 3_000,
+        }])
+        .load_spotify_tracks_into_playlist()
+        .assert_spotify_window_visible(false)
+        .assert_playlist_len(1)
+        .assert_playlist_entry(0, "spotify:track:three")
+        .assert_playlist_title(0, "Artist - Three")
+        .click_menu_item(MenuItem::Spotify)
+        .assert_spotify_window_visible(true)
+        .close_spotify_window()
+        .assert_spotify_window_visible(false);
 }
 
 #[test]

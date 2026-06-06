@@ -31,6 +31,7 @@ use crate::skin::widget::{
     VisVuMode, Visualization, WidgetId,
 };
 use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry};
+use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
 
@@ -38,6 +39,12 @@ const DEFAULT_SCALE: i32 = 2;
 pub struct PreviewOptions {
     pub show_playlist: bool,
     pub playlist_size: Option<(i32, i32)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpotifyChooserPage {
+    Playlists,
+    Tracks,
 }
 
 pub fn run_default_skin_preview(options: PreviewOptions) {
@@ -569,6 +576,22 @@ fn build_main_menu_popover(
         });
     }
     menu_box.append(&skin_browser);
+
+    let spotify = gtk::Button::with_label("Spotify Playlists...");
+    spotify.set_halign(gtk::Align::Fill);
+    {
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        spotify.connect_clicked(move |_| {
+            {
+                let mut state = main_state.borrow_mut();
+                state.set_menu_visible(false);
+                state.open_spotify_window();
+            }
+            popover.popdown();
+        });
+    }
+    menu_box.append(&spotify);
 
     let quit = gtk::Button::with_label("Quit");
     quit.set_halign(gtk::Align::Fill);
@@ -1827,6 +1850,15 @@ pub(crate) struct MainWindowUiState {
     skin_browser_entries: Vec<SkinEntry>,
     selected_skin_index: usize,
     skin_reload_count: u32,
+    spotify_authenticated: bool,
+    spotify_auth_prompt_visible: bool,
+    spotify_window_visible: bool,
+    spotify_page: SpotifyChooserPage,
+    spotify_status: String,
+    spotify_playlists: Vec<SpotifyPlaylist>,
+    spotify_tracks: Vec<SpotifyTrack>,
+    spotify_current_playlist_uri: Option<String>,
+    spotify_last_track_request: Option<String>,
     output_device_picker_visible: bool,
     output_device_groups: OutputDeviceGroups,
     selected_spotify_output_device: Option<String>,
@@ -1895,6 +1927,15 @@ impl MainWindowUiState {
             skin_browser_entries: Vec::new(),
             selected_skin_index: 0,
             skin_reload_count: 0,
+            spotify_authenticated: false,
+            spotify_auth_prompt_visible: false,
+            spotify_window_visible: false,
+            spotify_page: SpotifyChooserPage::Playlists,
+            spotify_status: String::new(),
+            spotify_playlists: Vec::new(),
+            spotify_tracks: Vec::new(),
+            spotify_current_playlist_uri: None,
+            spotify_last_track_request: None,
             output_device_picker_visible: false,
             output_device_groups: OutputDeviceGroups::default(),
             selected_spotify_output_device: None,
@@ -2372,6 +2413,121 @@ impl MainWindowUiState {
 
     pub(crate) fn skin_reload_count(&self) -> u32 {
         self.skin_reload_count
+    }
+
+    pub(crate) fn set_spotify_authenticated(&mut self, authenticated: bool) {
+        self.spotify_authenticated = authenticated;
+    }
+
+    pub(crate) fn open_spotify_window(&mut self) {
+        self.spotify_auth_prompt_visible = false;
+        if !self.spotify_authenticated {
+            self.spotify_auth_prompt_visible = true;
+            self.spotify_window_visible = false;
+            self.spotify_status = "Authentication required".to_string();
+            return;
+        }
+        self.spotify_window_visible = true;
+        self.spotify_page = SpotifyChooserPage::Playlists;
+        self.spotify_status = "Loading playlists...".to_string();
+    }
+
+    pub(crate) fn spotify_window_visible(&self) -> bool {
+        self.spotify_window_visible
+    }
+
+    pub(crate) fn spotify_auth_prompt_visible(&self) -> bool {
+        self.spotify_auth_prompt_visible
+    }
+
+    pub(crate) fn spotify_page(&self) -> SpotifyChooserPage {
+        self.spotify_page
+    }
+
+    pub(crate) fn spotify_status(&self) -> &str {
+        &self.spotify_status
+    }
+
+    pub(crate) fn spotify_playlist_names(&self) -> Vec<&str> {
+        self.spotify_playlists
+            .iter()
+            .map(|playlist| playlist.name.as_str())
+            .collect()
+    }
+
+    pub(crate) fn spotify_track_titles(&self) -> Vec<String> {
+        self.spotify_tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| {
+                format!(
+                    "{}. {} - {}",
+                    index + 1,
+                    track.artist.as_deref().unwrap_or("Unknown"),
+                    track.name
+                )
+            })
+            .collect()
+    }
+
+    pub(crate) fn set_spotify_playlists(&mut self, playlists: Vec<SpotifyPlaylist>) {
+        let count = playlists.len();
+        self.spotify_playlists = playlists;
+        self.spotify_page = SpotifyChooserPage::Playlists;
+        self.spotify_status = format!("{count} playlists");
+    }
+
+    pub(crate) fn select_spotify_playlist(&mut self, index: usize) -> bool {
+        let Some(playlist) = self.spotify_playlists.get(index) else {
+            return false;
+        };
+        self.spotify_current_playlist_uri = Some(playlist.uri.clone());
+        self.spotify_last_track_request = Some(playlist.id.clone());
+        self.spotify_status = "Loading tracks...".to_string();
+        true
+    }
+
+    pub(crate) fn spotify_last_track_request(&self) -> Option<&str> {
+        self.spotify_last_track_request.as_deref()
+    }
+
+    pub(crate) fn set_spotify_tracks(&mut self, tracks: Vec<SpotifyTrack>) {
+        let count = tracks.len();
+        self.spotify_tracks = tracks;
+        self.spotify_page = SpotifyChooserPage::Tracks;
+        self.spotify_status = format!("{count} tracks");
+    }
+
+    pub(crate) fn show_spotify_playlists_page(&mut self) {
+        self.spotify_page = SpotifyChooserPage::Playlists;
+    }
+
+    pub(crate) fn set_spotify_error(&mut self, message: impl Into<String>) {
+        self.spotify_status = message.into();
+    }
+
+    pub(crate) fn load_spotify_tracks_into_playlist(&mut self) -> bool {
+        if self.spotify_tracks.is_empty() {
+            return false;
+        }
+        self.app_state.playlist.clear();
+        for track in &self.spotify_tracks {
+            let title = format!(
+                "{} - {}",
+                track.artist.as_deref().unwrap_or("Unknown"),
+                track.name
+            );
+            self.app_state
+                .playlist
+                .add_spotify(&track.uri, title, i64::from(track.duration_ms));
+        }
+        self.app_state.playlist.set_position(0);
+        self.spotify_window_visible = false;
+        true
+    }
+
+    pub(crate) fn close_spotify_window(&mut self) {
+        self.spotify_window_visible = false;
     }
 
     pub(crate) fn is_file_dialog_visible(&self) -> bool {

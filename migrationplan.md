@@ -162,11 +162,11 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Add deterministic Spotify playback-state response parsing.
   - [x] Integrate Spotify URI playback into player state.
 
-- [ ] Port Spotify UI.
-  - [ ] Port Spotify playlist chooser.
-  - [ ] Port track import into playlist.
-  - [ ] Port authentication prompts.
-  - [ ] Port error handling and empty states.
+- [x] Port Spotify UI.
+  - [x] Port Spotify playlist chooser.
+  - [x] Port track import into playlist.
+  - [x] Port authentication prompts.
+  - [x] Port error handling and empty states.
 
 - [ ] Port podcast integration.
   - [ ] Detect feed URLs vs direct audio streams.
