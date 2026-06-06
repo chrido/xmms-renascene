@@ -19,13 +19,14 @@ use crate::player::{
 };
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    docked_panel_size, render_equalizer_state, render_main_player_state, render_playlist_frame,
-    render_playlist_menu, render_playlist_rows, DockedPanelState, EqualizerControl,
-    EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState,
-    PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    docked_panel_size, equalizer_window_height, main_window_height, render_equalizer_state,
+    render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
+    DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
+    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
+    PlaylistRowRenderEntry, PlaylistRowsRenderState, VisualizationRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::widget::{
     PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode,
@@ -154,6 +155,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     ));
     let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
+    resize_main_window(&window, &drawing_area, &main_state.borrow());
     let menu_popover = Rc::new(build_main_menu_popover(
         app,
         &window,
@@ -168,17 +170,14 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let skin = Rc::clone(&skin);
         let main_state = Rc::clone(&main_state);
         drawing_area.set_draw_func(move |_area, cr, width, height| {
-            let base_height = if main_state.borrow().shaded {
-                MAIN_TITLEBAR_HEIGHT
-            } else {
-                MAIN_WINDOW_HEIGHT
-            };
+            let state = main_state.borrow();
+            let docked_state = state.docked_panel_state();
+            let (base_width, base_height) = docked_panel_size(docked_state);
             cr.scale(
-                width as f64 / MAIN_WINDOW_WIDTH as f64,
+                width as f64 / base_width as f64,
                 height as f64 / base_height as f64,
             );
-            let render_state = main_state.borrow().render_state();
-            if let Err(err) = render_main_player_state(cr, &skin, &render_state) {
+            if let Err(err) = render_docked_ui_state(cr, &skin, &state) {
                 eprintln!("xmms-rs: failed to render main-window preview: {err}");
             }
         });
@@ -191,7 +190,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let drawing_area = drawing_area.clone();
         let main_state = Rc::clone(&main_state);
         click.connect_pressed(move |_gesture, _n_press, x, y| {
-            let (x, y) = event_to_base_coords(&drawing_area, x, y);
+            let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             main_state.borrow_mut().press(x, y);
             drawing_area.queue_draw();
         });
@@ -204,7 +203,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
-            let (x, y) = event_to_base_coords(&drawing_area, x, y);
+            let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let action = main_state.borrow_mut().release(x, y);
             apply_ui_action(
                 action,
@@ -215,6 +214,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
                 &main_state,
             );
             sync_panel_windows(&panel_windows, &main_state.borrow());
+            resize_main_window(&window, &drawing_area, &main_state.borrow());
             drawing_area.queue_draw();
         });
     }
@@ -226,7 +226,7 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let drawing_area = drawing_area.clone();
         let main_state = Rc::clone(&main_state);
         motion.connect_motion(move |_motion, x, y| {
-            let (x, y) = event_to_base_coords(&drawing_area, x, y);
+            let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             if main_state.borrow_mut().motion(x, y) {
                 drawing_area.queue_draw();
             }
@@ -560,6 +560,7 @@ fn handle_keyboard_shortcut(
             );
         }
     }
+    resize_main_window(window, drawing_area, &main_state.borrow());
     drawing_area.queue_draw();
 }
 
@@ -602,13 +603,87 @@ fn resize_main_window(
     drawing_area: &gtk::DrawingArea,
     state: &MainWindowUiState,
 ) {
-    let height = if state.shaded {
-        MAIN_TITLEBAR_HEIGHT
-    } else {
-        MAIN_WINDOW_HEIGHT
-    };
+    let (width, height) = state.docked_panel_size();
+    drawing_area.set_content_width(width * DEFAULT_SCALE);
     drawing_area.set_content_height(height * DEFAULT_SCALE);
-    window.set_default_size(MAIN_WINDOW_WIDTH * DEFAULT_SCALE, height * DEFAULT_SCALE);
+    window.set_default_size(width * DEFAULT_SCALE, height * DEFAULT_SCALE);
+}
+
+fn render_docked_ui_state(
+    cr: &gtk::cairo::Context,
+    skin: &DefaultSkin,
+    state: &MainWindowUiState,
+) -> Result<bool, crate::render::RenderError> {
+    let mut y = 0;
+    let mut rendered = render_main_player_state(cr, skin, &state.render_state())?;
+    y += main_window_height(state.shaded);
+
+    if state.app_state.config.equalizer_visible && !state.app_state.config.equalizer_detached {
+        cr.save()?;
+        cr.translate(0.0, f64::from(y));
+        rendered |= render_equalizer_state(cr, skin, &state.equalizer_render_state())?;
+        cr.restore()?;
+        y += equalizer_window_height(state.equalizer_shaded);
+    }
+
+    if state.app_state.config.playlist_visible && !state.app_state.config.playlist_detached {
+        cr.save()?;
+        cr.translate(0.0, f64::from(y));
+        rendered |= render_playlist_frame(
+            cr,
+            skin,
+            state.playlist_focused || state.playlist_dragging_title,
+            state.playlist_shaded,
+            state.playlist_width,
+            state.playlist_height,
+        )?;
+        if !state.playlist_shaded {
+            let current = state.app_state.playlist.position();
+            let rows = state
+                .app_state
+                .playlist
+                .entries()
+                .iter()
+                .enumerate()
+                .map(|(index, entry)| PlaylistRowRenderEntry {
+                    title: entry.title.clone(),
+                    length_ms: entry.length_ms,
+                    selected: entry.selected,
+                    current: current == Some(index),
+                })
+                .collect();
+            let row_state = PlaylistRowsRenderState {
+                entries: rows,
+                scroll_offset: state.playlist_scroll_offset,
+                scrollbar_dragging: state.playlist_scrollbar_dragging,
+                search_query: state
+                    .playlist_search_active
+                    .then(|| state.playlist_search_query.clone()),
+                show_numbers: state.app_state.config.show_numbers_in_pl,
+                width: state.playlist_width,
+                height: state.playlist_height,
+            };
+            rendered |= render_playlist_rows(cr, skin, &row_state)?;
+        }
+        if let Some(menu) = state.playlist_menu() {
+            let (x, y, _, _) =
+                playlist_menu_rect(menu, state.playlist_width, state.playlist_height);
+            cr.save()?;
+            cr.translate(f64::from(x), f64::from(y));
+            rendered |= render_playlist_menu(
+                cr,
+                skin,
+                PlaylistMenuRenderState {
+                    kind: menu.render_kind(),
+                    hover: state.playlist_menu_hover(),
+                },
+            )?;
+            cr.restore()?;
+        }
+        cr.restore()?;
+    }
+
+    Ok(rendered)
 }
 
 fn build_main_menu_popover(
@@ -762,6 +837,7 @@ impl PanelWindows {
         let preferences = build_preferences_window(
             app,
             main_state,
+            parent_window,
             main_area,
             &equalizer,
             &equalizer_area,
@@ -1250,6 +1326,7 @@ fn build_equalizer_presets_popover(
 fn build_preferences_window(
     app: &gtk::Application,
     main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_window: &gtk::ApplicationWindow,
     main_area: &gtk::DrawingArea,
     equalizer_window: &gtk::ApplicationWindow,
     equalizer_area: &gtk::DrawingArea,
@@ -1273,6 +1350,7 @@ fn build_preferences_window(
     notebook.set_vexpand(true);
     let preferences_changed: PreferencesChanged = Rc::new({
         let main_state = Rc::clone(main_state);
+        let main_window = main_window.clone();
         let main_area = main_area.clone();
         let equalizer_window = equalizer_window.clone();
         let equalizer_area = equalizer_area.clone();
@@ -1291,6 +1369,7 @@ fn build_preferences_window(
                 &playlist_area,
                 &main_state,
             );
+            resize_main_window(&main_window, &main_area, &main_state.borrow());
             main_area.queue_draw();
         }
     });
@@ -5238,16 +5317,17 @@ fn eq_shaded_position_to_balance(position: i32) -> i32 {
     (((position - 19) * 100 + if position >= 19 { 9 } else { -9 }) / 19).clamp(-100, 100)
 }
 
-fn event_to_base_coords(area: &gtk::DrawingArea, x: f64, y: f64) -> (i32, i32) {
+fn event_to_base_coords(
+    area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+    x: f64,
+    y: f64,
+) -> (i32, i32) {
     let width = area.allocated_width().max(1) as f64;
     let height = area.allocated_height().max(1) as f64;
-    let base_height = if height <= f64::from(MAIN_TITLEBAR_HEIGHT * DEFAULT_SCALE) {
-        MAIN_TITLEBAR_HEIGHT
-    } else {
-        MAIN_WINDOW_HEIGHT
-    };
+    let (base_width, base_height) = state.docked_panel_size();
     (
-        (x / (width / f64::from(MAIN_WINDOW_WIDTH))) as i32,
+        (x / (width / f64::from(base_width))) as i32,
         (y / (height / f64::from(base_height))) as i32,
     )
 }

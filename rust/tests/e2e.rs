@@ -2160,6 +2160,20 @@ fn startup_settings_can_open_equalizer_and_playlist() {
 }
 
 #[test]
+fn startup_settings_show_docked_equalizer_and_playlist_in_main_window_stack() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_equalizer_visible(true),
+    );
+
+    app.assert_window_visible(Window::Player)
+        .assert_window_hidden(Window::Equalizer)
+        .assert_window_hidden(Window::Playlist)
+        .assert_docked_panel_size((275, 464));
+}
+
+#[test]
 fn podcast_e2e_classifies_feed_and_stream_responses() {
     assert_eq!(
         classify_url_response(Some("application/atom+xml"), false, b""),
