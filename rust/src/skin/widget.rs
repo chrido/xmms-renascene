@@ -218,6 +218,105 @@ impl PushButton {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToggleButtonSources {
+    pub normal_unselected: SkinSource,
+    pub pressed_unselected: SkinSource,
+    pub normal_selected: SkinSource,
+    pub pressed_selected: SkinSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToggleButton {
+    widget: Widget,
+    sources: ToggleButtonSources,
+    selected: bool,
+    pressed: bool,
+    inside: bool,
+}
+
+impl ToggleButton {
+    pub fn new(id: WidgetId, rect: WidgetRect, sources: ToggleButtonSources) -> Self {
+        Self {
+            widget: Widget::new(id, rect),
+            sources,
+            selected: false,
+            pressed: false,
+            inside: false,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn widget_mut(&mut self) -> &mut Widget {
+        &mut self.widget
+    }
+
+    pub fn is_selected(&self) -> bool {
+        self.selected
+    }
+
+    pub fn is_pressed(&self) -> bool {
+        self.pressed
+    }
+
+    pub fn is_inside(&self) -> bool {
+        self.inside
+    }
+
+    pub fn set_selected(&mut self, selected: bool) {
+        if self.selected != selected {
+            self.selected = selected;
+            self.widget.queue_draw();
+        }
+    }
+
+    pub fn current_source(&self) -> SkinSource {
+        match (self.selected, self.pressed && self.inside) {
+            (true, true) => self.sources.pressed_selected,
+            (true, false) => self.sources.normal_selected,
+            (false, true) => self.sources.pressed_unselected,
+            (false, false) => self.sources.normal_unselected,
+        }
+    }
+
+    pub fn press(&mut self, button: u32) {
+        if button != 1 {
+            return;
+        }
+        self.pressed = true;
+        self.inside = true;
+        self.widget.queue_draw();
+    }
+
+    pub fn release(&mut self, button: u32) -> Option<bool> {
+        if button != 1 {
+            return None;
+        }
+        let activated = self.pressed && self.inside;
+        if activated {
+            self.selected = !self.selected;
+        }
+        self.pressed = false;
+        self.widget.queue_draw();
+
+        activated.then_some(self.selected)
+    }
+
+    pub fn motion(&mut self, x: i32, y: i32) {
+        if !self.pressed {
+            return;
+        }
+        let was_inside = self.inside;
+        self.inside = self.widget.rect().contains(x, y);
+        if was_inside != self.inside {
+            self.widget.queue_draw();
+        }
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -452,5 +551,85 @@ mod tests {
         assert!(!button.allow_draw());
         assert!(button.widget().needs_redraw());
         assert_eq!(button.current_source(), None);
+    }
+
+    #[test]
+    fn toggle_button_toggles_on_left_release_inside() {
+        let sources = ToggleButtonSources {
+            normal_unselected: SkinSource {
+                kind: SkinPixmapKind::ShufRep,
+                x: 0,
+                y: 0,
+            },
+            pressed_unselected: SkinSource {
+                kind: SkinPixmapKind::ShufRep,
+                x: 0,
+                y: 15,
+            },
+            normal_selected: SkinSource {
+                kind: SkinPixmapKind::ShufRep,
+                x: 28,
+                y: 0,
+            },
+            pressed_selected: SkinSource {
+                kind: SkinPixmapKind::ShufRep,
+                x: 28,
+                y: 15,
+            },
+        };
+        let mut button = ToggleButton::new(
+            WidgetId(2),
+            WidgetRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+            sources,
+        );
+
+        assert_eq!(button.current_source(), sources.normal_unselected);
+        button.press(1);
+        assert_eq!(button.current_source(), sources.pressed_unselected);
+        assert_eq!(button.release(1), Some(true));
+        assert!(button.is_selected());
+        assert_eq!(button.current_source(), sources.normal_selected);
+
+        button.press(1);
+        assert_eq!(button.current_source(), sources.pressed_selected);
+        assert_eq!(button.release(1), Some(false));
+        assert!(!button.is_selected());
+    }
+
+    #[test]
+    fn toggle_button_release_outside_does_not_toggle() {
+        let source = SkinSource {
+            kind: SkinPixmapKind::ShufRep,
+            x: 0,
+            y: 0,
+        };
+        let sources = ToggleButtonSources {
+            normal_unselected: source,
+            pressed_unselected: source,
+            normal_selected: source,
+            pressed_selected: source,
+        };
+        let mut button = ToggleButton::new(
+            WidgetId(2),
+            WidgetRect {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            },
+            sources,
+        );
+
+        button.press(1);
+        button.motion(12, 12);
+        assert_eq!(button.release(1), None);
+        assert!(!button.is_selected());
+        button.set_selected(true);
+        assert!(button.is_selected());
     }
 }
