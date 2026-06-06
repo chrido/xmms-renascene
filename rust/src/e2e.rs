@@ -10,7 +10,7 @@ use crate::skin::widget::{
 };
 use crate::ui::{
     MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind,
-    PlaylistSortAction, UiAction,
+    PlaylistSortAction, PreferencesPage, UiAction,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -889,6 +889,179 @@ impl UiE2e {
 
     pub fn assert_docked_panel_size(&mut self, expected: (i32, i32)) -> &mut Self {
         assert_eq!(self.state.docked_panel_size(), expected);
+        self
+    }
+
+    pub fn open_preferences_page(&mut self, page: PreferencesPage) -> &mut Self {
+        self.state.set_preferences_visible(true);
+        self.state.set_preferences_page(page);
+        self.sync_windows();
+        self
+    }
+
+    pub fn assert_preferences_page(&mut self, expected: PreferencesPage) -> &mut Self {
+        assert_eq!(self.state.preferences_page(), expected);
+        self
+    }
+
+    pub fn assert_preferences_saved(&mut self) -> &mut Self {
+        assert!(self.state.preferences_saved());
+        self
+    }
+
+    pub fn reset_preferences_to_defaults(&mut self) -> &mut Self {
+        self.state.reset_preferences_to_defaults();
+        self.sync_windows();
+        self
+    }
+
+    pub fn set_preference_output_device(&mut self, device: Option<&str>) -> &mut Self {
+        self.state
+            .set_preference_output_device(device.map(ToString::to_string));
+        self
+    }
+
+    pub fn assert_preference_output_device(&mut self, expected: Option<&str>) -> &mut Self {
+        assert_eq!(self.state.preference_output_device(), expected);
+        self
+    }
+
+    pub fn set_preference_volume(&mut self, volume: i32) -> &mut Self {
+        self.state.set_preference_volume(volume);
+        self
+    }
+
+    pub fn set_preference_balance(&mut self, balance: i32) -> &mut Self {
+        self.state.set_preference_balance(balance);
+        self
+    }
+
+    pub fn set_preference_repeat(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_repeat(enabled);
+        self
+    }
+
+    pub fn set_preference_shuffle(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_shuffle(enabled);
+        self
+    }
+
+    pub fn set_preference_no_playlist_advance(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_no_playlist_advance(enabled);
+        self
+    }
+
+    pub fn assert_no_playlist_advance(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_no_playlist_advance(), expected);
+        self
+    }
+
+    pub fn set_preference_timer_remaining(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_timer_remaining(enabled);
+        self
+    }
+
+    pub fn assert_preference_timer_remaining(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_timer_remaining(), expected);
+        self
+    }
+
+    pub fn set_preference_playlist_docked(&mut self, docked: bool) -> &mut Self {
+        self.state.set_preference_playlist_docked(docked);
+        self.sync_windows();
+        self
+    }
+
+    pub fn set_preference_equalizer_docked(&mut self, docked: bool) -> &mut Self {
+        self.state.set_preference_equalizer_docked(docked);
+        self.sync_windows();
+        self
+    }
+
+    pub fn set_preference_convert_underscore(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_convert_underscore(enabled);
+        self
+    }
+
+    pub fn assert_preference_convert_underscore(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_convert_underscore(), expected);
+        self
+    }
+
+    pub fn set_preference_convert_twenty(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_convert_twenty(enabled);
+        self
+    }
+
+    pub fn assert_preference_convert_twenty(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_convert_twenty(), expected);
+        self
+    }
+
+    pub fn set_preference_show_numbers_in_playlist(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_show_numbers_in_playlist(enabled);
+        self
+    }
+
+    pub fn assert_preference_show_numbers_in_playlist(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_show_numbers_in_playlist(), expected);
+        self
+    }
+
+    pub fn set_preference_playlist_font(&mut self, font: &str) -> &mut Self {
+        self.state.set_preference_playlist_font(font);
+        self
+    }
+
+    pub fn assert_preference_playlist_font(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.preference_playlist_font(), expected);
+        self
+    }
+
+    pub fn set_preference_mainwin_font(&mut self, font: &str) -> &mut Self {
+        self.state.set_preference_mainwin_font(font);
+        self
+    }
+
+    pub fn assert_preference_mainwin_font(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.preference_mainwin_font(), expected);
+        self
+    }
+
+    pub fn set_preference_title_format(&mut self, format: &str) -> &mut Self {
+        self.state.set_preference_title_format(format);
+        self
+    }
+
+    pub fn assert_preference_title_format(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.preference_title_format(), expected);
+        self
+    }
+
+    pub fn set_preference_podcast_cache_ttl_days(&mut self, days: i32) -> &mut Self {
+        self.state.set_preference_podcast_cache_ttl_days(days);
+        self
+    }
+
+    pub fn assert_preference_podcast_cache_ttl_days(&mut self, expected: i32) -> &mut Self {
+        assert_eq!(self.state.preference_podcast_cache_ttl_days(), expected);
+        self
+    }
+
+    pub fn set_preference_podcast_refresh_interval_minutes(&mut self, minutes: i32) -> &mut Self {
+        self.state
+            .set_preference_podcast_refresh_interval_minutes(minutes);
+        self
+    }
+
+    pub fn assert_preference_podcast_refresh_interval_minutes(
+        &mut self,
+        expected: i32,
+    ) -> &mut Self {
+        assert_eq!(
+            self.state.preference_podcast_refresh_interval_minutes(),
+            expected
+        );
         self
     }
 

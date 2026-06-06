@@ -12,7 +12,7 @@ use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
 use xmms_resuscitated::ui::{
-    PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction,
+    PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
 };
 
 #[test]
@@ -907,6 +907,116 @@ fn visualization_refresh_divisor_throttles_data_ticks_from_rust_e2e() {
         .assert_visualization_band_at_least(4, 0.9)
         .set_visualization_refresh_divisor(8)
         .assert_visualization_refresh_divisor(8);
+}
+
+#[test]
+fn preferences_audio_page_applies_output_volume_and_balance_immediately() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_preferences_page(PreferencesPage::Audio)
+        .assert_window_visible(Window::Preferences)
+        .assert_preferences_page(PreferencesPage::Audio)
+        .set_preference_output_device(Some("fakesink"))
+        .assert_preference_output_device(Some("fakesink"))
+        .set_preference_volume(35)
+        .assert_volume(35)
+        .set_preference_balance(-40)
+        .assert_balance(-40)
+        .assert_preferences_saved();
+}
+
+#[test]
+fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    );
+
+    app.open_preferences_page(PreferencesPage::Options)
+        .assert_preferences_page(PreferencesPage::Options)
+        .set_preference_repeat(true)
+        .assert_repeat(true)
+        .set_preference_shuffle(true)
+        .assert_shuffle(true)
+        .set_preference_no_playlist_advance(true)
+        .assert_no_playlist_advance(true)
+        .set_preference_timer_remaining(true)
+        .assert_preference_timer_remaining(true)
+        .set_preference_playlist_docked(false)
+        .assert_panel_detached(PanelKind::Playlist, true)
+        .set_preference_equalizer_docked(false)
+        .assert_panel_detached(PanelKind::Equalizer, true)
+        .set_preference_convert_underscore(false)
+        .assert_preference_convert_underscore(false)
+        .set_preference_convert_twenty(false)
+        .assert_preference_convert_twenty(false)
+        .set_preference_show_numbers_in_playlist(false)
+        .assert_preference_show_numbers_in_playlist(false)
+        .assert_preferences_saved();
+}
+
+#[test]
+fn preferences_font_and_title_pages_apply_text_controls_immediately() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_preferences_page(PreferencesPage::Fonts)
+        .set_preference_playlist_font("Monospace")
+        .assert_preference_playlist_font("Monospace")
+        .set_preference_playlist_font("")
+        .assert_preference_playlist_font("Helvetica")
+        .set_preference_mainwin_font("")
+        .assert_preference_mainwin_font("Skin bitmap font")
+        .open_preferences_page(PreferencesPage::Title)
+        .set_preference_title_format("%p/%t")
+        .assert_preference_title_format("%p/%t")
+        .set_preference_title_format("")
+        .assert_preference_title_format("%p - %t")
+        .assert_preferences_saved();
+}
+
+#[test]
+fn preferences_visualization_page_applies_controls_immediately() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_preferences_page(PreferencesPage::Visualization)
+        .set_visualization_mode(VisMode::Scope)
+        .assert_visualization_mode(VisMode::Scope)
+        .set_visualization_scope_mode(VisScopeMode::Dot)
+        .assert_visualization_scope_mode(VisScopeMode::Dot)
+        .set_visualization_mode(VisMode::Analyzer)
+        .set_visualization_analyzer_mode(VisAnalyzerMode::Fire)
+        .assert_visualization_analyzer_mode(VisAnalyzerMode::Fire)
+        .set_visualization_analyzer_style(VisAnalyzerStyle::Lines)
+        .assert_visualization_analyzer_style(VisAnalyzerStyle::Lines)
+        .set_visualization_peaks_enabled(false)
+        .assert_visualization_peaks_enabled(false)
+        .set_visualization_falloff(VisFalloffSpeed::Slowest, VisFalloffSpeed::Fastest)
+        .set_visualization_vu_mode(VisVuMode::Smooth)
+        .assert_visualization_vu_mode(VisVuMode::Smooth)
+        .set_visualization_refresh_divisor(4)
+        .assert_visualization_refresh_divisor(4)
+        .assert_preferences_saved();
+}
+
+#[test]
+fn preferences_podcast_controls_apply_and_reset_defaults() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_preferences_page(PreferencesPage::Options)
+        .set_preference_podcast_cache_ttl_days(14)
+        .assert_preference_podcast_cache_ttl_days(14)
+        .set_preference_podcast_refresh_interval_minutes(120)
+        .assert_preference_podcast_refresh_interval_minutes(120)
+        .set_preference_podcast_cache_ttl_days(0)
+        .assert_preference_podcast_cache_ttl_days(60)
+        .reset_preferences_to_defaults()
+        .assert_volume(100)
+        .assert_balance(0)
+        .assert_repeat(false)
+        .assert_shuffle(false)
+        .assert_preference_title_format("%p - %t")
+        .assert_preferences_saved();
 }
 
 #[test]

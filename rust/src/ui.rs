@@ -6,6 +6,7 @@ use std::time::Duration;
 use gtk::prelude::*;
 
 use crate::app_state::AppState;
+use crate::config::{Config, TimerMode};
 use crate::player::{equalizer_position_to_db, PlayerState};
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
@@ -261,6 +262,16 @@ enum MainKeyboardShortcut {
     ToggleEqualizer,
     ShadePlaylist,
     ShadeEqualizer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreferencesPage {
+    Audio,
+    Plugins,
+    Visualization,
+    Options,
+    Fonts,
+    Title,
 }
 
 fn keyboard_shortcut_from_event(
@@ -1073,15 +1084,105 @@ fn build_preferences_window(
     app: &gtk::Application,
     main_state: &Rc<RefCell<MainWindowUiState>>,
 ) -> gtk::ApplicationWindow {
-    build_placeholder_window(
-        app,
-        main_state,
-        "Preferences",
-        560,
-        520,
-        "Preferences UI placeholder for the Rust port",
-        MainWindowUiState::set_preferences_visible,
-    )
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title("Preferences")
+        .default_width(560)
+        .default_height(520)
+        .build();
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.set_margin_top(10);
+    root.set_margin_bottom(10);
+    root.set_margin_start(10);
+    root.set_margin_end(10);
+
+    let notebook = gtk::Notebook::new();
+    notebook.set_vexpand(true);
+    for (page, label, body) in [
+        (
+            PreferencesPage::Audio,
+            "Audio I/O Plugins",
+            "GStreamer input support and output device selection are wired through the Rust preferences model.",
+        ),
+        (
+            PreferencesPage::Plugins,
+            "Effect/General Plugins",
+            "Built-in equalizer, MPRIS, and service integrations are configured by the Rust port.",
+        ),
+        (
+            PreferencesPage::Visualization,
+            "Visualization Plugins",
+            "Visualization mode, analyzer, scope, peaks, VU, and refresh settings apply immediately.",
+        ),
+        (
+            PreferencesPage::Options,
+            "Options",
+            "Playback, playlist, docking, title conversion, and podcast options apply immediately.",
+        ),
+        (
+            PreferencesPage::Fonts,
+            "Fonts",
+            "Playlist font family and main-window font compatibility settings are preserved.",
+        ),
+        (
+            PreferencesPage::Title,
+            "Title",
+            "Title format compatibility settings are preserved and normalized.",
+        ),
+    ] {
+        let page_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        page_box.set_margin_top(8);
+        page_box.set_margin_bottom(8);
+        page_box.set_margin_start(8);
+        page_box.set_margin_end(8);
+        let text = gtk::Label::new(Some(body));
+        text.set_xalign(0.0);
+        text.set_wrap(true);
+        page_box.append(&text);
+        notebook.append_page(&page_box, Some(&gtk::Label::new(Some(label))));
+        if page == PreferencesPage::Options {
+            notebook.set_current_page(Some(3));
+        }
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        notebook.connect_switch_page(move |_notebook, _page_widget, page_num| {
+            let page = match page_num {
+                0 => PreferencesPage::Audio,
+                1 => PreferencesPage::Plugins,
+                2 => PreferencesPage::Visualization,
+                3 => PreferencesPage::Options,
+                4 => PreferencesPage::Fonts,
+                _ => PreferencesPage::Title,
+            };
+            main_state.borrow_mut().set_preferences_page(page);
+        });
+    }
+    root.append(&notebook);
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    buttons.set_halign(gtk::Align::End);
+    let reset = gtk::Button::with_label("Reset to Defaults");
+    {
+        let main_state = Rc::clone(main_state);
+        reset.connect_clicked(move |_| {
+            main_state.borrow_mut().reset_preferences_to_defaults();
+        });
+    }
+    buttons.append(&reset);
+    root.append(&buttons);
+    window.set_child(Some(&root));
+
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_close_request(move |window| {
+            main_state.borrow_mut().set_preferences_visible(false);
+            window.hide();
+            gtk::glib::Propagation::Stop
+        });
+    }
+
+    window
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1700,6 +1801,8 @@ pub(crate) struct MainWindowUiState {
     last_playlist_file_info: Option<String>,
     playlist_options_opened: bool,
     preferences_visible: bool,
+    preferences_page: PreferencesPage,
+    preferences_saved: bool,
     open_location_visible: bool,
     jump_time_visible: bool,
     skin_browser_visible: bool,
@@ -1756,6 +1859,8 @@ impl MainWindowUiState {
             last_playlist_file_info: None,
             playlist_options_opened: false,
             preferences_visible: false,
+            preferences_page: PreferencesPage::Options,
+            preferences_saved: false,
             open_location_visible: false,
             jump_time_visible: false,
             skin_browser_visible: false,
@@ -1931,6 +2036,33 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
         self.preferences_visible = visible;
+    }
+
+    pub(crate) fn preferences_page(&self) -> PreferencesPage {
+        self.preferences_page
+    }
+
+    pub(crate) fn set_preferences_page(&mut self, page: PreferencesPage) {
+        self.preferences_page = page;
+    }
+
+    pub(crate) fn preferences_saved(&self) -> bool {
+        self.preferences_saved
+    }
+
+    fn mark_preferences_saved(&mut self) {
+        self.preferences_saved = true;
+    }
+
+    pub(crate) fn reset_preferences_to_defaults(&mut self) {
+        self.app_state.config = Config::default();
+        self.app_state.apply_config_to_runtime();
+        self.equalizer_active = self.app_state.config.equalizer_active;
+        self.equalizer_automatic = self.app_state.config.equalizer_auto;
+        self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
+        self.equalizer_band_positions = self.app_state.config.equalizer_band_pos;
+        self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn is_open_location_visible(&self) -> bool {
@@ -2842,9 +2974,163 @@ impl MainWindowUiState {
         self.position_position
     }
 
+    pub(crate) fn set_preference_output_device(&mut self, device: Option<String>) {
+        self.app_state.config.output_device = device;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_output_device(&self) -> Option<&str> {
+        self.app_state.config.output_device.as_deref()
+    }
+
+    pub(crate) fn set_preference_volume(&mut self, volume: i32) {
+        let volume = volume.clamp(0, 100);
+        self.app_state.config.volume = volume;
+        self.app_state.player.set_volume(volume);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_balance(&mut self, balance: i32) {
+        let balance = balance.clamp(-100, 100);
+        self.app_state.config.balance = balance;
+        self.app_state.player.set_balance(balance);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_repeat(&mut self, enabled: bool) {
+        self.app_state.config.repeat = enabled;
+        self.app_state.playlist.set_repeat(enabled);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_shuffle(&mut self, enabled: bool) {
+        self.app_state.config.shuffle = enabled;
+        self.app_state.playlist.set_shuffle(enabled);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_no_playlist_advance(&mut self, enabled: bool) {
+        self.app_state.config.no_playlist_advance = enabled;
+        self.app_state.playlist.set_no_advance(enabled);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_no_playlist_advance(&self) -> bool {
+        self.app_state.playlist.no_advance()
+    }
+
+    pub(crate) fn set_preference_timer_remaining(&mut self, enabled: bool) {
+        self.app_state.config.timer_mode = if enabled {
+            TimerMode::Remaining
+        } else {
+            TimerMode::Elapsed
+        };
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_timer_remaining(&self) -> bool {
+        self.app_state.config.timer_mode == TimerMode::Remaining
+    }
+
+    pub(crate) fn set_preference_playlist_docked(&mut self, docked: bool) {
+        self.app_state.config.playlist_detached = !docked;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_equalizer_docked(&mut self, docked: bool) {
+        self.app_state.config.equalizer_detached = !docked;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn set_preference_convert_underscore(&mut self, enabled: bool) {
+        self.app_state.config.convert_underscore = enabled;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_convert_underscore(&self) -> bool {
+        self.app_state.config.convert_underscore
+    }
+
+    pub(crate) fn set_preference_convert_twenty(&mut self, enabled: bool) {
+        self.app_state.config.convert_twenty = enabled;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_convert_twenty(&self) -> bool {
+        self.app_state.config.convert_twenty
+    }
+
+    pub(crate) fn set_preference_show_numbers_in_playlist(&mut self, enabled: bool) {
+        self.app_state.config.show_numbers_in_pl = enabled;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_show_numbers_in_playlist(&self) -> bool {
+        self.app_state.config.show_numbers_in_pl
+    }
+
+    pub(crate) fn set_preference_playlist_font(&mut self, font: &str) {
+        self.app_state.config.playlist_font = if font.trim().is_empty() {
+            "Helvetica".to_string()
+        } else {
+            font.trim().to_string()
+        };
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_playlist_font(&self) -> &str {
+        &self.app_state.config.playlist_font
+    }
+
+    pub(crate) fn set_preference_mainwin_font(&mut self, font: &str) {
+        self.app_state.config.mainwin_font = if font.trim().is_empty() {
+            "Skin bitmap font".to_string()
+        } else {
+            font.trim().to_string()
+        };
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_mainwin_font(&self) -> &str {
+        &self.app_state.config.mainwin_font
+    }
+
+    pub(crate) fn set_preference_title_format(&mut self, format: &str) {
+        self.app_state.config.title_format = if format.trim().is_empty() {
+            "%p - %t".to_string()
+        } else {
+            format.trim().to_string()
+        };
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_title_format(&self) -> &str {
+        &self.app_state.config.title_format
+    }
+
+    pub(crate) fn set_preference_podcast_cache_ttl_days(&mut self, days: i32) {
+        self.app_state.config.podcast_cache_ttl_days = if days < 1 { 60 } else { days };
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_podcast_cache_ttl_days(&self) -> i32 {
+        self.app_state.config.podcast_cache_ttl_days
+    }
+
+    pub(crate) fn set_preference_podcast_refresh_interval_minutes(&mut self, minutes: i32) {
+        self.app_state.config.podcast_refresh_interval_minutes =
+            if minutes < 1 { 60 } else { minutes };
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_podcast_refresh_interval_minutes(&self) -> i32 {
+        self.app_state.config.podcast_refresh_interval_minutes
+    }
+
     pub(crate) fn set_visualization_mode(&mut self, mode: VisMode) {
         self.app_state.config.vis_mode = mode;
         self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_mode(&self) -> VisMode {
@@ -2854,6 +3140,7 @@ impl MainWindowUiState {
     pub(crate) fn set_visualization_analyzer_style(&mut self, style: VisAnalyzerStyle) {
         self.app_state.config.vis_analyzer_style = style;
         self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_analyzer_style(&self) -> VisAnalyzerStyle {
@@ -2863,6 +3150,7 @@ impl MainWindowUiState {
     pub(crate) fn set_visualization_analyzer_mode(&mut self, mode: VisAnalyzerMode) {
         self.app_state.config.vis_analyzer_mode = mode;
         self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_analyzer_mode(&self) -> VisAnalyzerMode {
@@ -2872,6 +3160,7 @@ impl MainWindowUiState {
     pub(crate) fn set_visualization_scope_mode(&mut self, mode: VisScopeMode) {
         self.app_state.config.vis_scope_mode = mode;
         self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_scope_mode(&self) -> VisScopeMode {
@@ -2881,6 +3170,7 @@ impl MainWindowUiState {
     pub(crate) fn set_visualization_peaks_enabled(&mut self, enabled: bool) {
         self.app_state.config.vis_peaks_enabled = enabled;
         self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_peaks_enabled(&self) -> bool {
@@ -2895,10 +3185,12 @@ impl MainWindowUiState {
         self.app_state.config.vis_analyzer_falloff = analyzer;
         self.app_state.config.vis_peaks_falloff = peaks;
         self.apply_visualization_preferences();
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_visualization_vu_mode(&mut self, mode: VisVuMode) {
         self.app_state.config.vis_vu_mode = mode;
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_vu_mode(&self) -> VisVuMode {
@@ -2907,6 +3199,7 @@ impl MainWindowUiState {
 
     pub(crate) fn set_visualization_refresh_divisor(&mut self, divisor: i32) {
         self.app_state.config.vis_refresh_divisor = divisor.clamp(1, 8);
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn visualization_refresh_divisor(&self) -> i32 {
