@@ -238,7 +238,7 @@ fn build_preview_window(
     {
         let drawing_area = drawing_area.clone();
         let main_state = Rc::clone(&main_state);
-        click.connect_pressed(move |_gesture, _n_press, x, y| {
+        click.connect_pressed(move |_gesture, n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
@@ -249,6 +249,14 @@ fn build_preview_window(
                         }
                     }
                     PanelKind::Playlist => {
+                        if n_press >= 2
+                            && main_state
+                                .borrow_mut()
+                                .activate_playlist_entry_at(panel_x, panel_y)
+                        {
+                            drawing_area.queue_draw();
+                            return;
+                        }
                         let pressed = main_state.borrow_mut().playlist_press(panel_x, panel_y)
                             || main_state
                                 .borrow_mut()
@@ -2631,7 +2639,7 @@ fn add_panel_click_controller(
         let area = area.clone();
         let window = window.clone();
         let main_state = Rc::clone(&main_state);
-        click.connect_pressed(move |gesture, _n_press, x, y| {
+        click.connect_pressed(move |gesture, n_press, x, y| {
             area.grab_focus();
             let (base_x, base_y) =
                 panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
@@ -2644,6 +2652,14 @@ fn add_panel_click_controller(
                 {
                     area.queue_draw();
                 } else if kind == PanelKind::Playlist {
+                    if n_press >= 2
+                        && main_state
+                            .borrow_mut()
+                            .activate_playlist_entry_at(base_x, base_y)
+                    {
+                        area.queue_draw();
+                        return;
+                    }
                     if main_state.borrow_mut().playlist_press(base_x, base_y) {
                         area.queue_draw();
                         return;
@@ -4730,6 +4746,20 @@ impl MainWindowUiState {
         };
         self.select_single_playlist_entry(index);
         self.playlist_drag_index = Some(index);
+        true
+    }
+
+    pub(crate) fn activate_playlist_entry_at(&mut self, x: i32, y: i32) -> bool {
+        if self.playlist_menu.is_some() {
+            return false;
+        }
+        let Some(index) = self.playlist_entry_at(x, y) else {
+            return false;
+        };
+        self.select_single_playlist_entry(index);
+        self.playlist_drag_index = None;
+        self.app_state.playlist.set_position(index);
+        self.start_current_playlist_playback();
         true
     }
 

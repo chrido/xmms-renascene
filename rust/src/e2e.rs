@@ -505,6 +505,16 @@ impl UiE2e {
         self
     }
 
+    pub fn double_click_playlist_row(&mut self, index: usize) -> &mut Self {
+        let y = self.playlist_row_y(index);
+        assert!(
+            self.state.activate_playlist_entry_at(20, y),
+            "expected playlist row {index} double click to start playback"
+        );
+        self.sync_windows();
+        self
+    }
+
     pub fn drag_playlist_row(&mut self, from: usize, to: usize) -> &mut Self {
         let from_y = self.playlist_row_y(from);
         let to_y = self.playlist_row_y(to);

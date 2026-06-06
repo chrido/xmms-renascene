@@ -839,6 +839,24 @@ fn clicked_playlist_rows_update_single_selection() {
 }
 
 #[test]
+fn double_clicking_playlist_row_starts_that_entry() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist([
+        "file:///music/first.ogg",
+        "file:///music/second.ogg",
+        "file:///music/third.ogg",
+    ])
+    .assert_player_state(PlayerState::Stopped)
+    .double_click_playlist_row(1)
+    .assert_playlist_entry_selected(1, true)
+    .assert_playlist_position(Some(1))
+    .assert_current_playlist_entry("file:///music/second.ogg")
+    .assert_last_playback_request(Some("file:///music/second.ogg"))
+    .assert_player_state(PlayerState::Playing);
+}
+
+#[test]
 fn playlist_sort_e2e_supports_title_and_date_keys() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
