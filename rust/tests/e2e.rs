@@ -340,7 +340,11 @@ fn main_feature_shortcuts_file_info_and_play_first_are_wired() {
 
 #[test]
 fn panel_keyboard_shortcuts_toggle_and_shade_windows() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_detached(true)
+            .with_equalizer_detached(true),
+    );
 
     app.press_shortcut(Shortcut::TogglePlaylist)
         .assert_window_visible(Window::Playlist)
@@ -1314,7 +1318,7 @@ fn volume_balance_and_position_sliders_update_player_values() {
 
 #[test]
 fn playlist_button_opens_and_closes_playlist_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_detached(true));
 
     app.assert_window_visible(Window::Player)
         .assert_window_hidden(Window::Playlist);
@@ -1328,7 +1332,7 @@ fn playlist_button_opens_and_closes_playlist_window() {
 
 #[test]
 fn equalizer_button_opens_and_closes_equalizer_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_detached(true));
 
     app.assert_window_visible(Window::Player)
         .assert_window_hidden(Window::Equalizer);
@@ -1342,7 +1346,7 @@ fn equalizer_button_opens_and_closes_equalizer_window() {
 
 #[test]
 fn equalizer_top_right_buttons_shade_and_close_equalizer_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_detached(true));
 
     app.click(MainTarget::EQUALIZER)
         .assert_window_visible(Window::Equalizer)
@@ -1439,7 +1443,7 @@ fn equalizer_all_bands_expose_c_compatible_gstreamer_db_mapping() {
 
 #[test]
 fn playlist_top_right_buttons_shade_and_close_playlist_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_detached(true));
 
     app.click(MainTarget::PLAYLIST)
         .assert_window_visible(Window::Playlist)
@@ -1659,7 +1663,7 @@ fn preferences_pages_expose_c_parity_controls() {
 #[test]
 fn preferences_options_layout_keeps_zoom_slider_full_width_and_window_tall_enough() {
     assert!(preferences_zoom_spans_full_width());
-    assert_eq!(preferences_window_default_size(), (560, 640));
+    assert_eq!(preferences_window_default_size(), (560, 680));
 }
 
 #[test]
@@ -1711,6 +1715,8 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
 
     app.open_preferences_page(PreferencesPage::Options)
         .assert_preferences_page(PreferencesPage::Options)
+        .assert_window_hidden(Window::Playlist)
+        .assert_window_hidden(Window::Equalizer)
         .set_preference_repeat(true)
         .assert_repeat(true)
         .set_preference_shuffle(true)
@@ -1721,8 +1727,16 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .assert_preference_timer_remaining(true)
         .set_preference_playlist_docked(false)
         .assert_panel_detached(PanelKind::Playlist, true)
+        .assert_window_visible(Window::Playlist)
         .set_preference_equalizer_docked(false)
         .assert_panel_detached(PanelKind::Equalizer, true)
+        .assert_window_visible(Window::Equalizer)
+        .set_preference_playlist_docked(true)
+        .assert_panel_detached(PanelKind::Playlist, false)
+        .assert_window_hidden(Window::Playlist)
+        .set_preference_equalizer_docked(true)
+        .assert_panel_detached(PanelKind::Equalizer, false)
+        .assert_window_hidden(Window::Equalizer)
         .set_preference_convert_underscore(false)
         .assert_preference_convert_underscore(false)
         .set_preference_convert_twenty(false)
@@ -2076,7 +2090,7 @@ fn playlist_can_resize_from_default_dimensions() {
 
 #[test]
 fn playlist_startup_size_opens_playlist_at_requested_dimensions() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_detached(true));
 
     app.start_playlist_size(325, 280)
         .assert_window_visible(Window::Playlist)
@@ -2117,7 +2131,9 @@ fn floating_panel_titlebars_track_active_window_state() {
     let mut app = UiE2e::start_player(
         PlayerSettings::default()
             .with_playlist_visible(true)
-            .with_equalizer_visible(true),
+            .with_equalizer_visible(true)
+            .with_playlist_detached(true)
+            .with_equalizer_detached(true),
     );
 
     app.assert_panel_focused(PanelKind::Playlist, false)
@@ -2133,7 +2149,9 @@ fn startup_settings_can_open_equalizer_and_playlist() {
     let mut app = UiE2e::start_player(
         PlayerSettings::default()
             .with_playlist_visible(true)
-            .with_equalizer_visible(true),
+            .with_equalizer_visible(true)
+            .with_playlist_detached(true)
+            .with_equalizer_detached(true),
     );
 
     app.assert_window_visible(Window::Player)

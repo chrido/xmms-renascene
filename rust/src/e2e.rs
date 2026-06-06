@@ -43,6 +43,16 @@ impl PlayerSettings {
         self
     }
 
+    pub fn with_playlist_detached(mut self, detached: bool) -> Self {
+        self.config.playlist_detached = detached;
+        self
+    }
+
+    pub fn with_equalizer_detached(mut self, detached: bool) -> Self {
+        self.config.equalizer_detached = detached;
+        self
+    }
+
     pub fn with_volume(mut self, volume: i32) -> Self {
         self.config.volume = volume.clamp(0, 100);
         self

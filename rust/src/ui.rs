@@ -35,6 +35,7 @@ use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry};
 use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
+type PreferencesChanged = Rc<dyn Fn()>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
@@ -334,7 +335,7 @@ pub enum PreferencesPage {
 }
 
 pub fn preferences_window_default_size() -> (i32, i32) {
-    (560, 640)
+    (560, 680)
 }
 
 pub fn preferences_zoom_spans_full_width() -> bool {
@@ -752,13 +753,21 @@ impl PanelWindows {
         parent_window: &gtk::ApplicationWindow,
     ) -> Self {
         let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
-        let preferences = build_preferences_window(app, main_state);
         let open_location =
             build_prompt_window(app, parent_window, main_state, PromptKind::OpenLocation);
         let jump_time = build_prompt_window(app, parent_window, main_state, PromptKind::JumpTime);
         let skin_browser = build_skin_browser_window(app, main_state);
         let (playlist, playlist_area) =
             build_playlist_window(app, skin, main_state, main_area, &open_location);
+        let preferences = build_preferences_window(
+            app,
+            main_state,
+            main_area,
+            &equalizer,
+            &equalizer_area,
+            &playlist,
+            &playlist_area,
+        );
         Self {
             equalizer,
             equalizer_area,
@@ -1241,6 +1250,11 @@ fn build_equalizer_presets_popover(
 fn build_preferences_window(
     app: &gtk::Application,
     main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+    equalizer_window: &gtk::ApplicationWindow,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_window: &gtk::ApplicationWindow,
+    playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
     let (default_width, default_height) = preferences_window_default_size();
     let window = gtk::ApplicationWindow::builder()
@@ -1257,11 +1271,35 @@ fn build_preferences_window(
 
     let notebook = gtk::Notebook::new();
     notebook.set_vexpand(true);
+    let preferences_changed: PreferencesChanged = Rc::new({
+        let main_state = Rc::clone(main_state);
+        let main_area = main_area.clone();
+        let equalizer_window = equalizer_window.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_window = playlist_window.clone();
+        let playlist_area = playlist_area.clone();
+        move || {
+            sync_single_panel_window_from_state(
+                PanelKind::Equalizer,
+                &equalizer_window,
+                &equalizer_area,
+                &main_state,
+            );
+            sync_single_panel_window_from_state(
+                PanelKind::Playlist,
+                &playlist_window,
+                &playlist_area,
+                &main_state,
+            );
+            main_area.queue_draw();
+        }
+    });
+
     for (page, label, page_widget) in [
         (
             PreferencesPage::Audio,
             "Audio I/O Plugins",
-            build_preferences_audio_page(main_state),
+            build_preferences_audio_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
         (
             PreferencesPage::Plugins,
@@ -1271,22 +1309,22 @@ fn build_preferences_window(
         (
             PreferencesPage::Visualization,
             "Visualization Plugins",
-            build_preferences_visualization_page(main_state),
+            build_preferences_visualization_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
         (
             PreferencesPage::Options,
             "Options",
-            build_preferences_options_page(main_state),
+            build_preferences_options_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
         (
             PreferencesPage::Fonts,
             "Fonts",
-            build_preferences_fonts_page(main_state),
+            build_preferences_fonts_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
         (
             PreferencesPage::Title,
             "Title",
-            build_preferences_title_page(main_state),
+            build_preferences_title_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
     ] {
         notebook.append_page(&page_widget, Some(&gtk::Label::new(Some(label))));
@@ -1315,8 +1353,10 @@ fn build_preferences_window(
     let reset = gtk::Button::with_label("Reset to Defaults");
     {
         let main_state = Rc::clone(main_state);
+        let preferences_changed = Rc::clone(&preferences_changed);
         reset.connect_clicked(move |_| {
             main_state.borrow_mut().reset_preferences_to_defaults();
+            preferences_changed();
         });
     }
     buttons.append(&reset);
@@ -1388,7 +1428,10 @@ fn prefs_check(label: &str, active: bool) -> gtk::CheckButton {
     check
 }
 
-fn build_preferences_audio_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+fn build_preferences_audio_page(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    on_change: Option<PreferencesChanged>,
+) -> gtk::Box {
     let page = prefs_page_box();
     let input = prefs_frame("Input Plugins", &page);
     input.append(&prefs_label("GStreamer input support (built in)"));
@@ -1416,10 +1459,14 @@ fn build_preferences_audio_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> 
     }
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         output_combo.connect_changed(move |combo| {
             let selected = combo.active_id().map(|id| id.to_string());
             let device = selected.filter(|id| id != "auto");
             main_state.borrow_mut().set_preference_output_device(device);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Output device:", &output_combo, 0);
@@ -1446,7 +1493,10 @@ fn build_preferences_plugins_page() -> gtk::Box {
     page
 }
 
-fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+fn build_preferences_options_page(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    on_change: Option<PreferencesChanged>,
+) -> gtk::Box {
     let page = prefs_page_box();
     let box_ = prefs_frame("Options", &page);
     let grid = prefs_grid();
@@ -1456,10 +1506,14 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
     volume.set_value(main_state.borrow().volume() as f64);
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         volume.connect_value_changed(move |spin| {
             main_state
                 .borrow_mut()
                 .set_preference_volume(spin.value_as_int());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Volume:", &volume, 0);
@@ -1468,10 +1522,14 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
     balance.set_value(main_state.borrow().balance() as f64);
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         balance.connect_value_changed(move |spin| {
             main_state
                 .borrow_mut()
                 .set_preference_balance(spin.value_as_int());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Balance:", &balance, 1);
@@ -1498,10 +1556,14 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
     {
         let main_state = Rc::clone(main_state);
         let zoom_value = zoom_value.clone();
+        let on_change = on_change.clone();
         zoom.connect_value_changed(move |scale| {
             let value = scale.value().clamp(1.0, 5.0);
             zoom_value.set_text(&format!("{value:.1}x"));
             main_state.borrow_mut().set_preference_scale_factor(value);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     grid.attach(&prefs_label("Zoom level:"), 0, 2, 2, 1);
@@ -1511,10 +1573,14 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
     ttl.set_value(main_state.borrow().preference_podcast_cache_ttl_days() as f64);
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         ttl.connect_value_changed(move |spin| {
             main_state
                 .borrow_mut()
                 .set_preference_podcast_cache_ttl_days(spin.value_as_int());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Podcast cache TTL (days):", &ttl, 4);
@@ -1527,10 +1593,14 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
     );
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         refresh.connect_value_changed(move |spin| {
             main_state
                 .borrow_mut()
                 .set_preference_podcast_refresh_interval_minutes(spin.value_as_int());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Podcast refresh interval (minutes):", &refresh, 5);
@@ -1581,6 +1651,7 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
         let check = prefs_check(label, active);
         {
             let main_state = Rc::clone(main_state);
+            let on_change = on_change.clone();
             check.connect_toggled(move |check| {
                 let mut state = main_state.borrow_mut();
                 match action {
@@ -1608,6 +1679,10 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
                         state.set_preference_show_numbers_in_playlist(check.is_active())
                     }
                 }
+                drop(state);
+                if let Some(on_change) = &on_change {
+                    on_change();
+                }
             });
         }
         grid.attach(&check, (index % 2) as i32, 6 + (index / 2) as i32, 1, 1);
@@ -1628,7 +1703,10 @@ enum PreferenceCheck {
     ShowNumbers,
 }
 
-fn build_preferences_fonts_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+fn build_preferences_fonts_page(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    on_change: Option<PreferencesChanged>,
+) -> gtk::Box {
     let page = prefs_page_box();
     let playlist = prefs_frame("Playlist", &page);
     let grid = prefs_grid();
@@ -1644,9 +1722,13 @@ fn build_preferences_fonts_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> 
     }
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         playlist_font.connect_changed(move |combo| {
             if let Some(font) = combo.active_id() {
                 main_state.borrow_mut().set_preference_playlist_font(&font);
+                if let Some(on_change) = &on_change {
+                    on_change();
+                }
             }
         });
     }
@@ -1664,15 +1746,22 @@ fn build_preferences_fonts_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> 
     let skin_browser = gtk::Button::with_label("Open Skin Browser");
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         skin_browser.connect_clicked(move |_| {
             main_state.borrow_mut().set_skin_browser_visible(true);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     main.append(&skin_browser);
     page
 }
 
-fn build_preferences_title_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+fn build_preferences_title_page(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    on_change: Option<PreferencesChanged>,
+) -> gtk::Box {
     let page = prefs_page_box();
     let box_ = prefs_frame("Title", &page);
     let grid = prefs_grid();
@@ -1681,10 +1770,14 @@ fn build_preferences_title_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> 
     title.set_text(main_state.borrow().preference_title_format());
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         title.connect_changed(move |entry| {
             main_state
                 .borrow_mut()
                 .set_preference_title_format(entry.text().as_str());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Title format:", &title, 0);
@@ -1692,7 +1785,10 @@ fn build_preferences_title_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> 
     page
 }
 
-fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiState>>) -> gtk::Box {
+fn build_preferences_visualization_page(
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    on_change: Option<PreferencesChanged>,
+) -> gtk::Box {
     let page = prefs_page_box();
     let box_ = prefs_frame("Visualization", &page);
     let grid = prefs_grid();
@@ -1735,6 +1831,7 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
     ));
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         analyzer_mode.connect_changed(move |combo| {
             let mode = match combo.active_id().as_deref() {
                 Some("fire") => VisAnalyzerMode::Fire,
@@ -1744,6 +1841,9 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
             main_state
                 .borrow_mut()
                 .set_visualization_analyzer_mode(mode);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Analyzer mode:", &analyzer_mode, 1);
@@ -1759,6 +1859,7 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
     ));
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         style.connect_changed(move |combo| {
             let style = match combo.active_id().as_deref() {
                 Some("lines") => VisAnalyzerStyle::Lines,
@@ -1767,6 +1868,9 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
             main_state
                 .borrow_mut()
                 .set_visualization_analyzer_style(style);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Analyzer style:", &style, 2);
@@ -1786,6 +1890,7 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
     }));
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         scope.connect_changed(move |combo| {
             let mode = match combo.active_id().as_deref() {
                 Some("dot") => VisScopeMode::Dot,
@@ -1793,6 +1898,9 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
                 _ => VisScopeMode::Line,
             };
             main_state.borrow_mut().set_visualization_scope_mode(mode);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Scope mode:", &scope, 3);
@@ -1808,23 +1916,31 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
     {
         let main_state = Rc::clone(main_state);
         let peaks_falloff = peaks_falloff.clone();
+        let on_change = on_change.clone();
         falloff.connect_changed(move |combo| {
             let analyzer = falloff_from_combo(combo);
             let peaks = falloff_from_combo(&peaks_falloff);
             main_state
                 .borrow_mut()
                 .set_visualization_falloff(analyzer, peaks);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     {
         let main_state = Rc::clone(main_state);
         let falloff = falloff.clone();
+        let on_change = on_change.clone();
         peaks_falloff.connect_changed(move |combo| {
             let analyzer = falloff_from_combo(&falloff);
             let peaks = falloff_from_combo(combo);
             main_state
                 .borrow_mut()
                 .set_visualization_falloff(analyzer, peaks);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Analyzer falloff:", &falloff, 5);
@@ -1839,12 +1955,16 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
     }));
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         vu.connect_changed(move |combo| {
             let mode = match combo.active_id().as_deref() {
                 Some("smooth") => VisVuMode::Smooth,
                 _ => VisVuMode::Normal,
             };
             main_state.borrow_mut().set_visualization_vu_mode(mode);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "WindowShade VU mode:", &vu, 7);
@@ -1868,6 +1988,7 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
     ));
     {
         let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
         refresh.connect_changed(move |combo| {
             let divisor = match combo.active_id().as_deref() {
                 Some("eighth") => 8,
@@ -1878,6 +1999,9 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
             main_state
                 .borrow_mut()
                 .set_visualization_refresh_divisor(divisor);
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     prefs_attach_label(&grid, "Refresh rate:", &refresh, 8);
@@ -1903,6 +2027,7 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
         let peaks_falloff = peaks_falloff.clone();
         let vu = vu.clone();
         let refresh = refresh.clone();
+        let on_change = on_change.clone();
         mode.connect_changed(move |combo| {
             let mode = match combo.active_id().as_deref() {
                 Some("scope") => VisMode::Scope,
@@ -1922,6 +2047,9 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
                 &vu,
                 &refresh,
             );
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     {
@@ -1934,6 +2062,7 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
         let peaks_falloff = peaks_falloff.clone();
         let vu = vu.clone();
         let refresh = refresh.clone();
+        let on_change = on_change.clone();
         peaks.connect_toggled(move |check| {
             main_state
                 .borrow_mut()
@@ -1949,6 +2078,9 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
                 &vu,
                 &refresh,
             );
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
         });
     }
     page
@@ -2503,13 +2635,13 @@ fn sync_single_panel_window_from_state(
 fn panel_window_values(kind: PanelKind, state: &MainWindowUiState) -> (bool, bool, i32, i32) {
     match kind {
         PanelKind::Equalizer => (
-            state.app_state.config.equalizer_visible,
+            state.app_state.config.equalizer_visible && state.app_state.config.equalizer_detached,
             state.equalizer_shaded,
             EQUALIZER_WINDOW_WIDTH,
             EQUALIZER_WINDOW_HEIGHT,
         ),
         PanelKind::Playlist => (
-            state.app_state.config.playlist_visible,
+            state.app_state.config.playlist_visible && state.app_state.config.playlist_detached,
             state.playlist_shaded,
             state.playlist_width,
             state.playlist_height,
@@ -2837,8 +2969,10 @@ impl MainWindowUiState {
 
     pub(crate) fn panel_visibility(&self) -> PanelVisibility {
         PanelVisibility {
-            equalizer: self.app_state.config.equalizer_visible,
-            playlist: self.app_state.config.playlist_visible,
+            equalizer: self.app_state.config.equalizer_visible
+                && self.app_state.config.equalizer_detached,
+            playlist: self.app_state.config.playlist_visible
+                && self.app_state.config.playlist_detached,
         }
     }
 
