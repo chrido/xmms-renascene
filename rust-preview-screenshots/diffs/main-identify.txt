@@ -1,0 +1,2 @@
+ref size=1024x768 trim=546x230+2+0 mean=1671.1
+rust size=1024x768 trim=546x230+2+0 mean=1671.1

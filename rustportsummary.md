@@ -40,9 +40,10 @@ Completed so far:
 - Ported mono/stereo indicator state and C-compatible active/inactive segment source mapping.
 - Ported play-status indicator state and stopped/paused/playing source-row mapping.
 - Ported simple invisible hit-area button press/release/motion activation behavior.
-- Added a GTK preview window that renders the default main skin.
+- Added a GTK preview window that renders the default main reset state, including titlebar buttons, transport buttons, toggle buttons, text boxes, volume/balance/position sliders, blank time numbers, visualization grid, mono/stereo indicator, and stopped play-status indicator.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
+- Re-captured `rust-preview-screenshots/main-preview.png` and compared it to `reference-screenshots/main-reset.png`; the latest ImageMagick AE and RMSE metrics are both `0`.
 - Added Meson run targets for Rust formatting, tests, CLI smoke, and GTK smoke.
 - Added a GitLab CI Rust job for formatting, tests, GTK smoke, and CLI smoke.
 - Added explicit `AppState` to tie together config, player, and playlist runtime state.
@@ -63,7 +64,7 @@ Completed so far:
 | `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, skin archives, visualization colors, and playlist colors |
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
 | `rust/src/skin/widget.rs` | Widget list/hit-testing model, all initial widget state machines, and visualization enums |
-| `rust/src/render.rs` | XPM-to-Cairo surface conversion |
+| `rust/src/render.rs` | XPM-to-Cairo conversion, skin blitting, docked panel rendering, and main reset-state composition |
 | `rust/src/ui.rs` | GTK preview window and smoke mode |
 | `rust/tests/default_skin.rs` | Default skin parsing tests |
 | `rust/tests/render.rs` | Cairo render tests |
@@ -156,12 +157,16 @@ C ground-truth screenshots:
 Current Rust preview screenshot:
 
 - `rust-preview-screenshots/main-preview.png`
+- `rust-preview-screenshots/diffs/main-ae-diff.png`
+- `rust-preview-screenshots/diffs/main-ae.txt`
+- `rust-preview-screenshots/diffs/main-rmse.txt`
+- `rust-preview-screenshots/diffs/main-identify.txt`
 
-These screenshots are intended as human visual references, not strict pixel-diff test fixtures.
+The current main reset-state Rust preview matches the C reference exactly for the captured root screenshot (`AE 0`, `RMSE 0`). These screenshots are intended as human visual references, not strict pixel-diff test fixtures.
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders only the default main skin preview and does not yet implement full playback, controls, playlist UI, equalizer UI, MPRIS, Spotify, podcasts, output device selection UI, preferences UI, packaging, or full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders the default main reset-state preview but does not yet wire the main-window controls to application behavior and does not yet implement full playback, playlist UI, equalizer UI, MPRIS, Spotify, podcasts, output device selection UI, preferences UI, packaging, or full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 
@@ -169,9 +174,6 @@ The manual XPM parser is intentionally kept for the first working port. A later 
 
 See `migrationplan.md` for the full checkbox roadmap. The next high-value areas are:
 
-- Finalize build and packaging strategy.
-- Complete skin loading beyond bundled XPM defaults.
-- Expand the renderer to support pixmap blitting and all main-window widgets.
-- Port the widget framework and main player controls.
+- Wire the rendered main-window controls to the Rust application state and GTK events.
 - Port GStreamer playback.
 - Port playlist and equalizer windows.

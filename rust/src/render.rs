@@ -2,6 +2,7 @@ use std::fmt;
 
 use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
 
+use crate::skin::widget::TextBox;
 use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
 
@@ -288,6 +289,280 @@ pub fn render_main_player(
     }
 
     rendered |= render_main_titlebar(cr, skin, focused, shaded)?;
+    Ok(rendered)
+}
+
+pub fn render_main_player_reset(cr: &Context, skin: &DefaultSkin) -> Result<bool, RenderError> {
+    let mut rendered = render_main_player(cr, skin, true, false)?;
+
+    let push_buttons = [
+        (SkinPixmapKind::Titlebar, 0, 0, 6, 3, 9, 9),
+        (SkinPixmapKind::Titlebar, 9, 0, 244, 3, 9, 9),
+        (SkinPixmapKind::Titlebar, 0, 18, 254, 3, 9, 9),
+        (SkinPixmapKind::Titlebar, 18, 0, 264, 3, 9, 9),
+        (SkinPixmapKind::CButtons, 0, 0, 16, 88, 23, 18),
+        (SkinPixmapKind::CButtons, 23, 0, 39, 88, 23, 18),
+        (SkinPixmapKind::CButtons, 46, 0, 62, 88, 23, 18),
+        (SkinPixmapKind::CButtons, 69, 0, 85, 88, 23, 18),
+        (SkinPixmapKind::CButtons, 92, 0, 108, 88, 22, 18),
+        (SkinPixmapKind::CButtons, 114, 0, 136, 89, 22, 16),
+        (SkinPixmapKind::ShufRep, 28, 0, 164, 89, 46, 15),
+        (SkinPixmapKind::ShufRep, 0, 0, 210, 89, 28, 15),
+        (SkinPixmapKind::ShufRep, 0, 61, 219, 58, 23, 12),
+        (SkinPixmapKind::ShufRep, 23, 61, 242, 58, 23, 12),
+    ];
+    for (kind, sx, sy, dx, dy, width, height) in push_buttons {
+        rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
+    }
+
+    render_text(cr, skin, "XMMS Resuscitated", 111, 27, 153)?;
+    render_text(cr, skin, "", 111, 43, 15)?;
+    render_text(cr, skin, "", 156, 43, 10)?;
+
+    rendered |= render_horizontal_slider(
+        cr,
+        skin,
+        SliderRenderSpec {
+            kind: SkinPixmapKind::Volume,
+            x: 107,
+            y: 57,
+            width: 68,
+            height: 13,
+            position: 51,
+            knob_source_x: 15,
+            knob_source_y: 422,
+            knob_width: 14,
+            knob_height: 11,
+            frame_height: 15,
+            frame_offset: 0,
+            frame: 27,
+        },
+    )?;
+    rendered |= render_horizontal_slider(
+        cr,
+        skin,
+        SliderRenderSpec {
+            kind: SkinPixmapKind::Balance,
+            x: 177,
+            y: 57,
+            width: 38,
+            height: 13,
+            position: 12,
+            knob_source_x: 15,
+            knob_source_y: 422,
+            knob_width: 14,
+            knob_height: 11,
+            frame_height: 15,
+            frame_offset: 0,
+            frame: 13,
+        },
+    )?;
+    rendered |= render_horizontal_slider(
+        cr,
+        skin,
+        SliderRenderSpec {
+            kind: SkinPixmapKind::PosBar,
+            x: 16,
+            y: 72,
+            width: 248,
+            height: 10,
+            position: 0,
+            knob_source_x: 248,
+            knob_source_y: 0,
+            knob_width: 29,
+            knob_height: 10,
+            frame_height: 1,
+            frame_offset: 0,
+            frame: 0,
+        },
+    )?;
+
+    for x in [36, 48, 60, 78, 90] {
+        rendered |= blit_skin_rect(cr, skin, SkinPixmapKind::Numbers, 90, 0, x, 26, 9, 13)?;
+    }
+
+    render_visualization_reset(cr, skin, 24, 43, 76)?;
+    rendered |= render_mono_stereo(cr, skin, 0, 212, 41)?;
+    rendered |= blit_skin_rect(cr, skin, SkinPixmapKind::PlayPause, 0, 18, 24, 28, 11, 9)?;
+
+    Ok(rendered)
+}
+
+struct SliderRenderSpec {
+    kind: SkinPixmapKind,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    position: i32,
+    knob_source_x: i32,
+    knob_source_y: i32,
+    knob_width: i32,
+    knob_height: i32,
+    frame_height: i32,
+    frame_offset: i32,
+    frame: i32,
+}
+
+fn render_horizontal_slider(
+    cr: &Context,
+    skin: &DefaultSkin,
+    spec: SliderRenderSpec,
+) -> Result<bool, RenderError> {
+    let mut rendered = blit_skin_rect(
+        cr,
+        skin,
+        spec.kind,
+        spec.frame_offset,
+        spec.frame * spec.frame_height,
+        spec.x,
+        spec.y,
+        spec.width,
+        spec.height,
+    )?;
+    rendered |= blit_skin_rect(
+        cr,
+        skin,
+        spec.kind,
+        spec.knob_source_x,
+        spec.knob_source_y,
+        spec.x + spec.position,
+        spec.y,
+        spec.knob_width,
+        spec.knob_height,
+    )?;
+    Ok(rendered)
+}
+
+fn blit_skin_rect(
+    cr: &Context,
+    skin: &DefaultSkin,
+    kind: SkinPixmapKind,
+    xsrc: i32,
+    ysrc: i32,
+    xdest: i32,
+    ydest: i32,
+    width: i32,
+    height: i32,
+) -> Result<bool, RenderError> {
+    let Some(image) = skin.get(kind) else {
+        return Ok(false);
+    };
+    let surface = surface_from_xpm(image)?;
+    blit_surface_rect(cr, &surface, xsrc, ysrc, xdest, ydest, width, height)
+}
+
+fn render_text(
+    cr: &Context,
+    skin: &DefaultSkin,
+    text: &str,
+    xdest: i32,
+    ydest: i32,
+    width: i32,
+) -> Result<(), RenderError> {
+    let Some(image) = skin.get(SkinPixmapKind::Text) else {
+        return Ok(());
+    };
+    let surface = surface_from_xpm(image)?;
+    cr.save()?;
+    cr.rectangle(
+        f64::from(xdest),
+        f64::from(ydest),
+        f64::from(width),
+        f64::from(TextBox::CHAR_HEIGHT),
+    );
+    cr.clip();
+    for (index, ch) in text.chars().enumerate() {
+        let Some((sx, sy)) = TextBox::glyph_source(ch) else {
+            continue;
+        };
+        let dx = xdest + (index as i32 * TextBox::CHAR_WIDTH);
+        if dx >= xdest + width {
+            break;
+        }
+        blit_surface_rect(
+            cr,
+            &surface,
+            sx,
+            sy,
+            dx,
+            ydest,
+            TextBox::CHAR_WIDTH,
+            TextBox::CHAR_HEIGHT,
+        )?;
+    }
+    cr.restore()?;
+    Ok(())
+}
+
+fn render_visualization_reset(
+    cr: &Context,
+    skin: &DefaultSkin,
+    xdest: i32,
+    ydest: i32,
+    width: i32,
+) -> Result<(), RenderError> {
+    let colors = skin.vis_colors();
+    let bg = colors[0];
+    cr.save()?;
+    cr.rectangle(f64::from(xdest), f64::from(ydest), f64::from(width), 16.0);
+    cr.clip();
+    cr.set_source_rgb(
+        f64::from(bg[0]) / 255.0,
+        f64::from(bg[1]) / 255.0,
+        f64::from(bg[2]) / 255.0,
+    );
+    cr.paint()?;
+    let dot = colors[1];
+    cr.set_source_rgb(
+        f64::from(dot[0]) / 255.0,
+        f64::from(dot[1]) / 255.0,
+        f64::from(dot[2]) / 255.0,
+    );
+    for y in (1..16).step_by(2) {
+        for x in (0..width.min(76)).step_by(2) {
+            cr.rectangle(f64::from(xdest + x), f64::from(ydest + y), 1.0, 1.0);
+        }
+    }
+    cr.fill()?;
+    cr.restore()?;
+    Ok(())
+}
+
+fn render_mono_stereo(
+    cr: &Context,
+    skin: &DefaultSkin,
+    channels: i32,
+    xdest: i32,
+    ydest: i32,
+) -> Result<bool, RenderError> {
+    let (stereo_y, mono_y) = match channels {
+        2 => (0, 12),
+        1 => (12, 0),
+        _ => (12, 12),
+    };
+    let mut rendered = blit_skin_rect(
+        cr,
+        skin,
+        SkinPixmapKind::MonoStereo,
+        0,
+        stereo_y,
+        xdest,
+        ydest,
+        29,
+        12,
+    )?;
+    rendered |= blit_skin_rect(
+        cr,
+        skin,
+        SkinPixmapKind::MonoStereo,
+        29,
+        mono_y,
+        xdest + 29,
+        ydest,
+        27,
+        12,
+    )?;
     Ok(rendered)
 }
 

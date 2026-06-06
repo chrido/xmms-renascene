@@ -54,7 +54,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port simple invisible hit-area buttons.
 
 - [ ] Port main window.
-  - [ ] Recreate exact main player layout and skin coordinates.
+  - [x] Recreate exact main reset-state layout and skin coordinates for visual parity.
   - [ ] Port transport controls.
   - [ ] Port volume, balance, and position sliders.
   - [ ] Port shaded mode controls.

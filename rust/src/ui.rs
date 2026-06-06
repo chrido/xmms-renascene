@@ -2,11 +2,9 @@ use std::rc::Rc;
 
 use gtk::prelude::*;
 
-use crate::render::surface_from_xpm;
-use crate::skin::{DefaultSkin, SkinPixmapKind};
+use crate::render::{render_main_player_reset, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH};
+use crate::skin::DefaultSkin;
 
-const MAINWIN_WIDTH: i32 = 275;
-const MAINWIN_HEIGHT: i32 = 116;
 const DEFAULT_SCALE: i32 = 2;
 
 pub fn run_default_skin_preview() {
@@ -46,37 +44,30 @@ fn run_preview_application(mode: PreviewMode) {
 
 fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
     let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
-    let main = skin
-        .get(SkinPixmapKind::Main)
-        .ok_or_else(|| "default main skin pixmap is missing".to_string())?;
-    let surface = Rc::new(surface_from_xpm(main).map_err(|err| err.to_string())?);
+    let skin = Rc::new(skin);
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Resuscitated Rust Preview")
         .resizable(false)
         .decorated(false)
-        .default_width(MAINWIN_WIDTH * DEFAULT_SCALE)
-        .default_height(MAINWIN_HEIGHT * DEFAULT_SCALE)
+        .default_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
+        .default_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .build();
 
     let drawing_area = gtk::DrawingArea::builder()
-        .content_width(MAINWIN_WIDTH * DEFAULT_SCALE)
-        .content_height(MAINWIN_HEIGHT * DEFAULT_SCALE)
+        .content_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
+        .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
 
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         cr.scale(
-            width as f64 / MAINWIN_WIDTH as f64,
-            height as f64 / MAINWIN_HEIGHT as f64,
+            width as f64 / MAIN_WINDOW_WIDTH as f64,
+            height as f64 / MAIN_WINDOW_HEIGHT as f64,
         );
-        if let Err(err) = cr.set_source_surface(&*surface, 0.0, 0.0) {
-            eprintln!("xmms-rs: failed to set cairo source surface: {err}");
-            return;
-        }
-        if let Err(err) = cr.paint() {
-            eprintln!("xmms-rs: failed to paint cairo surface: {err}");
+        if let Err(err) = render_main_player_reset(cr, &skin) {
+            eprintln!("xmms-rs: failed to render reset-state preview: {err}");
         }
     });
 
