@@ -1475,9 +1475,12 @@ pub fn render_playlist_frame(
 
     if shaded {
         blit_surface_rect(cr, &pledit, 72, 42, 0, 0, 25, 14)?;
-        let count = (width - 75) / 25;
-        for i in 0..count {
-            blit_surface_rect(cr, &pledit, 72, 57, (i * 25) + 25, 0, 25, 14)?;
+        let mut x = 25;
+        let right_cap_x = width - 50;
+        while x < right_cap_x {
+            let tile_width = (right_cap_x - x).min(25);
+            blit_surface_rect(cr, &pledit, 72, 57, x, 0, tile_width, 14)?;
+            x += tile_width;
         }
         blit_surface_rect(
             cr,

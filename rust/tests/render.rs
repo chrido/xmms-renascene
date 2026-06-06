@@ -113,6 +113,41 @@ fn renders_playlist_rows_with_selected_background() {
     assert_eq!(data[offset + 2], selected[0]);
 }
 
+#[test]
+fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let width = PLAYLIST_DEFAULT_WIDTH + 14;
+    let mut surface = ImageSurface::create(Format::ARgb32, width, 14).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_playlist_frame(
+        &cr,
+        &skin,
+        true,
+        true,
+        width,
+        PLAYLIST_DEFAULT_HEIGHT,
+        Some(""),
+        None
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let transparent_pixels = (0..14_usize)
+        .flat_map(|y| (0..width as usize).map(move |x| y * stride + x * 4))
+        .filter(|&offset| data[offset + 3] == 0)
+        .count();
+    let separator_pixels = (0..14_usize)
+        .flat_map(|y| (0..width as usize).map(move |x| y * stride + x * 4))
+        .filter(|&offset| data[offset] == 0 && data[offset + 1] == 0x39 && data[offset + 2] == 0xff)
+        .count();
+
+    assert_eq!(transparent_pixels, 0);
+    assert_eq!(separator_pixels, 0);
+}
+
 fn rendered_visualization_bytes(state: VisualizationRenderState) -> Vec<u8> {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
     let mut surface = ImageSurface::create(Format::ARgb32, 76, 16).unwrap();
