@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use gtk::glib::{self, ChecksumType};
@@ -50,6 +51,14 @@ pub enum PodcastResponseAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PodcastResponseError {
     HttpStatus(u16),
+}
+
+#[derive(Debug)]
+pub enum PodcastFetchError {
+    Transport(String),
+    Response(PodcastResponseError),
+    BodyTooLarge { limit: usize },
+    Read(io::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +183,44 @@ pub fn handle_url_response(
     }
 }
 
+pub fn fetch_url(url: &str) -> Result<PodcastHttpResponse, PodcastFetchError> {
+    let result = ureq::get(url).set("User-Agent", "XMMS Resuscitated").call();
+    let response = match result {
+        Ok(response) => response,
+        Err(ureq::Error::Status(_, response)) => response,
+        Err(err) => return Err(PodcastFetchError::Transport(err.to_string())),
+    };
+
+    let status = response.status();
+    let content_type = response.header("Content-Type").map(ToOwned::to_owned);
+    let has_icy_name = response.header("icy-name").is_some();
+    let retry_after = response.header("Retry-After").map(ToOwned::to_owned);
+    let mut reader = response.into_reader().take((FETCH_LIMIT + 1) as u64);
+    let mut body = Vec::new();
+    reader
+        .read_to_end(&mut body)
+        .map_err(PodcastFetchError::Read)?;
+    if body.len() > FETCH_LIMIT {
+        return Err(PodcastFetchError::BodyTooLarge { limit: FETCH_LIMIT });
+    }
+
+    Ok(PodcastHttpResponse {
+        status,
+        content_type,
+        has_icy_name,
+        retry_after,
+        body,
+    })
+}
+
+pub fn fetch_url_into_playlist(
+    playlist: &mut Playlist,
+    url: &str,
+) -> Result<PodcastResponseAction, PodcastFetchError> {
+    let response = fetch_url(url)?;
+    handle_url_response(playlist, url, &response).map_err(PodcastFetchError::Response)
+}
+
 pub fn cache_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("podcast-cache")
 }
@@ -240,6 +287,21 @@ where
     }
 
     unreachable!("download retry loop always returns before exhausting bounded attempts")
+}
+
+pub fn download_url_with_retries(
+    config_dir: &Path,
+    url: &str,
+) -> Result<PodcastDownloadOutcome, PodcastDownloadError> {
+    download_with_retries(config_dir, url, |_| {
+        let response = fetch_url(url)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{err:?}")))?;
+        Ok(PodcastDownloadAttempt {
+            status: response.status,
+            retry_after: response.retry_after,
+            body: response.body,
+        })
+    })
 }
 
 pub fn file_uri_for_cache(path: &Path) -> String {

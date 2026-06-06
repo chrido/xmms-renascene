@@ -8,11 +8,12 @@ use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState
 use xmms_resuscitated::playlist::{Playlist, PlaylistSortKey};
 use xmms_resuscitated::podcast::{
     add_feed_to_playlist, cache_file_is_fresh, cache_is_fresh, cache_path_for_url,
-    classify_url_response, cleanup_cache_dir, discover_cached_duration_ms, download_with_retries,
-    handle_url_response, mark_cache_failed_and_skip_current, parse_feed, prepare_playback_uri,
-    refresh_interval_seconds, retry_delay_seconds, stale_cache_files, status_should_retry,
-    write_cache_file, PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse,
-    PodcastResponseAction, PodcastUrlKind,
+    classify_url_response, cleanup_cache_dir, discover_cached_duration_ms,
+    download_url_with_retries, download_with_retries, fetch_url_into_playlist, handle_url_response,
+    mark_cache_failed_and_skip_current, parse_feed, prepare_playback_uri, refresh_interval_seconds,
+    retry_delay_seconds, stale_cache_files, status_should_retry, write_cache_file,
+    PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse, PodcastResponseAction,
+    PodcastUrlKind,
 };
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
@@ -2091,6 +2092,43 @@ fn podcast_e2e_failed_current_podcast_item_is_skipped() {
     assert_eq!(playlist.entries()[0].title, "failed: Needs cache");
 }
 
+#[test]
+fn podcast_e2e_live_fetch_imports_feed_from_http_response() {
+    let feed = r#"<rss><channel><item><title>Live</title><enclosure url="live.mp3"/></item></channel></rss>"#;
+    let (url, server) = local_http_server(vec![format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\nContent-Length: {}\r\n\r\n{}",
+        feed.len(),
+        feed
+    )]);
+
+    let mut playlist = Playlist::new();
+    let action = fetch_url_into_playlist(&mut playlist, &url).unwrap();
+
+    assert_eq!(action, PodcastResponseAction::AddedFeedEpisodes(1));
+    assert_eq!(playlist.entries()[0].title, "Live");
+    server.join().unwrap();
+}
+
+#[test]
+fn podcast_e2e_live_download_retries_http_503_and_writes_cache() {
+    let (url, server) = local_http_server(vec![
+        "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n"
+            .to_string(),
+        "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 10\r\n\r\ndownloaded"
+            .to_string(),
+    ]);
+    let root = unique_temp_dir("xmms-rs-podcast-live-download");
+    fs::create_dir_all(&root).unwrap();
+
+    let outcome = download_url_with_retries(&root, &url).unwrap();
+
+    assert_eq!(outcome.attempts, 2);
+    assert_eq!(outcome.retry_delays, vec![1]);
+    assert_eq!(fs::read(outcome.cache_path).unwrap(), b"downloaded");
+    fs::remove_dir_all(root).unwrap();
+    server.join().unwrap();
+}
+
 fn silent_wav_bytes() -> Vec<u8> {
     let sample_rate = 8_000u32;
     let samples = 8_000u32;
@@ -2109,4 +2147,18 @@ fn silent_wav_bytes() -> Vec<u8> {
     bytes.extend_from_slice(&samples.to_le_bytes());
     bytes.extend(std::iter::repeat_n(128u8, samples as usize));
     bytes
+}
+
+fn local_http_server(responses: Vec<String>) -> (String, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = std::thread::spawn(move || {
+        for response in responses {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut request).unwrap();
+            std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
+        }
+    });
+    (format!("http://{addr}/podcast"), handle)
 }
