@@ -878,7 +878,7 @@ fn render_docked_ui_state(
                 .iter()
                 .enumerate()
                 .map(|(index, entry)| PlaylistRowRenderEntry {
-                    title: entry.title.clone(),
+                    title: state.formatted_playlist_entry_title(entry),
                     length_ms: entry.length_ms,
                     selected: entry.selected,
                     current: current == Some(index),
@@ -1199,7 +1199,7 @@ fn build_playlist_window(
                 .iter()
                 .enumerate()
                 .map(|(index, entry)| PlaylistRowRenderEntry {
-                    title: entry.title.clone(),
+                    title: state.formatted_playlist_entry_title(entry),
                     length_ms: entry.length_ms,
                     selected: entry.selected,
                     current: current == Some(index),
@@ -3425,6 +3425,10 @@ impl MainWindowUiState {
         let Some(entry) = self.app_state.playlist.entries().get(position) else {
             return "XMMS Resuscitated".to_string();
         };
+        self.formatted_playlist_entry_title(entry)
+    }
+
+    fn formatted_playlist_entry_title(&self, entry: &crate::playlist::PlaylistEntry) -> String {
         format_title_for_preferences(
             &self.app_state.config.title_format,
             &entry.filename,
@@ -3441,7 +3445,7 @@ impl MainWindowUiState {
             return String::new();
         };
 
-        let title = normalize_playlist_display_text(&entry.title, &self.app_state.config);
+        let title = self.formatted_playlist_entry_title(entry);
         let prefix = if self.app_state.config.show_numbers_in_pl {
             format!("{}. ", position + 1)
         } else {
@@ -4263,6 +4267,13 @@ impl MainWindowUiState {
         self.playlist_scroll_offset
             .checked_add(row)
             .and_then(|index| self.playlist_entry_uri(index))
+    }
+
+    pub(crate) fn visible_playlist_entry_title(&self, row: usize) -> Option<String> {
+        self.playlist_scroll_offset
+            .checked_add(row)
+            .and_then(|index| self.app_state.playlist.entries().get(index))
+            .map(|entry| self.formatted_playlist_entry_title(entry))
     }
 
     pub(crate) fn playlist_position(&self) -> Option<usize> {
@@ -6349,17 +6360,6 @@ fn cleanup_formatted_title(text: &str) -> Option<String> {
     } else {
         Some(cleaned)
     }
-}
-
-fn normalize_playlist_display_text(text: &str, config: &Config) -> String {
-    let mut normalized = text.to_string();
-    if config.convert_underscore {
-        normalized = normalized.replace('_', " ");
-    }
-    if config.convert_twenty {
-        normalized = normalized.replace("%20", " ");
-    }
-    normalized
 }
 
 fn ellipsize_chars(text: &str, max_len: usize) -> String {

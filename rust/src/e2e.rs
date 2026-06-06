@@ -1145,6 +1145,14 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_visible_playlist_title(&mut self, row: usize, expected: &str) -> &mut Self {
+        assert_eq!(
+            self.state.visible_playlist_entry_title(row).as_deref(),
+            Some(expected)
+        );
+        self
+    }
+
     pub fn focus_panel(&mut self, panel: PanelKind, focused: bool) -> &mut Self {
         self.state.set_panel_focused(panel, focused);
         self

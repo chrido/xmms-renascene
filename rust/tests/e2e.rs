@@ -1969,9 +1969,10 @@ fn title_format_updates_main_title_and_shaded_playlist_info() {
         .press_shortcut(Shortcut::PlayFirst)
         .set_preference_title_format("%p/%t")
         .assert_main_title("Artist Name/Track Name")
+        .assert_visible_playlist_title(0, "Artist Name/Track Name")
         .press_shortcut(Shortcut::ShadePlaylist)
         .assert_playlist_shaded()
-        .assert_shaded_playlist_info("1. Artist Name - Track Name");
+        .assert_shaded_playlist_info("1. Artist Name/Track Name");
 }
 
 #[test]
