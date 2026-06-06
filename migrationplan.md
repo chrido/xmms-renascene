@@ -96,7 +96,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port play, stop, pause, unpause, toggle pause, seek, position, and duration.
   - [x] Port bitrate, frequency, and channel reporting.
   - [x] Port volume and balance.
-  - [ ] Port output-device rebuild behavior.
+  - [x] Port output-device rebuild behavior.
 
 - [ ] Port equalizer window.
   - [ ] Render equalizer skin and controls.

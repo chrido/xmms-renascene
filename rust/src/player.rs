@@ -28,7 +28,7 @@ pub struct Player {
 pub struct GStreamerBackend {
     pipeline: gst::Element,
     audio_sink_bin: gst::Bin,
-    audio_chain: Vec<&'static str>,
+    audio_chain: Vec<String>,
     panorama: gst::Element,
     equalizer: gst::Element,
     requested_state: Cell<PlayerState>,
@@ -37,7 +37,7 @@ pub struct GStreamerBackend {
 
 struct AudioSinkBin {
     bin: gst::Bin,
-    chain: Vec<&'static str>,
+    chain: Vec<String>,
     panorama: gst::Element,
     equalizer: gst::Element,
 }
@@ -75,7 +75,7 @@ impl GStreamerBackend {
         let fake_video = make_element("fakesink", "fakevideo")?;
         pipeline.set_property("video-sink", &fake_video);
 
-        let audio_sink = build_audio_sink_bin()?;
+        let audio_sink = build_audio_sink_bin("autoaudiosink", None)?;
         pipeline.set_property("audio-sink", &audio_sink.bin);
 
         Ok(Self {
@@ -100,7 +100,7 @@ impl GStreamerBackend {
             .map(|factory| factory.name().into())
     }
 
-    pub fn audio_chain(&self) -> &[&'static str] {
+    pub fn audio_chain(&self) -> &[String] {
         &self.audio_chain
     }
 
@@ -226,6 +226,20 @@ impl GStreamerBackend {
         for (index, db) in bands.into_iter().enumerate() {
             let _ = self.set_equalizer_band_db(index, db);
         }
+    }
+
+    pub fn rebuild_output_sink(
+        &mut self,
+        sink_factory: &str,
+        device: Option<&str>,
+    ) -> Result<(), String> {
+        let audio_sink = build_audio_sink_bin(sink_factory, device)?;
+        self.pipeline.set_property("audio-sink", &audio_sink.bin);
+        self.audio_sink_bin = audio_sink.bin;
+        self.audio_chain = audio_sink.chain;
+        self.panorama = audio_sink.panorama;
+        self.equalizer = audio_sink.equalizer;
+        Ok(())
     }
 
     fn event_from_message(&self, message: &gst::Message) -> Option<PlaybackEvent> {
@@ -377,13 +391,22 @@ impl Player {
     }
 }
 
-fn build_audio_sink_bin() -> Result<AudioSinkBin, String> {
+fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<AudioSinkBin, String> {
     let bin = gst::Bin::builder().name("audio-sink-bin").build();
     let convert = make_element("audioconvert", "convert")?;
     let panorama = make_element("audiopanorama", "panorama")?;
     let equalizer = make_element("equalizer-10bands", "eq")?;
     let spectrum = make_element("spectrum", "spectrum")?;
-    let sink = make_element("autoaudiosink", "sink")?;
+    let sink = make_element(sink_factory, "sink")?;
+
+    if let Some(device) = device {
+        if sink.find_property("device").is_none() {
+            return Err(format!(
+                "GStreamer sink {sink_factory} does not support selecting an output device"
+            ));
+        }
+        sink.set_property("device", device);
+    }
 
     spectrum.set_property("bands", 75u32);
     spectrum.set_property("threshold", -80i32);
@@ -430,14 +453,7 @@ fn build_audio_sink_bin() -> Result<AudioSinkBin, String> {
     let names = chain
         .iter()
         .filter_map(|element| element.factory().map(|factory| factory.name()))
-        .map(|name| match name.as_str() {
-            "audioconvert" => "audioconvert",
-            "audiopanorama" => "audiopanorama",
-            "equalizer-10bands" => "equalizer-10bands",
-            "spectrum" => "spectrum",
-            "autoaudiosink" => "autoaudiosink",
-            _ => "unknown",
-        })
+        .map(|name| name.to_string())
         .collect();
     Ok(AudioSinkBin {
         bin,
@@ -647,13 +663,37 @@ mod tests {
         assert_eq!(
             chain,
             &[
-                "audioconvert",
-                "audiopanorama",
-                "equalizer-10bands",
-                "spectrum",
-                "autoaudiosink"
+                "audioconvert".to_string(),
+                "audiopanorama".to_string(),
+                "equalizer-10bands".to_string(),
+                "spectrum".to_string(),
+                "autoaudiosink".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn gstreamer_backend_rebuilds_output_sink_chain() {
+        let _guard = gst_test_guard();
+        let mut backend = GStreamerBackend::new().expect("GStreamer backend should construct");
+
+        backend
+            .rebuild_output_sink("fakesink", None)
+            .expect("fakesink output chain should rebuild");
+        assert_eq!(
+            backend.audio_chain(),
+            &[
+                "audioconvert".to_string(),
+                "audiopanorama".to_string(),
+                "equalizer-10bands".to_string(),
+                "spectrum".to_string(),
+                "fakesink".to_string(),
+            ]
+        );
+
+        assert!(backend
+            .rebuild_output_sink("fakesink", Some("device-id"))
+            .is_err());
     }
 
     #[test]
