@@ -133,7 +133,23 @@ impl SkinPixmapKind {
 pub struct DefaultSkin {
     pixmaps: BTreeMap<SkinPixmapKind, XpmImage>,
     vis_colors: [[u8; 3]; 24],
+    playlist_colors: PlaylistColors,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaylistColors {
+    pub normal: [u8; 3],
+    pub current: [u8; 3],
+    pub normal_bg: [u8; 3],
+    pub selected_bg: [u8; 3],
+}
+
+pub const DEFAULT_PLAYLIST_COLORS: PlaylistColors = PlaylistColors {
+    normal: [0, 255, 0],
+    current: [255, 255, 255],
+    normal_bg: [0, 0, 0],
+    selected_bg: [0, 0, 102],
+};
 
 pub const DEFAULT_VIS_COLORS: [[u8; 3]; 24] = [
     [9, 34, 53],
@@ -233,6 +249,7 @@ impl DefaultSkin {
         Ok(Self {
             pixmaps,
             vis_colors: DEFAULT_VIS_COLORS,
+            playlist_colors: DEFAULT_PLAYLIST_COLORS,
         })
     }
 
@@ -254,10 +271,12 @@ impl DefaultSkin {
 
         apply_balance_fallback(&mut pixmaps);
         let vis_colors = load_vis_colors_from_dir(dir)?;
+        let playlist_colors = load_playlist_colors_from_dir(dir)?;
 
         Ok(Self {
             pixmaps,
             vis_colors,
+            playlist_colors,
         })
     }
 
@@ -293,10 +312,12 @@ impl DefaultSkin {
 
         apply_balance_fallback(&mut pixmaps);
         let vis_colors = load_vis_colors_from_archive(&entries)?;
+        let playlist_colors = load_playlist_colors_from_archive(&entries)?;
 
         Ok(Self {
             pixmaps,
             vis_colors,
+            playlist_colors,
         })
     }
 
@@ -374,6 +395,10 @@ impl DefaultSkin {
 
     pub fn vis_colors(&self) -> &[[u8; 3]; 24] {
         &self.vis_colors
+    }
+
+    pub fn playlist_colors(&self) -> PlaylistColors {
+        self.playlist_colors
     }
 }
 
@@ -497,6 +522,82 @@ fn load_vis_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<[[u
     Ok(parse_vis_colors(contents))
 }
 
+fn load_playlist_colors_from_dir(dir: &Path) -> io::Result<PlaylistColors> {
+    let path = dir.join("pledit.txt");
+    if !path.exists() {
+        return Ok(DEFAULT_PLAYLIST_COLORS);
+    }
+    let contents = fs::read_to_string(&path)?;
+    Ok(parse_playlist_colors(&contents))
+}
+
+fn load_playlist_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<PlaylistColors> {
+    let Some((name, contents)) = entries.iter().find(|(name, _)| {
+        Path::new(name)
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .is_some_and(|file_name| file_name.eq_ignore_ascii_case("pledit.txt"))
+    }) else {
+        return Ok(DEFAULT_PLAYLIST_COLORS);
+    };
+
+    let contents = std::str::from_utf8(contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {err}")))?;
+    Ok(parse_playlist_colors(contents))
+}
+
+fn parse_playlist_colors(contents: &str) -> PlaylistColors {
+    let mut colors = DEFAULT_PLAYLIST_COLORS;
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if let Some(value) = line
+            .strip_prefix("Normal=")
+            .or_else(|| line.strip_prefix("normal="))
+        {
+            if let Some(color) = parse_hex_rgb(value) {
+                colors.normal = color;
+            }
+        } else if let Some(value) = line
+            .strip_prefix("Current=")
+            .or_else(|| line.strip_prefix("current="))
+        {
+            if let Some(color) = parse_hex_rgb(value) {
+                colors.current = color;
+            }
+        } else if let Some(value) = line
+            .strip_prefix("NormalBG=")
+            .or_else(|| line.strip_prefix("normalbg="))
+        {
+            if let Some(color) = parse_hex_rgb(value) {
+                colors.normal_bg = color;
+            }
+        } else if let Some(value) = line
+            .strip_prefix("SelectedBG=")
+            .or_else(|| line.strip_prefix("selectedbg="))
+        {
+            if let Some(color) = parse_hex_rgb(value) {
+                colors.selected_bg = color;
+            }
+        }
+    }
+
+    colors
+}
+
+fn parse_hex_rgb(value: &str) -> Option<[u8; 3]> {
+    let value = value.trim();
+    let value = value.strip_prefix('#')?;
+    if value.len() < 6 {
+        return None;
+    }
+
+    let r = u8::from_str_radix(&value[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&value[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&value[4..6], 16).ok()?;
+    Some([r, g, b])
+}
+
 fn parse_vis_colors(contents: &str) -> [[u8; 3]; 24] {
     let mut colors = DEFAULT_VIS_COLORS;
 
@@ -585,6 +686,7 @@ static char * main_xpm[] = {
         assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 275);
         assert!(skin.get(SkinPixmapKind::Balance).is_some());
         assert_eq!(skin.vis_colors()[0], [9, 34, 53]);
+        assert_eq!(skin.playlist_colors(), DEFAULT_PLAYLIST_COLORS);
     }
 
     #[test]
@@ -623,6 +725,30 @@ static char * main_xpm[] = {
     }
 
     #[test]
+    fn directory_loader_accepts_playlist_color_overrides() {
+        let tmp =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-pledit", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(
+            tmp.join("pledit.txt"),
+            "Normal=#010203\ncurrent=#A0B0C0\nNormalBG=#11223344\nSelectedBG=bad\n",
+        )
+        .unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        assert_eq!(skin.playlist_colors().normal, [1, 2, 3]);
+        assert_eq!(skin.playlist_colors().current, [160, 176, 192]);
+        assert_eq!(skin.playlist_colors().normal_bg, [17, 34, 51]);
+        assert_eq!(
+            skin.playlist_colors().selected_bg,
+            DEFAULT_PLAYLIST_COLORS.selected_bg
+        );
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
     fn path_loader_accepts_wsz_zip_skin_archives() {
         let path =
             std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-zip.wsz", std::process::id()));
@@ -636,6 +762,8 @@ static char * main_xpm[] = {
         archive.write_all(ONE_PIXEL_XPM.as_bytes()).unwrap();
         archive.start_file("Example/viscolor.txt", options).unwrap();
         archive.write_all(b"4,5,6\n").unwrap();
+        archive.start_file("Example/pledit.txt", options).unwrap();
+        archive.write_all(b"Normal=#070809\n").unwrap();
         archive.finish().unwrap();
 
         let skin = DefaultSkin::load_from_path(&path).unwrap();
@@ -643,6 +771,7 @@ static char * main_xpm[] = {
         assert_eq!(main.width(), 1);
         assert_eq!(main.height(), 1);
         assert_eq!(skin.vis_colors()[0], [4, 5, 6]);
+        assert_eq!(skin.playlist_colors().normal, [7, 8, 9]);
 
         std::fs::remove_file(path).unwrap();
     }

@@ -20,6 +20,7 @@ Completed so far:
 - Added external skin directory loading for BMP, PNG, and XPM pixmap files, including the Winamp green transparency key.
 - Added path-based external skin loading for directories plus `.wsz`, `.zip`, `.tar`, `.tar.gz`, and `.tar.bz2` archives.
 - Ported `viscolor.txt` parsing with C-compatible defaults, comma/space-separated rows, integer clamping, and archive lookup.
+- Ported `pledit.txt` playlist color parsing with C-compatible defaults, `#RRGGBB` keys, and archive lookup.
 - Added Cairo conversion for parsed XPM pixels.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
@@ -41,7 +42,7 @@ Completed so far:
 | `rust/src/config.rs` | Initial Rust config model and defaults |
 | `rust/src/player.rs` | Initial player state model |
 | `rust/src/playlist.rs` | Playlist entries, M3U load/save, podcast metadata handling |
-| `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, skin archives, and visualization colors |
+| `rust/src/skin/mod.rs` | Skin pixmap definitions, bundled default skin loading, external BMP/PNG/XPM files, skin archives, visualization colors, and playlist colors |
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
 | `rust/src/skin/widget.rs` | Initial widget/visualization enums |
 | `rust/src/render.rs` | XPM-to-Cairo surface conversion |
