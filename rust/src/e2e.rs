@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::app_state::AppState;
 use crate::config::Config;
-use crate::player::PlayerState;
+use crate::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use crate::playlist::PlaylistSortKey;
 use crate::render::{MainPushButton, MainSlider, MainToggleButton};
 use crate::skin::widget::{
@@ -93,6 +93,7 @@ pub enum Window {
     OpenLocation,
     JumpTime,
     SkinBrowser,
+    OutputDevicePicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -253,6 +254,7 @@ pub struct UiE2e {
     open_location_visible: bool,
     jump_time_visible: bool,
     skin_browser_visible: bool,
+    output_device_picker_visible: bool,
     file_dialog_visible: bool,
     directory_dialog_visible: bool,
 }
@@ -269,6 +271,7 @@ impl UiE2e {
             open_location_visible: false,
             jump_time_visible: false,
             skin_browser_visible: false,
+            output_device_picker_visible: false,
             file_dialog_visible: false,
             directory_dialog_visible: false,
         };
@@ -1115,6 +1118,81 @@ impl UiE2e {
         self
     }
 
+    pub fn open_output_device_picker(&mut self) -> &mut Self {
+        self.state.set_output_device_picker_visible(true);
+        self.sync_windows();
+        self
+    }
+
+    pub fn set_output_devices(
+        &mut self,
+        system_devices: Vec<OutputDevice>,
+        spotify_devices: Vec<OutputDevice>,
+    ) -> &mut Self {
+        self.state
+            .set_output_devices(system_devices, spotify_devices);
+        self
+    }
+
+    pub fn assert_local_output_devices(&mut self, expected: &[&str]) -> &mut Self {
+        let actual: Vec<&str> = self
+            .state
+            .output_device_groups()
+            .local
+            .iter()
+            .map(|device| device.display_name.as_str())
+            .collect();
+        assert_eq!(actual, expected);
+        self
+    }
+
+    pub fn assert_network_output_devices(&mut self, expected: &[&str]) -> &mut Self {
+        let actual: Vec<&str> = self
+            .state
+            .output_device_groups()
+            .network
+            .iter()
+            .map(|device| device.display_name.as_str())
+            .collect();
+        assert_eq!(actual, expected);
+        self
+    }
+
+    pub fn assert_spotify_output_devices(&mut self, expected: &[&str]) -> &mut Self {
+        let actual: Vec<&str> = self
+            .state
+            .output_device_groups()
+            .spotify
+            .iter()
+            .map(|device| device.display_name.as_str())
+            .collect();
+        assert_eq!(actual, expected);
+        self
+    }
+
+    pub fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> &mut Self {
+        assert!(
+            self.state.select_output_device(selection),
+            "expected output device selection to succeed"
+        );
+        self
+    }
+
+    pub fn assert_selected_output_device(&mut self, expected: Option<&str>) -> &mut Self {
+        assert_eq!(self.state.selected_output_device(), expected);
+        self
+    }
+
+    pub fn assert_selected_spotify_output_device(&mut self, expected: Option<&str>) -> &mut Self {
+        assert_eq!(self.state.selected_spotify_output_device(), expected);
+        self
+    }
+
+    pub fn assert_output_switch_count(&mut self, expected: u32) -> &mut Self {
+        assert_eq!(self.state.output_switch_count(), expected);
+        self
+    }
+
     pub fn set_visualization_mode(&mut self, mode: VisMode) -> &mut Self {
         self.state.set_visualization_mode(mode);
         self
@@ -1383,6 +1461,7 @@ impl UiE2e {
             Window::OpenLocation => self.open_location_visible,
             Window::JumpTime => self.jump_time_visible,
             Window::SkinBrowser => self.skin_browser_visible,
+            Window::OutputDevicePicker => self.output_device_picker_visible,
         }
     }
 
@@ -1418,6 +1497,7 @@ impl UiE2e {
                 self.open_location_visible = false;
                 self.jump_time_visible = false;
                 self.skin_browser_visible = false;
+                self.output_device_picker_visible = false;
                 self.file_dialog_visible = false;
                 self.directory_dialog_visible = false;
             }
@@ -1435,6 +1515,7 @@ impl UiE2e {
         self.open_location_visible = self.state.is_open_location_visible();
         self.jump_time_visible = self.state.is_jump_time_visible();
         self.skin_browser_visible = self.state.is_skin_browser_visible();
+        self.output_device_picker_visible = self.state.is_output_device_picker_visible();
         self.directory_dialog_visible = self.state.is_directory_dialog_visible();
     }
 

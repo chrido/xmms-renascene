@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use xmms_resuscitated::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
 };
-use xmms_resuscitated::player::PlayerState;
+use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use xmms_resuscitated::playlist::PlaylistSortKey;
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
@@ -619,6 +619,86 @@ fn skin_browser_search_path_covers_user_legacy_system_and_env_dirs() {
     assert_eq!(dirs[4], env_two);
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn output_device_picker_groups_and_deduplicates_system_devices() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_output_device_picker()
+        .assert_window_visible(Window::OutputDevicePicker)
+        .set_output_devices(
+            vec![
+                OutputDevice::system("speaker", "Speakers", "pipewire-proplist", false),
+                OutputDevice::system("speaker", "Speakers via Pulse", "pulse-proplist", false),
+                OutputDevice::system("raw", "Raw ALSA", "alsa-proplist", false),
+                OutputDevice::system("cast", "Living Room", "pipewire-proplist", true),
+            ],
+            vec![],
+        )
+        .assert_local_output_devices(&["Speakers"])
+        .assert_network_output_devices(&["Living Room"]);
+}
+
+#[test]
+fn output_device_picker_preserves_automatic_system_default() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.set_output_devices(
+        vec![OutputDevice::system(
+            "speaker",
+            "Speakers",
+            "pipewire-proplist",
+            false,
+        )],
+        vec![],
+    )
+    .assert_selected_output_device(None)
+    .select_output_device(OutputDeviceSelection::System("speaker"))
+    .assert_selected_output_device(Some("speaker"))
+    .assert_output_switch_count(1)
+    .select_output_device(OutputDeviceSelection::Automatic)
+    .assert_selected_output_device(None)
+    .assert_output_switch_count(2);
+}
+
+#[test]
+fn output_device_picker_switches_system_device_without_stopping_playback() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.press_shortcut(Shortcut::Play)
+        .assert_player_state(PlayerState::Playing)
+        .set_output_devices(
+            vec![OutputDevice::system(
+                "headphones",
+                "Headphones",
+                "pipewire-proplist",
+                false,
+            )],
+            vec![],
+        )
+        .select_output_device(OutputDeviceSelection::System("headphones"))
+        .assert_selected_output_device(Some("headphones"))
+        .assert_player_state(PlayerState::Playing)
+        .assert_output_switch_count(1);
+}
+
+#[test]
+fn output_device_picker_lists_and_selects_spotify_devices() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.set_output_devices(
+        vec![],
+        vec![
+            OutputDevice::spotify("phone", "Phone", "Smartphone"),
+            OutputDevice::spotify("desktop", "Desktop", "Computer"),
+        ],
+    )
+    .assert_spotify_output_devices(&["Phone", "Desktop"])
+    .select_output_device(OutputDeviceSelection::Spotify("desktop"))
+    .assert_selected_spotify_output_device(Some("desktop"))
+    .assert_selected_output_device(None)
+    .assert_output_switch_count(1);
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

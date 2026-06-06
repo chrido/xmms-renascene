@@ -8,7 +8,10 @@ use gtk::prelude::*;
 
 use crate::app_state::AppState;
 use crate::config::{Config, TimerMode};
-use crate::player::{equalizer_position_to_db, PlayerState};
+use crate::player::{
+    equalizer_position_to_db, group_output_devices, OutputDevice, OutputDeviceGroups,
+    OutputDeviceSelection, PlayerState,
+};
 use crate::playlist::{DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
     docked_panel_size, render_equalizer_state, render_main_player_state, render_playlist_frame,
@@ -1810,6 +1813,10 @@ pub(crate) struct MainWindowUiState {
     skin_browser_entries: Vec<SkinEntry>,
     selected_skin_index: usize,
     skin_reload_count: u32,
+    output_device_picker_visible: bool,
+    output_device_groups: OutputDeviceGroups,
+    selected_spotify_output_device: Option<String>,
+    output_switch_count: u32,
     file_dialog_visible: bool,
     directory_dialog_visible: bool,
     last_open_location: Option<String>,
@@ -1871,6 +1878,10 @@ impl MainWindowUiState {
             skin_browser_entries: Vec::new(),
             selected_skin_index: 0,
             skin_reload_count: 0,
+            output_device_picker_visible: false,
+            output_device_groups: OutputDeviceGroups::default(),
+            selected_spotify_output_device: None,
+            output_switch_count: 0,
             file_dialog_visible: false,
             directory_dialog_visible: false,
             last_open_location: None,
@@ -2094,6 +2105,75 @@ impl MainWindowUiState {
 
     pub(crate) fn set_skin_browser_visible(&mut self, visible: bool) {
         self.skin_browser_visible = visible;
+    }
+
+    pub(crate) fn is_output_device_picker_visible(&self) -> bool {
+        self.output_device_picker_visible
+    }
+
+    pub(crate) fn set_output_device_picker_visible(&mut self, visible: bool) {
+        self.output_device_picker_visible = visible;
+    }
+
+    pub(crate) fn set_output_devices(
+        &mut self,
+        system_devices: Vec<OutputDevice>,
+        spotify_devices: Vec<OutputDevice>,
+    ) {
+        self.output_device_groups = group_output_devices(system_devices, spotify_devices);
+    }
+
+    pub(crate) fn output_device_groups(&self) -> &OutputDeviceGroups {
+        &self.output_device_groups
+    }
+
+    pub(crate) fn selected_output_device(&self) -> Option<&str> {
+        self.app_state.config.output_device.as_deref()
+    }
+
+    pub(crate) fn selected_spotify_output_device(&self) -> Option<&str> {
+        self.selected_spotify_output_device.as_deref()
+    }
+
+    pub(crate) fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> bool {
+        match selection {
+            OutputDeviceSelection::Automatic => {
+                self.app_state.config.output_device = None;
+                self.output_switch_count = self.output_switch_count.saturating_add(1);
+                true
+            }
+            OutputDeviceSelection::System(id) => {
+                let found = self
+                    .output_device_groups
+                    .local
+                    .iter()
+                    .chain(self.output_device_groups.network.iter())
+                    .any(|device| device.id == id);
+                if !found {
+                    return false;
+                }
+                self.app_state.config.output_device = Some(id.to_string());
+                self.output_switch_count = self.output_switch_count.saturating_add(1);
+                true
+            }
+            OutputDeviceSelection::Spotify(id) => {
+                if !self
+                    .output_device_groups
+                    .spotify
+                    .iter()
+                    .any(|device| device.id == id)
+                {
+                    return false;
+                }
+                self.selected_spotify_output_device = Some(id.to_string());
+                self.output_switch_count = self.output_switch_count.saturating_add(1);
+                true
+            }
+        }
+    }
+
+    pub(crate) fn output_switch_count(&self) -> u32 {
+        self.output_switch_count
     }
 
     pub(crate) fn scan_skin_browser_dirs<P: AsRef<Path>>(&mut self, dirs: &[P]) -> io::Result<()> {

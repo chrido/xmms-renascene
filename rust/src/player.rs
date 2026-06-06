@@ -67,6 +67,43 @@ pub enum PlaybackEvent {
     Spectrum([f32; SPECTRUM_BANDS]),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputDevice {
+    pub id: String,
+    pub display_name: String,
+    pub class_name: String,
+    pub is_network: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OutputDeviceGroups {
+    pub local: Vec<OutputDevice>,
+    pub network: Vec<OutputDevice>,
+    pub spotify: Vec<OutputDevice>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputDeviceSelection<'a> {
+    Automatic,
+    System(&'a str),
+    Spotify(&'a str),
+}
+
+impl OutputDevice {
+    pub fn system(id: &str, display_name: &str, class_name: &str, is_network: bool) -> Self {
+        Self {
+            id: id.to_string(),
+            display_name: display_name.to_string(),
+            class_name: class_name.to_string(),
+            is_network,
+        }
+    }
+
+    pub fn spotify(id: &str, display_name: &str, device_type: &str) -> Self {
+        Self::system(id, display_name, device_type, true)
+    }
+}
+
 impl GStreamerBackend {
     pub fn new() -> Result<Self, String> {
         gst::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
@@ -274,6 +311,69 @@ impl Drop for GStreamerBackend {
     fn drop(&mut self) {
         let _ = self.pipeline.set_state(gst::State::Null);
     }
+}
+
+pub fn normalize_output_devices(devices: Vec<OutputDevice>) -> Vec<OutputDevice> {
+    let mut seen = std::collections::BTreeSet::new();
+    devices
+        .into_iter()
+        .filter(|device| {
+            !device.class_name.eq_ignore_ascii_case("alsa-proplist")
+                && seen.insert(device.id.clone())
+        })
+        .collect()
+}
+
+pub fn group_output_devices(
+    system_devices: Vec<OutputDevice>,
+    spotify_devices: Vec<OutputDevice>,
+) -> OutputDeviceGroups {
+    let mut groups = OutputDeviceGroups::default();
+    for device in normalize_output_devices(system_devices) {
+        if device.is_network {
+            groups.network.push(device);
+        } else {
+            groups.local.push(device);
+        }
+    }
+    groups.spotify = spotify_devices;
+    groups
+}
+
+pub fn list_gstreamer_output_devices() -> Result<Vec<OutputDevice>, String> {
+    gst::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
+    let monitor = gst::DeviceMonitor::new();
+    let caps = gst::Caps::builder("audio/x-raw").build();
+    monitor.add_filter(Some("Audio/Sink"), Some(&caps));
+    monitor
+        .start()
+        .map_err(|err| format!("failed to start GStreamer device monitor: {err}"))?;
+
+    let mut devices = Vec::new();
+    for device in monitor.devices() {
+        let Some(properties) = device.properties() else {
+            continue;
+        };
+        let structure_name = properties.name().to_string();
+        if structure_name == "alsa-proplist" {
+            continue;
+        }
+        let Some(node_name) = properties.get::<String>("node.name").ok() else {
+            continue;
+        };
+        let is_network = properties
+            .get::<String>("node.network")
+            .ok()
+            .is_some_and(|value| value == "true");
+        devices.push(OutputDevice {
+            id: node_name,
+            display_name: device.display_name().to_string(),
+            class_name: device.device_class().to_string(),
+            is_network,
+        });
+    }
+    monitor.stop();
+    Ok(normalize_output_devices(devices))
 }
 
 impl Default for Player {

@@ -133,13 +133,13 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port reload skin behavior.
   - [x] Port Alt+S shortcut integration.
 
-- [ ] Port output device picker.
-  - [ ] Enumerate GStreamer audio sink devices.
-  - [ ] Deduplicate PipeWire/Pulse devices like C implementation.
-  - [ ] Group local and network devices.
-  - [ ] Preserve automatic system-default output.
-  - [ ] Switch output device while preserving playback state.
-  - [ ] Include Spotify devices when authenticated.
+- [x] Port output device picker.
+  - [x] Enumerate GStreamer audio sink devices.
+  - [x] Deduplicate PipeWire/Pulse devices like C implementation.
+  - [x] Group local and network devices.
+  - [x] Preserve automatic system-default output.
+  - [x] Switch output device while preserving playback state.
+  - [x] Include Spotify devices when authenticated.
 
 - [ ] Port MPRIS D-Bus interface.
   - [ ] Own `org.mpris.MediaPlayer2.xmms_resuscitated`.
