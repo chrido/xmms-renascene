@@ -1930,9 +1930,11 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .set_preference_playlist_docked(true)
         .assert_panel_detached(PanelKind::Playlist, false)
         .assert_window_hidden(Window::Playlist)
+        .assert_docked_panel_size((275, 116 + 232))
         .set_preference_equalizer_docked(true)
         .assert_panel_detached(PanelKind::Equalizer, false)
         .assert_window_hidden(Window::Equalizer)
+        .assert_docked_panel_size((275, 116 + 116 + 232))
         .set_preference_convert_underscore(false)
         .assert_preference_convert_underscore(false)
         .set_preference_convert_twenty(false)
@@ -1940,6 +1942,27 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .set_preference_show_numbers_in_playlist(false)
         .assert_preference_show_numbers_in_playlist(false)
         .assert_preferences_saved();
+}
+
+#[test]
+fn preferences_docking_moves_hidden_panels_into_requested_mode() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_preferences_page(PreferencesPage::Options)
+        .set_preference_playlist_docked(false)
+        .assert_panel_detached(PanelKind::Playlist, true)
+        .assert_window_visible(Window::Playlist)
+        .set_preference_playlist_docked(true)
+        .assert_panel_detached(PanelKind::Playlist, false)
+        .assert_window_hidden(Window::Playlist)
+        .assert_docked_panel_size((275, 116 + 232))
+        .set_preference_equalizer_docked(false)
+        .assert_panel_detached(PanelKind::Equalizer, true)
+        .assert_window_visible(Window::Equalizer)
+        .set_preference_equalizer_docked(true)
+        .assert_panel_detached(PanelKind::Equalizer, false)
+        .assert_window_hidden(Window::Equalizer)
+        .assert_docked_panel_size((275, 116 + 116 + 232));
 }
 
 #[test]
