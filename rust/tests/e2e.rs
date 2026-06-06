@@ -14,8 +14,8 @@ use xmms_resuscitated::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
 use xmms_resuscitated::spotify::{
-    authorization_url, config_path as spotify_config_path, SpotifyAuthConfig, CLIENT_ID,
-    REDIRECT_URI,
+    authorization_url, config_path as spotify_config_path, SpotifyAuthConfig, SpotifyAuthState,
+    CLIENT_ID, REDIRECT_URI,
 };
 use xmms_resuscitated::ui::{
     PanelKind, PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
@@ -313,6 +313,31 @@ fn spotify_auth_config_and_url_match_c_contract() {
     assert!(auth_url.contains("code_challenge=pkce-challenge"));
 
     fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn spotify_token_refresh_state_matches_c_contract() {
+    let mut state = SpotifyAuthState::from_config(SpotifyAuthConfig {
+        refresh_token: Some("refresh-token".to_string()),
+    });
+
+    assert!(state.is_authenticated());
+    let expected_body =
+        format!("grant_type=refresh_token&refresh_token=refresh-token&client_id={CLIENT_ID}");
+    assert_eq!(
+        state.refresh_request_body().as_deref(),
+        Some(expected_body.as_str())
+    );
+
+    assert!(state.apply_token_response(
+        r#"{"access_token":"access-token","expires_in":120,"refresh_token":"new-refresh"}"#,
+        10,
+    ));
+    assert_eq!(state.access_token.as_deref(), Some("access-token"));
+    assert_eq!(state.refresh_token.as_deref(), Some("new-refresh"));
+    assert_eq!(state.token_expiry_unix, 70);
+    assert!(state.access_token_valid(69));
+    assert!(!state.access_token_valid(70));
 }
 
 #[test]

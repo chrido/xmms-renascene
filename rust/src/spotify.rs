@@ -15,6 +15,56 @@ pub struct SpotifyAuthConfig {
     pub refresh_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpotifyAuthState {
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub token_expiry_unix: i64,
+}
+
+impl SpotifyAuthState {
+    pub fn from_config(config: SpotifyAuthConfig) -> Self {
+        Self {
+            refresh_token: config.refresh_token,
+            ..Self::default()
+        }
+    }
+
+    pub fn is_authenticated(&self) -> bool {
+        self.refresh_token
+            .as_deref()
+            .is_some_and(|token| !token.is_empty())
+    }
+
+    pub fn access_token_valid(&self, now_unix: i64) -> bool {
+        self.access_token
+            .as_deref()
+            .is_some_and(|token| !token.is_empty() && now_unix < self.token_expiry_unix)
+    }
+
+    pub fn refresh_request_body(&self) -> Option<String> {
+        self.refresh_token.as_deref().map(|refresh_token| {
+            format!("grant_type=refresh_token&refresh_token={refresh_token}&client_id={CLIENT_ID}")
+        })
+    }
+
+    pub fn apply_token_response(&mut self, body: &str, now_unix: i64) -> bool {
+        let Some(access_token) = json_string_member(body, "access_token") else {
+            return false;
+        };
+        let Some(expires_in) = json_i64_member(body, "expires_in") else {
+            return false;
+        };
+
+        self.access_token = Some(access_token);
+        self.token_expiry_unix = now_unix + expires_in - 60;
+        if let Some(refresh_token) = json_string_member(body, "refresh_token") {
+            self.refresh_token = Some(refresh_token);
+        }
+        true
+    }
+}
+
 impl SpotifyAuthConfig {
     pub fn is_authenticated(&self) -> bool {
         self.refresh_token
@@ -77,6 +127,46 @@ fn parse_refresh_token(contents: &str) -> Option<String> {
     None
 }
 
+fn json_string_member(body: &str, key: &str) -> Option<String> {
+    let marker = format!("\"{key}\"");
+    let mut rest = body.split_once(&marker)?.1.trim_start();
+    rest = rest.strip_prefix(':')?.trim_start();
+    rest = rest.strip_prefix('"')?;
+
+    let mut value = String::new();
+    let mut escaped = false;
+    for ch in rest.chars() {
+        if escaped {
+            value.push(match ch {
+                '"' | '\\' | '/' => ch,
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                _ => ch,
+            });
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            return Some(value);
+        } else {
+            value.push(ch);
+        }
+    }
+    None
+}
+
+fn json_i64_member(body: &str, key: &str) -> Option<i64> {
+    let marker = format!("\"{key}\"");
+    let mut rest = body.split_once(&marker)?.1.trim_start();
+    rest = rest.strip_prefix(':')?.trim_start();
+    let digits: String = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '-')
+        .collect();
+    digits.parse().ok()
+}
+
 fn escape_auth_url(input: &str) -> String {
     const ALLOWED: &str = ":/?#[]@!$&'()*+,;=-._~";
     let mut out = String::with_capacity(input.len());
@@ -132,5 +222,31 @@ mod tests {
         assert!(url.contains(&format!("redirect_uri={REDIRECT_URI}")));
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains("code_challenge=challenge-value"));
+    }
+
+    #[test]
+    fn token_response_updates_access_expiry_and_optional_refresh_token() {
+        let mut state = SpotifyAuthState::from_config(SpotifyAuthConfig {
+            refresh_token: Some("old-refresh".to_string()),
+        });
+
+        assert_eq!(
+            state.refresh_request_body().as_deref(),
+            Some(
+                "grant_type=refresh_token&refresh_token=old-refresh&client_id=60687ec3a8e1407cb86dc18f14030fff"
+            )
+        );
+
+        assert!(state.apply_token_response(
+            r#"{"access_token":"access","expires_in":3600,"refresh_token":"new-refresh"}"#,
+            1000,
+        ));
+        assert_eq!(state.access_token.as_deref(), Some("access"));
+        assert_eq!(state.refresh_token.as_deref(), Some("new-refresh"));
+        assert_eq!(state.token_expiry_unix, 4540);
+        assert!(state.access_token_valid(4539));
+        assert!(!state.access_token_valid(4540));
+
+        assert!(!state.apply_token_response(r#"{"expires_in":3600}"#, 1000));
     }
 }
