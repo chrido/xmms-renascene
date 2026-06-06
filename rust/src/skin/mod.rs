@@ -132,7 +132,35 @@ impl SkinPixmapKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefaultSkin {
     pixmaps: BTreeMap<SkinPixmapKind, XpmImage>,
+    vis_colors: [[u8; 3]; 24],
 }
+
+pub const DEFAULT_VIS_COLORS: [[u8; 3]; 24] = [
+    [9, 34, 53],
+    [10, 18, 26],
+    [0, 54, 108],
+    [0, 58, 116],
+    [0, 62, 124],
+    [0, 66, 132],
+    [0, 70, 140],
+    [0, 74, 148],
+    [0, 78, 156],
+    [0, 82, 164],
+    [0, 86, 172],
+    [0, 92, 184],
+    [0, 98, 196],
+    [0, 104, 208],
+    [0, 110, 220],
+    [0, 116, 232],
+    [0, 122, 244],
+    [0, 128, 255],
+    [0, 128, 255],
+    [0, 104, 208],
+    [0, 80, 160],
+    [0, 56, 112],
+    [0, 32, 64],
+    [200, 200, 200],
+];
 
 impl DefaultSkin {
     pub fn load_bundled() -> io::Result<Self> {
@@ -202,7 +230,10 @@ impl DefaultSkin {
             pixmaps.insert(*kind, image);
         }
         apply_balance_fallback(&mut pixmaps);
-        Ok(Self { pixmaps })
+        Ok(Self {
+            pixmaps,
+            vis_colors: DEFAULT_VIS_COLORS,
+        })
     }
 
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
@@ -222,8 +253,12 @@ impl DefaultSkin {
         }
 
         apply_balance_fallback(&mut pixmaps);
+        let vis_colors = load_vis_colors_from_dir(dir)?;
 
-        Ok(Self { pixmaps })
+        Ok(Self {
+            pixmaps,
+            vis_colors,
+        })
     }
 
     pub fn load_from_path(path: &Path) -> io::Result<Self> {
@@ -257,8 +292,12 @@ impl DefaultSkin {
         }
 
         apply_balance_fallback(&mut pixmaps);
+        let vis_colors = load_vis_colors_from_archive(&entries)?;
 
-        Ok(Self { pixmaps })
+        Ok(Self {
+            pixmaps,
+            vis_colors,
+        })
     }
 
     fn find_skin_file(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -331,6 +370,10 @@ impl DefaultSkin {
 
     pub fn get(&self, kind: SkinPixmapKind) -> Option<&XpmImage> {
         self.pixmaps.get(&kind)
+    }
+
+    pub fn vis_colors(&self) -> &[[u8; 3]; 24] {
+        &self.vis_colors
     }
 }
 
@@ -430,6 +473,82 @@ fn find_archive_skin_entry<'a>(
     None
 }
 
+fn load_vis_colors_from_dir(dir: &Path) -> io::Result<[[u8; 3]; 24]> {
+    let path = dir.join("viscolor.txt");
+    if !path.exists() {
+        return Ok(DEFAULT_VIS_COLORS);
+    }
+    let contents = fs::read_to_string(&path)?;
+    Ok(parse_vis_colors(&contents))
+}
+
+fn load_vis_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<[[u8; 3]; 24]> {
+    let Some((name, contents)) = entries.iter().find(|(name, _)| {
+        Path::new(name)
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .is_some_and(|file_name| file_name.eq_ignore_ascii_case("viscolor.txt"))
+    }) else {
+        return Ok(DEFAULT_VIS_COLORS);
+    };
+
+    let contents = std::str::from_utf8(contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {err}")))?;
+    Ok(parse_vis_colors(contents))
+}
+
+fn parse_vis_colors(contents: &str) -> [[u8; 3]; 24] {
+    let mut colors = DEFAULT_VIS_COLORS;
+
+    for (index, line) in contents.lines().take(24).enumerate() {
+        let values: Vec<_> = if line.contains(',') {
+            line.split(',').collect()
+        } else {
+            line.split_whitespace().collect()
+        };
+        if values.len() < 3 {
+            continue;
+        }
+
+        let Some(r) = parse_c_int(values[0].trim()) else {
+            continue;
+        };
+        let Some(g) = parse_c_int(values[1].trim()) else {
+            continue;
+        };
+        let Some(b) = parse_c_int(values[2].trim()) else {
+            continue;
+        };
+        colors[index] = [clamp_u8(r), clamp_u8(g), clamp_u8(b)];
+    }
+
+    colors
+}
+
+fn parse_c_int(value: &str) -> Option<i32> {
+    let mut end = 0;
+    for (index, ch) in value.char_indices() {
+        if index == 0 && (ch == '-' || ch == '+') {
+            end = ch.len_utf8();
+            continue;
+        }
+        if !ch.is_ascii_digit() {
+            break;
+        }
+        end = index + ch.len_utf8();
+    }
+
+    if end == 0 || value[..end].chars().all(|ch| ch == '-' || ch == '+') {
+        return None;
+    }
+
+    value[..end].parse().ok()
+}
+
+fn clamp_u8(value: i32) -> u8 {
+    value.clamp(0, 255) as u8
+}
+
 fn apply_balance_fallback(pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>) {
     if !pixmaps.contains_key(&SkinPixmapKind::Balance) {
         if let Some(volume) = pixmaps.get(&SkinPixmapKind::Volume).cloned() {
@@ -465,6 +584,7 @@ static char * main_xpm[] = {
         assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
         assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 275);
         assert!(skin.get(SkinPixmapKind::Balance).is_some());
+        assert_eq!(skin.vis_colors()[0], [9, 34, 53]);
     }
 
     #[test]
@@ -487,6 +607,22 @@ static char * main_xpm[] = {
     }
 
     #[test]
+    fn directory_loader_accepts_viscolor_overrides() {
+        let tmp =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-viscolor", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("viscolor.txt"), "300,-1,42\n1 2 3\ninvalid\n").unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        assert_eq!(skin.vis_colors()[0], [255, 0, 42]);
+        assert_eq!(skin.vis_colors()[1], [1, 2, 3]);
+        assert_eq!(skin.vis_colors()[2], DEFAULT_VIS_COLORS[2]);
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
     fn path_loader_accepts_wsz_zip_skin_archives() {
         let path =
             std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-zip.wsz", std::process::id()));
@@ -498,12 +634,15 @@ static char * main_xpm[] = {
             .compression_method(zip::CompressionMethod::Deflated);
         archive.start_file("Example/Main.xpm", options).unwrap();
         archive.write_all(ONE_PIXEL_XPM.as_bytes()).unwrap();
+        archive.start_file("Example/viscolor.txt", options).unwrap();
+        archive.write_all(b"4,5,6\n").unwrap();
         archive.finish().unwrap();
 
         let skin = DefaultSkin::load_from_path(&path).unwrap();
         let main = skin.get(SkinPixmapKind::Main).unwrap();
         assert_eq!(main.width(), 1);
         assert_eq!(main.height(), 1);
+        assert_eq!(skin.vis_colors()[0], [4, 5, 6]);
 
         std::fs::remove_file(path).unwrap();
     }
