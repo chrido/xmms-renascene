@@ -64,7 +64,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [ ] Complete feature-dependent keyboard shortcuts as their target features land.
   - [x] Port drag-and-drop file handling.
   - [x] Port file and directory open dialogs.
-  - [ ] Port update timer behavior.
+  - [x] Port update timer behavior.
 
 - [ ] Complete playlist model.
   - [ ] Add files, directories, URLs, Spotify tracks, and podcast entries.

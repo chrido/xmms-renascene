@@ -418,6 +418,11 @@ impl UiE2e {
         self
     }
 
+    pub fn update_timer_tick(&mut self, elapsed_ms: u32) -> &mut Self {
+        self.state.update_timer_tick(elapsed_ms);
+        self
+    }
+
     pub fn show_jump_time_prompt(&mut self) -> &mut Self {
         self.state.set_jump_time_visible(true);
         self.sync_windows();

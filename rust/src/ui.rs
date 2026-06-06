@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gtk::prelude::*;
 
@@ -210,6 +211,20 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
                 panel_windows.equalizer_area.queue_draw();
                 panel_windows.playlist_area.queue_draw();
             }
+        });
+    }
+
+    {
+        let drawing_area = drawing_area.clone();
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+            if main_state.borrow_mut().update_timer_tick(100) {
+                drawing_area.queue_draw();
+                panel_windows.playlist_area.queue_draw();
+                panel_windows.equalizer_area.queue_draw();
+            }
+            gtk::glib::ControlFlow::Continue
         });
     }
 
@@ -1281,6 +1296,7 @@ pub(crate) struct MainWindowUiState {
     last_open_location: Option<String>,
     last_jump_time_ms: Option<i64>,
     position_position: i32,
+    update_accumulator_ms: u32,
     active: Option<MainControl>,
     active_inside: bool,
     slider_press_offset: i32,
@@ -1325,6 +1341,7 @@ impl MainWindowUiState {
             last_open_location: None,
             last_jump_time_ms: None,
             position_position: 0,
+            update_accumulator_ms: 0,
             active: None,
             active_inside: false,
             slider_press_offset: 0,
@@ -1830,6 +1847,22 @@ impl MainWindowUiState {
 
     pub(crate) fn position(&self) -> i32 {
         self.position_position
+    }
+
+    pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
+        if self.app_state.player.state() != PlayerState::Playing {
+            self.update_accumulator_ms = 0;
+            return false;
+        }
+
+        self.update_accumulator_ms = self.update_accumulator_ms.saturating_add(elapsed_ms);
+        let seconds = self.update_accumulator_ms / 1000;
+        self.update_accumulator_ms %= 1000;
+        if seconds > 0 {
+            self.position_position =
+                (self.position_position + seconds as i32).min(slider_max(MainSlider::Position));
+        }
+        true
     }
 
     pub(crate) fn click(&mut self, x: i32, y: i32) -> UiAction {

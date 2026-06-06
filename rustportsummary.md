@@ -57,6 +57,7 @@ Completed so far:
 - Added Rust preview keyboard shortcuts for currently ported main-window behavior: transport keys, open-files, shuffle/repeat/no-advance toggles, preferences, prompts, skin-browser placeholder, main shade, playlist/equalizer show-hide, and playlist/equalizer shade shortcuts.
 - Wired GTK file-list drag-and-drop for the Rust main and playlist preview windows. Drops on the main window replace the playlist and start preview playback, while drops on the playlist window append to existing entries.
 - Wired accepted Rust file and directory open-dialog selections into playlist state. File selections and directory selections replace the playlist and start preview playback, matching the C main-window open behavior at the current playlist-model level.
+- Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
 - Added a GTK smoke mode for non-interactive validation.

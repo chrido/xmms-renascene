@@ -214,6 +214,28 @@ fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
 }
 
 #[test]
+fn update_timer_advances_position_while_playing_only() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.assert_position(0)
+        .update_timer_tick(1_000)
+        .assert_position(0)
+        .press_shortcut(Shortcut::Play)
+        .update_timer_tick(900)
+        .assert_position(0)
+        .update_timer_tick(100)
+        .assert_position(1)
+        .update_timer_tick(2_000)
+        .assert_position(3)
+        .press_shortcut(Shortcut::Pause)
+        .update_timer_tick(1_000)
+        .assert_position(3)
+        .press_shortcut(Shortcut::Stop)
+        .update_timer_tick(1_000)
+        .assert_position(0);
+}
+
+#[test]
 fn transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
