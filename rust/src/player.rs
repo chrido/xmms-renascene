@@ -3,6 +3,7 @@ use gstreamer as gst;
 use std::cell::{Cell, RefCell};
 
 const SPECTRUM_BANDS: usize = 75;
+const EQUALIZER_BANDS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
@@ -29,6 +30,7 @@ pub struct GStreamerBackend {
     audio_sink_bin: gst::Bin,
     audio_chain: Vec<&'static str>,
     panorama: gst::Element,
+    equalizer: gst::Element,
     requested_state: Cell<PlayerState>,
     requested_uri: RefCell<Option<String>>,
 }
@@ -37,6 +39,7 @@ struct AudioSinkBin {
     bin: gst::Bin,
     chain: Vec<&'static str>,
     panorama: gst::Element,
+    equalizer: gst::Element,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -72,6 +75,7 @@ impl GStreamerBackend {
             audio_sink_bin: audio_sink.bin,
             audio_chain: audio_sink.chain,
             panorama: audio_sink.panorama,
+            equalizer: audio_sink.equalizer,
             requested_state: Cell::new(PlayerState::Stopped),
             requested_uri: RefCell::new(None),
         })
@@ -188,6 +192,23 @@ impl GStreamerBackend {
 
     pub fn balance_percent(&self) -> i32 {
         (self.panorama.property::<f32>("panorama") * 100.0).round() as i32
+    }
+
+    pub fn set_equalizer_band_db(&self, band: usize, db: f64) -> Result<(), String> {
+        let property = equalizer_band_property(band)?;
+        self.equalizer.set_property(property, db.clamp(-24.0, 12.0));
+        Ok(())
+    }
+
+    pub fn equalizer_band_db(&self, band: usize) -> Result<f64, String> {
+        let property = equalizer_band_property(band)?;
+        Ok(self.equalizer.property::<f64>(property))
+    }
+
+    pub fn set_equalizer_bands_db(&self, bands: [f64; EQUALIZER_BANDS]) {
+        for (index, db) in bands.into_iter().enumerate() {
+            let _ = self.set_equalizer_band_db(index, db);
+        }
     }
 
     fn event_from_message(&self, message: &gst::Message) -> Option<PlaybackEvent> {
@@ -402,6 +423,7 @@ fn build_audio_sink_bin() -> Result<AudioSinkBin, String> {
         bin,
         chain: names,
         panorama,
+        equalizer,
     })
 }
 
@@ -410,6 +432,22 @@ fn make_element(factory: &str, name: &str) -> Result<gst::Element, String> {
         .name(name)
         .build()
         .map_err(|err| format!("failed to create GStreamer {factory}: {err}"))
+}
+
+fn equalizer_band_property(band: usize) -> Result<&'static str, String> {
+    match band {
+        0 => Ok("band0"),
+        1 => Ok("band1"),
+        2 => Ok("band2"),
+        3 => Ok("band3"),
+        4 => Ok("band4"),
+        5 => Ok("band5"),
+        6 => Ok("band6"),
+        7 => Ok("band7"),
+        8 => Ok("band8"),
+        9 => Ok("band9"),
+        _ => Err(format!("equalizer band index {band} is out of range")),
+    }
 }
 
 fn event_from_message(
@@ -641,6 +679,30 @@ mod tests {
         backend.set_balance_percent(25);
         assert_eq!(backend.volume_percent(), 33);
         assert_eq!(backend.balance_percent(), 25);
+    }
+
+    #[test]
+    fn gstreamer_backend_equalizer_bands_map_to_gstreamer_properties() {
+        let _guard = gst_test_guard();
+        let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
+
+        backend
+            .set_equalizer_band_db(0, 24.0)
+            .expect("band 0 should be set");
+        backend
+            .set_equalizer_band_db(9, -48.0)
+            .expect("band 9 should be set");
+        assert_eq!(backend.equalizer_band_db(0).unwrap(), 12.0);
+        assert_eq!(backend.equalizer_band_db(9).unwrap(), -24.0);
+        assert!(backend.set_equalizer_band_db(10, 0.0).is_err());
+
+        backend.set_equalizer_bands_db([-9.0, -7.0, -5.0, -3.0, -1.0, 1.0, 3.0, 5.0, 7.0, 9.0]);
+        for (index, expected) in [-9.0, -7.0, -5.0, -3.0, -1.0, 1.0, 3.0, 5.0, 7.0, 9.0]
+            .into_iter()
+            .enumerate()
+        {
+            assert_eq!(backend.equalizer_band_db(index).unwrap(), expected);
+        }
     }
 
     #[test]

@@ -77,6 +77,7 @@ Completed so far:
 - Added typed Rust GStreamer bus-event polling for end-of-stream, errors, duration changes, tag metadata, and spectrum magnitudes, with unit coverage using real GStreamer message objects.
 - Added Rust GStreamer playback-control methods for URI playback, stop, pause, unpause, pause toggling, seeking, and position/duration queries, with deterministic tests using generated silent WAV input and `fakesink`.
 - Added Rust GStreamer volume and balance property controls plus player-side stream-info, duration, and spectrum update hooks; bitrate updates now flow from tag bus events into the Rust player state.
+- Added Rust GStreamer equalizer band syncing helpers for all ten `equalizer-10bands` properties, including dB clamping and coverage for every band.
 - Fixed the Rust playlist close path to avoid GTK hide/resize callbacks re-entering `MainWindowUiState` while a `RefCell` borrow is still active.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
