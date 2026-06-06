@@ -12,8 +12,8 @@ use xmms_resuscitated::podcast::{
     download_url_with_retries, download_with_retries, fetch_url_into_playlist, handle_url_response,
     mark_cache_failed_and_skip_current, parse_feed, prepare_playback_uri, refresh_interval_seconds,
     retry_delay_seconds, stale_cache_files, status_should_retry, write_cache_file,
-    PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse, PodcastResponseAction,
-    PodcastUrlKind,
+    PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse, PodcastRefreshScheduler,
+    PodcastResponseAction, PodcastUrlKind,
 };
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
@@ -2090,6 +2090,23 @@ fn podcast_e2e_failed_current_podcast_item_is_skipped() {
     ));
     assert_eq!(playlist.position(), Some(1));
     assert_eq!(playlist.entries()[0].title, "failed: Needs cache");
+}
+
+#[test]
+fn podcast_e2e_refresh_scheduler_returns_due_feeds_and_reschedules() {
+    let mut scheduler = PodcastRefreshScheduler::new();
+    scheduler.add_feed("https://example.test/z.xml");
+    scheduler.add_feed("https://example.test/a.xml");
+    scheduler.schedule_from(10, 1);
+
+    assert_eq!(scheduler.next_refresh_unix(), Some(70));
+    assert!(scheduler.due_feeds(69).is_empty());
+    assert_eq!(
+        scheduler.due_feeds(70),
+        vec!["https://example.test/a.xml", "https://example.test/z.xml"]
+    );
+    scheduler.mark_refreshed(70, 2);
+    assert_eq!(scheduler.next_refresh_unix(), Some(190));
 }
 
 #[test]

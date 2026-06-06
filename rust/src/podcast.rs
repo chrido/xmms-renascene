@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -31,6 +32,12 @@ pub struct PodcastCacheEntry {
     pub name: String,
     pub modified_unix: i64,
     pub size: u64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PodcastRefreshScheduler {
+    feeds: BTreeSet<String>,
+    next_refresh_unix: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,6 +392,58 @@ pub fn retry_delay_seconds(retry_after: Option<&str>, attempt: u32) -> u32 {
 pub fn refresh_interval_seconds(minutes: i32) -> u32 {
     let minutes = if minutes > 0 { minutes } else { 60 };
     (minutes as u32) * 60
+}
+
+impl PodcastRefreshScheduler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn feeds(&self) -> Vec<&str> {
+        self.feeds.iter().map(String::as_str).collect()
+    }
+
+    pub fn next_refresh_unix(&self) -> Option<i64> {
+        self.next_refresh_unix
+    }
+
+    pub fn add_feed(&mut self, feed: impl Into<String>) {
+        let feed = feed.into();
+        if !feed.is_empty() {
+            self.feeds.insert(feed);
+        }
+    }
+
+    pub fn remove_feed(&mut self, feed: &str) {
+        self.feeds.remove(feed);
+        if self.feeds.is_empty() {
+            self.next_refresh_unix = None;
+        }
+    }
+
+    pub fn schedule_from(&mut self, now_unix: i64, interval_minutes: i32) {
+        if self.feeds.is_empty() {
+            self.next_refresh_unix = None;
+        } else {
+            self.next_refresh_unix =
+                Some(now_unix + i64::from(refresh_interval_seconds(interval_minutes)));
+        }
+    }
+
+    pub fn due_feeds(&self, now_unix: i64) -> Vec<&str> {
+        if self
+            .next_refresh_unix
+            .is_some_and(|next| now_unix >= next && !self.feeds.is_empty())
+        {
+            self.feeds()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn mark_refreshed(&mut self, now_unix: i64, interval_minutes: i32) {
+        self.schedule_from(now_unix, interval_minutes);
+    }
 }
 
 pub fn discover_cached_duration_ms(cache_path: &Path) -> Result<Option<i64>, String> {
@@ -752,6 +811,28 @@ mod tests {
         assert_eq!(fs::read(&outcome.cache_path).unwrap(), b"ok");
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_scheduler_tracks_due_feeds_and_reschedules() {
+        let mut scheduler = PodcastRefreshScheduler::new();
+        scheduler.add_feed("https://example.test/b.xml");
+        scheduler.add_feed("https://example.test/a.xml");
+        scheduler.add_feed("");
+        scheduler.schedule_from(1_000, 0);
+
+        assert_eq!(scheduler.next_refresh_unix(), Some(4_600));
+        assert!(scheduler.due_feeds(4_599).is_empty());
+        assert_eq!(
+            scheduler.due_feeds(4_600),
+            vec!["https://example.test/a.xml", "https://example.test/b.xml"]
+        );
+
+        scheduler.mark_refreshed(4_600, 5);
+        assert_eq!(scheduler.next_refresh_unix(), Some(4_900));
+        scheduler.remove_feed("https://example.test/a.xml");
+        scheduler.remove_feed("https://example.test/b.xml");
+        assert_eq!(scheduler.next_refresh_unix(), None);
     }
 
     #[test]

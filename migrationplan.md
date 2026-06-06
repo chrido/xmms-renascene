@@ -168,7 +168,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port authentication prompts.
   - [x] Port error handling and empty states.
 
-- [ ] Port podcast integration.
+- [x] Port podcast integration.
   - [x] Detect feed URLs vs direct audio streams.
   - [x] Fetch RSS and Atom feeds.
   - [x] Parse RSS/Atom enclosures, media content URLs, and enclosure links.
@@ -179,7 +179,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Discover cached duration with GStreamer.
   - [x] Retry 429 and 503 downloads with backoff.
   - [x] Cleanup cache by TTL.
-  - [ ] Refresh feeds on timer.
+  - [x] Refresh feeds on timer.
   - [x] Skip failed current podcast item when needed.
   - [x] Wire live HTTP fetch/download execution.
 
