@@ -243,10 +243,11 @@ fn build_preview_window(
     click.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let drawing_area = drawing_area.clone();
+        let window = window.clone();
         let main_state = Rc::clone(&main_state);
         click.connect_pressed(move |gesture, n_press, x, y| {
-            let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
-            let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
+            let (base_x, base_y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            let docked_panel = { main_state.borrow().docked_panel_at(base_x, base_y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
                 match kind {
                     PanelKind::Equalizer => {
@@ -288,7 +289,26 @@ fn build_preview_window(
                 }
                 return;
             }
-            main_state.borrow_mut().press(x, y);
+            if main_state.borrow().main_title_drag_region(base_x, base_y) {
+                let Some(device) = gesture.current_event_device() else {
+                    return;
+                };
+                let Some(surface) = window.surface() else {
+                    return;
+                };
+                let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
+                    return;
+                };
+                toplevel.begin_move(
+                    &device,
+                    gesture.current_button() as i32,
+                    x,
+                    y,
+                    gesture.current_event_time(),
+                );
+                return;
+            }
+            main_state.borrow_mut().press(base_x, base_y);
             drawing_area.queue_draw();
         });
     }
@@ -4732,6 +4752,19 @@ impl MainWindowUiState {
         y >= 0 && y < title_height && !self.panel_title_button_hit(kind, x, y)
     }
 
+    pub(crate) fn main_title_drag_region(&self, x: i32, y: i32) -> bool {
+        y >= 0
+            && y < MAIN_TITLEBAR_HEIGHT
+            && [
+                MainPushButton::Menu,
+                MainPushButton::Minimize,
+                MainPushButton::Shade,
+                MainPushButton::Close,
+            ]
+            .into_iter()
+            .all(|button| !push_button_rect(button).contains(x, y))
+    }
+
     pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {
         !self.playlist_shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
     }
@@ -6581,6 +6614,18 @@ mod tests {
 
         state.press(265, 4);
         assert_eq!(state.release(265, 4), UiAction::Quit);
+    }
+
+    #[test]
+    fn main_titlebar_drag_region_excludes_title_buttons() {
+        let state = MainWindowUiState::default();
+
+        assert!(state.main_title_drag_region(40, 7));
+        assert!(!state.main_title_drag_region(6, 4));
+        assert!(!state.main_title_drag_region(244, 4));
+        assert!(!state.main_title_drag_region(254, 4));
+        assert!(!state.main_title_drag_region(264, 4));
+        assert!(!state.main_title_drag_region(40, MAIN_TITLEBAR_HEIGHT));
     }
 
     #[test]
