@@ -43,7 +43,8 @@ Completed so far:
 - Added a GTK preview window that renders the default main reset state, including titlebar buttons, transport buttons, toggle buttons, text boxes, volume/balance/position sliders, blank time numbers, visualization grid, mono/stereo indicator, and stopped play-status indicator.
 - Wired the Rust main-window GTK preview to click and motion controllers: titlebar close/minimize/shade, play/pause/stop/previous/next/eject press states, shuffle/repeat/equalizer/playlist toggles, and volume/balance/position slider dragging now update Rust runtime state and redraw.
 - Added Rust GTK preview windows for the equalizer and playlist; the main-window EQ and PL toggle buttons now show and hide those skinned windows.
-- Added a Rust UI e2e harness for scripted startup settings, main-window clicks, and window visibility assertions. Current scenarios cover titlebar buttons, transport buttons, shuffle/repeat, sliders, playlist/equalizer toggles, and startup visibility settings.
+- Added a Rust UI e2e harness for scripted startup settings, main-window clicks, and window visibility assertions. Current scenarios cover titlebar buttons, visible main menu, transport buttons, shuffle/repeat, sliders, playlist/equalizer toggles, and startup visibility settings.
+- Moved Rust main-window input handling to capture-phase GTK window controllers so clicks reach the skinned controls reliably, and added a visible popover menu for the main menu button.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
 - Re-captured `rust-preview-screenshots/main-preview.png` and compared it to `reference-screenshots/main-reset.png`; the latest ImageMagick AE and RMSE metrics are both `0`.

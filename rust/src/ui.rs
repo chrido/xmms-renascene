@@ -71,6 +71,7 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         .focusable(true)
         .build();
     let panel_windows = Rc::new(PanelWindows::new(app, &skin));
+    let menu_popover = Rc::new(build_main_menu_popover(app, &drawing_area));
 
     {
         let skin = Rc::clone(&skin);
@@ -94,6 +95,7 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
 
     let click = gtk::GestureClick::new();
     click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let drawing_area = drawing_area.clone();
         let main_state = Rc::clone(&main_state);
@@ -107,19 +109,28 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         let app = app.clone();
         let window = window.clone();
         let drawing_area = drawing_area.clone();
+        let menu_popover = Rc::clone(&menu_popover);
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, x, y);
             let action = main_state.borrow_mut().release(x, y);
-            apply_ui_action(action, &app, &window, &drawing_area, &main_state.borrow());
+            apply_ui_action(
+                action,
+                &app,
+                &window,
+                &drawing_area,
+                &menu_popover,
+                &main_state,
+            );
             sync_panel_windows(&panel_windows, &main_state.borrow());
             drawing_area.queue_draw();
         });
     }
-    drawing_area.add_controller(click);
+    window.add_controller(click);
 
     let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let drawing_area = drawing_area.clone();
         let main_state = Rc::clone(&main_state);
@@ -130,11 +141,42 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
             }
         });
     }
-    drawing_area.add_controller(motion);
+    window.add_controller(motion);
 
     window.set_child(Some(&drawing_area));
     window.present();
     Ok(())
+}
+
+fn build_main_menu_popover(app: &gtk::Application, parent: &gtk::DrawingArea) -> gtk::Popover {
+    let popover = gtk::Popover::builder()
+        .autohide(true)
+        .has_arrow(false)
+        .build();
+    popover.set_parent(parent);
+
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    for label in [
+        "Open Files...",
+        "Open Location...",
+        "Preferences",
+        "Skin Browser",
+    ] {
+        let item = gtk::Button::with_label(label);
+        item.set_halign(gtk::Align::Fill);
+        menu_box.append(&item);
+    }
+
+    let quit = gtk::Button::with_label("Quit");
+    quit.set_halign(gtk::Align::Fill);
+    {
+        let app = app.clone();
+        quit.connect_clicked(move |_| app.quit());
+    }
+    menu_box.append(&quit);
+
+    popover.set_child(Some(&menu_box));
+    popover
 }
 
 #[derive(Debug, Clone)]
@@ -244,12 +286,14 @@ pub(crate) enum UiAction {
     Quit,
     Minimize,
     Resize,
+    ShowMenu,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct MainWindowUiState {
     app_state: AppState,
     shaded: bool,
+    menu_visible: bool,
     position_position: i32,
     active: Option<MainControl>,
     active_inside: bool,
@@ -267,6 +311,7 @@ impl MainWindowUiState {
         Self {
             app_state,
             shaded: false,
+            menu_visible: false,
             position_position: 0,
             active: None,
             active_inside: false,
@@ -305,6 +350,14 @@ impl MainWindowUiState {
 
     pub(crate) fn is_shaded(&self) -> bool {
         self.shaded
+    }
+
+    pub(crate) fn is_menu_visible(&self) -> bool {
+        self.menu_visible
+    }
+
+    pub(crate) fn set_menu_visible(&mut self, visible: bool) {
+        self.menu_visible = visible;
     }
 
     pub(crate) fn player_state(&self) -> PlayerState {
@@ -432,6 +485,10 @@ impl MainWindowUiState {
         match button {
             MainPushButton::Close => UiAction::Quit,
             MainPushButton::Minimize => UiAction::Minimize,
+            MainPushButton::Menu => {
+                self.menu_visible = true;
+                UiAction::ShowMenu
+            }
             MainPushButton::Shade => {
                 self.shaded = !self.shaded;
                 UiAction::Resize
@@ -457,7 +514,7 @@ impl MainWindowUiState {
                 self.position_position = 0;
                 UiAction::None
             }
-            MainPushButton::Menu | MainPushButton::Eject => UiAction::None,
+            MainPushButton::Eject => UiAction::None,
         }
     }
 
@@ -671,14 +728,15 @@ fn apply_ui_action(
     app: &gtk::Application,
     window: &gtk::ApplicationWindow,
     drawing_area: &gtk::DrawingArea,
-    state: &MainWindowUiState,
+    menu_popover: &gtk::Popover,
+    state: &Rc<RefCell<MainWindowUiState>>,
 ) {
     match action {
         UiAction::None => {}
         UiAction::Quit => app.quit(),
         UiAction::Minimize => window.minimize(),
         UiAction::Resize => {
-            let height = if state.shaded {
+            let height = if state.borrow().shaded {
                 MAIN_TITLEBAR_HEIGHT
             } else {
                 MAIN_WINDOW_HEIGHT
@@ -686,7 +744,25 @@ fn apply_ui_action(
             drawing_area.set_content_height(height * DEFAULT_SCALE);
             window.set_default_size(MAIN_WINDOW_WIDTH * DEFAULT_SCALE, height * DEFAULT_SCALE);
         }
+        UiAction::ShowMenu => {
+            show_main_menu(menu_popover, drawing_area);
+            let state = Rc::clone(state);
+            menu_popover.connect_closed(move |_| state.borrow_mut().set_menu_visible(false));
+        }
     }
+}
+
+fn show_main_menu(menu_popover: &gtk::Popover, drawing_area: &gtk::DrawingArea) {
+    let scale_x = drawing_area.allocated_width().max(1) as f64 / f64::from(MAIN_WINDOW_WIDTH);
+    let scale_y = drawing_area.allocated_height().max(1) as f64 / f64::from(MAIN_WINDOW_HEIGHT);
+    let rect = gtk::gdk::Rectangle::new(
+        (6.0 * scale_x) as i32,
+        (12.0 * scale_y) as i32,
+        (9.0 * scale_x).max(1.0) as i32,
+        (1.0 * scale_y).max(1.0) as i32,
+    );
+    menu_popover.set_pointing_to(Some(&rect));
+    menu_popover.popup();
 }
 
 #[cfg(test)]

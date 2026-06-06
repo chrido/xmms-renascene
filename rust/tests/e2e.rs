@@ -8,7 +8,8 @@ fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
     app.click(MainTarget::MENU)
         .assert_window_visible(Window::Player)
         .assert_player_not_minimized()
-        .assert_player_unshaded();
+        .assert_player_unshaded()
+        .assert_menu_visible();
 
     app.click(MainTarget::MINIMIZE)
         .assert_window_visible(Window::Player)

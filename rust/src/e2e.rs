@@ -176,6 +176,22 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_menu_visible(&mut self) -> &mut Self {
+        assert!(
+            self.state.is_menu_visible(),
+            "expected main menu to be visible"
+        );
+        self
+    }
+
+    pub fn assert_menu_hidden(&mut self) -> &mut Self {
+        assert!(
+            !self.state.is_menu_visible(),
+            "expected main menu to be hidden"
+        );
+        self
+    }
+
     pub fn assert_player_state(&mut self, expected: PlayerState) -> &mut Self {
         assert_eq!(self.state.player_state(), expected);
         self
@@ -216,7 +232,7 @@ impl UiE2e {
 
     fn apply_action(&mut self, action: UiAction) {
         match action {
-            UiAction::None | UiAction::Resize => {}
+            UiAction::None | UiAction::Resize | UiAction::ShowMenu => {}
             UiAction::Minimize => self.main_minimized = true,
             UiAction::Quit => {
                 self.main_visible = false;
