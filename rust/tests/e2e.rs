@@ -1,4 +1,6 @@
-use xmms_resuscitated::e2e::{MainTarget, MenuItem, PanelTarget, PlayerSettings, UiE2e, Window};
+use xmms_resuscitated::e2e::{
+    MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
+};
 use xmms_resuscitated::player::PlayerState;
 use xmms_resuscitated::ui::{PanelKind, PlaylistMenuKind};
 
@@ -47,7 +49,10 @@ fn main_menu_items_trigger_their_preview_actions() {
         .assert_menu_visible()
         .click_menu_item(MenuItem::OpenLocation)
         .assert_menu_hidden()
-        .assert_window_visible(Window::OpenLocation);
+        .assert_window_visible(Window::OpenLocation)
+        .accept_open_location("https://example.test/song.ogg")
+        .assert_window_hidden(Window::OpenLocation)
+        .assert_last_open_location("https://example.test/song.ogg");
 
     app.click(MainTarget::MENU)
         .assert_menu_visible()
@@ -65,6 +70,41 @@ fn main_menu_items_trigger_their_preview_actions() {
         .assert_menu_visible()
         .click_menu_item(MenuItem::Quit)
         .assert_window_hidden(Window::Player);
+}
+
+#[test]
+fn main_prompts_accept_location_and_jump_time_values() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.click(MainTarget::MENU)
+        .click_menu_item(MenuItem::OpenLocation)
+        .assert_window_visible(Window::OpenLocation)
+        .accept_open_location("file:///tmp/example.mp3")
+        .assert_window_hidden(Window::OpenLocation)
+        .assert_last_open_location("file:///tmp/example.mp3");
+
+    app.show_jump_time_prompt()
+        .assert_window_visible(Window::JumpTime)
+        .accept_jump_time("1:23")
+        .assert_window_hidden(Window::JumpTime)
+        .assert_last_jump_time_ms(83_000)
+        .assert_position(83);
+
+    app.show_jump_time_prompt()
+        .accept_jump_time("42")
+        .assert_last_jump_time_ms(42_000)
+        .assert_position(42);
+}
+
+#[test]
+fn prompt_keyboard_shortcuts_open_location_and_jump_time() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.press_shortcut(Shortcut::OpenLocation)
+        .assert_window_visible(Window::OpenLocation);
+
+    app.press_shortcut(Shortcut::JumpTime)
+        .assert_window_visible(Window::JumpTime);
 }
 
 #[test]

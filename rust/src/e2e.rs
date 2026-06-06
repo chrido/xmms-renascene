@@ -46,6 +46,7 @@ pub enum Window {
     Equalizer,
     Preferences,
     OpenLocation,
+    JumpTime,
     SkinBrowser,
 }
 
@@ -129,6 +130,12 @@ pub enum MenuItem {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shortcut {
+    OpenLocation,
+    JumpTime,
+}
+
 impl MainTarget {
     pub const MENU: Self = Self::Push(MainPushButton::Menu);
     pub const MINIMIZE: Self = Self::Push(MainPushButton::Minimize);
@@ -182,6 +189,7 @@ pub struct UiE2e {
     equalizer_visible: bool,
     preferences_visible: bool,
     open_location_visible: bool,
+    jump_time_visible: bool,
     skin_browser_visible: bool,
     file_dialog_visible: bool,
 }
@@ -196,6 +204,7 @@ impl UiE2e {
             equalizer_visible: false,
             preferences_visible: false,
             open_location_visible: false,
+            jump_time_visible: false,
             skin_browser_visible: false,
             file_dialog_visible: false,
         };
@@ -283,6 +292,33 @@ impl UiE2e {
                 self.apply_action(UiAction::Quit);
             }
         }
+        self.sync_windows();
+        self
+    }
+
+    pub fn press_shortcut(&mut self, shortcut: Shortcut) -> &mut Self {
+        match shortcut {
+            Shortcut::OpenLocation => self.state.set_open_location_visible(true),
+            Shortcut::JumpTime => self.state.set_jump_time_visible(true),
+        }
+        self.sync_windows();
+        self
+    }
+
+    pub fn show_jump_time_prompt(&mut self) -> &mut Self {
+        self.state.set_jump_time_visible(true);
+        self.sync_windows();
+        self
+    }
+
+    pub fn accept_open_location(&mut self, text: &str) -> &mut Self {
+        self.state.accept_open_location(text);
+        self.sync_windows();
+        self
+    }
+
+    pub fn accept_jump_time(&mut self, text: &str) -> &mut Self {
+        self.state.accept_jump_time(text);
         self.sync_windows();
         self
     }
@@ -502,6 +538,16 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_last_open_location(&mut self, expected: &str) -> &mut Self {
+        assert_eq!(self.state.last_open_location(), Some(expected));
+        self
+    }
+
+    pub fn assert_last_jump_time_ms(&mut self, expected: i64) -> &mut Self {
+        assert_eq!(self.state.last_jump_time_ms(), Some(expected));
+        self
+    }
+
     pub fn is_window_visible(&self, window: Window) -> bool {
         match window {
             Window::Player => self.main_visible,
@@ -509,6 +555,7 @@ impl UiE2e {
             Window::Equalizer => self.equalizer_visible,
             Window::Preferences => self.preferences_visible,
             Window::OpenLocation => self.open_location_visible,
+            Window::JumpTime => self.jump_time_visible,
             Window::SkinBrowser => self.skin_browser_visible,
         }
     }
@@ -543,6 +590,7 @@ impl UiE2e {
                 self.equalizer_visible = false;
                 self.preferences_visible = false;
                 self.open_location_visible = false;
+                self.jump_time_visible = false;
                 self.skin_browser_visible = false;
             }
         }
@@ -557,6 +605,7 @@ impl UiE2e {
         self.equalizer_visible = visibility.equalizer;
         self.preferences_visible = self.state.is_preferences_visible();
         self.open_location_visible = self.state.is_open_location_visible();
+        self.jump_time_visible = self.state.is_jump_time_visible();
         self.skin_browser_visible = self.state.is_skin_browser_visible();
     }
 

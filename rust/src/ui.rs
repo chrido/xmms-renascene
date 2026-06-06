@@ -87,7 +87,13 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let panel_windows = Rc::new(PanelWindows::new(app, &skin, &main_state, &drawing_area));
+    let panel_windows = Rc::new(PanelWindows::new(
+        app,
+        &skin,
+        &main_state,
+        &drawing_area,
+        &window,
+    ));
     sync_panel_windows(&panel_windows, &main_state.borrow());
     let menu_popover = Rc::new(build_main_menu_popover(
         app,
@@ -168,6 +174,26 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         });
     }
     window.add_controller(motion);
+
+    let key_controller = gtk::EventControllerKey::new();
+    {
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+            if shortcut_matches(key, state, "<Control>l") {
+                main_state.borrow_mut().set_open_location_visible(true);
+                panel_windows.open_location.present();
+                return gtk::glib::Propagation::Stop;
+            }
+            if shortcut_matches(key, state, "<Control>j") {
+                main_state.borrow_mut().set_jump_time_visible(true);
+                panel_windows.jump_time.present();
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+    }
+    window.add_controller(key_controller);
 
     {
         let panel_windows = Rc::clone(&panel_windows);
@@ -301,6 +327,7 @@ struct PanelWindows {
     playlist_area: gtk::DrawingArea,
     preferences: gtk::ApplicationWindow,
     open_location: gtk::ApplicationWindow,
+    jump_time: gtk::ApplicationWindow,
     skin_browser: gtk::ApplicationWindow,
 }
 
@@ -310,11 +337,14 @@ impl PanelWindows {
         skin: &Rc<DefaultSkin>,
         main_state: &Rc<RefCell<MainWindowUiState>>,
         main_area: &gtk::DrawingArea,
+        parent_window: &gtk::ApplicationWindow,
     ) -> Self {
         let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
         let (playlist, playlist_area) = build_playlist_window(app, skin, main_state, main_area);
         let preferences = build_preferences_window(app, main_state);
-        let open_location = build_open_location_window(app, main_state);
+        let open_location =
+            build_prompt_window(app, parent_window, main_state, PromptKind::OpenLocation);
+        let jump_time = build_prompt_window(app, parent_window, main_state, PromptKind::JumpTime);
         let skin_browser = build_skin_browser_window(app, main_state);
         Self {
             equalizer,
@@ -323,6 +353,7 @@ impl PanelWindows {
             playlist_area,
             preferences,
             open_location,
+            jump_time,
             skin_browser,
         }
     }
@@ -510,19 +541,103 @@ fn build_preferences_window(
     )
 }
 
-fn build_open_location_window(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptKind {
+    OpenLocation,
+    JumpTime,
+}
+
+impl PromptKind {
+    fn title(self) -> &'static str {
+        match self {
+            Self::OpenLocation => "Play Location",
+            Self::JumpTime => "Jump to Time",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::OpenLocation => "https://...",
+            Self::JumpTime => "seconds or mm:ss",
+        }
+    }
+
+    fn set_visible(self, state: &mut MainWindowUiState, visible: bool) {
+        match self {
+            Self::OpenLocation => state.set_open_location_visible(visible),
+            Self::JumpTime => state.set_jump_time_visible(visible),
+        }
+    }
+
+    fn accept(self, state: &mut MainWindowUiState, text: &str) {
+        match self {
+            Self::OpenLocation => state.accept_open_location(text),
+            Self::JumpTime => state.accept_jump_time(text),
+        }
+    }
+}
+
+fn build_prompt_window(
     app: &gtk::Application,
+    parent: &gtk::ApplicationWindow,
     main_state: &Rc<RefCell<MainWindowUiState>>,
+    kind: PromptKind,
 ) -> gtk::ApplicationWindow {
-    build_placeholder_window(
-        app,
-        main_state,
-        "Open Location",
-        420,
-        120,
-        "Open Location placeholder for the Rust port",
-        MainWindowUiState::set_open_location_visible,
-    )
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title(kind.title())
+        .transient_for(parent)
+        .modal(true)
+        .resizable(false)
+        .default_width(360)
+        .default_height(110)
+        .build();
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    let entry = gtk::Entry::builder()
+        .placeholder_text(kind.placeholder())
+        .build();
+    content.append(&entry);
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let cancel = gtk::Button::with_label("Cancel");
+    let ok = gtk::Button::with_label("OK");
+    buttons.append(&cancel);
+    buttons.append(&ok);
+    content.append(&buttons);
+    window.set_child(Some(&content));
+
+    {
+        let window = window.clone();
+        cancel.connect_clicked(move |_| window.hide());
+    }
+    {
+        let window = window.clone();
+        let entry = entry.clone();
+        let main_state = Rc::clone(main_state);
+        ok.connect_clicked(move |_| {
+            kind.accept(&mut main_state.borrow_mut(), entry.text().as_str());
+            window.hide();
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_close_request(move |window| {
+            kind.set_visible(&mut main_state.borrow_mut(), false);
+            window.hide();
+            gtk::glib::Propagation::Stop
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_hide(move |_| {
+            kind.set_visible(&mut main_state.borrow_mut(), false);
+        });
+    }
+    window
 }
 
 fn build_skin_browser_window(
@@ -934,8 +1049,11 @@ pub(crate) struct MainWindowUiState {
     playlist_menu_pressed: bool,
     preferences_visible: bool,
     open_location_visible: bool,
+    jump_time_visible: bool,
     skin_browser_visible: bool,
     file_dialog_visible: bool,
+    last_open_location: Option<String>,
+    last_jump_time_ms: Option<i64>,
     position_position: i32,
     active: Option<MainControl>,
     active_inside: bool,
@@ -974,8 +1092,11 @@ impl MainWindowUiState {
             playlist_menu_pressed: false,
             preferences_visible: false,
             open_location_visible: false,
+            jump_time_visible: false,
             skin_browser_visible: false,
             file_dialog_visible: false,
+            last_open_location: None,
+            last_jump_time_ms: None,
             position_position: 0,
             active: None,
             active_inside: false,
@@ -1082,6 +1203,14 @@ impl MainWindowUiState {
         self.open_location_visible = visible;
     }
 
+    pub(crate) fn is_jump_time_visible(&self) -> bool {
+        self.jump_time_visible
+    }
+
+    pub(crate) fn set_jump_time_visible(&mut self, visible: bool) {
+        self.jump_time_visible = visible;
+    }
+
     pub(crate) fn is_skin_browser_visible(&self) -> bool {
         self.skin_browser_visible
     }
@@ -1096,6 +1225,31 @@ impl MainWindowUiState {
 
     pub(crate) fn set_file_dialog_visible(&mut self, visible: bool) {
         self.file_dialog_visible = visible;
+    }
+
+    pub(crate) fn last_open_location(&self) -> Option<&str> {
+        self.last_open_location.as_deref()
+    }
+
+    pub(crate) fn last_jump_time_ms(&self) -> Option<i64> {
+        self.last_jump_time_ms
+    }
+
+    pub(crate) fn accept_open_location(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.last_open_location = Some(text.to_string());
+        self.open_location_visible = false;
+    }
+
+    pub(crate) fn accept_jump_time(&mut self, text: &str) {
+        let Some(ms) = parse_time_ms(text) else {
+            return;
+        };
+        self.last_jump_time_ms = Some(ms);
+        self.position_position = ((ms / 1000) as i32).clamp(0, slider_max(MainSlider::Position));
+        self.jump_time_visible = false;
     }
 
     pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
@@ -1837,6 +1991,28 @@ fn show_main_menu(menu_popover: &gtk::Popover, drawing_area: &gtk::DrawingArea) 
     menu_popover.popup();
 }
 
+fn shortcut_matches(key: gtk::gdk::Key, state: gtk::gdk::ModifierType, accelerator: &str) -> bool {
+    let Some((shortcut_key, shortcut_mods)) = gtk::accelerator_parse(accelerator) else {
+        return false;
+    };
+    key == shortcut_key && state.contains(shortcut_mods)
+}
+
+fn parse_time_ms(text: &str) -> Option<i64> {
+    if text.is_empty() {
+        return None;
+    }
+    if let Some((minutes, seconds)) = text.split_once(':') {
+        if seconds.contains(':') {
+            return None;
+        }
+        let minutes = minutes.parse::<i64>().ok()?;
+        let seconds = seconds.parse::<i64>().ok()?;
+        return Some((minutes * 60 + seconds) * 1000);
+    }
+    Some(text.parse::<i64>().ok()? * 1000)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1890,5 +2066,14 @@ mod tests {
 
         state.press(265, 4);
         assert_eq!(state.release(265, 4), UiAction::Quit);
+    }
+
+    #[test]
+    fn parse_prompt_time_accepts_seconds_and_minutes_seconds() {
+        assert_eq!(parse_time_ms("42"), Some(42_000));
+        assert_eq!(parse_time_ms("1:23"), Some(83_000));
+        assert_eq!(parse_time_ms(""), None);
+        assert_eq!(parse_time_ms("1:2:3"), None);
+        assert_eq!(parse_time_ms("not-time"), None);
     }
 }
