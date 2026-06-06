@@ -1,4 +1,5 @@
 builddir/
+rust/target/
 *.o
 *.so
 *.a

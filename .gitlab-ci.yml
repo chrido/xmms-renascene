@@ -2,6 +2,24 @@ stages:
   - build
   - release
 
+rust:
+  image: 'registry.fedoraproject.org/fedora:44'
+  stage: build
+  before_script:
+    - dnf install -y cargo rustfmt gtk4-devel cairo-devel xorg-x11-server-Xvfb
+  script:
+    - cd rust
+    - cargo fmt --check
+    - cargo test
+    - xvfb-run -a -s '-screen 0 1024x768x24' env GDK_BACKEND=x11 GSK_RENDERER=cairo GDK_DISABLE=gl NO_AT_BRIDGE=1 cargo run -- --gtk-smoke
+    - cargo run
+  rules:
+    - changes:
+        - rust/**/*
+        - migrationplan.md
+        - rustportsummary.md
+        - .gitlab-ci.yml
+
 .flatpak_build:
   image: 'registry.fedoraproject.org/fedora:44'
   stage: build

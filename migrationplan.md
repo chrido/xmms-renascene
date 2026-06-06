@@ -12,11 +12,11 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
 - [x] Add Rust GTK preview and smoke mode.
 - [x] Capture initial Rust preview screenshot in `rust-preview-screenshots/`.
 
-- [ ] Finalize build strategy.
-  - [ ] Decide whether Meson drives Cargo or Cargo becomes primary.
-  - [ ] Keep C and Rust binary names non-conflicting until replacement.
-  - [ ] Add CI coverage for Rust formatting, tests, and GTK smoke.
-  - [ ] Update Flatpak/RPM packaging strategy.
+- [x] Finalize build strategy.
+  - [x] Decide whether Meson drives Cargo or Cargo becomes primary.
+  - [x] Keep C and Rust binary names non-conflicting until replacement.
+  - [x] Add CI coverage for Rust formatting, tests, and GTK smoke.
+  - [x] Update Flatpak/RPM packaging strategy.
 
 - [ ] Complete core application state.
   - [ ] Replace global-style state with explicit `AppState`.

@@ -78,3 +78,37 @@ install_data('data/org.xmms.Resuscitated.svg',
 install_data('data/xmms.1',
   install_dir: get_option('mandir') / 'man1',
 )
+
+cargo = find_program('cargo', required: false)
+xvfb_run = find_program('xvfb-run', required: false)
+env_prog = find_program('env', required: false)
+rust_manifest = meson.project_source_root() / 'rust' / 'Cargo.toml'
+
+if cargo.found()
+  run_target('rust-fmt',
+    command: [cargo, 'fmt', '--manifest-path', rust_manifest, '--check'],
+  )
+
+  run_target('rust-test',
+    command: [cargo, 'test', '--manifest-path', rust_manifest],
+  )
+
+  run_target('rust-smoke',
+    command: [cargo, 'run', '--manifest-path', rust_manifest, '--quiet'],
+  )
+
+  if xvfb_run.found() and env_prog.found()
+    run_target('rust-gtk-smoke',
+      command: [
+        xvfb_run, '-a', '-s', '-screen 0 1024x768x24',
+        env_prog,
+        'GDK_BACKEND=x11',
+        'GSK_RENDERER=cairo',
+        'GDK_DISABLE=gl',
+        'NO_AT_BRIDGE=1',
+        cargo, 'run', '--manifest-path', rust_manifest, '--quiet', '--',
+        '--gtk-smoke',
+      ],
+    )
+  endif
+endif
