@@ -1335,6 +1335,7 @@ impl UiE2e {
 
     pub fn set_preference_title_format(&mut self, format: &str) -> &mut Self {
         self.state.set_preference_title_format(format);
+        self.sync_windows();
         self
     }
 
