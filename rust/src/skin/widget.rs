@@ -317,6 +317,155 @@ impl ToggleButton {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextBox {
+    widget: Widget,
+    scroll_enabled: bool,
+    skin: SkinPixmapKind,
+    original_text: Option<String>,
+    text: Option<String>,
+    offset: i32,
+    rendered_width: i32,
+    scrollable: bool,
+}
+
+impl TextBox {
+    pub const CHAR_WIDTH: i32 = 5;
+    pub const CHAR_HEIGHT: i32 = 6;
+    pub const SCROLL_SEPARATOR: &'static str = "  ***  ";
+
+    pub fn new(
+        id: WidgetId,
+        x: i32,
+        y: i32,
+        width: i32,
+        scroll_enabled: bool,
+        skin: SkinPixmapKind,
+    ) -> Self {
+        Self {
+            widget: Widget::new(
+                id,
+                WidgetRect {
+                    x,
+                    y,
+                    width,
+                    height: Self::CHAR_HEIGHT,
+                },
+            ),
+            scroll_enabled,
+            skin,
+            original_text: None,
+            text: None,
+            offset: 0,
+            rendered_width: Self::CHAR_WIDTH,
+            scrollable: false,
+        }
+    }
+
+    pub fn widget(&self) -> &Widget {
+        &self.widget
+    }
+
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
+    }
+
+    pub fn original_text(&self) -> Option<&str> {
+        self.original_text.as_deref()
+    }
+
+    pub fn offset(&self) -> i32 {
+        self.offset
+    }
+
+    pub fn rendered_width(&self) -> i32 {
+        self.rendered_width
+    }
+
+    pub fn is_scrollable(&self) -> bool {
+        self.scrollable
+    }
+
+    pub fn skin(&self) -> SkinPixmapKind {
+        self.skin
+    }
+
+    pub fn set_text(&mut self, text: Option<&str>) {
+        if self.original_text.as_deref() == text {
+            return;
+        }
+
+        self.original_text = text.map(ToOwned::to_owned);
+        self.text = text.map(|text| {
+            let text_width = text.len() as i32 * Self::CHAR_WIDTH;
+            if self.scroll_enabled && text_width > self.widget.rect().width {
+                format!("{text}{}", Self::SCROLL_SEPARATOR)
+            } else {
+                text.to_owned()
+            }
+        });
+        self.offset = 0;
+        self.update_metrics();
+        self.widget.queue_draw();
+    }
+
+    pub fn scroll_tick(&mut self) -> bool {
+        if !self.scrollable || !self.scroll_enabled {
+            return false;
+        }
+
+        self.offset += 1;
+        if self.offset >= self.rendered_width {
+            self.offset = 0;
+        }
+        self.widget.queue_draw();
+        true
+    }
+
+    pub fn glyph_source(ch: char) -> Option<(i32, i32)> {
+        match ch {
+            'A'..='Z' => Some((((ch as u8 - b'A') as i32) * Self::CHAR_WIDTH, 0)),
+            'a'..='z' => Some((((ch as u8 - b'a') as i32) * Self::CHAR_WIDTH, 0)),
+            '0'..='9' => Some((((ch as u8 - b'0') as i32) * Self::CHAR_WIDTH, 6)),
+            ' ' => None,
+            '"' => Some((130, 0)),
+            '@' => Some((135, 0)),
+            '.' => Some((55, 6)),
+            ':' => Some((60, 6)),
+            '(' => Some((65, 6)),
+            ')' => Some((70, 6)),
+            '-' => Some((75, 6)),
+            '\'' => Some((80, 6)),
+            '!' => Some((85, 6)),
+            '_' => Some((90, 6)),
+            '+' => Some((95, 6)),
+            '\\' => Some((100, 6)),
+            '/' => Some((105, 6)),
+            '[' => Some((110, 6)),
+            ']' => Some((115, 6)),
+            '^' => Some((120, 6)),
+            '&' => Some((125, 6)),
+            '%' => Some((130, 6)),
+            ',' => Some((135, 6)),
+            '=' => Some((140, 6)),
+            '$' => Some((145, 6)),
+            '#' => Some((150, 6)),
+            '?' => Some((50, 12)),
+            '*' => Some((55, 12)),
+            _ => None,
+        }
+    }
+
+    fn update_metrics(&mut self) {
+        self.rendered_width = self
+            .text
+            .as_deref()
+            .map(|text| (text.len() as i32 * Self::CHAR_WIDTH).max(Self::CHAR_WIDTH))
+            .unwrap_or(Self::CHAR_WIDTH);
+        self.scrollable = self.rendered_width > self.widget.rect().width;
+    }
+}
+
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VisMode {
@@ -631,5 +780,42 @@ mod tests {
         assert!(!button.is_selected());
         button.set_selected(true);
         assert!(button.is_selected());
+    }
+
+    #[test]
+    fn textbox_appends_scroll_separator_only_when_needed() {
+        let mut textbox = TextBox::new(WidgetId(3), 0, 0, 20, true, SkinPixmapKind::Text);
+        textbox.set_text(Some("abc"));
+        assert_eq!(textbox.text(), Some("abc"));
+        assert!(!textbox.is_scrollable());
+
+        textbox.set_text(Some("abcdef"));
+        assert_eq!(textbox.text(), Some("abcdef  ***  "));
+        assert_eq!(textbox.original_text(), Some("abcdef"));
+        assert!(textbox.is_scrollable());
+        assert_eq!(textbox.offset(), 0);
+        assert!(textbox.widget().needs_redraw());
+    }
+
+    #[test]
+    fn textbox_scroll_tick_wraps_at_rendered_width() {
+        let mut textbox = TextBox::new(WidgetId(3), 0, 0, 5, true, SkinPixmapKind::Text);
+        textbox.set_text(Some("ab"));
+        assert!(textbox.is_scrollable());
+        let rendered_width = textbox.rendered_width();
+        for _ in 0..rendered_width {
+            assert!(textbox.scroll_tick());
+        }
+        assert_eq!(textbox.offset(), 0);
+    }
+
+    #[test]
+    fn textbox_glyph_sources_match_c_font_map() {
+        assert_eq!(TextBox::glyph_source('A'), Some((0, 0)));
+        assert_eq!(TextBox::glyph_source('z'), Some((125, 0)));
+        assert_eq!(TextBox::glyph_source('9'), Some((45, 6)));
+        assert_eq!(TextBox::glyph_source('?'), Some((50, 12)));
+        assert_eq!(TextBox::glyph_source(' '), None);
+        assert_eq!(TextBox::glyph_source('~'), None);
     }
 }
