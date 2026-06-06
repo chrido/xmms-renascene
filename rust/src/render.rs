@@ -6,6 +6,7 @@ use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
 
 pub const MAIN_WINDOW_WIDTH: i32 = 275;
+pub const MAIN_WINDOW_HEIGHT: i32 = 116;
 pub const MAIN_TITLEBAR_HEIGHT: i32 = 14;
 
 #[derive(Debug)]
@@ -190,6 +191,33 @@ pub fn render_main_titlebar(
     )
 }
 
+pub fn main_window_height(shaded: bool) -> i32 {
+    if shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        MAIN_WINDOW_HEIGHT
+    }
+}
+
+pub fn render_main_player(
+    cr: &Context,
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+) -> Result<bool, RenderError> {
+    let mut rendered = false;
+    if !shaded {
+        if let Some(main) = skin.get(SkinPixmapKind::Main) {
+            let main = surface_from_xpm(main)?;
+            rendered |=
+                blit_surface_rect(cr, &main, 0, 0, 0, 0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)?;
+        }
+    }
+
+    rendered |= render_main_titlebar(cr, skin, focused, shaded)?;
+    Ok(rendered)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +367,32 @@ mod tests {
             u32::from_ne_bytes(unfocused_data[0..4].try_into().unwrap()),
             expected_unfocused
         );
+    }
+
+    #[test]
+    fn renders_normal_and_windowshade_main_player_backgrounds() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+
+        let mut normal =
+            ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+        let normal_cr = Context::new(&normal).unwrap();
+        assert!(render_main_player(&normal_cr, &skin, true, false).unwrap());
+        drop(normal_cr);
+        normal.flush();
+
+        let mut shaded =
+            ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT).unwrap();
+        let shaded_cr = Context::new(&shaded).unwrap();
+        assert!(render_main_player(&shaded_cr, &skin, true, true).unwrap());
+        drop(shaded_cr);
+        shaded.flush();
+
+        assert_eq!(main_window_height(false), MAIN_WINDOW_HEIGHT);
+        assert_eq!(main_window_height(true), MAIN_TITLEBAR_HEIGHT);
+
+        let normal_data = normal.data().unwrap();
+        let shaded_data = shaded.data().unwrap();
+        assert_ne!(u32::from_ne_bytes(normal_data[0..4].try_into().unwrap()), 0);
+        assert_ne!(u32::from_ne_bytes(shaded_data[0..4].try_into().unwrap()), 0);
     }
 }
