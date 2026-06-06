@@ -29,6 +29,7 @@ Completed so far:
 - Added renderer coverage for transparent pixels plus C-compatible scale-factor clamping, coordinate rounding, dimension minimums, and window-scale transforms.
 - Added Rust main-titlebar rendering for focused/unfocused and shaded/unshaded rows using the same source rectangles as the C app.
 - Added Rust main-player background rendering for normal and WindowShade states.
+- Added docked panel composition for main, equalizer, and playlist backgrounds, including detached-panel exclusion and playlist frame tiling.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.

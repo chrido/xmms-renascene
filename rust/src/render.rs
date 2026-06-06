@@ -8,6 +8,47 @@ use crate::skin::{DefaultSkin, SkinPixmapKind};
 pub const MAIN_WINDOW_WIDTH: i32 = 275;
 pub const MAIN_WINDOW_HEIGHT: i32 = 116;
 pub const MAIN_TITLEBAR_HEIGHT: i32 = 14;
+pub const EQUALIZER_WINDOW_WIDTH: i32 = 275;
+pub const EQUALIZER_WINDOW_HEIGHT: i32 = 116;
+pub const PLAYLIST_DEFAULT_WIDTH: i32 = 275;
+pub const PLAYLIST_DEFAULT_HEIGHT: i32 = 232;
+pub const PLAYLIST_MIN_WIDTH: i32 = 275;
+pub const PLAYLIST_MIN_HEIGHT: i32 = 116;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DockedPanelState {
+    pub main_focused: bool,
+    pub main_shaded: bool,
+    pub equalizer_visible: bool,
+    pub equalizer_detached: bool,
+    pub equalizer_focused: bool,
+    pub equalizer_shaded: bool,
+    pub playlist_visible: bool,
+    pub playlist_detached: bool,
+    pub playlist_focused: bool,
+    pub playlist_shaded: bool,
+    pub playlist_width: i32,
+    pub playlist_height: i32,
+}
+
+impl Default for DockedPanelState {
+    fn default() -> Self {
+        Self {
+            main_focused: true,
+            main_shaded: false,
+            equalizer_visible: false,
+            equalizer_detached: false,
+            equalizer_focused: true,
+            equalizer_shaded: false,
+            playlist_visible: false,
+            playlist_detached: false,
+            playlist_focused: true,
+            playlist_shaded: false,
+            playlist_width: PLAYLIST_DEFAULT_WIDTH,
+            playlist_height: PLAYLIST_DEFAULT_HEIGHT,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -199,6 +240,38 @@ pub fn main_window_height(shaded: bool) -> i32 {
     }
 }
 
+pub fn equalizer_window_height(shaded: bool) -> i32 {
+    if shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        EQUALIZER_WINDOW_HEIGHT
+    }
+}
+
+pub fn playlist_window_height(shaded: bool, height: i32) -> i32 {
+    if shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        height.max(PLAYLIST_MIN_HEIGHT)
+    }
+}
+
+pub fn docked_panel_size(state: DockedPanelState) -> (i32, i32) {
+    let playlist_width = state.playlist_width.max(PLAYLIST_MIN_WIDTH);
+    let mut width = MAIN_WINDOW_WIDTH;
+    let mut height = main_window_height(state.main_shaded);
+
+    if state.equalizer_visible && !state.equalizer_detached {
+        height += equalizer_window_height(state.equalizer_shaded);
+    }
+    if state.playlist_visible && !state.playlist_detached {
+        height += playlist_window_height(state.playlist_shaded, state.playlist_height);
+        width = width.max(playlist_width);
+    }
+
+    (width, height)
+}
+
 pub fn render_main_player(
     cr: &Context,
     skin: &DefaultSkin,
@@ -215,6 +288,186 @@ pub fn render_main_player(
     }
 
     rendered |= render_main_titlebar(cr, skin, focused, shaded)?;
+    Ok(rendered)
+}
+
+pub fn render_equalizer_background(
+    cr: &Context,
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+) -> Result<bool, RenderError> {
+    if shaded {
+        let Some(eq_ex) = skin.get(SkinPixmapKind::EqEx) else {
+            return Ok(false);
+        };
+        let eq_ex = surface_from_xpm(eq_ex)?;
+        return blit_surface_rect(
+            cr,
+            &eq_ex,
+            0,
+            if focused { 0 } else { 15 },
+            0,
+            0,
+            EQUALIZER_WINDOW_WIDTH,
+            MAIN_TITLEBAR_HEIGHT,
+        );
+    }
+
+    let Some(eqmain_image) = skin.get(SkinPixmapKind::EqMain) else {
+        return Ok(false);
+    };
+    let eqmain = surface_from_xpm(eqmain_image)?;
+    let mut rendered = blit_surface_rect(
+        cr,
+        &eqmain,
+        0,
+        0,
+        0,
+        0,
+        EQUALIZER_WINDOW_WIDTH,
+        EQUALIZER_WINDOW_HEIGHT,
+    )?;
+    if eqmain_image.height() >= 163 {
+        rendered |= blit_surface_rect(
+            cr,
+            &eqmain,
+            0,
+            if focused { 134 } else { 149 },
+            0,
+            0,
+            EQUALIZER_WINDOW_WIDTH,
+            MAIN_TITLEBAR_HEIGHT,
+        )?;
+    }
+    Ok(rendered)
+}
+
+pub fn render_playlist_frame(
+    cr: &Context,
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+    width: i32,
+    height: i32,
+) -> Result<bool, RenderError> {
+    let width = width.max(PLAYLIST_MIN_WIDTH);
+    let height = playlist_window_height(shaded, height);
+    let Some(pledit) = skin.get(SkinPixmapKind::PlEdit) else {
+        return Ok(false);
+    };
+    let pledit = surface_from_xpm(pledit)?;
+    let title_y = if focused { 0 } else { 21 };
+
+    let colors = skin.playlist_colors();
+    cr.set_source_rgb(
+        f64::from(colors.normal_bg[0]) / 255.0,
+        f64::from(colors.normal_bg[1]) / 255.0,
+        f64::from(colors.normal_bg[2]) / 255.0,
+    );
+    cr.rectangle(0.0, 0.0, f64::from(width), f64::from(height));
+    cr.fill()?;
+
+    blit_surface_rect(cr, &pledit, 0, title_y, 0, 0, 25, 20)?;
+    let mut count = (width - 150) / 25;
+    for i in 0..count / 2 {
+        blit_surface_rect(cr, &pledit, 127, title_y, (i * 25) + 25, 0, 25, 20)?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            127,
+            title_y,
+            (i * 25) + (width / 2) + 50,
+            0,
+            25,
+            20,
+        )?;
+    }
+    if count & 1 == 1 {
+        blit_surface_rect(
+            cr,
+            &pledit,
+            127,
+            title_y,
+            ((count / 2) * 25) + 25,
+            0,
+            12,
+            20,
+        )?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            127,
+            title_y,
+            (width / 2) + ((count / 2) * 25) + 50,
+            0,
+            13,
+            20,
+        )?;
+    }
+    blit_surface_rect(cr, &pledit, 26, title_y, (width / 2) - 50, 0, 100, 20)?;
+    blit_surface_rect(cr, &pledit, 153, title_y, width - 25, 0, 25, 20)?;
+
+    if shaded {
+        return Ok(true);
+    }
+
+    for i in 0..(height - 58) / 29 {
+        let ydest = (i * 29) + 20;
+        blit_surface_rect(cr, &pledit, 0, 42, 0, ydest, 12, 29)?;
+        blit_surface_rect(cr, &pledit, 32, 42, width - 19, ydest, 19, 29)?;
+    }
+    blit_surface_rect(cr, &pledit, 0, 72, 0, height - 38, 125, 38)?;
+
+    count = (width - 275) / 25;
+    if count >= 3 {
+        count -= 3;
+        blit_surface_rect(cr, &pledit, 205, 0, width - 225, height - 38, 75, 38)?;
+    }
+    for i in 0..count {
+        blit_surface_rect(cr, &pledit, 179, 0, (i * 25) + 125, height - 38, 25, 38)?;
+    }
+    blit_surface_rect(cr, &pledit, 126, 72, width - 150, height - 38, 150, 38)?;
+
+    cr.set_source_rgb(10.0 / 255.0, 18.0 / 255.0, 26.0 / 255.0);
+    cr.rectangle(f64::from(width - 82), f64::from(height - 15), 28.0, 9.0);
+    cr.fill()?;
+
+    Ok(true)
+}
+
+pub fn render_docked_panels(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: DockedPanelState,
+) -> Result<bool, RenderError> {
+    let mut y = 0;
+    let mut rendered = render_main_player(cr, skin, state.main_focused, state.main_shaded)?;
+    y += main_window_height(state.main_shaded);
+
+    if state.equalizer_visible && !state.equalizer_detached {
+        cr.save()?;
+        cr.translate(0.0, f64::from(y));
+        rendered |=
+            render_equalizer_background(cr, skin, state.equalizer_focused, state.equalizer_shaded)?;
+        cr.restore()?;
+        y += equalizer_window_height(state.equalizer_shaded);
+    }
+
+    if state.playlist_visible && !state.playlist_detached {
+        cr.save()?;
+        cr.translate(0.0, f64::from(y));
+        rendered |= render_playlist_frame(
+            cr,
+            skin,
+            state.playlist_focused,
+            state.playlist_shaded,
+            state.playlist_width,
+            state.playlist_height,
+        )?;
+        cr.restore()?;
+    }
+
     Ok(rendered)
 }
 
@@ -394,5 +647,55 @@ mod tests {
         let shaded_data = shaded.data().unwrap();
         assert_ne!(u32::from_ne_bytes(normal_data[0..4].try_into().unwrap()), 0);
         assert_ne!(u32::from_ne_bytes(shaded_data[0..4].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn computes_and_renders_docked_panel_composition() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let state = DockedPanelState {
+            equalizer_visible: true,
+            playlist_visible: true,
+            ..DockedPanelState::default()
+        };
+        let (width, height) = docked_panel_size(state);
+        assert_eq!(width, MAIN_WINDOW_WIDTH);
+        assert_eq!(
+            height,
+            MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT
+        );
+
+        let mut surface = ImageSurface::create(Format::ARgb32, width, height).unwrap();
+        let cr = Context::new(&surface).unwrap();
+        assert!(render_docked_panels(&cr, &skin, state).unwrap());
+        drop(cr);
+        surface.flush();
+
+        let stride = surface.stride() as usize;
+        let data = surface.data().unwrap();
+        let main_pixel = u32::from_ne_bytes(data[0..4].try_into().unwrap());
+        let playlist_offset = stride * (MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT) as usize;
+        let playlist_pixel = u32::from_ne_bytes(
+            data[playlist_offset..playlist_offset + 4]
+                .try_into()
+                .unwrap(),
+        );
+        assert_ne!(main_pixel, 0);
+        assert_ne!(playlist_pixel, 0);
+    }
+
+    #[test]
+    fn docked_panel_size_ignores_detached_panels() {
+        let state = DockedPanelState {
+            equalizer_visible: true,
+            equalizer_detached: true,
+            playlist_visible: true,
+            playlist_detached: true,
+            ..DockedPanelState::default()
+        };
+
+        assert_eq!(
+            docked_panel_size(state),
+            (MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)
+        );
     }
 }
