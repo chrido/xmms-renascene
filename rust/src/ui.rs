@@ -4836,16 +4836,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn main_title_drag_region(&self, x: i32, y: i32) -> bool {
-        y >= 0
-            && y < MAIN_TITLEBAR_HEIGHT
-            && [
-                MainPushButton::Menu,
-                MainPushButton::Minimize,
-                MainPushButton::Shade,
-                MainPushButton::Close,
-            ]
-            .into_iter()
-            .all(|button| !push_button_rect(button).contains(x, y))
+        y >= 0 && y < MAIN_TITLEBAR_HEIGHT && self.hit_test(x, y).is_none()
     }
 
     pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {
@@ -5889,6 +5880,15 @@ impl MainWindowUiState {
                 MainControl::Push(MainPushButton::Play),
                 MainControl::Push(MainPushButton::Previous),
             ]);
+        } else {
+            controls.extend([
+                MainControl::Push(MainPushButton::Eject),
+                MainControl::Push(MainPushButton::Next),
+                MainControl::Push(MainPushButton::Stop),
+                MainControl::Push(MainPushButton::Pause),
+                MainControl::Push(MainPushButton::Play),
+                MainControl::Push(MainPushButton::Previous),
+            ]);
         }
 
         controls
@@ -6046,6 +6046,7 @@ impl MainWindowUiState {
 
     fn control_rect(&self, control: MainControl) -> ControlRect {
         match control {
+            MainControl::Push(button) if self.shaded => shaded_push_button_rect(button),
             MainControl::Push(button) => push_button_rect(button),
             MainControl::Toggle(toggle) => toggle_button_rect(toggle),
             MainControl::Slider(slider) => self.slider_rect(slider),
@@ -6107,6 +6108,18 @@ fn push_button_rect(button: MainPushButton) -> ControlRect {
         MainPushButton::Stop => ControlRect::new(85, 88, 23, 18),
         MainPushButton::Next => ControlRect::new(108, 88, 22, 18),
         MainPushButton::Eject => ControlRect::new(136, 89, 22, 16),
+    }
+}
+
+fn shaded_push_button_rect(button: MainPushButton) -> ControlRect {
+    match button {
+        MainPushButton::Previous => ControlRect::new(169, 4, 8, 7),
+        MainPushButton::Play => ControlRect::new(177, 4, 10, 7),
+        MainPushButton::Pause => ControlRect::new(187, 4, 10, 7),
+        MainPushButton::Stop => ControlRect::new(197, 4, 9, 7),
+        MainPushButton::Next => ControlRect::new(206, 4, 8, 7),
+        MainPushButton::Eject => ControlRect::new(216, 4, 9, 7),
+        _ => push_button_rect(button),
     }
 }
 

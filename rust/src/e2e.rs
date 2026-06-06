@@ -255,9 +255,9 @@ impl MainTarget {
         Self::Slider(MainSlider::Position, position)
     }
 
-    fn point(self) -> (i32, i32) {
+    fn point(self, shaded: bool) -> (i32, i32) {
         match self {
-            Self::Push(button) => center(push_button_rect(button)),
+            Self::Push(button) => center(push_button_rect(button, shaded)),
             Self::Toggle(toggle) => center(toggle_button_rect(toggle)),
             Self::Slider(slider, position) => {
                 let rect = slider_rect(slider);
@@ -312,7 +312,7 @@ impl UiE2e {
     }
 
     pub fn click(&mut self, target: MainTarget) -> &mut Self {
-        let (x, y) = target.point();
+        let (x, y) = target.point(self.state.is_shaded());
         let action = self.state.click(x, y);
         self.apply_action(action);
         self.sync_windows();
@@ -2034,7 +2034,19 @@ fn center(rect: Rect) -> (i32, i32) {
     (rect.x + rect.width / 2, rect.y + rect.height / 2)
 }
 
-fn push_button_rect(button: MainPushButton) -> Rect {
+fn push_button_rect(button: MainPushButton, shaded: bool) -> Rect {
+    if shaded {
+        match button {
+            MainPushButton::Previous => return rect(169, 4, 8, 7),
+            MainPushButton::Play => return rect(177, 4, 10, 7),
+            MainPushButton::Pause => return rect(187, 4, 10, 7),
+            MainPushButton::Stop => return rect(197, 4, 9, 7),
+            MainPushButton::Next => return rect(206, 4, 8, 7),
+            MainPushButton::Eject => return rect(216, 4, 9, 7),
+            _ => {}
+        }
+    }
+
     match button {
         MainPushButton::Menu => rect(6, 3, 9, 9),
         MainPushButton::Minimize => rect(244, 3, 9, 9),

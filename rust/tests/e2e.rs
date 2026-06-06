@@ -475,6 +475,30 @@ fn playlist_navigation_controls_update_position_and_eof_behavior() {
 }
 
 #[test]
+fn shaded_transport_controls_trigger_playback_actions() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist(["file:///tmp/one.ogg", "file:///tmp/two.ogg"])
+        .click(MainTarget::SHADE)
+        .assert_player_shaded()
+        .click(MainTarget::PLAY)
+        .assert_player_state(PlayerState::Playing)
+        .assert_playlist_position(Some(0))
+        .click(MainTarget::PAUSE)
+        .assert_player_state(PlayerState::Paused)
+        .click(MainTarget::PAUSE)
+        .assert_player_state(PlayerState::Playing)
+        .click(MainTarget::NEXT)
+        .assert_playlist_position(Some(1))
+        .assert_current_playlist_entry("file:///tmp/two.ogg")
+        .click(MainTarget::PREVIOUS)
+        .assert_playlist_position(Some(0))
+        .assert_current_playlist_entry("file:///tmp/one.ogg")
+        .click(MainTarget::STOP)
+        .assert_player_state(PlayerState::Stopped);
+}
+
+#[test]
 fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
