@@ -1504,6 +1504,17 @@ impl MainWindowUiState {
             return;
         }
         self.last_open_location = Some(text.to_string());
+        match self.app_state.playlist.add_location(text) {
+            Ok(added) => {
+                if added > 0 {
+                    if self.app_state.playlist.position().is_none() {
+                        self.app_state.playlist.set_position(0);
+                    }
+                    self.app_state.player.mark_playing();
+                }
+            }
+            Err(err) => eprintln!("xmms-rs: failed to add open location {text}: {err}"),
+        }
         self.open_location_visible = false;
     }
 
@@ -1521,13 +1532,15 @@ impl MainWindowUiState {
         if clear_first {
             self.app_state.playlist.clear();
         }
-        for uri in uris {
-            let uri = uri.as_ref();
-            if uri.is_empty() {
+        for location in uris {
+            let location = location.as_ref();
+            if location.is_empty() {
                 continue;
             }
-            self.app_state.playlist.add_uri(uri);
-            accepted = true;
+            match self.app_state.playlist.add_location(location) {
+                Ok(added) => accepted |= added > 0,
+                Err(err) => eprintln!("xmms-rs: failed to add playlist location {location}: {err}"),
+            }
         }
         if accepted && clear_first {
             self.app_state.playlist.set_position(0);

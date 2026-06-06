@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::{Path, PathBuf};
 use xmms_resuscitated::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
 };
@@ -52,7 +54,9 @@ fn main_menu_items_trigger_their_preview_actions() {
         .assert_window_visible(Window::OpenLocation)
         .accept_open_location("https://example.test/song.ogg")
         .assert_window_hidden(Window::OpenLocation)
-        .assert_last_open_location("https://example.test/song.ogg");
+        .assert_last_open_location("https://example.test/song.ogg")
+        .assert_playlist_entry(0, "https://example.test/song.ogg")
+        .assert_player_state(PlayerState::Playing);
 
     app.click(MainTarget::MENU)
         .assert_menu_visible()
@@ -81,7 +85,9 @@ fn main_prompts_accept_location_and_jump_time_values() {
         .assert_window_visible(Window::OpenLocation)
         .accept_open_location("file:///tmp/example.mp3")
         .assert_window_hidden(Window::OpenLocation)
-        .assert_last_open_location("file:///tmp/example.mp3");
+        .assert_last_open_location("file:///tmp/example.mp3")
+        .assert_playlist_entry(0, "file:///tmp/example.mp3")
+        .assert_player_state(PlayerState::Playing);
 
     app.show_jump_time_prompt()
         .assert_window_visible(Window::JumpTime)
@@ -204,13 +210,22 @@ fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
 #[test]
 fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
+    let music_dir = unique_temp_dir("xmms-rs-e2e-open-dir");
+    fs::create_dir_all(music_dir.join("albums")).unwrap();
+    fs::write(music_dir.join("albums").join("New_Song.flac"), b"audio").unwrap();
+    fs::write(music_dir.join("cover.png"), b"image").unwrap();
 
     app.press_shortcut(Shortcut::OpenDirectory)
         .assert_directory_dialog_visible()
-        .accept_directory_dialog("file:///tmp/music")
+        .accept_directory_dialog(&file_uri(&music_dir))
         .assert_playlist_len(1)
-        .assert_playlist_entry(0, "file:///tmp/music")
+        .assert_playlist_entry(
+            0,
+            &file_uri(&music_dir.join("albums").join("New_Song.flac")),
+        )
         .assert_player_state(PlayerState::Playing);
+
+    fs::remove_dir_all(music_dir).unwrap();
 }
 
 #[test]
@@ -233,6 +248,18 @@ fn update_timer_advances_position_while_playing_only() {
         .press_shortcut(Shortcut::Stop)
         .update_timer_tick(1_000)
         .assert_position(0);
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+}
+
+fn file_uri(path: &Path) -> String {
+    format!("file://{}", path.to_string_lossy())
 }
 
 #[test]

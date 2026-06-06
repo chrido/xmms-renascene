@@ -13,7 +13,7 @@ Completed so far:
 - Added a Rust binary named `xmms-rs`.
 - Ported initial config defaults.
 - Ported initial player state behavior.
-- Ported initial playlist and M3U handling, including podcast metadata markers.
+- Ported initial playlist and M3U handling, including recursive directory import with C-compatible media-extension filtering plus podcast metadata markers.
 - Ported a manual XPM parser from the C implementation's behavior.
 - Added a default skin loader for `data/defskin/*.xpm`.
 - Embedded bundled default skin XPM assets in the Rust crate for filesystem-independent startup.
@@ -57,6 +57,7 @@ Completed so far:
 - Added Rust preview keyboard shortcuts for currently ported main-window behavior: transport keys, open-files, shuffle/repeat/no-advance toggles, preferences, prompts, skin-browser placeholder, main shade, playlist/equalizer show-hide, and playlist/equalizer shade shortcuts.
 - Wired GTK file-list drag-and-drop for the Rust main and playlist preview windows. Drops on the main window replace the playlist and start preview playback, while drops on the playlist window append to existing entries.
 - Wired accepted Rust file and directory open-dialog selections into playlist state. File selections and directory selections replace the playlist and start preview playback, matching the C main-window open behavior at the current playlist-model level.
+- Wired playlist location import through the Rust model for file drops, file/directory dialogs, and Open Location submissions, preserving URL/Spotify/podcast entry support.
 - Added a Rust GTK preview update timer that ticks every 100 ms, advances preview seek position while playing, and queues main/playlist/equalizer redraws.
 - Added interactive Rust equalizer state for ON/AUTO/PRESETS, preamp and ten band sliders, EQ graph rendering, and preset application.
 - Added a Rust preferences placeholder window and connected the main menu Preferences item to show it.
@@ -206,7 +207,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, menu behavior, basic file-list drops, and file/directory open dialogs. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, recursive directory import/media filtering for directories, complete playlist data operations, audio-connected equalizer behavior, MPRIS, Spotify, podcasts, output device selection UI, playlist-connected Open Location behavior, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows with basic controls, resize, menu behavior, file-list drops, file/directory open dialogs, recursive directory import, and Open Location playlist insertion. Playback controls only update Rust runtime state until the GStreamer backend is ported. The Rust port still lacks full playback, complete playlist data operations, audio-connected equalizer behavior, MPRIS, live Spotify/podcast integrations, output device selection UI, real Skin Browser implementation, full preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 

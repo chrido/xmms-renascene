@@ -2,6 +2,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+const MEDIA_EXTENSIONS: &[&str] = &[
+    "mp3", "ogg", "flac", "wav", "m4a", "aac", "opus", "wma", "mp4", "webm",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistEntry {
     pub filename: String,
@@ -80,6 +84,102 @@ impl Playlist {
 
     pub fn add_uri(&mut self, uri: impl Into<String>) {
         self.entries.push(PlaylistEntry::new_uri(uri));
+    }
+
+    pub fn add_path(&mut self, path: impl AsRef<Path>) {
+        self.add_uri(path_to_file_uri(path.as_ref()));
+    }
+
+    pub fn add_location(&mut self, location: impl AsRef<str>) -> io::Result<usize> {
+        let location = location.as_ref();
+        if location.is_empty() {
+            return Ok(0);
+        }
+
+        if let Some(path) = file_uri_to_path(location) {
+            if path.exists() {
+                return self.add_path_or_directory(&path);
+            }
+            self.add_uri(location);
+            return Ok(1);
+        }
+
+        let path = Path::new(location);
+        if path.exists() {
+            return self.add_path_or_directory(path);
+        }
+
+        self.add_uri(location);
+        Ok(1)
+    }
+
+    pub fn add_path_or_directory(&mut self, path: &Path) -> io::Result<usize> {
+        if path.is_dir() {
+            self.add_directory(path)
+        } else if path.is_file() {
+            self.add_path(path);
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    }
+
+    pub fn add_directory(&mut self, path: &Path) -> io::Result<usize> {
+        let mut added = 0;
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                added += self.add_directory(&path)?;
+            } else if file_type.is_file() && is_media_file(&path) {
+                self.add_path(&path);
+                added += 1;
+            }
+        }
+        Ok(added)
+    }
+
+    pub fn add_podcast_entry(
+        &mut self,
+        uri: impl Into<String>,
+        title: Option<String>,
+        feed: Option<String>,
+        guid: Option<String>,
+    ) {
+        let uri = uri.into();
+        if uri.is_empty() {
+            return;
+        }
+
+        if let Some(entry) = self.entries.iter_mut().find(|entry| {
+            if !entry.is_podcast {
+                return false;
+            }
+            let same_guid = guid
+                .as_ref()
+                .filter(|guid| !guid.is_empty())
+                .is_some_and(|guid| {
+                    entry.podcast_guid.as_deref() == Some(guid.as_str())
+                        && entry.podcast_feed.as_deref() == feed.as_deref()
+                });
+            let same_url = entry.filename == uri;
+            same_guid || same_url
+        }) {
+            if let Some(title) = title.as_ref().filter(|title| !title.is_empty()) {
+                entry.title = title.clone();
+            }
+            if let Some(feed) = feed.as_ref().filter(|feed| !feed.is_empty()) {
+                entry.podcast_feed = Some(feed.clone());
+            }
+            if let Some(guid) = guid.as_ref().filter(|guid| !guid.is_empty()) {
+                entry.podcast_guid = Some(guid.clone());
+            }
+            return;
+        }
+
+        self.entries
+            .push(PlaylistEntry::podcast(uri, title, feed, guid));
     }
 
     pub fn add_spotify(
@@ -296,10 +396,38 @@ fn normalize_playlist_path(line: &str, base_dir: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn is_media_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| MEDIA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
+fn path_to_file_uri(path: &Path) -> String {
+    format!("file://{}", percent_encode_path(&path.to_string_lossy()))
+}
+
+fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
+    uri.strip_prefix("file://")
+        .map(percent_decode)
+        .map(PathBuf::from)
+}
+
 fn percent_encode(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+fn percent_encode_path(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
             out.push(byte as char);
         } else {
             out.push_str(&format!("%{byte:02X}"));
@@ -331,6 +459,7 @@ fn percent_decode(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn format_title_uses_basename_without_extension_and_underscores() {
@@ -359,5 +488,59 @@ mod tests {
         assert!(playlist
             .to_m3u()
             .contains("#XMMSPODCAST:feed=https%3A%2F%2Fexample.test%2Ffeed.xml\tguid=item%201"));
+    }
+
+    #[test]
+    fn add_directory_recursively_imports_supported_media_files() {
+        let root = unique_temp_dir();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(root.join("ignore.txt"), b"not audio").unwrap();
+        fs::write(nested.join("Track_One.OGG"), b"audio").unwrap();
+
+        let mut playlist = Playlist::new();
+        let added = playlist.add_directory(&root).unwrap();
+
+        assert_eq!(added, 1);
+        assert_eq!(playlist.len(), 1);
+        assert_eq!(
+            playlist.entries()[0].filename,
+            path_to_file_uri(&nested.join("Track_One.OGG"))
+        );
+        assert_eq!(playlist.entries()[0].title, "Track One");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn add_podcast_entry_updates_existing_by_guid() {
+        let mut playlist = Playlist::new();
+        playlist.add_podcast_entry(
+            "https://example.test/old.mp3",
+            Some("Old".to_string()),
+            Some("https://example.test/feed.xml".to_string()),
+            Some("episode-1".to_string()),
+        );
+        playlist.add_podcast_entry(
+            "https://example.test/new.mp3",
+            Some("New".to_string()),
+            Some("https://example.test/feed.xml".to_string()),
+            Some("episode-1".to_string()),
+        );
+
+        assert_eq!(playlist.len(), 1);
+        assert_eq!(playlist.entries()[0].title, "New");
+        assert_eq!(
+            playlist.entries()[0].filename,
+            "https://example.test/old.mp3"
+        );
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("xmms-rs-playlist-test-{nanos}"))
     }
 }
