@@ -207,6 +207,14 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
                         if pressed {
                             drawing_area.queue_draw();
                         }
+                        if !pressed
+                            && main_state.borrow().playlist_resize_region(panel_x, panel_y)
+                            && main_state
+                                .borrow_mut()
+                                .begin_docked_playlist_resize(panel_y)
+                        {
+                            drawing_area.queue_draw();
+                        }
                     }
                 }
                 return;
@@ -224,6 +232,12 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            if main_state.borrow_mut().end_docked_playlist_resize() {
+                sync_panel_windows(&panel_windows, &main_state.borrow());
+                resize_main_window(&window, &drawing_area, &main_state.borrow());
+                drawing_area.queue_draw();
+                return;
+            }
             let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
                 let action = {
@@ -248,10 +262,13 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
                         }
                     }
                 };
-                if action == PanelAction::Changed {
-                    sync_panel_windows(&panel_windows, &main_state.borrow());
-                    resize_main_window(&window, &drawing_area, &main_state.borrow());
-                }
+                handle_panel_action_for_main_window(
+                    action,
+                    &window,
+                    &drawing_area,
+                    &panel_windows,
+                    &main_state,
+                );
                 drawing_area.queue_draw();
                 return;
             }
@@ -275,9 +292,19 @@ fn build_preview_window(app: &gtk::Application, options: PreviewOptions) -> Resu
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
     {
         let drawing_area = drawing_area.clone();
+        let window = window.clone();
+        let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            if main_state.borrow().is_docked_playlist_resizing() {
+                if main_state.borrow_mut().docked_playlist_resize_motion(y) {
+                    sync_panel_windows(&panel_windows, &main_state.borrow());
+                    resize_main_window(&window, &drawing_area, &main_state.borrow());
+                    drawing_area.queue_draw();
+                }
+                return;
+            }
             let docked_panel = { main_state.borrow().docked_panel_at(x, y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
                 let changed = match kind {
@@ -2778,6 +2805,51 @@ fn panel_event_to_base_coords(
     )
 }
 
+fn handle_panel_action_for_main_window(
+    action: PanelAction,
+    window: &gtk::ApplicationWindow,
+    area: &gtk::DrawingArea,
+    panel_windows: &Rc<PanelWindows>,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    match action {
+        PanelAction::None => {}
+        PanelAction::Changed => {
+            sync_panel_windows(panel_windows, &main_state.borrow());
+            resize_main_window(window, area, &main_state.borrow());
+        }
+        PanelAction::OpenDirectoryDialog => {
+            main_state.borrow_mut().set_directory_dialog_visible(true);
+            show_playlist_add_directory_dialog(window, Rc::clone(main_state), area.clone());
+        }
+        PanelAction::OpenFileDialog => {
+            main_state.borrow_mut().set_file_dialog_visible(true);
+            show_playlist_add_file_dialog(window, Rc::clone(main_state), area.clone());
+        }
+        PanelAction::OpenLocationWindow => {
+            main_state.borrow_mut().set_open_location_visible(true);
+            panel_windows.open_location.present();
+        }
+        PanelAction::OpenPlaylistLoadDialog => {
+            main_state
+                .borrow_mut()
+                .set_playlist_load_dialog_visible(true);
+            show_playlist_load_dialog(window, Rc::clone(main_state), area.clone());
+        }
+        PanelAction::OpenPlaylistSaveDialog => {
+            main_state
+                .borrow_mut()
+                .set_playlist_save_dialog_visible(true);
+            show_playlist_save_dialog(window, Rc::clone(main_state));
+        }
+        PanelAction::ShowPlaylistSortMenu
+        | PanelAction::ShowPlaylistMenu(_)
+        | PanelAction::ShowEqualizerPresets => {
+            area.queue_draw();
+        }
+    }
+}
+
 fn sync_single_panel_window_from_state(
     kind: PanelKind,
     window: &gtk::ApplicationWindow,
@@ -2919,6 +2991,8 @@ pub(crate) struct MainWindowUiState {
     playlist_scroll_offset: usize,
     playlist_scrollbar_dragging: bool,
     playlist_scrollbar_drag_offset: i32,
+    playlist_docked_resizing: bool,
+    playlist_resize_drag_offset_y: i32,
     playlist_search_active: bool,
     playlist_search_query: String,
     playlist_load_dialog_visible: bool,
@@ -3011,6 +3085,8 @@ impl MainWindowUiState {
             playlist_scroll_offset: 0,
             playlist_scrollbar_dragging: false,
             playlist_scrollbar_drag_offset: 0,
+            playlist_docked_resizing: false,
+            playlist_resize_drag_offset_y: 0,
             playlist_search_active: false,
             playlist_search_query: String::new(),
             playlist_load_dialog_visible: false,
@@ -3275,6 +3351,17 @@ impl MainWindowUiState {
         None
     }
 
+    fn docked_playlist_local_y(&self, y: i32) -> Option<i32> {
+        if !self.app_state.config.playlist_visible || self.app_state.config.playlist_detached {
+            return None;
+        }
+        let mut offset_y = main_window_height(self.shaded);
+        if self.app_state.config.equalizer_visible && !self.app_state.config.equalizer_detached {
+            offset_y += equalizer_window_height(self.equalizer_shaded);
+        }
+        Some(y - offset_y)
+    }
+
     pub(crate) fn set_panel_detached(&mut self, kind: PanelKind, detached: bool) {
         match kind {
             PanelKind::Equalizer => self.app_state.config.equalizer_detached = detached,
@@ -3327,6 +3414,10 @@ impl MainWindowUiState {
 
     pub(crate) fn playlist_scroll_offset(&self) -> usize {
         self.playlist_scroll_offset
+    }
+
+    pub(crate) fn playlist_scrollbar_visible(&self) -> bool {
+        self.playlist_scrollbar_geometry().is_some()
     }
 
     pub(crate) fn playlist_search_active(&self) -> bool {
@@ -4343,6 +4434,37 @@ impl MainWindowUiState {
 
     pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {
         !self.playlist_shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
+    }
+
+    pub(crate) fn begin_docked_playlist_resize(&mut self, local_y: i32) -> bool {
+        if !self.playlist_resize_region(self.playlist_width - 1, local_y) {
+            return false;
+        }
+        self.playlist_docked_resizing = true;
+        self.playlist_resize_drag_offset_y = self.playlist_height - local_y;
+        true
+    }
+
+    pub(crate) fn docked_playlist_resize_motion(&mut self, main_y: i32) -> bool {
+        if !self.playlist_docked_resizing {
+            return false;
+        }
+        let Some(local_y) = self.docked_playlist_local_y(main_y) else {
+            return false;
+        };
+        let height = local_y + self.playlist_resize_drag_offset_y;
+        self.set_playlist_size(PLAYLIST_MIN_WIDTH, height)
+    }
+
+    pub(crate) fn end_docked_playlist_resize(&mut self) -> bool {
+        let was_resizing = self.playlist_docked_resizing;
+        self.playlist_docked_resizing = false;
+        self.playlist_resize_drag_offset_y = 0;
+        was_resizing
+    }
+
+    pub(crate) fn is_docked_playlist_resizing(&self) -> bool {
+        self.playlist_docked_resizing
     }
 
     pub(crate) fn playlist_scrollbar_press(&mut self, x: i32, y: i32) -> bool {

@@ -453,6 +453,28 @@ impl UiE2e {
         self
     }
 
+    pub fn resize_docked_playlist_vertically(&mut self, height: i32) -> &mut Self {
+        let (_, current_height) = self.state.playlist_size();
+        assert!(
+            self.state.begin_docked_playlist_resize(current_height - 1),
+            "expected docked playlist vertical resize to start"
+        );
+        let main_y = main_window_height(self.state.is_shaded())
+            + if self.state.app_state_mut().config.equalizer_visible
+                && !self.state.app_state_mut().config.equalizer_detached
+            {
+                equalizer_window_height(self.state.is_equalizer_shaded())
+            } else {
+                0
+            }
+            + height
+            - 1;
+        self.state.docked_playlist_resize_motion(main_y);
+        self.state.end_docked_playlist_resize();
+        self.sync_windows();
+        self
+    }
+
     pub fn drag_playlist_scrollbar_to_bottom(&mut self) -> &mut Self {
         let (width, height) = self.state.playlist_size();
         let x = width - 12;
@@ -988,6 +1010,11 @@ impl UiE2e {
 
     pub fn assert_playlist_scroll_offset(&mut self, expected: usize) -> &mut Self {
         assert_eq!(self.state.playlist_scroll_offset(), expected);
+        self
+    }
+
+    pub fn assert_playlist_scrollbar_visible(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.playlist_scrollbar_visible(), expected);
         self
     }
 

@@ -2150,6 +2150,55 @@ fn resized_playlist_bottom_buttons_use_current_geometry() {
 }
 
 #[test]
+fn docked_playlist_bottom_add_menu_opens_url_file_and_directory_controls() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_playlist_detached(false),
+    );
+
+    app.click_docked_panel(PanelTarget::PlaylistAdd)
+        .assert_playlist_menu(PlaylistMenuKind::Add)
+        .activate_playlist_menu_item(0)
+        .assert_window_visible(Window::OpenLocation);
+
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_playlist_detached(false),
+    );
+    app.click_docked_panel(PanelTarget::PlaylistAdd)
+        .assert_playlist_menu(PlaylistMenuKind::Add)
+        .activate_playlist_menu_item(1)
+        .assert_directory_dialog_visible();
+
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_playlist_detached(false),
+    );
+    app.click_docked_panel(PanelTarget::PlaylistAdd)
+        .assert_playlist_menu(PlaylistMenuKind::Add)
+        .activate_playlist_menu_item(2)
+        .assert_file_dialog_visible();
+}
+
+#[test]
+fn docked_playlist_resizes_vertically_only() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_playlist_detached(false),
+    );
+
+    app.resize_playlist(325, 232)
+        .resize_docked_playlist_vertically(290)
+        .assert_playlist_size(275, 290)
+        .resize_docked_playlist_vertically(80)
+        .assert_playlist_size(275, 116);
+}
+
+#[test]
 fn playlist_scrollbar_drag_updates_visible_rows() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
@@ -2158,6 +2207,7 @@ fn playlist_scrollbar_drag_updates_visible_rows() {
     }
 
     app.assert_playlist_scroll_offset(0)
+        .assert_playlist_scrollbar_visible(true)
         .assert_visible_playlist_entry(0, "file:///tmp/scroll-00.mp3")
         .drag_playlist_scrollbar_to_bottom()
         .assert_playlist_scroll_offset(15)
