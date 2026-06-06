@@ -1,0 +1,17 @@
+[package]
+name = "xmms-resuscitated-rs"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "xmms_resuscitated"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xmms-rs"
+path = "src/main.rs"
+
+[dependencies]
+cairo = { version = "0.22.0", package = "cairo-rs" }
+gtk = { version = "0.11.3", package = "gtk4", features = ["v4_6"] }

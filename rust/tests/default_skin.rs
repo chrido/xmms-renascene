@@ -1,0 +1,45 @@
+use std::path::PathBuf;
+
+use xmms_resuscitated::skin::xpm::XpmImage;
+use xmms_resuscitated::skin::{DefaultSkin, SkinPixmapKind};
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+#[test]
+fn parses_all_bundled_default_xpm_files() {
+    let skin_dir = repo_root().join("data").join("defskin");
+    let skin = DefaultSkin::load_from_dir(&skin_dir).unwrap();
+
+    assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
+
+    for kind in SkinPixmapKind::ALL {
+        let image = skin.get(kind).unwrap();
+        if kind == SkinPixmapKind::Balance {
+            assert_eq!(image.width(), SkinPixmapKind::Volume.info().width);
+            assert_eq!(
+                image.height(),
+                skin.get(SkinPixmapKind::Volume).unwrap().height()
+            );
+        }
+        assert_eq!(image.pixels_argb().len(), image.width() * image.height());
+    }
+
+    assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 275);
+    assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().height(), 116);
+    assert_eq!(skin.get(SkinPixmapKind::Titlebar).unwrap().width(), 344);
+    assert_eq!(skin.get(SkinPixmapKind::EqMain).unwrap().height(), 315);
+}
+
+#[test]
+fn bundled_main_skin_has_expected_dimensions_and_pixels() {
+    let path = repo_root().join("data").join("defskin").join("main.xpm");
+    let contents = std::fs::read_to_string(path).unwrap();
+    let image = XpmImage::parse(&contents).unwrap();
+
+    assert_eq!(image.width(), 275);
+    assert_eq!(image.height(), 116);
+    assert_eq!(image.pixels_argb().len(), 275 * 116);
+    assert_eq!(image.pixel_argb(0, 0), Some(0xff00_0000));
+}
