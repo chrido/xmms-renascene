@@ -138,6 +138,7 @@ pub enum Shortcut {
     Stop,
     Next,
     OpenFiles,
+    OpenDirectory,
     ToggleRepeat,
     ToggleShuffle,
     Preferences,
@@ -208,6 +209,7 @@ pub struct UiE2e {
     jump_time_visible: bool,
     skin_browser_visible: bool,
     file_dialog_visible: bool,
+    directory_dialog_visible: bool,
 }
 
 impl UiE2e {
@@ -223,6 +225,7 @@ impl UiE2e {
             jump_time_visible: false,
             skin_browser_visible: false,
             file_dialog_visible: false,
+            directory_dialog_visible: false,
         };
         harness.sync_windows();
         harness
@@ -333,6 +336,10 @@ impl UiE2e {
                 self.file_dialog_visible = true;
                 self.state.set_file_dialog_visible(true);
             }
+            Shortcut::OpenDirectory => {
+                self.directory_dialog_visible = true;
+                self.state.set_directory_dialog_visible(true);
+            }
             Shortcut::ToggleRepeat => {
                 self.state.activate_toggle(MainToggleButton::Repeat);
             }
@@ -391,6 +398,26 @@ impl UiE2e {
         self
     }
 
+    pub fn accept_file_dialog<I, S>(&mut self, uris: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.state.set_file_dialog_visible(false);
+        self.file_dialog_visible = false;
+        self.state.accept_opened_uris(uris);
+        self.sync_windows();
+        self
+    }
+
+    pub fn accept_directory_dialog(&mut self, uri: &str) -> &mut Self {
+        self.state.set_directory_dialog_visible(false);
+        self.directory_dialog_visible = false;
+        self.state.accept_opened_uris([uri]);
+        self.sync_windows();
+        self
+    }
+
     pub fn show_jump_time_prompt(&mut self) -> &mut Self {
         self.state.set_jump_time_visible(true);
         self.sync_windows();
@@ -421,6 +448,14 @@ impl UiE2e {
         assert!(
             self.file_dialog_visible || self.state.is_file_dialog_visible(),
             "expected open file dialog to be visible"
+        );
+        self
+    }
+
+    pub fn assert_directory_dialog_visible(&mut self) -> &mut Self {
+        assert!(
+            self.directory_dialog_visible || self.state.is_directory_dialog_visible(),
+            "expected open directory dialog to be visible"
         );
         self
     }
@@ -693,6 +728,8 @@ impl UiE2e {
                 self.open_location_visible = false;
                 self.jump_time_visible = false;
                 self.skin_browser_visible = false;
+                self.file_dialog_visible = false;
+                self.directory_dialog_visible = false;
             }
         }
     }
@@ -708,6 +745,7 @@ impl UiE2e {
         self.open_location_visible = self.state.is_open_location_visible();
         self.jump_time_visible = self.state.is_jump_time_visible();
         self.skin_browser_visible = self.state.is_skin_browser_visible();
+        self.directory_dialog_visible = self.state.is_directory_dialog_visible();
     }
 
     fn drag_equalizer_slider(&mut self, x: i32, position: i32) -> &mut Self {

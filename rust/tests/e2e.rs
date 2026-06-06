@@ -188,6 +188,32 @@ fn drag_and_drop_on_playlist_appends_to_existing_entries() {
 }
 
 #[test]
+fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.drop_on_playlist(["file:///tmp/old.ogg"])
+        .press_shortcut(Shortcut::OpenFiles)
+        .assert_file_dialog_visible()
+        .accept_file_dialog(["file:///tmp/new-a.ogg", "file:///tmp/new-b.ogg"])
+        .assert_playlist_len(2)
+        .assert_playlist_entry(0, "file:///tmp/new-a.ogg")
+        .assert_playlist_entry(1, "file:///tmp/new-b.ogg")
+        .assert_player_state(PlayerState::Playing);
+}
+
+#[test]
+fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.press_shortcut(Shortcut::OpenDirectory)
+        .assert_directory_dialog_visible()
+        .accept_directory_dialog("file:///tmp/music")
+        .assert_playlist_len(1)
+        .assert_playlist_entry(0, "file:///tmp/music")
+        .assert_player_state(PlayerState::Playing);
+}
+
+#[test]
 fn transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

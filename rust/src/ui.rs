@@ -234,6 +234,7 @@ enum MainKeyboardShortcut {
     ShadeMain,
     JumpTime,
     SkinBrowser,
+    OpenDirectory,
     PresentMain,
     TogglePlaylist,
     ToggleEqualizer,
@@ -260,6 +261,7 @@ fn keyboard_shortcut_from_event(
         ("<Control>w", MainKeyboardShortcut::ShadeMain),
         ("<Control>j", MainKeyboardShortcut::JumpTime),
         ("<Alt>s", MainKeyboardShortcut::SkinBrowser),
+        ("<Shift>l", MainKeyboardShortcut::OpenDirectory),
         ("<Alt>w", MainKeyboardShortcut::PresentMain),
         ("<Alt>e", MainKeyboardShortcut::TogglePlaylist),
         ("<Alt>g", MainKeyboardShortcut::ToggleEqualizer),
@@ -299,7 +301,7 @@ fn handle_keyboard_shortcut(
         }
         MainKeyboardShortcut::OpenFiles => {
             main_state.borrow_mut().set_file_dialog_visible(true);
-            show_open_file_dialog(window);
+            show_open_file_dialog(window, Rc::clone(main_state));
         }
         MainKeyboardShortcut::ToggleRepeat => {
             main_state
@@ -338,6 +340,10 @@ fn handle_keyboard_shortcut(
         MainKeyboardShortcut::SkinBrowser => {
             main_state.borrow_mut().set_skin_browser_visible(true);
             panel_windows.skin_browser.present();
+        }
+        MainKeyboardShortcut::OpenDirectory => {
+            main_state.borrow_mut().set_directory_dialog_visible(true);
+            show_open_directory_dialog(window, Rc::clone(main_state));
         }
         MainKeyboardShortcut::PresentMain => {
             window.present();
@@ -455,7 +461,7 @@ fn build_main_menu_popover(
         open_files.connect_clicked(move |_| {
             main_state.borrow_mut().set_menu_visible(false);
             popover.popdown();
-            show_open_file_dialog(&parent_window);
+            show_open_file_dialog(&parent_window, Rc::clone(&main_state));
         });
     }
     menu_box.append(&open_files);
@@ -1271,6 +1277,7 @@ pub(crate) struct MainWindowUiState {
     jump_time_visible: bool,
     skin_browser_visible: bool,
     file_dialog_visible: bool,
+    directory_dialog_visible: bool,
     last_open_location: Option<String>,
     last_jump_time_ms: Option<i64>,
     position_position: i32,
@@ -1314,6 +1321,7 @@ impl MainWindowUiState {
             jump_time_visible: false,
             skin_browser_visible: false,
             file_dialog_visible: false,
+            directory_dialog_visible: false,
             last_open_location: None,
             last_jump_time_ms: None,
             position_position: 0,
@@ -1446,6 +1454,14 @@ impl MainWindowUiState {
         self.file_dialog_visible = visible;
     }
 
+    pub(crate) fn is_directory_dialog_visible(&self) -> bool {
+        self.directory_dialog_visible
+    }
+
+    pub(crate) fn set_directory_dialog_visible(&mut self, visible: bool) {
+        self.directory_dialog_visible = visible;
+    }
+
     pub(crate) fn last_open_location(&self) -> Option<&str> {
         self.last_open_location.as_deref()
     }
@@ -1503,6 +1519,14 @@ impl MainWindowUiState {
             self.app_state.player.mark_playing();
         }
         accepted
+    }
+
+    pub(crate) fn accept_opened_uris<I, S>(&mut self, uris: I) -> bool
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.accept_dropped_uris(uris, true, true)
     }
 
     pub(crate) fn accept_jump_time(&mut self, text: &str) {
@@ -2241,12 +2265,16 @@ fn apply_ui_action(
             show_main_menu(menu_popover, drawing_area);
         }
         UiAction::OpenFileDialog => {
-            show_open_file_dialog(window);
+            state.borrow_mut().set_file_dialog_visible(true);
+            show_open_file_dialog(window, Rc::clone(state));
         }
     }
 }
 
-fn show_open_file_dialog(parent: &gtk::ApplicationWindow) {
+fn show_open_file_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
     let dialog = gtk::FileChooserNative::new(
         Some("Open Files"),
         Some(parent),
@@ -2256,8 +2284,52 @@ fn show_open_file_dialog(parent: &gtk::ApplicationWindow) {
     );
     dialog.set_select_multiple(true);
     let dialog_for_response = dialog.clone();
-    dialog.connect_response(move |_, _response| dialog_for_response.destroy());
+    dialog.connect_response(move |dialog, response| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_file_dialog_visible(false);
+            if response == gtk::ResponseType::Accept {
+                let uris = files_from_list_model(dialog.files());
+                state.accept_opened_uris(uris);
+            }
+        }
+        dialog_for_response.destroy();
+    });
     dialog.show();
+}
+
+fn show_open_directory_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Open Directory"),
+        Some(parent),
+        gtk::FileChooserAction::SelectFolder,
+        Some("Open"),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_directory_dialog_visible(false);
+            if response == gtk::ResponseType::Accept {
+                let uri = dialog.file().map(|file| file.uri().to_string());
+                state.accept_opened_uris(uri);
+            }
+        }
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn files_from_list_model(files: gtk::gio::ListModel) -> Vec<String> {
+    (0..files.n_items())
+        .filter_map(|idx| files.item(idx))
+        .filter_map(|object| object.downcast::<gtk::gio::File>().ok())
+        .map(|file| file.uri().to_string())
+        .collect()
 }
 
 fn show_main_menu(menu_popover: &gtk::Popover, drawing_area: &gtk::DrawingArea) {
