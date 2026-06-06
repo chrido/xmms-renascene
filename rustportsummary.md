@@ -23,6 +23,7 @@ Completed so far:
 - Ported `pledit.txt` playlist color parsing with C-compatible defaults, `#RRGGBB` keys, and archive lookup.
 - Preserved the legacy `numbers.*` fallback for missing `nums_ex.*` skins, including the C-compatible expansion to 108-pixel-wide number graphics.
 - Preserved the C balance-from-volume fallback when a skin omits `balance.*`.
+- Switched XPM loading to prefer the `image-extras` XPM decoder, retaining the compatibility parser only as a fallback for XMMS skin quirks.
 - Added Cairo conversion for parsed XPM pixels.
 - Added a GTK preview window that renders the default main skin.
 - Added a GTK smoke mode for non-interactive validation.
@@ -59,6 +60,7 @@ Current Rust dependencies:
 - `gtk4` via crate rename `gtk`, with GTK 4.6 feature enabled.
 - `cairo-rs` via crate rename `cairo`.
 - `image` with PNG and BMP support for external skin pixmap files.
+- `image-extras` with XPM support for primary XPM decoding.
 - `zip`, `tar`, `flate2`, and `bzip2` for external skin archives.
 
 The existing C application remains built by Meson and still depends on GTK4, GStreamer, libsoup, json-glib, libxml2, and optional libarchive.

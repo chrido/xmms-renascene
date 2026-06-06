@@ -18,5 +18,6 @@ cairo = { version = "0.22.0", package = "cairo-rs" }
 flate2 = "1.1.9"
 gtk = { version = "0.11.3", package = "gtk4", features = ["v4_6"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "bmp"] }
+image-extras = { version = "0.1.1", default-features = false, features = ["xpm"] }
 tar = "0.4.46"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

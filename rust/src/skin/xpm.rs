@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::io::{BufReader, Cursor};
+
+use image::ImageDecoder;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XpmImage {
@@ -25,57 +28,7 @@ impl XpmImage {
     }
 
     pub fn parse(contents: &str) -> Result<Self, XpmError> {
-        let strings = extract_strings(contents);
-        if strings.is_empty() {
-            return Err(XpmError::MissingHeader);
-        }
-
-        let mut header = strings[0].split_whitespace();
-        let width = parse_header_field(header.next(), "width")?;
-        let height = parse_header_field(header.next(), "height")?;
-        let ncolors = parse_header_field(header.next(), "color count")?;
-        let cpp = parse_header_field(header.next(), "chars per pixel")?;
-
-        if width == 0 || height == 0 || ncolors == 0 || cpp == 0 {
-            return Err(XpmError::InvalidHeader(strings[0].clone()));
-        }
-
-        if strings.len() < 1 + ncolors + height {
-            return Err(XpmError::Truncated {
-                expected: 1 + ncolors + height,
-                actual: strings.len(),
-            });
-        }
-
-        let mut colors = HashMap::with_capacity(ncolors);
-        for line in &strings[1..1 + ncolors] {
-            if line.len() < cpp {
-                continue;
-            }
-            let key = line[..cpp].to_string();
-            let value = color_attr_value(line, cpp);
-            colors.insert(key, parse_color_value(value.as_deref()));
-        }
-
-        let mut argb = Vec::with_capacity(width * height);
-        for row in &strings[1 + ncolors..1 + ncolors + height] {
-            for x in 0..width {
-                let start = x * cpp;
-                let end = start + cpp;
-                let pixel = if end <= row.len() {
-                    colors.get(&row[start..end]).copied().unwrap_or(0xff00_0000)
-                } else {
-                    0xff00_0000
-                };
-                argb.push(pixel);
-            }
-        }
-
-        Ok(Self {
-            width,
-            height,
-            argb,
-        })
+        parse_with_library(contents).or_else(|_| parse_compat(contents))
     }
 
     pub fn width(&self) -> usize {
@@ -98,6 +51,85 @@ impl XpmImage {
     }
 }
 
+fn parse_with_library(contents: &str) -> Result<XpmImage, XpmError> {
+    let reader = BufReader::new(Cursor::new(contents.as_bytes()));
+    let decoder = image_extras::xpm::XpmDecoder::new(reader)
+        .map_err(|err| XpmError::Decode(err.to_string()))?;
+    let (width, height) = decoder.dimensions();
+    let mut rgba16 = vec![0; decoder.total_bytes() as usize];
+    decoder
+        .read_image(&mut rgba16)
+        .map_err(|err| XpmError::Decode(err.to_string()))?;
+
+    let mut argb = Vec::with_capacity((width as usize) * (height as usize));
+    for pixel in rgba16.chunks_exact(8) {
+        let r = (u16::from_ne_bytes([pixel[0], pixel[1]]) / 257) as u8;
+        let g = (u16::from_ne_bytes([pixel[2], pixel[3]]) / 257) as u8;
+        let b = (u16::from_ne_bytes([pixel[4], pixel[5]]) / 257) as u8;
+        let a = (u16::from_ne_bytes([pixel[6], pixel[7]]) / 257) as u8;
+        let pr = ((u16::from(r) * u16::from(a) + 127) / 255) as u32;
+        let pg = ((u16::from(g) * u16::from(a) + 127) / 255) as u32;
+        let pb = ((u16::from(b) * u16::from(a) + 127) / 255) as u32;
+        argb.push((u32::from(a) << 24) | (pr << 16) | (pg << 8) | pb);
+    }
+
+    XpmImage::from_argb_pixels(width as usize, height as usize, argb)
+}
+
+fn parse_compat(contents: &str) -> Result<XpmImage, XpmError> {
+    let strings = extract_strings(contents);
+    if strings.is_empty() {
+        return Err(XpmError::MissingHeader);
+    }
+
+    let mut header = strings[0].split_whitespace();
+    let width = parse_header_field(header.next(), "width")?;
+    let height = parse_header_field(header.next(), "height")?;
+    let ncolors = parse_header_field(header.next(), "color count")?;
+    let cpp = parse_header_field(header.next(), "chars per pixel")?;
+
+    if width == 0 || height == 0 || ncolors == 0 || cpp == 0 {
+        return Err(XpmError::InvalidHeader(strings[0].clone()));
+    }
+
+    if strings.len() < 1 + ncolors + height {
+        return Err(XpmError::Truncated {
+            expected: 1 + ncolors + height,
+            actual: strings.len(),
+        });
+    }
+
+    let mut colors = HashMap::with_capacity(ncolors);
+    for line in &strings[1..1 + ncolors] {
+        if line.len() < cpp {
+            continue;
+        }
+        let key = line[..cpp].to_string();
+        let value = color_attr_value(line, cpp);
+        colors.insert(key, parse_color_value(value.as_deref()));
+    }
+
+    let mut argb = Vec::with_capacity(width * height);
+    for row in &strings[1 + ncolors..1 + ncolors + height] {
+        for x in 0..width {
+            let start = x * cpp;
+            let end = start + cpp;
+            let pixel = if end <= row.len() {
+                colors.get(&row[start..end]).copied().unwrap_or(0xff00_0000)
+            } else {
+                0xff00_0000
+            };
+            argb.push(pixel);
+        }
+    }
+
+    Ok(XpmImage {
+        width,
+        height,
+        argb,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XpmError {
     MissingHeader,
@@ -115,6 +147,7 @@ pub enum XpmError {
         height: usize,
         len: usize,
     },
+    Decode(String),
 }
 
 impl fmt::Display for XpmError {
@@ -141,6 +174,7 @@ impl fmt::Display for XpmError {
                     "invalid ARGB pixel buffer for {width}x{height}: {len} pixels"
                 )
             }
+            XpmError::Decode(err) => write!(f, "XPM decoder failed: {err}"),
         }
     }
 }
@@ -321,6 +355,23 @@ fn parse_named_color(value: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn library_decoder_parses_canonical_xpm() {
+        let image = parse_with_library(
+            r#"/* XPM */
+            static char *x[] = {
+            "1 1 1 1",
+            ". c #010203",
+            "."};
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(image.width(), 1);
+        assert_eq!(image.height(), 1);
+        assert_eq!(image.pixel_argb(0, 0), Some(0xff01_0203));
+    }
 
     #[test]
     fn parses_basic_xpm_and_c_escapes() {

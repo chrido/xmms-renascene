@@ -24,7 +24,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Add config load/save compatibility.
   - [x] Track window visibility, docking, shading, scale, sticky, easy-move, playlist position, equalizer state, visualization state, and podcast preferences.
 
-- [ ] Complete skin system.
+- [x] Complete skin system.
   - [x] Load default skin assets from bundled resources.
   - [x] Load external BMP, PNG, and XPM skin files.
   - [x] Support `.wsz`, `.zip`, `.tar`, `.tar.gz`, and `.tar.bz2` skin archives.
@@ -32,7 +32,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port `pledit.txt` playlist color parsing.
   - [x] Preserve `numbers` fallback for `nums_ex`.
   - [x] Preserve balance-from-volume fallback.
-  - [ ] Replace manual XPM parser with a library in a later cleanup phase.
+  - [x] Replace manual XPM parser with a library in a later cleanup phase.
 
 - [ ] Complete Cairo renderer.
   - [ ] Implement skin pixmap blitting with source/destination rectangles.

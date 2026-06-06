@@ -486,6 +486,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "image-extras"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60d02eb2c9ccbbab470538fce34c7bc3be7b4e59268e65a3171367b296cdb842"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -873,6 +882,7 @@ dependencies = [
  "flate2",
  "gtk4",
  "image",
+ "image-extras",
  "tar",
  "zip",
 ]
