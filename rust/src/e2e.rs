@@ -384,6 +384,14 @@ impl UiE2e {
         self.drag_equalizer_slider(78 + band as i32 * 18, position)
     }
 
+    pub fn drag_shaded_equalizer_volume(&mut self, position: i32) -> &mut Self {
+        self.drag_equalizer_shaded_slider(61, position.clamp(0, 94))
+    }
+
+    pub fn drag_shaded_equalizer_balance(&mut self, position: i32) -> &mut Self {
+        self.drag_equalizer_shaded_slider(164, position.clamp(0, 39))
+    }
+
     pub fn apply_equalizer_preset(&mut self, preset: i32) -> &mut Self {
         self.state.apply_equalizer_preset(preset);
         self
@@ -1026,6 +1034,15 @@ impl UiE2e {
 
     fn drag_equalizer_slider(&mut self, x: i32, position: i32) -> &mut Self {
         let y = 38 + (position.clamp(0, 100) * 63 + 99) / 100;
+        self.state.equalizer_press(x, y);
+        self.state.equalizer_motion(x, y);
+        self.state.equalizer_release(x, y);
+        self
+    }
+
+    fn drag_equalizer_shaded_slider(&mut self, x: i32, position: i32) -> &mut Self {
+        let y = 8;
+        let x = x + position;
         self.state.equalizer_press(x, y);
         self.state.equalizer_motion(x, y);
         self.state.equalizer_release(x, y);

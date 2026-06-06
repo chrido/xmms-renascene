@@ -104,7 +104,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Port ten band sliders.
   - [x] Port active and auto toggles.
   - [x] Sync equalizer state to GStreamer band properties.
-  - [ ] Sync volume and balance with the main window.
+  - [x] Sync volume and balance with the main window.
   - [ ] Preserve shaded and detached modes.
 
 - [ ] Port visualization behavior.

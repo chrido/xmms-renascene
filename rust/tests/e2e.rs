@@ -648,6 +648,24 @@ fn equalizer_top_right_buttons_shade_and_close_equalizer_window() {
 }
 
 #[test]
+fn shaded_equalizer_volume_and_balance_sliders_update_shared_player_state() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
+
+    app.click_panel(PanelTarget::EqualizerShade)
+        .assert_equalizer_shaded()
+        .drag_shaded_equalizer_volume(94)
+        .assert_volume(100)
+        .drag_shaded_equalizer_volume(0)
+        .assert_volume(0)
+        .drag_shaded_equalizer_balance(0)
+        .assert_balance(-100)
+        .drag_shaded_equalizer_balance(19)
+        .assert_balance(0)
+        .drag_shaded_equalizer_balance(39)
+        .assert_balance(100);
+}
+
+#[test]
 fn equalizer_buttons_sliders_and_presets_update_state() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
 

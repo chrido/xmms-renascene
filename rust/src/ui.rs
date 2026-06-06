@@ -1300,6 +1300,8 @@ pub(crate) enum PanelAction {
 enum EqualizerSlider {
     Preamp,
     Band(usize),
+    ShadedVolume,
+    ShadedBalance,
 }
 
 fn add_panel_click_controller(
@@ -2225,6 +2227,11 @@ impl MainWindowUiState {
 
     pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
         if self.equalizer_shaded {
+            if let Some(slider) = equalizer_shaded_slider_at(x, y) {
+                self.equalizer_dragging = Some(slider);
+                self.set_equalizer_slider_position(slider, x);
+                return true;
+            }
             return false;
         }
 
@@ -2254,7 +2261,11 @@ impl MainWindowUiState {
         let Some(slider) = self.equalizer_dragging else {
             return false;
         };
-        self.set_equalizer_slider_position(slider, y)
+        let coordinate = match slider {
+            EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => x,
+            EqualizerSlider::Preamp | EqualizerSlider::Band(_) => y,
+        };
+        self.set_equalizer_slider_position(slider, coordinate)
     }
 
     pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
@@ -2305,20 +2316,35 @@ impl MainWindowUiState {
         }
     }
 
-    fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, y: i32) -> bool {
-        let position = ((y - 38) * 100 / 63).clamp(0, 100);
+    fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, coordinate: i32) -> bool {
         match slider {
             EqualizerSlider::Preamp => {
+                let position = ((coordinate - 38) * 100 / 63).clamp(0, 100);
                 let changed = self.equalizer_preamp_position != position;
                 self.equalizer_preamp_position = position;
                 changed
             }
             EqualizerSlider::Band(band) => {
+                let position = ((coordinate - 38) * 100 / 63).clamp(0, 100);
                 let Some(value) = self.equalizer_band_positions.get_mut(band) else {
                     return false;
                 };
                 let changed = *value != position;
                 *value = position;
+                changed
+            }
+            EqualizerSlider::ShadedVolume => {
+                let position = (coordinate - 61).clamp(0, 94);
+                let volume = eq_shaded_position_to_volume(position);
+                let changed = self.app_state.player.volume() != volume;
+                self.app_state.player.set_volume(volume);
+                changed
+            }
+            EqualizerSlider::ShadedBalance => {
+                let position = (coordinate - 164).clamp(0, 39);
+                let balance = eq_shaded_position_to_balance(position);
+                let changed = self.app_state.player.balance() != balance;
+                self.app_state.player.set_balance(balance);
                 changed
             }
         }
@@ -3085,11 +3111,22 @@ fn equalizer_slider_at(x: i32, y: i32) -> Option<EqualizerSlider> {
     if ControlRect::new(21, 38, 14, 63).contains(x, y) {
         return Some(EqualizerSlider::Preamp);
     }
+
     (0..10).find_map(|band| {
         ControlRect::new(78 + band * 18, 38, 14, 63)
             .contains(x, y)
             .then_some(EqualizerSlider::Band(band as usize))
     })
+}
+
+fn equalizer_shaded_slider_at(x: i32, y: i32) -> Option<EqualizerSlider> {
+    if ControlRect::new(61, 4, 97, 8).contains(x, y) {
+        return Some(EqualizerSlider::ShadedVolume);
+    }
+    if ControlRect::new(164, 4, 42, 8).contains(x, y) {
+        return Some(EqualizerSlider::ShadedBalance);
+    }
+    None
 }
 
 fn playlist_menu_at(x: i32, y: i32, width: i32, height: i32) -> Option<PlaylistMenuKind> {
@@ -3178,6 +3215,15 @@ fn balance_to_position(balance: i32) -> i32 {
 
 fn position_to_balance(position: i32) -> i32 {
     (((position.clamp(0, 24) - 12) * 100) as f64 / 12.0) as i32
+}
+
+fn eq_shaded_position_to_volume(position: i32) -> i32 {
+    ((position.clamp(0, 94) * 100 + 47) / 94).clamp(0, 100)
+}
+
+fn eq_shaded_position_to_balance(position: i32) -> i32 {
+    let position = position.clamp(0, 38);
+    (((position - 19) * 100 + if position >= 19 { 9 } else { -9 }) / 19).clamp(-100, 100)
 }
 
 fn event_to_base_coords(area: &gtk::DrawingArea, x: f64, y: f64) -> (i32, i32) {
