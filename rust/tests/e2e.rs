@@ -725,6 +725,29 @@ fn playlist_context_remove_dead_keeps_existing_local_files_and_urls() {
 }
 
 #[test]
+fn playlist_context_physical_delete_removes_selected_local_files() {
+    let root = unique_temp_dir("xmms-rs-context-physical-delete");
+    fs::create_dir_all(&root).unwrap();
+    let keep = root.join("keep.mp3");
+    let delete = root.join("delete.mp3");
+    fs::write(&keep, b"keep").unwrap();
+    fs::write(&delete, b"delete").unwrap();
+    let keep_uri = format!("file://{}", keep.display());
+
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    app.accept_open_location(keep.to_str().unwrap())
+        .accept_open_location(delete.to_str().unwrap())
+        .select_playlist_entry(1)
+        .activate_playlist_context_action(PlaylistContextAction::PhysicallyDelete)
+        .assert_playlist_len(1)
+        .assert_playlist_entry(0, &keep_uri);
+
+    assert!(keep.exists());
+    assert!(!delete.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn playlist_can_resize_from_default_dimensions() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 

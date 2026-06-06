@@ -776,6 +776,7 @@ fn add_playlist_context_menu(
     for (label, action) in [
         ("Remove Selected", PlaylistContextAction::RemoveSelected),
         ("Remove Dead Files", PlaylistContextAction::RemoveDead),
+        ("Physically Delete", PlaylistContextAction::PhysicallyDelete),
         ("Select All", PlaylistContextAction::SelectAll),
         ("Select None", PlaylistContextAction::SelectNone),
         ("Invert Selection", PlaylistContextAction::InvertSelection),
@@ -787,10 +788,19 @@ fn add_playlist_context_menu(
         let main_area = main_area.clone();
         let popover = popover.clone();
         button.connect_clicked(move |_| {
-            state.borrow_mut().activate_playlist_context_action(action);
             popover.popdown();
-            area.queue_draw();
-            main_area.queue_draw();
+            if action == PlaylistContextAction::PhysicallyDelete {
+                show_playlist_delete_confirmation(
+                    &area,
+                    Rc::clone(&state),
+                    area.clone(),
+                    main_area.clone(),
+                );
+            } else {
+                state.borrow_mut().activate_playlist_context_action(action);
+                area.queue_draw();
+                main_area.queue_draw();
+            }
         });
         menu_box.append(&button);
     }
@@ -807,6 +817,61 @@ fn add_playlist_context_menu(
         });
     }
     area.add_controller(right_click);
+}
+
+fn show_playlist_delete_confirmation(
+    parent: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    playlist_area: gtk::DrawingArea,
+    main_area: gtk::DrawingArea,
+) {
+    let window = gtk::Window::builder()
+        .title("Delete selected files?")
+        .modal(true)
+        .default_width(280)
+        .default_height(100)
+        .build();
+    if let Some(root) = parent
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok())
+    {
+        window.set_transient_for(Some(&root));
+    }
+
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.set_margin_top(8);
+    layout.set_margin_bottom(8);
+    layout.set_margin_start(8);
+    layout.set_margin_end(8);
+    layout.append(&gtk::Label::new(Some(
+        "Delete selected local files from disk?",
+    )));
+
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let cancel = gtk::Button::with_label("Cancel");
+    let delete = gtk::Button::with_label("Delete");
+    {
+        let window = window.clone();
+        cancel.connect_clicked(move |_| {
+            window.close();
+        });
+    }
+    {
+        let window = window.clone();
+        delete.connect_clicked(move |_| {
+            main_state
+                .borrow_mut()
+                .activate_playlist_context_action(PlaylistContextAction::PhysicallyDelete);
+            window.close();
+            playlist_area.queue_draw();
+            main_area.queue_draw();
+        });
+    }
+    buttons.append(&cancel);
+    buttons.append(&delete);
+    layout.append(&buttons);
+    window.set_child(Some(&layout));
+    window.present();
 }
 
 fn build_equalizer_presets_popover(
@@ -1022,6 +1087,7 @@ pub enum PlaylistMenuKind {
 pub enum PlaylistContextAction {
     RemoveSelected,
     RemoveDead,
+    PhysicallyDelete,
     SelectAll,
     SelectNone,
     InvertSelection,
@@ -2063,6 +2129,15 @@ impl MainWindowUiState {
                 self.app_state.playlist.remove_selected_or_current()
             }
             PlaylistContextAction::RemoveDead => self.app_state.playlist.remove_dead_files(),
+            PlaylistContextAction::PhysicallyDelete => {
+                match self.app_state.playlist.physically_delete_selected() {
+                    Ok(deleted) => deleted > 0,
+                    Err(err) => {
+                        eprintln!("xmms-rs: failed to physically delete playlist entry: {err}");
+                        false
+                    }
+                }
+            }
             PlaylistContextAction::SelectAll => {
                 self.app_state.playlist.select_all(true);
                 true

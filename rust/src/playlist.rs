@@ -308,6 +308,32 @@ impl Playlist {
         true
     }
 
+    pub fn physically_delete_selected(&mut self) -> io::Result<usize> {
+        let selected: Vec<(usize, PathBuf)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.selected)
+            .filter_map(|(index, entry)| entry_local_path(entry).map(|path| (index, path)))
+            .collect();
+        if selected.is_empty() {
+            return Ok(0);
+        }
+
+        let old_position = self.position;
+        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let mut deleted = Vec::with_capacity(selected.len());
+        for (index, path) in selected {
+            fs::remove_file(&path)?;
+            deleted.push(index);
+        }
+        for index in deleted.iter().rev() {
+            self.entries.remove(*index);
+        }
+        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        Ok(deleted.len())
+    }
+
     pub fn position(&self) -> Option<usize> {
         self.position
     }
