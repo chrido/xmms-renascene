@@ -4,6 +4,7 @@ pub mod e2e;
 pub mod mpris;
 pub mod player;
 pub mod playlist;
+pub mod podcast;
 pub mod render;
 pub mod skin;
 pub mod spotify;

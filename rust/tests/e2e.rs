@@ -6,6 +6,11 @@ use xmms_resuscitated::e2e::{
 use xmms_resuscitated::mpris::{MprisCommand, MprisEvent};
 use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState};
 use xmms_resuscitated::playlist::PlaylistSortKey;
+use xmms_resuscitated::podcast::{
+    cache_is_fresh, cache_path_for_url, classify_url_response, parse_feed, prepare_playback_uri,
+    refresh_interval_seconds, retry_delay_seconds, stale_cache_files, status_should_retry,
+    PodcastCacheEntry, PodcastUrlKind,
+};
 use xmms_resuscitated::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
 };
@@ -1855,4 +1860,97 @@ fn startup_settings_can_open_equalizer_and_playlist() {
     app.assert_window_visible(Window::Player)
         .assert_window_visible(Window::Playlist)
         .assert_window_visible(Window::Equalizer);
+}
+
+#[test]
+fn podcast_e2e_classifies_feed_and_stream_responses() {
+    assert_eq!(
+        classify_url_response(Some("application/atom+xml"), false, b""),
+        PodcastUrlKind::Feed
+    );
+    assert_eq!(
+        classify_url_response(Some("audio/ogg"), false, b""),
+        PodcastUrlKind::DirectStream
+    );
+    assert_eq!(
+        classify_url_response(None, false, b"<?xml version='1.0'?><rss></rss>"),
+        PodcastUrlKind::Feed
+    );
+    assert_eq!(
+        classify_url_response(None, true, b""),
+        PodcastUrlKind::DirectStream
+    );
+}
+
+#[test]
+fn podcast_e2e_parses_rss_atom_enclosure_urls_and_fallbacks() {
+    let episodes = parse_feed(
+        r#"
+        <rss><channel>
+          <item><title>First &amp; Best</title><guid>one</guid><enclosure url="media/one.mp3"/></item>
+          <entry><title>Second</title><id>two</id><link href="/two.ogg" rel="enclosure"/></entry>
+          <item><content url="https://cdn.example.test/three.mp3"/></item>
+        </channel></rss>
+        "#,
+        "https://example.test/podcasts/feed.xml",
+    );
+
+    assert_eq!(episodes.len(), 3);
+    assert_eq!(
+        episodes[0].url,
+        "https://example.test/podcasts/media/one.mp3"
+    );
+    assert_eq!(episodes[0].title, "First & Best");
+    assert_eq!(episodes[0].guid.as_deref(), Some("one"));
+    assert_eq!(episodes[1].url, "https://example.test/two.ogg");
+    assert_eq!(episodes[1].guid.as_deref(), Some("two"));
+    assert_eq!(episodes[2].title, "https://cdn.example.test/three.mp3");
+}
+
+#[test]
+fn podcast_e2e_cache_paths_freshness_cleanup_and_playback_uri_follow_c_defaults() {
+    let root = unique_temp_dir("xmms-rs-podcast-cache");
+    fs::create_dir_all(&root).unwrap();
+    let cache = cache_path_for_url(&root, "https://example.test/episode.mp3");
+
+    assert_eq!(cache.parent().unwrap(), root.join("podcast-cache"));
+    assert_eq!(cache.file_name().unwrap().to_string_lossy().len(), 64);
+    assert!(cache_is_fresh(1, 1_000, 1_000 + 30, 0));
+    assert!(!cache_is_fresh(0, 1_000, 1_000 + 30, 0));
+
+    let stale = stale_cache_files(
+        &[
+            PodcastCacheEntry {
+                name: "stale".to_string(),
+                modified_unix: 0,
+                size: 1,
+            },
+            PodcastCacheEntry {
+                name: "stale.part".to_string(),
+                modified_unix: 0,
+                size: 1,
+            },
+        ],
+        61 * 24 * 60 * 60,
+        0,
+    );
+    assert_eq!(stale, vec!["stale"]);
+    assert_eq!(
+        prepare_playback_uri(true, "https://example.test/episode.mp3", &cache, true),
+        format!("file://{}", cache.display())
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn podcast_e2e_retry_and_refresh_scheduling_match_c() {
+    assert!(status_should_retry(429));
+    assert!(status_should_retry(503));
+    assert!(!status_should_retry(404));
+    assert_eq!(retry_delay_seconds(Some("15"), 0), 15);
+    assert_eq!(retry_delay_seconds(Some("120"), 0), 60);
+    assert_eq!(retry_delay_seconds(None, 4), 16);
+    assert_eq!(refresh_interval_seconds(0), 60 * 60);
+    assert_eq!(refresh_interval_seconds(5), 5 * 60);
 }
