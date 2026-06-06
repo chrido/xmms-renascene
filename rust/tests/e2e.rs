@@ -36,8 +36,10 @@ use xmms_resuscitated::spotify::{
     SpotifyPlaylist, SpotifyTrack, CLIENT_ID, REDIRECT_URI,
 };
 use xmms_resuscitated::ui::{
-    preferences_page_parity_controls, PanelKind, PlaylistContextAction, PlaylistMenuKind,
-    PlaylistSortAction, PreferencesPage, SpotifyChooserPage,
+    preferences_page_parity_controls, preferences_window_default_size,
+    preferences_zoom_spans_full_width, visualization_preference_sensitivity, PanelKind,
+    PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
+    SpotifyChooserPage,
 };
 
 #[test]
@@ -1652,6 +1654,41 @@ fn preferences_pages_expose_c_parity_controls() {
             .contains(&"Visualization mode:")
     );
     assert!(preferences_page_parity_controls(PreferencesPage::Audio).contains(&"Output device:"));
+}
+
+#[test]
+fn preferences_options_layout_keeps_zoom_slider_full_width_and_window_tall_enough() {
+    assert!(preferences_zoom_spans_full_width());
+    assert_eq!(preferences_window_default_size(), (560, 640));
+}
+
+#[test]
+fn preferences_visualization_controls_follow_selected_mode_sensitivity() {
+    let analyzer = visualization_preference_sensitivity(VisMode::Analyzer, true);
+    assert!(analyzer.analyzer_mode);
+    assert!(analyzer.analyzer_style);
+    assert!(analyzer.analyzer_peaks);
+    assert!(analyzer.analyzer_falloff);
+    assert!(analyzer.peaks_falloff);
+    assert!(!analyzer.scope_mode);
+    assert!(analyzer.windowshade_vu);
+    assert!(analyzer.refresh_rate);
+
+    let scope = visualization_preference_sensitivity(VisMode::Scope, true);
+    assert!(!scope.analyzer_mode);
+    assert!(scope.scope_mode);
+    assert!(!scope.windowshade_vu);
+    assert!(scope.refresh_rate);
+
+    let milkdrop = visualization_preference_sensitivity(VisMode::Milkdrop, true);
+    assert!(!milkdrop.analyzer_mode);
+    assert!(!milkdrop.analyzer_style);
+    assert!(!milkdrop.analyzer_peaks);
+    assert!(!milkdrop.analyzer_falloff);
+    assert!(!milkdrop.peaks_falloff);
+    assert!(!milkdrop.scope_mode);
+    assert!(!milkdrop.windowshade_vu);
+    assert!(!milkdrop.refresh_rate);
 }
 
 #[test]

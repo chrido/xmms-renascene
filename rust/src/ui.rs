@@ -333,6 +333,14 @@ pub enum PreferencesPage {
     Title,
 }
 
+pub fn preferences_window_default_size() -> (i32, i32) {
+    (560, 640)
+}
+
+pub fn preferences_zoom_spans_full_width() -> bool {
+    true
+}
+
 pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'static str] {
     match page {
         PreferencesPage::Audio => &[
@@ -375,6 +383,36 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Skin bitmap font",
         ],
         PreferencesPage::Title => &["Title format:"],
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualizationPreferenceSensitivity {
+    pub analyzer_mode: bool,
+    pub analyzer_style: bool,
+    pub analyzer_peaks: bool,
+    pub analyzer_falloff: bool,
+    pub peaks_falloff: bool,
+    pub scope_mode: bool,
+    pub windowshade_vu: bool,
+    pub refresh_rate: bool,
+}
+
+pub fn visualization_preference_sensitivity(
+    mode: VisMode,
+    peaks_enabled: bool,
+) -> VisualizationPreferenceSensitivity {
+    let analyzer = mode == VisMode::Analyzer;
+    let scope = mode == VisMode::Scope;
+    VisualizationPreferenceSensitivity {
+        analyzer_mode: analyzer,
+        analyzer_style: analyzer,
+        analyzer_peaks: analyzer,
+        analyzer_falloff: analyzer,
+        peaks_falloff: analyzer && peaks_enabled,
+        scope_mode: scope,
+        windowshade_vu: analyzer,
+        refresh_rate: analyzer || scope,
     }
 }
 
@@ -1204,11 +1242,12 @@ fn build_preferences_window(
     app: &gtk::Application,
     main_state: &Rc<RefCell<MainWindowUiState>>,
 ) -> gtk::ApplicationWindow {
+    let (default_width, default_height) = preferences_window_default_size();
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("Preferences")
-        .default_width(560)
-        .default_height(520)
+        .default_width(default_width)
+        .default_height(default_height)
         .build();
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
     root.set_margin_top(10);
@@ -1451,7 +1490,9 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
     zoom_value.set_width_chars(5);
     zoom_value.set_hexpand(false);
     zoom_value.set_text(&zoom_text);
+    zoom.set_hexpand(true);
     let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    zoom_box.set_hexpand(true);
     zoom_box.append(&zoom);
     zoom_box.append(&zoom_value);
     {
@@ -1463,7 +1504,8 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
             main_state.borrow_mut().set_preference_scale_factor(value);
         });
     }
-    prefs_attach_label(&grid, "Zoom level:", &zoom_box, 2);
+    grid.attach(&prefs_label("Zoom level:"), 0, 2, 2, 1);
+    grid.attach(&zoom_box, 0, 3, 2, 1);
 
     let ttl = gtk::SpinButton::with_range(1.0, 3650.0, 1.0);
     ttl.set_value(main_state.borrow().preference_podcast_cache_ttl_days() as f64);
@@ -1475,7 +1517,7 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
                 .set_preference_podcast_cache_ttl_days(spin.value_as_int());
         });
     }
-    prefs_attach_label(&grid, "Podcast cache TTL (days):", &ttl, 3);
+    prefs_attach_label(&grid, "Podcast cache TTL (days):", &ttl, 4);
 
     let refresh = gtk::SpinButton::with_range(1.0, 10080.0, 1.0);
     refresh.set_value(
@@ -1491,7 +1533,7 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
                 .set_preference_podcast_refresh_interval_minutes(spin.value_as_int());
         });
     }
-    prefs_attach_label(&grid, "Podcast refresh interval (minutes):", &refresh, 4);
+    prefs_attach_label(&grid, "Podcast refresh interval (minutes):", &refresh, 5);
 
     let checks = {
         let state = main_state.borrow();
@@ -1568,7 +1610,7 @@ fn build_preferences_options_page(main_state: &Rc<RefCell<MainWindowUiState>>) -
                 }
             });
         }
-        grid.attach(&check, (index % 2) as i32, 5 + (index / 2) as i32, 1, 1);
+        grid.attach(&check, (index % 2) as i32, 6 + (index / 2) as i32, 1, 1);
     }
     page
 }
@@ -1674,18 +1716,6 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
         VisMode::Off => "off",
         VisMode::Analyzer => "analyzer",
     }));
-    {
-        let main_state = Rc::clone(main_state);
-        mode.connect_changed(move |combo| {
-            let mode = match combo.active_id().as_deref() {
-                Some("scope") => VisMode::Scope,
-                Some("milkdrop") => VisMode::Milkdrop,
-                Some("off") => VisMode::Off,
-                _ => VisMode::Analyzer,
-            };
-            main_state.borrow_mut().set_visualization_mode(mode);
-        });
-    }
     prefs_attach_label(&grid, "Visualization mode:", &mode, 0);
 
     let analyzer_mode = gtk::ComboBoxText::new();
@@ -1771,14 +1801,6 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
         "Show analyzer peaks",
         main_state.borrow().visualization_peaks_enabled(),
     );
-    {
-        let main_state = Rc::clone(main_state);
-        peaks.connect_toggled(move |check| {
-            main_state
-                .borrow_mut()
-                .set_visualization_peaks_enabled(check.is_active());
-        });
-    }
     grid.attach(&peaks, 1, 4, 1, 1);
 
     let falloff = falloff_combo(main_state.borrow().visualization_analyzer_falloff());
@@ -1859,7 +1881,105 @@ fn build_preferences_visualization_page(main_state: &Rc<RefCell<MainWindowUiStat
         });
     }
     prefs_attach_label(&grid, "Refresh rate:", &refresh, 8);
+
+    update_visualization_preference_sensitivity(
+        &mode,
+        &analyzer_mode,
+        &style,
+        &scope,
+        &peaks,
+        &falloff,
+        &peaks_falloff,
+        &vu,
+        &refresh,
+    );
+    {
+        let main_state = Rc::clone(main_state);
+        let analyzer_mode = analyzer_mode.clone();
+        let style = style.clone();
+        let scope = scope.clone();
+        let peaks = peaks.clone();
+        let falloff = falloff.clone();
+        let peaks_falloff = peaks_falloff.clone();
+        let vu = vu.clone();
+        let refresh = refresh.clone();
+        mode.connect_changed(move |combo| {
+            let mode = match combo.active_id().as_deref() {
+                Some("scope") => VisMode::Scope,
+                Some("milkdrop") => VisMode::Milkdrop,
+                Some("off") => VisMode::Off,
+                _ => VisMode::Analyzer,
+            };
+            main_state.borrow_mut().set_visualization_mode(mode);
+            update_visualization_preference_sensitivity(
+                combo,
+                &analyzer_mode,
+                &style,
+                &scope,
+                &peaks,
+                &falloff,
+                &peaks_falloff,
+                &vu,
+                &refresh,
+            );
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        let mode = mode.clone();
+        let analyzer_mode = analyzer_mode.clone();
+        let style = style.clone();
+        let scope = scope.clone();
+        let falloff = falloff.clone();
+        let peaks_falloff = peaks_falloff.clone();
+        let vu = vu.clone();
+        let refresh = refresh.clone();
+        peaks.connect_toggled(move |check| {
+            main_state
+                .borrow_mut()
+                .set_visualization_peaks_enabled(check.is_active());
+            update_visualization_preference_sensitivity(
+                &mode,
+                &analyzer_mode,
+                &style,
+                &scope,
+                check,
+                &falloff,
+                &peaks_falloff,
+                &vu,
+                &refresh,
+            );
+        });
+    }
     page
+}
+
+fn update_visualization_preference_sensitivity(
+    mode: &gtk::ComboBoxText,
+    analyzer_mode: &gtk::ComboBoxText,
+    analyzer_style: &gtk::ComboBoxText,
+    scope_mode: &gtk::ComboBoxText,
+    peaks: &gtk::CheckButton,
+    analyzer_falloff: &gtk::ComboBoxText,
+    peaks_falloff: &gtk::ComboBoxText,
+    vu: &gtk::ComboBoxText,
+    refresh: &gtk::ComboBoxText,
+) {
+    let mode = match mode.active_id().as_deref() {
+        Some("scope") => VisMode::Scope,
+        Some("milkdrop") => VisMode::Milkdrop,
+        Some("off") => VisMode::Off,
+        _ => VisMode::Analyzer,
+    };
+    let sensitivity = visualization_preference_sensitivity(mode, peaks.is_active());
+    analyzer_mode.set_sensitive(sensitivity.analyzer_mode);
+    analyzer_style.set_sensitive(sensitivity.analyzer_style);
+    peaks.set_sensitive(sensitivity.analyzer_peaks);
+    analyzer_falloff.set_sensitive(sensitivity.analyzer_falloff);
+    peaks_falloff.set_sensitive(sensitivity.peaks_falloff);
+    scope_mode.set_sensitive(sensitivity.scope_mode);
+    vu.set_sensitive(sensitivity.windowshade_vu);
+    refresh.set_sensitive(sensitivity.refresh_rate);
 }
 
 fn falloff_combo(active: VisFalloffSpeed) -> gtk::ComboBoxText {
