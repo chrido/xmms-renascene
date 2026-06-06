@@ -816,6 +816,7 @@ impl Visualization {
     pub fn set_falloff(&mut self, analyzer: VisFalloffSpeed, peaks: VisFalloffSpeed) {
         self.analyzer_falloff = analyzer;
         self.peaks_falloff = peaks;
+        self.widget.queue_draw();
     }
 
     pub fn level(value: f32) -> i32 {
@@ -1522,6 +1523,16 @@ mod tests {
         assert!(vis.widget().needs_redraw());
         assert_eq!(Visualization::level(0.5), 8);
         assert_eq!(Visualization::level(2.0), 16);
+    }
+
+    #[test]
+    fn visualization_falloff_change_requests_redraw() {
+        let mut vis = Visualization::new(WidgetId(6), 0, 0, 75);
+        assert!(!vis.widget().needs_redraw());
+
+        vis.set_falloff(VisFalloffSpeed::Fastest, VisFalloffSpeed::Slowest);
+
+        assert!(vis.widget().needs_redraw());
     }
 
     #[test]

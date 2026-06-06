@@ -752,15 +752,23 @@ fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<[f32; SPECTR
         return None;
     }
 
-    let magnitudes = structure.get::<gst::Array>("magnitude").ok()?;
+    if let Ok(magnitudes) = structure.get::<gst::Array>("magnitude") {
+        return spectrum_from_values(magnitudes.as_slice());
+    }
+    if let Ok(magnitudes) = structure.get::<gst::List>("magnitude") {
+        return spectrum_from_values(magnitudes.as_slice());
+    }
+    None
+}
+
+fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<[f32; SPECTRUM_BANDS]> {
     let mut bands = [0.0; SPECTRUM_BANDS];
-    for (index, value) in magnitudes
-        .as_slice()
-        .iter()
-        .take(SPECTRUM_BANDS)
-        .enumerate()
-    {
-        let magnitude = value.get::<f64>().ok()? as f32;
+    for (index, value) in values.iter().take(SPECTRUM_BANDS).enumerate() {
+        let magnitude = value
+            .get::<f64>()
+            .map(|value| value as f32)
+            .or_else(|_| value.get::<f32>())
+            .ok()?;
         bands[index] = ((magnitude + 80.0) / 80.0).clamp(0.0, 1.0);
     }
     Some(bands)
@@ -1163,6 +1171,27 @@ mod tests {
 
         assert_eq!(bands[0], 0.0);
         assert_eq!(bands[1], 0.5);
+        assert_eq!(bands[2], 1.0);
+        assert_eq!(bands[3], 0.0);
+    }
+
+    #[test]
+    fn gstreamer_bus_spectrum_list_messages_extract_visualizer_bands() {
+        let _guard = gst_test_guard();
+        gst::init().expect("GStreamer should initialize");
+        let magnitudes = gst::List::new([-80.0f32, -20.0, 0.0]);
+        let structure = gst::Structure::builder("spectrum")
+            .field("magnitude", magnitudes)
+            .build();
+
+        let event = event_from_message(&gst::message::Element::new(structure), || None)
+            .expect("spectrum list structure should produce a visualizer event");
+        let PlaybackEvent::Spectrum(bands) = event else {
+            panic!("expected spectrum event");
+        };
+
+        assert_eq!(bands[0], 0.0);
+        assert_eq!(bands[1], 0.75);
         assert_eq!(bands[2], 1.0);
         assert_eq!(bands[3], 0.0);
     }
