@@ -6,8 +6,10 @@ use gtk::prelude::*;
 use crate::app_state::AppState;
 use crate::player::PlayerState;
 use crate::render::{
-    render_main_player_state, MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState,
-    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    render_equalizer_background, render_main_player_state, render_playlist_frame, MainPushButton,
+    MainSlider, MainToggleButton, MainWindowRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
@@ -68,6 +70,7 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
+    let panel_windows = Rc::new(PanelWindows::new(app, &skin));
 
     {
         let skin = Rc::clone(&skin);
@@ -104,11 +107,13 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
         let app = app.clone();
         let window = window.clone();
         let drawing_area = drawing_area.clone();
+        let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, x, y);
             let action = main_state.borrow_mut().release(x, y);
             apply_ui_action(action, &app, &window, &drawing_area, &main_state.borrow());
+            sync_panel_windows(&panel_windows, &main_state.borrow());
             drawing_area.queue_draw();
         });
     }
@@ -130,6 +135,99 @@ fn build_preview_window(app: &gtk::Application) -> Result<(), String> {
     window.set_child(Some(&drawing_area));
     window.present();
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PanelWindows {
+    equalizer: gtk::ApplicationWindow,
+    playlist: gtk::ApplicationWindow,
+}
+
+impl PanelWindows {
+    fn new(app: &gtk::Application, skin: &Rc<DefaultSkin>) -> Self {
+        Self {
+            equalizer: build_equalizer_window(app, skin),
+            playlist: build_playlist_window(app, skin),
+        }
+    }
+}
+
+fn build_equalizer_window(
+    app: &gtk::Application,
+    skin: &Rc<DefaultSkin>,
+) -> gtk::ApplicationWindow {
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title("XMMS Resuscitated Rust Equalizer")
+        .resizable(false)
+        .decorated(false)
+        .default_width(EQUALIZER_WINDOW_WIDTH * DEFAULT_SCALE)
+        .default_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
+        .build();
+    let drawing_area = gtk::DrawingArea::builder()
+        .content_width(EQUALIZER_WINDOW_WIDTH * DEFAULT_SCALE)
+        .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
+        .build();
+    let skin = Rc::clone(skin);
+    drawing_area.set_draw_func(move |_area, cr, width, height| {
+        cr.scale(
+            width as f64 / EQUALIZER_WINDOW_WIDTH as f64,
+            height as f64 / EQUALIZER_WINDOW_HEIGHT as f64,
+        );
+        if let Err(err) = render_equalizer_background(cr, &skin, true, false) {
+            eprintln!("xmms-rs: failed to render equalizer preview: {err}");
+        }
+    });
+    window.set_child(Some(&drawing_area));
+    window
+}
+
+fn build_playlist_window(app: &gtk::Application, skin: &Rc<DefaultSkin>) -> gtk::ApplicationWindow {
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title("XMMS Resuscitated Rust Playlist")
+        .resizable(false)
+        .decorated(false)
+        .default_width(PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE)
+        .default_height(PLAYLIST_DEFAULT_HEIGHT * DEFAULT_SCALE)
+        .build();
+    let drawing_area = gtk::DrawingArea::builder()
+        .content_width(PLAYLIST_DEFAULT_WIDTH * DEFAULT_SCALE)
+        .content_height(PLAYLIST_DEFAULT_HEIGHT * DEFAULT_SCALE)
+        .build();
+    let skin = Rc::clone(skin);
+    drawing_area.set_draw_func(move |_area, cr, width, height| {
+        cr.scale(
+            width as f64 / PLAYLIST_DEFAULT_WIDTH as f64,
+            height as f64 / PLAYLIST_DEFAULT_HEIGHT as f64,
+        );
+        if let Err(err) = render_playlist_frame(
+            cr,
+            &skin,
+            true,
+            false,
+            PLAYLIST_DEFAULT_WIDTH,
+            PLAYLIST_DEFAULT_HEIGHT,
+        ) {
+            eprintln!("xmms-rs: failed to render playlist preview: {err}");
+        }
+    });
+    window.set_child(Some(&drawing_area));
+    window
+}
+
+fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
+    if state.app_state.config.equalizer_visible {
+        windows.equalizer.present();
+    } else {
+        windows.equalizer.hide();
+    }
+
+    if state.app_state.config.playlist_visible {
+        windows.playlist.present();
+    } else {
+        windows.playlist.hide();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

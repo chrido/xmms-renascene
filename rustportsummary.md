@@ -42,6 +42,7 @@ Completed so far:
 - Ported simple invisible hit-area button press/release/motion activation behavior.
 - Added a GTK preview window that renders the default main reset state, including titlebar buttons, transport buttons, toggle buttons, text boxes, volume/balance/position sliders, blank time numbers, visualization grid, mono/stereo indicator, and stopped play-status indicator.
 - Wired the Rust main-window GTK preview to click and motion controllers: titlebar close/minimize/shade, play/pause/stop/previous/next/eject press states, shuffle/repeat/equalizer/playlist toggles, and volume/balance/position slider dragging now update Rust runtime state and redraw.
+- Added Rust GTK preview windows for the equalizer and playlist; the main-window EQ and PL toggle buttons now show and hide those skinned windows.
 - Added a GTK smoke mode for non-interactive validation.
 - Captured an initial Rust preview screenshot in `rust-preview-screenshots/`.
 - Re-captured `rust-preview-screenshots/main-preview.png` and compared it to `reference-screenshots/main-reset.png`; the latest ImageMagick AE and RMSE metrics are both `0`.
@@ -66,7 +67,7 @@ Completed so far:
 | `rust/src/skin/xpm.rs` | Manual XPM parser |
 | `rust/src/skin/widget.rs` | Widget list/hit-testing model, all initial widget state machines, and visualization enums |
 | `rust/src/render.rs` | XPM-to-Cairo conversion, skin blitting, docked panel rendering, and main reset-state composition |
-| `rust/src/ui.rs` | GTK preview window, smoke mode, and interactive main-window control state |
+| `rust/src/ui.rs` | GTK preview windows, smoke mode, interactive main-window control state, and EQ/playlist preview window visibility |
 | `rust/tests/default_skin.rs` | Default skin parsing tests |
 | `rust/tests/render.rs` | Cairo render tests |
 
@@ -167,7 +168,7 @@ The current main reset-state Rust preview matches the C reference exactly for th
 
 ## Current limitations
 
-The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, but playback controls only update Rust runtime state until the GStreamer backend is ported. Playlist/equalizer toggle buttons do not yet open full windows, and the Rust port still lacks full playback, playlist UI, equalizer UI, MPRIS, Spotify, podcasts, output device selection UI, preferences UI, packaging, and full command-line/session behavior.
+The Rust version is not yet feature-complete. It currently renders and handles the default main-window controls, including showing skinned playlist and equalizer preview windows. Playback controls only update Rust runtime state until the GStreamer backend is ported, and the playlist/equalizer windows are not yet fully interactive. The Rust port still lacks full playback, playlist UI behavior, equalizer UI behavior, MPRIS, Spotify, podcasts, output device selection UI, preferences UI, packaging, and full command-line/session behavior.
 
 The manual XPM parser is intentionally kept for the first working port. A later cleanup phase can replace it with a library after parity is reached.
 
