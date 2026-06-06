@@ -1715,6 +1715,22 @@ fn docked_panel_size_respects_playlist_detached_and_docked_state() {
 }
 
 #[test]
+fn docking_resized_floating_playlist_resets_width_but_preserves_height() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_playlist_detached(true),
+    );
+
+    app.resize_playlist(325, 280)
+        .assert_playlist_size(325, 261)
+        .set_preference_playlist_docked(true)
+        .assert_panel_detached(PanelKind::Playlist, false)
+        .assert_playlist_size(275, 261)
+        .assert_docked_panel_size((275, 116 + 261));
+}
+
+#[test]
 fn visualization_modes_can_be_selected_from_rust_e2e() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

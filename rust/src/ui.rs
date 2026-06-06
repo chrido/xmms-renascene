@@ -1249,6 +1249,9 @@ fn build_playlist_window(
         let main_state = Rc::clone(main_state);
         drawing_area.connect_resize(move |area, width, height| {
             let mut state = main_state.borrow_mut();
+            if !state.app_state.config.playlist_detached {
+                return;
+            }
             let scale = state.scale_factor();
             let base_height = if state.playlist_shaded {
                 state.playlist_height
@@ -5487,6 +5490,10 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preference_playlist_docked(&mut self, docked: bool) {
         self.app_state.config.playlist_detached = !docked;
+        if docked {
+            self.playlist_width = PLAYLIST_MIN_WIDTH;
+            self.clamp_playlist_scroll_offset();
+        }
         self.mark_preferences_saved();
     }
 
