@@ -23,8 +23,8 @@ use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistS
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, playlist_window_height,
     render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
-    render_playlist_rows, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
-    MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
+    render_playlist_rows, scale_dim, DockedPanelState, EqualizerControl, EqualizerRenderState,
+    MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
     PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
     VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
     MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
@@ -829,9 +829,14 @@ fn resize_main_window(
     state: &MainWindowUiState,
 ) {
     let (width, height) = state.docked_panel_size();
-    drawing_area.set_content_width(width * DEFAULT_SCALE);
-    drawing_area.set_content_height(height * DEFAULT_SCALE);
-    window.set_default_size(width * DEFAULT_SCALE, height * DEFAULT_SCALE);
+    let scale = state.scale_factor();
+    drawing_area.set_content_width(scale_dim(width, scale));
+    drawing_area.set_content_height(scale_dim(height, scale));
+    window.set_default_size(scale_dim(width, scale), scale_dim(height, scale));
+}
+
+fn unscale_dim(value: i32, scale: f64) -> i32 {
+    ((f64::from(value) / scale.clamp(1.0, 5.0)) + 0.5).max(1.0) as i32
 }
 
 fn render_docked_ui_state(
@@ -1244,13 +1249,16 @@ fn build_playlist_window(
         let main_state = Rc::clone(main_state);
         drawing_area.connect_resize(move |area, width, height| {
             let mut state = main_state.borrow_mut();
+            let scale = state.scale_factor();
             let base_height = if state.playlist_shaded {
                 state.playlist_height
             } else {
-                (height / DEFAULT_SCALE).max(PLAYLIST_MIN_HEIGHT)
+                unscale_dim(height, scale).max(PLAYLIST_MIN_HEIGHT)
             };
-            if state.set_playlist_size((width / DEFAULT_SCALE).max(PLAYLIST_MIN_WIDTH), base_height)
-            {
+            if state.set_playlist_size(
+                unscale_dim(width, scale).max(PLAYLIST_MIN_WIDTH),
+                base_height,
+            ) {
                 area.queue_draw();
             }
         });
@@ -3050,11 +3058,12 @@ fn sync_single_panel_window_from_state(
     area: &gtk::DrawingArea,
     state: &Rc<RefCell<MainWindowUiState>>,
 ) {
-    let (visible, shaded, width, full_height) = {
+    let (visible, shaded, width, full_height, scale) = {
         let state = state.borrow();
-        panel_window_values(kind, &state)
+        let (visible, shaded, width, full_height) = panel_window_values(kind, &state);
+        (visible, shaded, width, full_height, state.scale_factor())
     };
-    sync_single_panel_window_values(window, area, visible, shaded, width, full_height);
+    sync_single_panel_window_values(window, area, visible, shaded, width, full_height, scale);
 }
 
 fn panel_window_values(kind: PanelKind, state: &MainWindowUiState) -> (bool, bool, i32, i32) {
@@ -3081,6 +3090,7 @@ fn sync_single_panel_window_values(
     shaded: bool,
     width: i32,
     full_height: i32,
+    scale: f64,
 ) {
     if !visible {
         window.hide();
@@ -3091,14 +3101,15 @@ fn sync_single_panel_window_values(
     } else {
         full_height
     };
-    area.set_content_width(width * DEFAULT_SCALE);
-    area.set_content_height(height * DEFAULT_SCALE);
-    window.set_default_size(width * DEFAULT_SCALE, height * DEFAULT_SCALE);
+    area.set_content_width(scale_dim(width, scale));
+    area.set_content_height(scale_dim(height, scale));
+    window.set_default_size(scale_dim(width, scale), scale_dim(height, scale));
     area.queue_draw();
 }
 
 fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     let visibility = state.panel_visibility();
+    let scale = state.scale_factor();
     if visibility.equalizer {
         let height = if state.equalizer_shaded {
             MAIN_TITLEBAR_HEIGHT
@@ -3107,10 +3118,13 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         };
         windows
             .equalizer_area
-            .set_content_height(height * DEFAULT_SCALE);
+            .set_content_width(scale_dim(EQUALIZER_WINDOW_WIDTH, scale));
+        windows
+            .equalizer_area
+            .set_content_height(scale_dim(height, scale));
         windows.equalizer.set_default_size(
-            EQUALIZER_WINDOW_WIDTH * DEFAULT_SCALE,
-            height * DEFAULT_SCALE,
+            scale_dim(EQUALIZER_WINDOW_WIDTH, scale),
+            scale_dim(height, scale),
         );
         windows.equalizer.present();
         windows.equalizer_area.queue_draw();
@@ -3126,13 +3140,14 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         };
         windows
             .playlist_area
-            .set_content_width(state.playlist_width * DEFAULT_SCALE);
+            .set_content_width(scale_dim(state.playlist_width, scale));
         windows
             .playlist_area
-            .set_content_height(height * DEFAULT_SCALE);
-        windows
-            .playlist
-            .set_default_size(state.playlist_width * DEFAULT_SCALE, height * DEFAULT_SCALE);
+            .set_content_height(scale_dim(height, scale));
+        windows.playlist.set_default_size(
+            scale_dim(state.playlist_width, scale),
+            scale_dim(height, scale),
+        );
         windows.playlist.present();
         windows.playlist_area.queue_draw();
     } else {
@@ -6398,13 +6413,22 @@ fn apply_ui_action(
         UiAction::Quit => app.quit(),
         UiAction::Minimize => window.minimize(),
         UiAction::Resize => {
-            let height = if state.borrow().shaded {
-                MAIN_TITLEBAR_HEIGHT
-            } else {
-                MAIN_WINDOW_HEIGHT
+            let (height, scale) = {
+                let state = state.borrow();
+                (
+                    if state.shaded {
+                        MAIN_TITLEBAR_HEIGHT
+                    } else {
+                        MAIN_WINDOW_HEIGHT
+                    },
+                    state.scale_factor(),
+                )
             };
-            drawing_area.set_content_height(height * DEFAULT_SCALE);
-            window.set_default_size(MAIN_WINDOW_WIDTH * DEFAULT_SCALE, height * DEFAULT_SCALE);
+            drawing_area.set_content_height(scale_dim(height, scale));
+            window.set_default_size(
+                scale_dim(MAIN_WINDOW_WIDTH, scale),
+                scale_dim(height, scale),
+            );
         }
         UiAction::ShowMenu => {
             show_main_menu(menu_popover, drawing_area);
@@ -6682,6 +6706,15 @@ mod tests {
         state.press(263, 73);
         assert_eq!(state.release(263, 73), UiAction::None);
         assert_eq!(state.position(), 0);
+    }
+
+    #[test]
+    fn zoom_scale_helpers_resize_from_preferences_scale_factor() {
+        let mut state = MainWindowUiState::default();
+        state.set_preference_scale_factor(1.7);
+
+        assert_eq!(scale_dim(MAIN_WINDOW_WIDTH, state.scale_factor()), 468);
+        assert_eq!(unscale_dim(468, state.scale_factor()), MAIN_WINDOW_WIDTH);
     }
 
     #[test]
