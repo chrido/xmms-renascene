@@ -198,7 +198,7 @@ Goal: port every active XMMS Resuscitated feature to Rust while keeping the app 
   - [x] Update man page if CLI behavior changes.
   - [x] Install desktop file, appstream metadata, icon, skins, and binary.
 
-- [ ] Add parity validation.
+- [x] Add parity validation.
   - [x] Keep Rust unit tests for pure logic.
   - [x] Add Rust integration tests for playlist/config/skin fixtures.
   - [x] Add Rust UI e2e harness for scripted player settings, clicks, and window visibility assertions.
