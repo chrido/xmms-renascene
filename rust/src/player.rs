@@ -559,6 +559,11 @@ impl Player {
         self.vis_data_valid = true;
     }
 
+    pub fn clear_visualization_data(&mut self) {
+        self.vis_data = [0.0; SPECTRUM_BANDS];
+        self.vis_data_valid = false;
+    }
+
     pub fn visualization_data(&self) -> &[f32; SPECTRUM_BANDS] {
         &self.vis_data
     }

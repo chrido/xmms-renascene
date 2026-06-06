@@ -1739,6 +1739,18 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_visualization_data_cleared(&mut self) -> &mut Self {
+        assert!(
+            self.state
+                .visualization_render_state()
+                .data
+                .iter()
+                .all(|value| *value == 0.0),
+            "expected visualization data to be cleared"
+        );
+        self
+    }
+
     pub fn assert_visualization_peak_cleared(&mut self) -> &mut Self {
         assert!(
             self.state

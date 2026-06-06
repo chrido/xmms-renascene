@@ -42,6 +42,8 @@ use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
 type PreferencesChanged = Rc<dyn Fn()>;
+const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
+const PREFERENCES_BALANCE_WIDGET: &str = "xmms-preferences-balance";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
@@ -245,6 +247,7 @@ fn build_preview_window(
         let drawing_area = drawing_area.clone();
         let window = window.clone();
         let main_state = Rc::clone(&main_state);
+        let panel_windows = Rc::clone(&panel_windows);
         click.connect_pressed(move |gesture, n_press, x, y| {
             let (base_x, base_y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let docked_panel = { main_state.borrow().docked_panel_at(base_x, base_y) };
@@ -309,6 +312,7 @@ fn build_preview_window(
                 return;
             }
             main_state.borrow_mut().press(base_x, base_y);
+            sync_preferences_options_controls(&panel_windows.preferences, &main_state.borrow());
             drawing_area.queue_draw();
         });
     }
@@ -374,6 +378,7 @@ fn build_preview_window(
                 &menu_popover,
                 &main_state,
             );
+            sync_preferences_options_controls(&panel_windows.preferences, &main_state.borrow());
             sync_panel_windows(&panel_windows, &main_state.borrow());
             resize_main_window(&window, &drawing_area, &main_state.borrow());
             drawing_area.queue_draw();
@@ -419,6 +424,7 @@ fn build_preview_window(
                 return;
             }
             if main_state.borrow_mut().motion(x, y) {
+                sync_preferences_options_controls(&panel_windows.preferences, &main_state.borrow());
                 drawing_area.queue_draw();
             }
         });
@@ -1733,6 +1739,42 @@ fn prefs_attach_label(grid: &gtk::Grid, label: &str, child: &impl IsA<gtk::Widge
     child.set_hexpand(true);
 }
 
+fn find_spin_button_by_name(root: &impl IsA<gtk::Widget>, name: &str) -> Option<gtk::SpinButton> {
+    let root = root.as_ref();
+    if root.widget_name() == name {
+        if let Ok(spin) = root.clone().downcast::<gtk::SpinButton>() {
+            return Some(spin);
+        }
+    }
+
+    let mut child = root.first_child();
+    while let Some(widget) = child {
+        if let Some(spin) = find_spin_button_by_name(&widget, name) {
+            return Some(spin);
+        }
+        child = widget.next_sibling();
+    }
+    None
+}
+
+fn set_spin_value_if_changed(spin: &gtk::SpinButton, value: i32) {
+    if spin.value_as_int() != value {
+        spin.set_value(value as f64);
+    }
+}
+
+fn sync_preferences_options_controls(
+    preferences_window: &gtk::ApplicationWindow,
+    state: &MainWindowUiState,
+) {
+    if let Some(spin) = find_spin_button_by_name(preferences_window, PREFERENCES_VOLUME_WIDGET) {
+        set_spin_value_if_changed(&spin, state.volume());
+    }
+    if let Some(spin) = find_spin_button_by_name(preferences_window, PREFERENCES_BALANCE_WIDGET) {
+        set_spin_value_if_changed(&spin, state.balance());
+    }
+}
+
 fn prefs_check(label: &str, active: bool) -> gtk::CheckButton {
     let check = gtk::CheckButton::with_label(label);
     check.set_halign(gtk::Align::Start);
@@ -1815,6 +1857,7 @@ fn build_preferences_options_page(
     box_.append(&grid);
 
     let volume = gtk::SpinButton::with_range(0.0, 100.0, 1.0);
+    volume.set_widget_name(PREFERENCES_VOLUME_WIDGET);
     volume.set_value(main_state.borrow().volume() as f64);
     {
         let main_state = Rc::clone(main_state);
@@ -1831,6 +1874,7 @@ fn build_preferences_options_page(
     prefs_attach_label(&grid, "Volume:", &volume, 0);
 
     let balance = gtk::SpinButton::with_range(-100.0, 100.0, 1.0);
+    balance.set_widget_name(PREFERENCES_BALANCE_WIDGET);
     balance.set_value(main_state.borrow().balance() as f64);
     {
         let main_state = Rc::clone(main_state);
@@ -3366,6 +3410,7 @@ impl MainWindowUiState {
             &self.app_state.config.title_format,
             &entry.filename,
             &entry.title,
+            &self.app_state.config,
         )
     }
 
@@ -4267,6 +4312,8 @@ impl MainWindowUiState {
             }
         }
         self.app_state.player.stop();
+        self.app_state.player.clear_visualization_data();
+        self.visualization.clear_data();
         self.position_position = 0;
         self.playback_position_ms = 0;
     }
@@ -6189,14 +6236,21 @@ fn format_playlist_footer_duration(milliseconds: i64, more: bool) -> String {
     }
 }
 
-fn format_title_for_preferences(format: &str, filename: &str, title: &str) -> String {
-    let fallback_title = if title.trim().is_empty() {
-        filename_title(filename)
-    } else {
-        percent_decode_spaces(title.trim()).replace('_', " ")
-    };
+fn format_title_for_preferences(
+    format: &str,
+    filename: &str,
+    title: &str,
+    config: &Config,
+) -> String {
+    let title = title.trim();
+    let fallback_title =
+        if title.is_empty() || title == crate::playlist::format_title(filename, None) {
+            filename_title(filename, config)
+        } else {
+            normalize_title_text(title, config)
+        };
     let (artist, track_title) = split_artist_title(&fallback_title);
-    let file_title = filename_title(filename);
+    let file_title = filename_title(filename, config);
     let format = if format.trim().is_empty() {
         "%p - %t"
     } else {
@@ -6234,12 +6288,12 @@ fn split_artist_title(title: &str) -> (Option<&str>, &str) {
         .unwrap_or((None, title.trim()))
 }
 
-fn filename_title(filename: &str) -> String {
+fn filename_title(filename: &str, config: &Config) -> String {
     let without_query = filename.split(['?', '#']).next().unwrap_or(filename);
-    let decoded = percent_decode_spaces(without_query);
-    let path = decoded
+    let normalized = normalize_title_text(without_query, config);
+    let path = normalized
         .strip_prefix("file://")
-        .unwrap_or(decoded.as_str())
+        .unwrap_or(normalized.as_str())
         .trim_end_matches('/');
     let basename = Path::new(path)
         .file_name()
@@ -6249,11 +6303,18 @@ fn filename_title(filename: &str) -> String {
         .rsplit_once('.')
         .map(|(stem, _)| stem)
         .unwrap_or(basename);
-    stem.replace('_', " ")
+    stem.to_string()
 }
 
-fn percent_decode_spaces(text: &str) -> String {
-    text.replace("%20", " ")
+fn normalize_title_text(text: &str, config: &Config) -> String {
+    let mut normalized = text.to_string();
+    if config.convert_twenty {
+        normalized = normalized.replace("%20", " ");
+    }
+    if config.convert_underscore {
+        normalized = normalized.replace('_', " ");
+    }
+    normalized
 }
 
 fn cleanup_formatted_title(text: &str) -> Option<String> {

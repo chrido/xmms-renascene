@@ -1987,6 +1987,32 @@ fn playlist_font_preference_and_visualization_feed_render_state() {
 }
 
 #[test]
+fn stop_clears_visualization_immediately() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.set_visualization_mode(VisMode::Analyzer)
+        .feed_visualization_data(4, 0.9)
+        .tick_visualization(100)
+        .assert_visualization_band_at_least(4, 0.8)
+        .press_shortcut(Shortcut::Stop)
+        .assert_visualization_data_cleared()
+        .assert_visualization_peak_cleared();
+}
+
+#[test]
+fn title_format_respects_percent_twenty_conversion_preference() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.add_playlist_uri("file:///music/Artist%20Name%20-%20Track_Name.ogg")
+        .press_shortcut(Shortcut::PlayFirst)
+        .assert_main_title("Artist Name - Track Name")
+        .set_preference_convert_twenty(false)
+        .assert_main_title("Artist%20Name%20-%20Track Name")
+        .set_preference_convert_underscore(false)
+        .assert_main_title("Artist%20Name%20-%20Track_Name");
+}
+
+#[test]
 fn preferences_visualization_page_applies_controls_immediately() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

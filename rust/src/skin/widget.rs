@@ -773,6 +773,15 @@ impl Visualization {
         }
     }
 
+    pub fn clear_data(&mut self) {
+        self.data = [0.0; 75];
+        self.peak = [0.0; 75];
+        self.peak_speed = [0.0; 75];
+        self.milkdrop_energy = 0.0;
+        self.milkdrop_phase = 0.0;
+        self.widget.queue_draw();
+    }
+
     pub fn tick(&mut self, data: Option<&[f32]>) {
         if let Some(data) = data {
             self.set_data(data);
