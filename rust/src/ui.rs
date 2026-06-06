@@ -5485,13 +5485,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_playlist_docked(&mut self, docked: bool) {
-        self.app_state.config.playlist_visible = true;
         self.app_state.config.playlist_detached = !docked;
         self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_equalizer_docked(&mut self, docked: bool) {
-        self.app_state.config.equalizer_visible = true;
         self.app_state.config.equalizer_detached = !docked;
         self.mark_preferences_saved();
     }

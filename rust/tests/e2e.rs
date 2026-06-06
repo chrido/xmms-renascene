@@ -1945,22 +1945,47 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
 }
 
 #[test]
-fn preferences_docking_moves_hidden_panels_into_requested_mode() {
+fn preferences_docking_changes_mode_without_changing_visibility() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
     app.open_preferences_page(PreferencesPage::Options)
         .set_preference_playlist_docked(false)
         .assert_panel_detached(PanelKind::Playlist, true)
-        .assert_window_visible(Window::Playlist)
+        .assert_window_hidden(Window::Playlist)
         .set_preference_playlist_docked(true)
         .assert_panel_detached(PanelKind::Playlist, false)
         .assert_window_hidden(Window::Playlist)
-        .assert_docked_panel_size((275, 116 + 232))
+        .assert_docked_panel_size((275, 116))
         .set_preference_equalizer_docked(false)
         .assert_panel_detached(PanelKind::Equalizer, true)
-        .assert_window_visible(Window::Equalizer)
+        .assert_window_hidden(Window::Equalizer)
         .set_preference_equalizer_docked(true)
         .assert_panel_detached(PanelKind::Equalizer, false)
+        .assert_window_hidden(Window::Equalizer)
+        .assert_docked_panel_size((275, 116));
+}
+
+#[test]
+fn player_buttons_control_visibility_for_current_docking_mode() {
+    let mut app = UiE2e::start_player(PlayerSettings::default());
+
+    app.open_preferences_page(PreferencesPage::Options)
+        .set_preference_playlist_docked(false)
+        .click(MainTarget::PLAYLIST)
+        .assert_window_visible(Window::Playlist)
+        .click(MainTarget::PLAYLIST)
+        .assert_window_hidden(Window::Playlist)
+        .set_preference_playlist_docked(true)
+        .click(MainTarget::PLAYLIST)
+        .assert_window_hidden(Window::Playlist)
+        .assert_docked_panel_size((275, 116 + 232))
+        .set_preference_equalizer_docked(false)
+        .click(MainTarget::EQUALIZER)
+        .assert_window_visible(Window::Equalizer)
+        .click(MainTarget::EQUALIZER)
+        .assert_window_hidden(Window::Equalizer)
+        .set_preference_equalizer_docked(true)
+        .click(MainTarget::EQUALIZER)
         .assert_window_hidden(Window::Equalizer)
         .assert_docked_panel_size((275, 116 + 116 + 232));
 }
