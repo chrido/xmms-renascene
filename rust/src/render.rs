@@ -3,7 +3,8 @@ use std::fmt;
 use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
 
 use crate::skin::widget::{
-    PlayStatusValue, TextBox, VisAnalyzerMode, VisAnalyzerStyle, VisMode, VisScopeMode, VisVuMode,
+    NumberDisplay, PlayStatusValue, TextBox, VisAnalyzerMode, VisAnalyzerStyle, VisMode,
+    VisScopeMode, VisVuMode,
 };
 use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
@@ -437,6 +438,7 @@ pub struct MainWindowRenderState {
     pub title: String,
     pub bitrate_text: String,
     pub frequency_text: String,
+    pub time_digits: [i32; 5],
     pub volume_position: i32,
     pub balance_position: i32,
     pub position_position: i32,
@@ -460,6 +462,7 @@ impl Default for MainWindowRenderState {
             title: "XMMS Resuscitated".to_string(),
             bitrate_text: String::new(),
             frequency_text: String::new(),
+            time_digits: [NumberDisplay::BLANK; 5],
             volume_position: 51,
             balance_position: 12,
             position_position: 0,
@@ -608,8 +611,8 @@ pub fn render_main_player_state(
         },
     )?;
 
-    for x in [36, 48, 60, 78, 90] {
-        rendered |= blit_skin_rect(cr, skin, SkinPixmapKind::Numbers, 90, 0, x, 26, 9, 13)?;
+    for (value, x) in state.time_digits.iter().zip([36, 48, 60, 78, 90]) {
+        rendered |= render_number(cr, skin, *value, x, 26)?;
     }
 
     render_visualization(cr, skin, 24, 43, 76, &state.visualization)?;
@@ -816,6 +819,31 @@ fn render_horizontal_slider(
         spec.knob_height,
     )?;
     Ok(rendered)
+}
+
+fn render_number(
+    cr: &Context,
+    skin: &DefaultSkin,
+    value: i32,
+    xdest: i32,
+    ydest: i32,
+) -> Result<bool, RenderError> {
+    let digit = if (0..=NumberDisplay::DASH).contains(&value) {
+        value
+    } else {
+        NumberDisplay::DASH
+    };
+    blit_skin_rect(
+        cr,
+        skin,
+        SkinPixmapKind::Numbers,
+        digit * NumberDisplay::WIDTH,
+        0,
+        xdest,
+        ydest,
+        NumberDisplay::WIDTH,
+        NumberDisplay::HEIGHT,
+    )
 }
 
 fn blit_skin_rect(

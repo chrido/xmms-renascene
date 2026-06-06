@@ -1695,6 +1695,11 @@ impl UiE2e {
         self
     }
 
+    pub fn assert_main_time_digits(&mut self, expected: [i32; 5]) -> &mut Self {
+        assert_eq!(self.state.main_time_digits(), expected);
+        self
+    }
+
     pub fn assert_last_open_location(&mut self, expected: &str) -> &mut Self {
         assert_eq!(self.state.last_open_location(), Some(expected));
         self

@@ -258,12 +258,12 @@ fn main_prompts_accept_location_and_jump_time_values() {
         .accept_jump_time("1:23")
         .assert_window_hidden(Window::JumpTime)
         .assert_last_jump_time_ms(83_000)
-        .assert_position(83);
+        .assert_mpris_position_us(83_000_000);
 
     app.show_jump_time_prompt()
         .accept_jump_time("42")
         .assert_last_jump_time_ms(42_000)
-        .assert_position(42);
+        .assert_mpris_position_us(42_000_000);
 }
 
 #[test]
@@ -281,18 +281,19 @@ fn prompt_keyboard_shortcuts_open_location_and_jump_time() {
 fn main_keyboard_shortcuts_trigger_preview_actions() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.press_shortcut(Shortcut::Play)
+    app.add_spotify_entry("spotify:track:shortcut", "Shortcut", 10_000)
+        .press_shortcut(Shortcut::Play)
         .assert_player_state(PlayerState::Playing)
         .press_shortcut(Shortcut::Pause)
         .assert_player_state(PlayerState::Paused)
         .press_shortcut(Shortcut::Stop)
         .assert_player_state(PlayerState::Stopped)
-        .click(MainTarget::position(100))
-        .assert_position(100)
+        .click(MainTarget::position(219))
+        .assert_position(219)
         .press_shortcut(Shortcut::Previous)
         .assert_position(0)
-        .click(MainTarget::position(100))
-        .assert_position(100)
+        .click(MainTarget::position(219))
+        .assert_position(219)
         .press_shortcut(Shortcut::Next)
         .assert_position(0);
 
@@ -964,21 +965,25 @@ fn update_timer_advances_position_while_playing_only() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
     app.assert_position(0)
+        .assert_main_time_digits([10, 10, 10, 10, 10])
+        .press_shortcut(Shortcut::Play)
+        .assert_player_state(PlayerState::Stopped)
         .update_timer_tick(1_000)
         .assert_position(0)
-        .press_shortcut(Shortcut::Play)
-        .update_timer_tick(900)
-        .assert_position(0)
-        .update_timer_tick(100)
-        .assert_position(1)
-        .update_timer_tick(2_000)
-        .assert_position(3)
+        .assert_main_time_digits([10, 10, 10, 10, 10])
+        .add_spotify_entry("spotify:track:one", "Song", 10_000)
+        .press_shortcut(Shortcut::PlayFirst)
+        .assert_player_state(PlayerState::Playing)
+        .update_timer_tick(5_000)
+        .assert_position(109)
+        .assert_main_time_digits([10, 0, 0, 0, 5])
         .press_shortcut(Shortcut::Pause)
         .update_timer_tick(1_000)
-        .assert_position(3)
+        .assert_position(109)
         .press_shortcut(Shortcut::Stop)
         .update_timer_tick(1_000)
-        .assert_position(0);
+        .assert_position(0)
+        .assert_main_time_digits([10, 10, 10, 10, 10]);
 }
 
 #[test]
@@ -1118,7 +1123,8 @@ fn output_device_picker_preserves_automatic_system_default() {
 fn output_device_picker_switches_system_device_without_stopping_playback() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.press_shortcut(Shortcut::Play)
+    app.add_spotify_entry("spotify:track:output", "Output", 10_000)
+        .press_shortcut(Shortcut::Play)
         .assert_player_state(PlayerState::Playing)
         .set_output_devices(
             vec![OutputDevice::system(
@@ -1179,7 +1185,8 @@ fn mpris_root_and_player_properties_match_xmms_contract() {
 fn mpris_volume_seek_and_set_position_update_player_state() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.set_mpris_volume(0.25)
+    app.add_spotify_entry("spotify:track:mpris", "MPRIS", 10_000)
+        .set_mpris_volume(0.25)
         .assert_volume(25)
         .assert_mpris_volume(0.25)
         .execute_mpris_command(MprisCommand::Play)
@@ -1187,14 +1194,14 @@ fn mpris_volume_seek_and_set_position_update_player_state() {
         .execute_mpris_command(MprisCommand::Seek {
             offset_us: 5_000_000,
         })
-        .assert_position(5)
+        .assert_position(109)
         .assert_mpris_position_us(5_000_000)
         .assert_mpris_event(MprisEvent::Seeked(5_000_000))
         .execute_mpris_command(MprisCommand::SetPosition {
             track_id: "/org/xmms/Track/0".to_string(),
             position_us: 2_000_000,
         })
-        .assert_position(2)
+        .assert_position(43)
         .assert_mpris_position_us(2_000_000)
         .assert_mpris_event(MprisEvent::Seeked(2_000_000));
 }
@@ -1256,6 +1263,9 @@ fn transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
     app.click(MainTarget::PLAY)
+        .assert_player_state(PlayerState::Stopped)
+        .add_spotify_entry("spotify:track:transport", "Transport", 10_000)
+        .click(MainTarget::PLAY)
         .assert_player_state(PlayerState::Playing);
 
     app.click(MainTarget::PAUSE)
@@ -1264,11 +1274,11 @@ fn transport_buttons_update_player_state_and_position() {
     app.click(MainTarget::PAUSE)
         .assert_player_state(PlayerState::Playing);
 
-    app.click(MainTarget::position(100)).assert_position(100);
+    app.click(MainTarget::position(219)).assert_position(219);
 
     app.click(MainTarget::PREVIOUS).assert_position(0);
 
-    app.click(MainTarget::position(100)).assert_position(100);
+    app.click(MainTarget::position(219)).assert_position(219);
 
     app.click(MainTarget::NEXT).assert_position(0);
 
@@ -1311,8 +1321,11 @@ fn volume_balance_and_position_sliders_update_player_values() {
     app.click(MainTarget::balance(12)).assert_balance(0);
     app.click(MainTarget::balance(24)).assert_balance(100);
 
-    app.click(MainTarget::position(0)).assert_position(0);
-    app.click(MainTarget::position(100)).assert_position(100);
+    app.add_spotify_entry("spotify:track:slider", "Slider", 10_000)
+        .press_shortcut(Shortcut::PlayFirst)
+        .click(MainTarget::position(0))
+        .assert_position(0);
+    app.click(MainTarget::position(100)).assert_position(99);
     app.click(MainTarget::position(219)).assert_position(219);
 }
 

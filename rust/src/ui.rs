@@ -29,8 +29,8 @@ use crate::render::{
     PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::widget::{
-    PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode,
-    VisVuMode, Visualization, WidgetId,
+    NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
+    VisScopeMode, VisVuMode, Visualization, WidgetId,
 };
 use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry};
 use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
@@ -2955,7 +2955,7 @@ pub(crate) struct MainWindowUiState {
     last_open_location: Option<String>,
     last_jump_time_ms: Option<i64>,
     position_position: i32,
-    update_accumulator_ms: u32,
+    playback_position_ms: i64,
     visualization: Visualization,
     visualization_tick_counter: i32,
     active: Option<MainControl>,
@@ -3047,7 +3047,7 @@ impl MainWindowUiState {
             last_open_location: None,
             last_jump_time_ms: None,
             position_position: 0,
-            update_accumulator_ms: 0,
+            playback_position_ms: 0,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
             active: None,
@@ -3080,7 +3080,8 @@ impl MainWindowUiState {
             shaded: self.shaded,
             volume_position: volume_to_position(self.app_state.player.volume()),
             balance_position: balance_to_position(self.app_state.player.balance()),
-            position_position: self.position_position,
+            position_position: self.position_slider_position(),
+            time_digits: self.time_digits(),
             shuffle_selected: self.app_state.playlist.shuffle(),
             repeat_selected: self.app_state.playlist.repeat(),
             equalizer_selected: self.app_state.config.equalizer_visible,
@@ -3137,6 +3138,62 @@ impl MainWindowUiState {
             .max(0) as usize;
         let title = ellipsize_chars(&title, max_len);
         format!("{prefix}{title:<max_len$}{suffix}")
+    }
+
+    fn current_duration_ms(&self) -> Option<i64> {
+        self.app_state.player.duration_ms().or_else(|| {
+            self.app_state
+                .playlist
+                .position()
+                .and_then(|position| self.playlist_entry_length_ms(position))
+                .filter(|duration| *duration > 0)
+        })
+    }
+
+    fn position_slider_position(&self) -> i32 {
+        let Some(duration_ms) = self.current_duration_ms().filter(|duration| *duration > 0) else {
+            return 0;
+        };
+        ((self.playback_position_ms.clamp(0, duration_ms)
+            * i64::from(slider_max(MainSlider::Position)))
+            / duration_ms) as i32
+    }
+
+    fn display_time_ms(&self) -> i64 {
+        let elapsed = self.playback_position_ms.max(0);
+        if self.app_state.config.timer_mode == TimerMode::Remaining {
+            if let Some(duration) = self.current_duration_ms().filter(|duration| *duration > 0) {
+                return (duration - elapsed).max(0);
+            }
+        }
+        elapsed
+    }
+
+    fn time_digits(&self) -> [i32; 5] {
+        if self.app_state.player.state() == PlayerState::Stopped {
+            return [NumberDisplay::BLANK; 5];
+        }
+        let display_ms = self.display_time_ms();
+        let mut seconds = (display_ms / 1000).max(0);
+        if seconds > i64::from(99 * 60) {
+            seconds /= 60;
+        }
+        let minutes = seconds / 60;
+        [
+            if self.app_state.config.timer_mode == TimerMode::Remaining
+                && self
+                    .current_duration_ms()
+                    .is_some_and(|duration| duration > 0)
+            {
+                NumberDisplay::DASH
+            } else {
+                NumberDisplay::BLANK
+            },
+            ((minutes / 10) % 10) as i32,
+            (minutes % 10) as i32,
+            ((seconds % 60) / 10) as i32,
+            (seconds % 10) as i32,
+        ]
     }
 
     fn make_visualization_render_state(&self) -> VisualizationRenderState {
@@ -3426,7 +3483,7 @@ impl MainWindowUiState {
             rate: 1.0,
             metadata: self.mpris_metadata(),
             volume: f64::from(self.app_state.player.volume()) / 100.0,
-            position_us: i64::from(self.position_position) * 1_000_000,
+            position_us: self.playback_position_ms * 1_000,
             can_go_next: true,
             can_go_previous: true,
             can_play: true,
@@ -3510,23 +3567,18 @@ impl MainWindowUiState {
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Seek { offset_us } => {
-                let position_us =
-                    (i64::from(self.position_position) * 1_000_000 + offset_us).max(0);
-                self.position_position =
-                    ((position_us / 1_000_000) as i32).clamp(0, slider_max(MainSlider::Position));
-                self.mpris_events.push(MprisEvent::Seeked(
-                    i64::from(self.position_position) * 1_000_000,
-                ));
+                let position_us = (self.playback_position_ms * 1_000 + offset_us).max(0);
+                self.set_playback_position_ms(position_us / 1_000);
+                self.mpris_events
+                    .push(MprisEvent::Seeked(self.playback_position_ms * 1_000));
             }
             MprisCommand::SetPosition {
                 track_id: _,
                 position_us,
             } => {
-                self.position_position = ((position_us.max(0) / 1_000_000) as i32)
-                    .clamp(0, slider_max(MainSlider::Position));
-                self.mpris_events.push(MprisEvent::Seeked(
-                    i64::from(self.position_position) * 1_000_000,
-                ));
+                self.set_playback_position_ms(position_us.max(0) / 1_000);
+                self.mpris_events
+                    .push(MprisEvent::Seeked(self.playback_position_ms * 1_000));
             }
             MprisCommand::OpenUri(uri) => {
                 self.accept_dropped_uris([uri.as_str()], true, true);
@@ -3862,13 +3914,15 @@ impl MainWindowUiState {
             self.app_state.playlist.set_position(0);
         }
         let Some(position) = self.app_state.playlist.position() else {
-            self.app_state.player.mark_playing();
+            self.stop_playback();
             return;
         };
         let Some(uri) = self.playlist_entry_uri(position).map(ToString::to_string) else {
-            self.app_state.player.mark_playing();
+            self.stop_playback();
             return;
         };
+        self.playback_position_ms = 0;
+        self.position_position = 0;
         if uri.starts_with("spotify:") {
             let duration_ms = self.playlist_entry_length_ms(position).unwrap_or(0);
             self.app_state.player.play_spotify_uri(uri, duration_ms);
@@ -3911,6 +3965,7 @@ impl MainWindowUiState {
         }
         self.app_state.player.stop();
         self.position_position = 0;
+        self.playback_position_ms = 0;
     }
 
     pub(crate) fn player_spotify_mode(&self) -> bool {
@@ -4079,7 +4134,7 @@ impl MainWindowUiState {
             return;
         };
         self.last_jump_time_ms = Some(ms);
-        self.position_position = ((ms / 1000) as i32).clamp(0, slider_max(MainSlider::Position));
+        self.set_playback_position_ms(ms);
         self.jump_time_visible = false;
     }
 
@@ -4702,7 +4757,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn position(&self) -> i32 {
-        self.position_position
+        self.position_slider_position()
+    }
+
+    pub(crate) fn main_time_digits(&self) -> [i32; 5] {
+        self.time_digits()
     }
 
     pub(crate) fn set_preference_output_device(&mut self, device: Option<String>) {
@@ -4986,10 +5045,32 @@ impl MainWindowUiState {
         );
     }
 
+    fn set_playback_position_ms(&mut self, position_ms: i64) {
+        let duration = self.current_duration_ms();
+        self.playback_position_ms =
+            if let Some(duration) = duration.filter(|duration| *duration > 0) {
+                position_ms.clamp(0, duration)
+            } else {
+                position_ms.max(0)
+            };
+        self.position_position = self.position_slider_position();
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend.borrow().seek_to_ms(self.playback_position_ms) {
+                eprintln!("xmms-rs: failed to seek playback: {err}");
+            }
+        }
+        if self.app_state.player.spotify_mode() {
+            self.app_state.player.apply_spotify_playback_state(
+                self.app_state.player.state() == PlayerState::Playing,
+                self.playback_position_ms,
+                duration.unwrap_or(0),
+            );
+        }
+    }
+
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
         self.poll_playback_backend();
         if self.app_state.player.state() != PlayerState::Playing {
-            self.update_accumulator_ms = 0;
             self.visualization_tick_counter = 0;
             return false;
         }
@@ -5002,13 +5083,15 @@ impl MainWindowUiState {
             self.spotify_playback_poll_requests =
                 self.spotify_playback_poll_requests.saturating_add(1);
         }
-        self.update_accumulator_ms = self.update_accumulator_ms.saturating_add(elapsed_ms);
-        let seconds = self.update_accumulator_ms / 1000;
-        self.update_accumulator_ms %= 1000;
-        if seconds > 0 {
-            self.position_position =
-                (self.position_position + seconds as i32).min(slider_max(MainSlider::Position));
+        if self.playback_backend.is_none() || self.app_state.player.spotify_mode() {
+            self.playback_position_ms = self
+                .playback_position_ms
+                .saturating_add(i64::from(elapsed_ms));
+            if self.app_state.player.spotify_mode() {
+                self.playback_position_ms = self.app_state.player.spotify_position_ms();
+            }
         }
+        self.position_position = self.position_slider_position();
         self.visualization_tick_counter += 1;
         if self.visualization_tick_counter >= self.visualization_refresh_divisor() {
             self.visualization_tick_counter = 0;
@@ -5045,8 +5128,8 @@ impl MainWindowUiState {
             );
         }
         if let Some(position_ms) = backend.position_ms() {
-            self.position_position =
-                ((position_ms / 1000) as i32).clamp(0, slider_max(MainSlider::Position));
+            self.playback_position_ms = position_ms.max(0);
+            self.position_position = self.position_slider_position();
         }
     }
 
@@ -5189,6 +5272,7 @@ impl MainWindowUiState {
                     self.start_current_playlist_playback();
                 }
                 self.position_position = 0;
+                self.playback_position_ms = 0;
                 UiAction::None
             }
             MainPushButton::Next => {
@@ -5196,6 +5280,7 @@ impl MainWindowUiState {
                     self.start_current_playlist_playback();
                 }
                 self.position_position = 0;
+                self.playback_position_ms = 0;
                 UiAction::None
             }
             MainPushButton::Eject => UiAction::OpenFileDialog,
@@ -5258,7 +5343,16 @@ impl MainWindowUiState {
                     backend.borrow().set_balance_percent(balance);
                 }
             }
-            MainSlider::Position => self.position_position = position,
+            MainSlider::Position => {
+                if let Some(duration_ms) =
+                    self.current_duration_ms().filter(|duration| *duration > 0)
+                {
+                    self.set_playback_position_ms(
+                        (duration_ms * i64::from(position))
+                            / i64::from(slider_max(MainSlider::Position)),
+                    );
+                }
+            }
         }
         self.app_state.sync_config_from_runtime();
         true
@@ -5268,7 +5362,7 @@ impl MainWindowUiState {
         match slider {
             MainSlider::Volume => volume_to_position(self.app_state.player.volume()),
             MainSlider::Balance => balance_to_position(self.app_state.player.balance()),
-            MainSlider::Position => self.position_position,
+            MainSlider::Position => self.position_slider_position(),
         }
     }
 
@@ -5873,6 +5967,14 @@ mod tests {
 
         state.press(40, 90);
         assert_eq!(state.release(40, 90), UiAction::None);
+        assert_eq!(state.app_state.player.state(), PlayerState::Stopped);
+
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:test", "Test", 10_000);
+        state.press(40, 90);
+        assert_eq!(state.release(40, 90), UiAction::None);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
 
         state.press(63, 90);
@@ -5903,7 +6005,7 @@ mod tests {
 
         state.press(263, 73);
         assert_eq!(state.release(263, 73), UiAction::None);
-        assert_eq!(state.position_position, 219);
+        assert_eq!(state.position(), 0);
     }
 
     #[test]
