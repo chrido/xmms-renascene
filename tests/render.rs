@@ -4,7 +4,8 @@ use cairo::{Context, Format, ImageSurface};
 use xmms_renascene::render::{
     render_equalizer_state, render_main_player_reset, render_playlist_frame, render_playlist_rows,
     render_visualization, surface_from_xpm, EqualizerRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
     PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use xmms_renascene::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
@@ -20,9 +21,9 @@ fn renders_main_default_skin_to_cairo_surface() {
     let main = skin.get(SkinPixmapKind::Main).unwrap();
     let surface = surface_from_xpm(main).unwrap();
 
-    assert_eq!(surface.width(), 275);
-    assert_eq!(surface.height(), 116);
-    assert!(surface.stride() >= 275 * 4);
+    assert_eq!(surface.width(), MAIN_WINDOW_WIDTH);
+    assert_eq!(surface.height(), MAIN_WINDOW_HEIGHT);
+    assert!(surface.stride() >= MAIN_WINDOW_WIDTH * 4);
 }
 
 #[test]
@@ -214,7 +215,12 @@ fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
 #[test]
 fn equalizer_graph_uses_skin_color_ramp() {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(Format::ARgb32, 275, 116).unwrap();
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        EQUALIZER_WINDOW_WIDTH,
+        EQUALIZER_WINDOW_HEIGHT,
+    )
+    .unwrap();
     let cr = Context::new(&surface).unwrap();
     assert!(render_equalizer_state(&cr, &skin, &EqualizerRenderState::default()).unwrap());
     drop(cr);
@@ -237,7 +243,8 @@ fn equalizer_graph_uses_skin_color_ramp() {
 #[test]
 fn shaded_equalizer_draws_volume_and_balance_slider_handles() {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(Format::ARgb32, 275, 14).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT).unwrap();
     let cr = Context::new(&surface).unwrap();
     assert!(render_equalizer_state(
         &cr,

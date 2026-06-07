@@ -12,6 +12,12 @@ use crate::playlist::PlaylistSortKey;
 use crate::render::{
     equalizer_window_height, main_window_height, MainPushButton, MainSlider, MainToggleButton,
 };
+use crate::skin::layout::{
+    equalizer_control_rect, main_push_button_rect, main_slider_layout, main_toggle_button_rect,
+    panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
+    EqualizerControl, LayoutPanelKind as LayoutPanel, PanelTitleButton, PlaylistFooterButton,
+    PlaylistMenuButton,
+};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
@@ -152,61 +158,154 @@ pub enum PanelTarget {
 impl PanelTarget {
     fn point(self, state: &MainWindowUiState) -> (PanelKind, i32, i32) {
         let (playlist_width, playlist_height) = state.playlist_size();
-        let playlist_button_y = playlist_height - 20;
-        match self {
-            Self::EqualizerShade => (PanelKind::Equalizer, 258, 7),
-            Self::EqualizerClose => (PanelKind::Equalizer, 268, 7),
-            Self::EqualizerOn => (PanelKind::Equalizer, 20, 24),
-            Self::EqualizerAuto => (PanelKind::Equalizer, 50, 24),
-            Self::EqualizerPresets => (PanelKind::Equalizer, 230, 24),
-            Self::PlaylistShade => (PanelKind::Playlist, playlist_width - 17, 7),
-            Self::PlaylistClose => (PanelKind::Playlist, playlist_width - 7, 7),
-            Self::PlaylistAdd => (PanelKind::Playlist, 24, playlist_button_y),
-            Self::PlaylistRemove => (PanelKind::Playlist, 53, playlist_button_y),
-            Self::PlaylistSelect => (PanelKind::Playlist, 82, playlist_button_y),
-            Self::PlaylistMisc => (PanelKind::Playlist, 111, playlist_button_y),
-            Self::PlaylistList => (PanelKind::Playlist, playlist_width - 35, playlist_button_y),
+        let (kind, rect) = match self {
+            Self::EqualizerShade => (
+                PanelKind::Equalizer,
+                panel_title_button_rect(
+                    LayoutPanel::Equalizer,
+                    PanelTitleButton::Shade,
+                    playlist_width,
+                ),
+            ),
+            Self::EqualizerClose => (
+                PanelKind::Equalizer,
+                panel_title_button_rect(
+                    LayoutPanel::Equalizer,
+                    PanelTitleButton::Close,
+                    playlist_width,
+                ),
+            ),
+            Self::EqualizerOn => (
+                PanelKind::Equalizer,
+                equalizer_control_rect(EqualizerControl::On),
+            ),
+            Self::EqualizerAuto => (
+                PanelKind::Equalizer,
+                equalizer_control_rect(EqualizerControl::Auto),
+            ),
+            Self::EqualizerPresets => (
+                PanelKind::Equalizer,
+                equalizer_control_rect(EqualizerControl::Presets),
+            ),
+            Self::PlaylistShade => (
+                PanelKind::Playlist,
+                panel_title_button_rect(
+                    LayoutPanel::Playlist,
+                    PanelTitleButton::Shade,
+                    playlist_width,
+                ),
+            ),
+            Self::PlaylistClose => (
+                PanelKind::Playlist,
+                panel_title_button_rect(
+                    LayoutPanel::Playlist,
+                    PanelTitleButton::Close,
+                    playlist_width,
+                ),
+            ),
+            Self::PlaylistAdd => (
+                PanelKind::Playlist,
+                playlist_menu_button_rect(PlaylistMenuButton::Add, playlist_width, playlist_height),
+            ),
+            Self::PlaylistRemove => (
+                PanelKind::Playlist,
+                playlist_menu_button_rect(
+                    PlaylistMenuButton::Remove,
+                    playlist_width,
+                    playlist_height,
+                ),
+            ),
+            Self::PlaylistSelect => (
+                PanelKind::Playlist,
+                playlist_menu_button_rect(
+                    PlaylistMenuButton::Select,
+                    playlist_width,
+                    playlist_height,
+                ),
+            ),
+            Self::PlaylistMisc => (
+                PanelKind::Playlist,
+                playlist_menu_button_rect(
+                    PlaylistMenuButton::Misc,
+                    playlist_width,
+                    playlist_height,
+                ),
+            ),
+            Self::PlaylistList => (
+                PanelKind::Playlist,
+                playlist_menu_button_rect(
+                    PlaylistMenuButton::List,
+                    playlist_width,
+                    playlist_height,
+                ),
+            ),
             Self::PlaylistPrevious => (
                 PanelKind::Playlist,
-                playlist_width - 140,
-                playlist_height - 13,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::Previous,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistPlay => (
                 PanelKind::Playlist,
-                playlist_width - 133,
-                playlist_height - 13,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::Play,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistPause => (
                 PanelKind::Playlist,
-                playlist_width - 123,
-                playlist_height - 13,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::Pause,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistStop => (
                 PanelKind::Playlist,
-                playlist_width - 114,
-                playlist_height - 13,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::Stop,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistNext => (
                 PanelKind::Playlist,
-                playlist_width - 105,
-                playlist_height - 13,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::Next,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistEject => (
                 PanelKind::Playlist,
-                playlist_width - 96,
-                playlist_height - 13,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::Eject,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistScrollUp => (
                 PanelKind::Playlist,
-                playlist_width - 10,
-                playlist_height - 33,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::ScrollUp,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
             Self::PlaylistScrollDown => (
                 PanelKind::Playlist,
-                playlist_width - 10,
-                playlist_height - 28,
+                playlist_footer_button_rect(
+                    PlaylistFooterButton::ScrollDown,
+                    playlist_width,
+                    playlist_height,
+                ),
             ),
-        }
+        };
+        let (x, y) = rect.center();
+        (kind, x, y)
     }
 
     fn click(self, state: &mut MainWindowUiState) -> PanelAction {
@@ -317,13 +416,14 @@ impl MainTarget {
 
     fn point(self, shaded: bool) -> (i32, i32) {
         match self {
-            Self::Push(button) => center(push_button_rect(button, shaded)),
-            Self::Toggle(toggle) => center(toggle_button_rect(toggle)),
+            Self::Push(button) => main_push_button_rect(button, shaded).center(),
+            Self::Toggle(toggle) => main_toggle_button_rect(toggle).center(),
             Self::Slider(slider, position) => {
-                let rect = slider_rect(slider);
-                let position = position.clamp(0, slider_max(slider));
+                let layout = main_slider_layout(slider, false);
+                let rect = layout.rect;
+                let position = position.clamp(layout.min, layout.max);
                 (
-                    rect.x + position + slider_knob_width(slider) / 2,
+                    rect.x + position + layout.knob_size.width / 2,
                     rect.y + rect.height / 2,
                 )
             }
@@ -2145,85 +2245,5 @@ impl UiE2e {
         self.state.equalizer_motion(x, y);
         self.state.equalizer_release(x, y);
         self
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Rect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
-
-const fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect {
-    Rect {
-        x,
-        y,
-        width,
-        height,
-    }
-}
-
-fn center(rect: Rect) -> (i32, i32) {
-    (rect.x + rect.width / 2, rect.y + rect.height / 2)
-}
-
-fn push_button_rect(button: MainPushButton, shaded: bool) -> Rect {
-    if shaded {
-        match button {
-            MainPushButton::Previous => return rect(169, 4, 8, 7),
-            MainPushButton::Play => return rect(177, 4, 10, 7),
-            MainPushButton::Pause => return rect(187, 4, 10, 7),
-            MainPushButton::Stop => return rect(197, 4, 9, 7),
-            MainPushButton::Next => return rect(206, 4, 8, 7),
-            MainPushButton::Eject => return rect(216, 4, 9, 7),
-            _ => {}
-        }
-    }
-
-    match button {
-        MainPushButton::Menu => rect(6, 3, 9, 9),
-        MainPushButton::Minimize => rect(244, 3, 9, 9),
-        MainPushButton::Shade => rect(254, 3, 9, 9),
-        MainPushButton::Close => rect(264, 3, 9, 9),
-        MainPushButton::Previous => rect(16, 88, 23, 18),
-        MainPushButton::Play => rect(39, 88, 23, 18),
-        MainPushButton::Pause => rect(62, 88, 23, 18),
-        MainPushButton::Stop => rect(85, 88, 23, 18),
-        MainPushButton::Next => rect(108, 88, 22, 18),
-        MainPushButton::Eject => rect(136, 89, 22, 16),
-    }
-}
-
-fn toggle_button_rect(toggle: MainToggleButton) -> Rect {
-    match toggle {
-        MainToggleButton::Shuffle => rect(164, 89, 46, 15),
-        MainToggleButton::Repeat => rect(210, 89, 28, 15),
-        MainToggleButton::Equalizer => rect(219, 58, 23, 12),
-        MainToggleButton::Playlist => rect(242, 58, 23, 12),
-    }
-}
-
-fn slider_rect(slider: MainSlider) -> Rect {
-    match slider {
-        MainSlider::Volume => rect(107, 57, 68, 13),
-        MainSlider::Balance => rect(177, 57, 38, 13),
-        MainSlider::Position => rect(16, 72, 248, 10),
-    }
-}
-
-fn slider_max(slider: MainSlider) -> i32 {
-    match slider {
-        MainSlider::Volume => 51,
-        MainSlider::Balance => 24,
-        MainSlider::Position => 219,
-    }
-}
-
-fn slider_knob_width(slider: MainSlider) -> i32 {
-    match slider {
-        MainSlider::Volume | MainSlider::Balance => 14,
-        MainSlider::Position => 29,
     }
 }

@@ -2,22 +2,21 @@ use std::fmt;
 
 use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
 
+pub use crate::skin::layout::{
+    equalizer_control_spec, equalizer_slider_layout, equalizer_window_height,
+    main_push_button_spec, main_slider_layout, main_toggle_button_spec, main_window_height,
+    playlist_window_height, EqualizerControl, EqualizerSlider, MainPushButton, MainSlider,
+    MainToggleButton, SliderLayout, SpriteSpec, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    PLAYLIST_WIDTH_STEP,
+};
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, TextBox, VisAnalyzerMode, VisAnalyzerStyle, VisMode,
     VisScopeMode, VisVuMode,
 };
 use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
-
-pub const MAIN_WINDOW_WIDTH: i32 = 275;
-pub const MAIN_WINDOW_HEIGHT: i32 = 116;
-pub const MAIN_TITLEBAR_HEIGHT: i32 = 14;
-pub const EQUALIZER_WINDOW_WIDTH: i32 = 275;
-pub const EQUALIZER_WINDOW_HEIGHT: i32 = 116;
-pub const PLAYLIST_DEFAULT_WIDTH: i32 = 275;
-pub const PLAYLIST_DEFAULT_HEIGHT: i32 = 232;
-pub const PLAYLIST_MIN_WIDTH: i32 = 275;
-pub const PLAYLIST_MIN_HEIGHT: i32 = 116;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EqualizerRenderState {
@@ -46,13 +45,6 @@ impl Default for EqualizerRenderState {
             balance_position: 19,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EqualizerControl {
-    On,
-    Auto,
-    Presets,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,30 +308,6 @@ pub fn render_main_titlebar(
     )
 }
 
-pub fn main_window_height(shaded: bool) -> i32 {
-    if shaded {
-        MAIN_TITLEBAR_HEIGHT
-    } else {
-        MAIN_WINDOW_HEIGHT
-    }
-}
-
-pub fn equalizer_window_height(shaded: bool) -> i32 {
-    if shaded {
-        MAIN_TITLEBAR_HEIGHT
-    } else {
-        EQUALIZER_WINDOW_HEIGHT
-    }
-}
-
-pub fn playlist_window_height(shaded: bool, height: i32) -> i32 {
-    if shaded {
-        MAIN_TITLEBAR_HEIGHT
-    } else {
-        height.max(PLAYLIST_MIN_HEIGHT)
-    }
-}
-
 pub fn docked_panel_size(state: DockedPanelState) -> (i32, i32) {
     let playlist_width = state.playlist_width.max(PLAYLIST_MIN_WIDTH);
     let mut width = MAIN_WINDOW_WIDTH;
@@ -373,35 +341,6 @@ pub fn render_main_player(
 
     rendered |= render_main_titlebar(cr, skin, focused, shaded)?;
     Ok(rendered)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MainPushButton {
-    Menu,
-    Minimize,
-    Shade,
-    Close,
-    Previous,
-    Play,
-    Pause,
-    Stop,
-    Next,
-    Eject,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MainToggleButton {
-    Shuffle,
-    Repeat,
-    Equalizer,
-    Playlist,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MainSlider {
-    Volume,
-    Balance,
-    Position,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -509,9 +448,11 @@ pub fn render_main_player_state(
         MainPushButton::Shade,
         MainPushButton::Close,
     ] {
-        let (kind, sx, sy, dx, dy, width, height) =
-            main_push_button_rect(button, state.pressed_push == Some(button));
-        rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
+        rendered |= render_sprite_spec(
+            cr,
+            skin,
+            main_push_button_spec(button, state.pressed_push == Some(button)),
+        )?;
     }
 
     if state.shaded {
@@ -532,9 +473,11 @@ pub fn render_main_player_state(
         MainPushButton::Next,
         MainPushButton::Eject,
     ] {
-        let (kind, sx, sy, dx, dy, width, height) =
-            main_push_button_rect(button, state.pressed_push == Some(button));
-        rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
+        rendered |= render_sprite_spec(
+            cr,
+            skin,
+            main_push_button_spec(button, state.pressed_push == Some(button)),
+        )?;
     }
 
     for toggle in [
@@ -549,81 +492,100 @@ pub fn render_main_player_state(
             MainToggleButton::Equalizer => state.equalizer_selected,
             MainToggleButton::Playlist => state.playlist_selected,
         };
-        let (kind, sx, sy, dx, dy, width, height) =
-            main_toggle_button_rect(toggle, selected, state.pressed_toggle == Some(toggle));
-        rendered |= blit_skin_rect(cr, skin, kind, sx, sy, dx, dy, width, height)?;
+        rendered |= render_sprite_spec(
+            cr,
+            skin,
+            main_toggle_button_spec(toggle, selected, state.pressed_toggle == Some(toggle)),
+        )?;
     }
 
     render_text(cr, skin, &state.title, 111, 27, 153)?;
     render_text(cr, skin, &state.bitrate_text, 111, 43, 15)?;
     render_text(cr, skin, &state.frequency_text, 156, 43, 10)?;
 
+    let volume_slider = main_slider_layout(MainSlider::Volume, false);
     rendered |= render_horizontal_slider(
         cr,
         skin,
         SliderRenderSpec {
             kind: SkinPixmapKind::Volume,
-            x: 107,
-            y: 57,
-            width: 68,
-            height: 13,
-            position: state.volume_position.clamp(0, 51),
+            x: volume_slider.rect.x,
+            y: volume_slider.rect.y,
+            width: volume_slider.rect.width,
+            height: volume_slider.rect.height,
+            position: state
+                .volume_position
+                .clamp(volume_slider.min, volume_slider.max),
             knob_source_x: if state.pressed_slider == Some(MainSlider::Volume) {
                 0
             } else {
                 15
             },
             knob_source_y: 422,
-            knob_width: 14,
-            knob_height: 11,
-            frame_height: 15,
-            frame_offset: 0,
-            frame: ((state.volume_position.clamp(0, 51) as f64 / 51.0) * 27.0) as i32,
+            knob_width: volume_slider.knob_size.width,
+            knob_height: volume_slider.knob_size.height,
+            frame_height: volume_slider.frame_height,
+            frame_offset: volume_slider.frame_offset,
+            frame: ((state
+                .volume_position
+                .clamp(volume_slider.min, volume_slider.max) as f64
+                / volume_slider.max as f64)
+                * 27.0) as i32,
         },
     )?;
+    let balance_slider = main_slider_layout(MainSlider::Balance, false);
     rendered |= render_horizontal_slider(
         cr,
         skin,
         SliderRenderSpec {
             kind: SkinPixmapKind::Balance,
-            x: 177,
-            y: 57,
-            width: 38,
-            height: 13,
-            position: state.balance_position.clamp(0, 24),
+            x: balance_slider.rect.x,
+            y: balance_slider.rect.y,
+            width: balance_slider.rect.width,
+            height: balance_slider.rect.height,
+            position: state
+                .balance_position
+                .clamp(balance_slider.min, balance_slider.max),
             knob_source_x: if state.pressed_slider == Some(MainSlider::Balance) {
                 0
             } else {
                 15
             },
             knob_source_y: 422,
-            knob_width: 14,
-            knob_height: 11,
-            frame_height: 15,
-            frame_offset: 0,
-            frame: ((state.balance_position.clamp(0, 24) as f64 / 24.0) * 27.0) as i32,
+            knob_width: balance_slider.knob_size.width,
+            knob_height: balance_slider.knob_size.height,
+            frame_height: balance_slider.frame_height,
+            frame_offset: balance_slider.frame_offset,
+            frame: ((state
+                .balance_position
+                .clamp(balance_slider.min, balance_slider.max) as f64
+                / balance_slider.max as f64)
+                * 27.0) as i32,
         },
     )?;
+    let position_slider = main_slider_layout(MainSlider::Position, false);
     rendered |= render_horizontal_slider(
         cr,
         skin,
         SliderRenderSpec {
             kind: SkinPixmapKind::PosBar,
-            x: 16,
-            y: 72,
-            width: 248,
-            height: 10,
-            position: state.position_position.clamp(0, 219),
+            x: position_slider.rect.x,
+            y: position_slider.rect.y,
+            width: position_slider.rect.width,
+            height: position_slider.rect.height,
+            position: state
+                .position_position
+                .clamp(position_slider.min, position_slider.max),
             knob_source_x: if state.pressed_slider == Some(MainSlider::Position) {
                 278
             } else {
                 248
             },
             knob_source_y: 0,
-            knob_width: 29,
-            knob_height: 10,
-            frame_height: 1,
-            frame_offset: 0,
+            knob_width: position_slider.knob_size.width,
+            knob_height: position_slider.knob_size.height,
+            frame_height: position_slider.frame_height,
+            frame_offset: position_slider.frame_offset,
             frame: 0,
         },
     )?;
@@ -657,139 +619,39 @@ pub fn render_main_player_state(
     Ok(rendered)
 }
 
-fn main_push_button_rect(
-    button: MainPushButton,
-    pressed: bool,
-) -> (SkinPixmapKind, i32, i32, i32, i32, i32, i32) {
-    match button {
-        MainPushButton::Menu => (
-            SkinPixmapKind::Titlebar,
-            0,
-            if pressed { 9 } else { 0 },
-            6,
-            3,
-            9,
-            9,
-        ),
-        MainPushButton::Minimize => (
-            SkinPixmapKind::Titlebar,
-            9,
-            if pressed { 9 } else { 0 },
-            244,
-            3,
-            9,
-            9,
-        ),
-        MainPushButton::Shade => (
-            SkinPixmapKind::Titlebar,
-            if pressed { 9 } else { 0 },
-            18,
-            254,
-            3,
-            9,
-            9,
-        ),
-        MainPushButton::Close => (
-            SkinPixmapKind::Titlebar,
-            18,
-            if pressed { 9 } else { 0 },
-            264,
-            3,
-            9,
-            9,
-        ),
-        MainPushButton::Previous => (
-            SkinPixmapKind::CButtons,
-            0,
-            if pressed { 18 } else { 0 },
-            16,
-            88,
-            23,
-            18,
-        ),
-        MainPushButton::Play => (
-            SkinPixmapKind::CButtons,
-            23,
-            if pressed { 18 } else { 0 },
-            39,
-            88,
-            23,
-            18,
-        ),
-        MainPushButton::Pause => (
-            SkinPixmapKind::CButtons,
-            46,
-            if pressed { 18 } else { 0 },
-            62,
-            88,
-            23,
-            18,
-        ),
-        MainPushButton::Stop => (
-            SkinPixmapKind::CButtons,
-            69,
-            if pressed { 18 } else { 0 },
-            85,
-            88,
-            23,
-            18,
-        ),
-        MainPushButton::Next => (
-            SkinPixmapKind::CButtons,
-            92,
-            if pressed { 18 } else { 0 },
-            108,
-            88,
-            22,
-            18,
-        ),
-        MainPushButton::Eject => (
-            SkinPixmapKind::CButtons,
-            114,
-            if pressed { 16 } else { 0 },
-            136,
-            89,
-            22,
-            16,
-        ),
-    }
+fn render_sprite_spec(
+    cr: &Context,
+    skin: &DefaultSkin,
+    spec: SpriteSpec,
+) -> Result<bool, RenderError> {
+    blit_skin_rect(
+        cr,
+        skin,
+        spec.kind,
+        spec.source.x,
+        spec.source.y,
+        spec.dest.x,
+        spec.dest.y,
+        spec.source.width,
+        spec.source.height,
+    )
 }
 
-fn main_toggle_button_rect(
-    toggle: MainToggleButton,
-    selected: bool,
-    pressed: bool,
-) -> (SkinPixmapKind, i32, i32, i32, i32, i32, i32) {
-    let row = match (selected, pressed) {
-        (false, false) => 0,
-        (false, true) => 15,
-        (true, false) => 30,
-        (true, true) => 45,
-    };
-    match toggle {
-        MainToggleButton::Shuffle => (SkinPixmapKind::ShufRep, 28, row, 164, 89, 46, 15),
-        MainToggleButton::Repeat => (SkinPixmapKind::ShufRep, 0, row, 210, 89, 28, 15),
-        MainToggleButton::Equalizer => {
-            let x = match (selected, pressed) {
-                (false, false) => 0,
-                (false, true) => 46,
-                (true, false) => 0,
-                (true, true) => 46,
-            };
-            let y = if selected { 73 } else { 61 };
-            (SkinPixmapKind::ShufRep, x, y, 219, 58, 23, 12)
-        }
-        MainToggleButton::Playlist => {
-            let x = match (selected, pressed) {
-                (false, false) => 23,
-                (false, true) => 69,
-                (true, false) => 23,
-                (true, true) => 69,
-            };
-            let y = if selected { 73 } else { 61 };
-            (SkinPixmapKind::ShufRep, x, y, 242, 58, 23, 12)
-        }
-    }
+fn render_surface_sprite_spec(
+    cr: &Context,
+    source: &ImageSurface,
+    spec: SpriteSpec,
+) -> Result<bool, RenderError> {
+    blit_surface_rect(
+        cr,
+        source,
+        spec.source.x,
+        spec.source.y,
+        spec.dest.x,
+        spec.dest.y,
+        spec.source.width,
+        spec.source.height,
+    )
 }
 
 struct SliderRenderSpec {
@@ -843,19 +705,12 @@ fn render_shaded_position_slider(
     skin: &DefaultSkin,
     state: &MainWindowRenderState,
 ) -> Result<bool, RenderError> {
-    let position = state.shaded_position_position.clamp(1, 13);
-    let knob_source_x = if state.pressed_slider == Some(MainSlider::Position) {
-        match position {
-            1..=5 => 17,
-            6..=8 => 20,
-            _ => 23,
-        }
-    } else {
-        match position {
-            1..=5 => 17,
-            6..=8 => 20,
-            _ => 23,
-        }
+    let layout = main_slider_layout(MainSlider::Position, true);
+    let position = state.shaded_position_position.clamp(layout.min, layout.max);
+    let knob_source_x = match position {
+        1..=5 => 17,
+        6..=8 => 20,
+        _ => 23,
     };
     blit_skin_rect(
         cr,
@@ -863,10 +718,10 @@ fn render_shaded_position_slider(
         SkinPixmapKind::Titlebar,
         knob_source_x,
         36,
-        226 + position,
-        4,
-        3,
-        7,
+        layout.rect.x + position,
+        layout.rect.y,
+        layout.knob_size.width,
+        layout.knob_size.height,
     )
 }
 
@@ -1398,53 +1253,47 @@ pub fn render_equalizer_state(
     };
     let eqmain = surface_from_xpm(eqmain_image)?;
 
-    rendered |= draw_eq_toggle_button(
+    rendered |= render_surface_sprite_spec(
         cr,
         &eqmain,
-        state.active,
-        state.pressed_control == Some(EqualizerControl::On),
-        (10, 119),
-        (128, 119),
-        (69, 119),
-        (187, 119),
-        14,
-        18,
-        25,
-        12,
+        equalizer_control_spec(
+            EqualizerControl::On,
+            state.active,
+            state.pressed_control == Some(EqualizerControl::On),
+        ),
     )?;
-    rendered |= draw_eq_toggle_button(
+    rendered |= render_surface_sprite_spec(
         cr,
         &eqmain,
-        state.automatic,
-        state.pressed_control == Some(EqualizerControl::Auto),
-        (35, 119),
-        (153, 119),
-        (94, 119),
-        (212, 119),
-        39,
-        18,
-        33,
-        12,
+        equalizer_control_spec(
+            EqualizerControl::Auto,
+            state.automatic,
+            state.pressed_control == Some(EqualizerControl::Auto),
+        ),
     )?;
-
-    rendered |= blit_surface_rect(
+    rendered |= render_surface_sprite_spec(
         cr,
         &eqmain,
-        224,
-        if state.pressed_control == Some(EqualizerControl::Presets) {
-            176
-        } else {
-            164
-        },
-        217,
-        18,
-        44,
-        12,
+        equalizer_control_spec(
+            EqualizerControl::Presets,
+            false,
+            state.pressed_control == Some(EqualizerControl::Presets),
+        ),
     )?;
 
-    rendered |= draw_eq_slider(cr, &eqmain, 21, state.preamp_position)?;
+    rendered |= draw_eq_slider(
+        cr,
+        &eqmain,
+        equalizer_slider_layout(EqualizerSlider::Preamp),
+        state.preamp_position,
+    )?;
     for (idx, position) in state.band_positions.iter().enumerate() {
-        rendered |= draw_eq_slider(cr, &eqmain, 78 + idx as i32 * 18, *position)?;
+        rendered |= draw_eq_slider(
+            cr,
+            &eqmain,
+            equalizer_slider_layout(EqualizerSlider::Band(idx)),
+            *position,
+        )?;
     }
 
     draw_eq_graph(cr, eqmain_image, &state.band_positions)?;
@@ -1457,24 +1306,30 @@ fn render_shaded_equalizer_sliders(
     skin: &DefaultSkin,
     state: &EqualizerRenderState,
 ) -> Result<bool, RenderError> {
-    let volume_position = state.volume_position.clamp(0, 94);
-    let balance_position = state.balance_position.clamp(0, 39);
+    let volume_slider = equalizer_slider_layout(EqualizerSlider::ShadedVolume);
+    let balance_slider = equalizer_slider_layout(EqualizerSlider::ShadedBalance);
+    let volume_position = state
+        .volume_position
+        .clamp(volume_slider.min, volume_slider.max);
+    let balance_position = state
+        .balance_position
+        .clamp(balance_slider.min, balance_slider.max);
     let mut rendered = render_horizontal_slider(
         cr,
         skin,
         SliderRenderSpec {
             kind: SkinPixmapKind::EqEx,
-            x: 61,
-            y: 4,
-            width: 97,
-            height: 8,
+            x: volume_slider.rect.x,
+            y: volume_slider.rect.y,
+            width: volume_slider.rect.width,
+            height: volume_slider.rect.height,
             position: volume_position,
             knob_source_x: shaded_eq_volume_knob_x(volume_position),
             knob_source_y: 30,
-            knob_width: 3,
-            knob_height: 7,
-            frame_height: 4,
-            frame_offset: 61,
+            knob_width: volume_slider.knob_size.width,
+            knob_height: volume_slider.knob_size.height,
+            frame_height: volume_slider.frame_height,
+            frame_offset: volume_slider.frame_offset,
             frame: 1,
         },
     )?;
@@ -1483,17 +1338,17 @@ fn render_shaded_equalizer_sliders(
         skin,
         SliderRenderSpec {
             kind: SkinPixmapKind::EqEx,
-            x: 164,
-            y: 4,
-            width: 42,
-            height: 8,
+            x: balance_slider.rect.x,
+            y: balance_slider.rect.y,
+            width: balance_slider.rect.width,
+            height: balance_slider.rect.height,
             position: balance_position,
             knob_source_x: shaded_eq_balance_knob_x(balance_position),
             knob_source_y: 30,
-            knob_width: 3,
-            knob_height: 7,
-            frame_height: 4,
-            frame_offset: 164,
+            knob_width: balance_slider.knob_size.width,
+            knob_height: balance_slider.knob_size.height,
+            frame_height: balance_slider.frame_height,
+            frame_offset: balance_slider.frame_offset,
             frame: 1,
         },
     )?;
@@ -1516,37 +1371,24 @@ fn shaded_eq_balance_knob_x(position: i32) -> i32 {
     }
 }
 
-fn draw_eq_toggle_button(
-    cr: &Context,
-    eqmain: &ImageSurface,
-    selected: bool,
-    pressed: bool,
-    normal_unselected: (i32, i32),
-    pressed_unselected: (i32, i32),
-    normal_selected: (i32, i32),
-    pressed_selected: (i32, i32),
-    dest_x: i32,
-    dest_y: i32,
-    width: i32,
-    height: i32,
-) -> Result<bool, RenderError> {
-    let (src_x, src_y) = match (selected, pressed) {
-        (true, true) => pressed_selected,
-        (true, false) => normal_selected,
-        (false, true) => pressed_unselected,
-        (false, false) => normal_unselected,
-    };
-    blit_surface_rect(cr, eqmain, src_x, src_y, dest_x, dest_y, width, height)
-}
-
 fn draw_eq_slider(
     cr: &Context,
     eqmain: &ImageSurface,
-    x: i32,
+    layout: SliderLayout,
     position: i32,
 ) -> Result<bool, RenderError> {
-    let knob_y = 38 + (position.clamp(0, 100) * (63 - 11)) / 100;
-    blit_surface_rect(cr, eqmain, 0, 164, x, knob_y, 14, 11)
+    let knob_y = layout.rect.y
+        + (position.clamp(0, 100) * (layout.rect.height - layout.knob_size.height)) / 100;
+    blit_surface_rect(
+        cr,
+        eqmain,
+        0,
+        164,
+        layout.rect.x,
+        knob_y,
+        layout.knob_size.width,
+        layout.knob_size.height,
+    )
 }
 
 fn draw_eq_graph(
@@ -1700,13 +1542,22 @@ pub fn render_playlist_frame(
 
     blit_surface_rect(cr, &pledit, 0, 72, 0, height - 38, 125, 38)?;
 
-    count = (width - 275) / 25;
+    count = (width - PLAYLIST_MIN_WIDTH) / PLAYLIST_WIDTH_STEP;
     if count >= 3 {
         count -= 3;
         blit_surface_rect(cr, &pledit, 205, 0, width - 225, height - 38, 75, 38)?;
     }
     for i in 0..count {
-        blit_surface_rect(cr, &pledit, 179, 0, (i * 25) + 125, height - 38, 25, 38)?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            179,
+            0,
+            (i * PLAYLIST_WIDTH_STEP) + 125,
+            height - 38,
+            PLAYLIST_WIDTH_STEP,
+            38,
+        )?;
     }
     blit_surface_rect(cr, &pledit, 126, 72, width - 150, height - 38, 150, 38)?;
 
@@ -1864,7 +1715,7 @@ fn playlist_scrollbar_geometry(
         return None;
     }
     let list_y = 20;
-    let list_h = height.max(PLAYLIST_MIN_HEIGHT) - 58;
+    let list_h = height.max(PLAYLIST_MIN_HEIGHT) - PLAYLIST_HEIGHT_BASE;
     let thumb_h = 18;
     let max_scroll = total_entries - visible_entries;
     let max_thumb_pos = (list_h - thumb_h).max(0);
