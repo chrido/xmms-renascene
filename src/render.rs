@@ -2015,7 +2015,8 @@ mod tests {
     #[test]
     fn creates_cairo_surface_from_xpm_pixels() {
         let image = XpmImage::parse(
-            r#"static char *x[] = {
+            r#"/* XPM */
+            static char *x[] = {
             "2 1 2 1",
             "a c #000000",
             "b c None",
@@ -2040,7 +2041,8 @@ mod tests {
     #[test]
     fn blits_source_rect_to_destination() {
         let image = XpmImage::parse(
-            r#"static char *x[] = {
+            r#"/* XPM */
+            static char *x[] = {
             "2 1 2 1",
             "a c #010203",
             "b c #040506",
@@ -2067,7 +2069,8 @@ mod tests {
     #[test]
     fn blit_clips_negative_source_coordinates_like_c() {
         let image = XpmImage::parse(
-            r#"static char *x[] = {
+            r#"/* XPM */
+            static char *x[] = {
             "1 1 1 1",
             "a c #010203",
             "a"
