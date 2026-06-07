@@ -225,6 +225,9 @@ pub enum Shortcut {
     ToggleDoubleSize,
     FileInfo,
     PlayFirst,
+    PlaylistDown,
+    PlaylistUp,
+    PlaylistPlay,
 }
 
 impl MainTarget {
@@ -681,6 +684,15 @@ impl UiE2e {
             Shortcut::ToggleDoubleSize => self.state.toggle_double_size(),
             Shortcut::FileInfo => self.state.show_current_file_info(),
             Shortcut::PlayFirst => self.state.play_first_playlist_entry(),
+            Shortcut::PlaylistDown => {
+                self.state.move_playlist_selection(1);
+            }
+            Shortcut::PlaylistUp => {
+                self.state.move_playlist_selection(-1);
+            }
+            Shortcut::PlaylistPlay => {
+                self.state.play_selected_playlist_entry();
+            }
         }
         self.sync_windows();
         self

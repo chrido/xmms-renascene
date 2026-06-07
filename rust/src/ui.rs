@@ -662,11 +662,14 @@ fn handle_main_playlist_key_pressed(
     ) {
         return false;
     }
-    if key != gtk::gdk::Key::Delete && key != gtk::gdk::Key::KP_Delete {
-        return false;
-    }
     let mut ui_state = main_state.borrow_mut();
     if !ui_state.app_state.config.playlist_visible {
+        return false;
+    }
+    if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
+        return true;
+    }
+    if key != gtk::gdk::Key::Delete && key != gtk::gdk::Key::KP_Delete {
         return false;
     }
     ui_state.remove_selected_playlist_entries()
@@ -1345,11 +1348,29 @@ fn handle_playlist_key_pressed(
     if key == gtk::gdk::Key::Delete || key == gtk::gdk::Key::KP_Delete {
         return main_state.borrow_mut().remove_selected_playlist_entries();
     }
+    {
+        let mut ui_state = main_state.borrow_mut();
+        if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
+            return true;
+        }
+    }
     if key == gtk::gdk::Key::slash {
         main_state.borrow_mut().start_playlist_search();
         return true;
     }
     false
+}
+
+fn handle_playlist_navigation_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+) -> bool {
+    match key {
+        gtk::gdk::Key::j => ui_state.move_playlist_selection(1),
+        gtk::gdk::Key::k => ui_state.move_playlist_selection(-1),
+        gtk::gdk::Key::p => ui_state.play_selected_playlist_entry(),
+        _ => false,
+    }
 }
 
 fn add_playlist_context_menu(
@@ -5242,6 +5263,33 @@ impl MainWindowUiState {
             .entries()
             .iter()
             .position(|entry| entry.selected)
+    }
+
+    pub(crate) fn move_playlist_selection(&mut self, delta: isize) -> bool {
+        let len = self.app_state.playlist.len();
+        if len == 0 {
+            return false;
+        }
+        let current = self
+            .selected_playlist_index()
+            .or_else(|| self.app_state.playlist.position())
+            .unwrap_or(if delta < 0 { len - 1 } else { 0 });
+        let next = current.saturating_add_signed(delta).min(len - 1);
+        self.select_single_playlist_entry(next);
+        self.scroll_playlist_entry_into_view(next);
+        true
+    }
+
+    pub(crate) fn play_selected_playlist_entry(&mut self) -> bool {
+        let Some(index) = self
+            .selected_playlist_index()
+            .or_else(|| self.app_state.playlist.position())
+            .or_else(|| (!self.app_state.playlist.is_empty()).then_some(0))
+        else {
+            return false;
+        };
+        self.activate_playlist_entry(index);
+        true
     }
 
     fn select_single_playlist_entry(&mut self, index: usize) {

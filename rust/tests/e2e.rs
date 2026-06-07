@@ -908,6 +908,37 @@ fn clicked_playlist_rows_update_single_selection() {
 }
 
 #[test]
+fn vim_playlist_keys_move_selection_and_play_selected_entry() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist([
+        "file:///music/one.ogg",
+        "file:///music/two.ogg",
+        "file:///music/three.ogg",
+    ])
+    .press_shortcut(Shortcut::PlaylistDown)
+    .assert_playlist_entry_selected(1, true)
+    .press_shortcut(Shortcut::PlaylistDown)
+    .assert_playlist_entry_selected(1, false)
+    .assert_playlist_entry_selected(2, true)
+    .press_shortcut(Shortcut::PlaylistUp)
+    .assert_playlist_entry_selected(1, true)
+    .press_shortcut(Shortcut::PlaylistUp)
+    .assert_playlist_entry_selected(0, true)
+    .press_shortcut(Shortcut::PlaylistPlay)
+    .assert_player_state(PlayerState::Playing)
+    .assert_playlist_position(Some(0))
+    .assert_current_playlist_entry("file:///music/one.ogg")
+    .press_shortcut(Shortcut::PlaylistDown)
+    .press_shortcut(Shortcut::PlaylistDown)
+    .press_shortcut(Shortcut::PlaylistDown)
+    .assert_playlist_entry_selected(2, true)
+    .press_shortcut(Shortcut::PlaylistPlay)
+    .assert_playlist_position(Some(2))
+    .assert_current_playlist_entry("file:///music/three.ogg");
+}
+
+#[test]
 fn ctrl_clicking_playlist_rows_toggles_multiple_selection() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
