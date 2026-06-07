@@ -71,6 +71,8 @@ fn renders_playlist_rows_with_selected_background() {
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
         None,
+        None,
+        None,
         None
     )
     .unwrap());
@@ -132,6 +134,8 @@ fn playlist_search_overlay_stays_inside_row_area() {
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
         None,
+        None,
+        None,
         None
     )
     .unwrap());
@@ -184,6 +188,8 @@ fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
         width,
         PLAYLIST_DEFAULT_HEIGHT,
         Some(""),
+        None,
+        None,
         None
     )
     .unwrap());
@@ -279,6 +285,8 @@ fn shaded_playlist_title_uses_skin_bitmap_text() {
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
         Some("A"),
+        None,
+        None,
         None
     )
     .unwrap());
@@ -300,6 +308,56 @@ fn shaded_playlist_title_uses_skin_bitmap_text() {
     let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
 
     assert_eq!(actual, expected.2);
+}
+
+#[test]
+fn playlist_footer_info_uses_original_textbox_position() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+    )
+    .unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_playlist_frame(
+        &cr,
+        &skin,
+        true,
+        false,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+        None,
+        Some("1:23/4:56"),
+        Some(" 01"),
+        Some("23")
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let old_y = PLAYLIST_DEFAULT_HEIGHT as usize - 9;
+    let new_y = PLAYLIST_DEFAULT_HEIGHT as usize - 28;
+    let x = PLAYLIST_DEFAULT_WIDTH as usize - 143;
+    let old_row_pixels = (0..85)
+        .map(|dx| {
+            let offset = old_y * stride + (x + dx) * 4;
+            u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
+        })
+        .collect::<Vec<_>>();
+    let new_row_pixels = (0..85)
+        .map(|dx| {
+            let offset = new_y * stride + (x + dx) * 4;
+            u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
+        })
+        .collect::<Vec<_>>();
+
+    assert_ne!(old_row_pixels, new_row_pixels);
+    assert!(new_row_pixels
+        .windows(2)
+        .any(|pixels| pixels[0] != pixels[1]));
 }
 
 fn rendered_visualization_bytes(state: VisualizationRenderState) -> Vec<u8> {

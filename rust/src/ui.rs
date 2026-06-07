@@ -880,6 +880,8 @@ fn render_docked_ui_state(
             state.playlist_height,
             Some(&state.shaded_playlist_info()),
             Some(&state.playlist_footer_info()),
+            Some(&state.playlist_footer_time_min_text()),
+            Some(&state.playlist_footer_time_sec_text()),
         )?;
         if !state.playlist_shaded {
             let current = state.app_state.playlist.position();
@@ -1199,6 +1201,8 @@ fn build_playlist_window(
             playlist_height,
             Some(&state.shaded_playlist_info()),
             Some(&state.playlist_footer_info()),
+            Some(&state.playlist_footer_time_min_text()),
+            Some(&state.playlist_footer_time_sec_text()),
         ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
@@ -3526,15 +3530,16 @@ impl MainWindowUiState {
         let mut total_ms = 0_i64;
         let mut selected_more = false;
         let mut total_more = false;
+        let selected_index = self.selected_playlist_index();
 
-        for entry in self.app_state.playlist.entries() {
+        for (index, entry) in self.app_state.playlist.entries().iter().enumerate() {
             if entry.length_ms >= 0 {
                 total_ms += entry.length_ms;
             } else {
                 total_more = true;
             }
 
-            if entry.selected {
+            if entry.selected || selected_index == Some(index) {
                 if entry.length_ms >= 0 {
                     selected_ms += entry.length_ms;
                 } else {
@@ -3548,6 +3553,38 @@ impl MainWindowUiState {
             format_playlist_footer_duration(selected_ms, selected_more),
             format_playlist_footer_duration(total_ms, total_more)
         )
+    }
+
+    fn playlist_footer_time_parts(&self) -> (String, String) {
+        if self.app_state.player.state() == PlayerState::Stopped {
+            return ("   ".to_string(), "  ".to_string());
+        }
+        let display_ms = self.display_time_ms();
+        let mut seconds = (display_ms / 1000).max(0);
+        if seconds > i64::from(99 * 60) {
+            seconds /= 60;
+        }
+        let prefix = if self.app_state.config.timer_mode == TimerMode::Remaining
+            && self
+                .current_duration_ms()
+                .is_some_and(|duration| duration > 0)
+        {
+            '-'
+        } else {
+            ' '
+        };
+        (
+            format!("{prefix}{:02}", seconds / 60),
+            format!("{:02}", seconds % 60),
+        )
+    }
+
+    fn playlist_footer_time_min_text(&self) -> String {
+        self.playlist_footer_time_parts().0
+    }
+
+    fn playlist_footer_time_sec_text(&self) -> String {
+        self.playlist_footer_time_parts().1
     }
 
     fn current_duration_ms(&self) -> Option<i64> {
