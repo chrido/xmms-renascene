@@ -8,11 +8,10 @@ export GSK_RENDERER="${XMMS_GSK_RENDERER:-cairo}"
 
 usage() {
     cat <<EOF
-Usage: ./exec.sh [--rust|--c] [screenshot] [app args...]
+Usage: ./exec.sh [--rust] [screenshot] [app args...]
 
 Options:
   --rust      Start the Rust version (default).
-  --c         Start the C version.
   screenshot Capture a root-window screenshot after starting the selected version.
 
 Rust preview app args:
@@ -29,18 +28,16 @@ Rust preview app args:
 EOF
 }
 
-app="${XMMS_EXEC_APP:-rust}"
 screenshot=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --rust)
-            app=rust
             shift
             ;;
         --c)
-            app=c
-            shift
+            echo "The C version has been removed; ./exec.sh now runs the Rust port only." >&2
+            exit 2
             ;;
         screenshot)
             screenshot=1
@@ -60,32 +57,15 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-case "$app" in
-    rust|c)
-        ;;
-    *)
-        echo "Unknown app version '$app'. Use --rust or --c." >&2
-        exit 2
-        ;;
-esac
-
-rust_bin="rust/target/debug/xmms-rs"
+rust_bin="target/debug/xmms-rs"
 
 build_selected_app() {
-    if [ "$app" = "c" ]; then
-        if [ ! -f builddir/build.ninja ]; then
-            meson setup builddir
-        fi
-
-        meson compile -C builddir
-    else
-        if ! command -v cargo >/dev/null 2>&1; then
-            echo "cargo is required to run the Rust version." >&2
-            exit 127
-        fi
-
-        cargo build --manifest-path rust/Cargo.toml --quiet
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "cargo is required to run the Rust version." >&2
+        exit 127
     fi
+
+    cargo build --manifest-path Cargo.toml --quiet
 }
 
 rust_args_include_gtk_mode() {
@@ -101,10 +81,6 @@ rust_args_include_gtk_mode() {
 }
 
 start_selected_app() {
-    if [ "$app" = "c" ]; then
-        exec ./builddir/xmms-c "$@"
-    fi
-
     if [ ! -x "$rust_bin" ]; then
         echo "Rust binary '$rust_bin' is missing. Run without XMMS_EXEC_SKIP_BUILD=1 first." >&2
         exit 127
@@ -118,9 +94,7 @@ start_selected_app() {
 }
 
 start_selected_app_in_background() {
-    if [ "$app" = "c" ]; then
-        ./builddir/xmms-c "$@" &
-    elif rust_args_include_gtk_mode "$@"; then
+    if rust_args_include_gtk_mode "$@"; then
         "$rust_bin" "$@" &
     else
         "$rust_bin" --gtk "$@" &
@@ -146,7 +120,6 @@ if [ "$screenshot" = "1" ]; then
                 GDK_BACKEND=x11 GSK_RENDERER=cairo GDK_DISABLE="$GDK_DISABLE" \
                 NO_AT_BRIDGE=1 \
                 XMMS_NON_UNIQUE=1 \
-                XMMS_EXEC_APP="$app" \
                 XMMS_EXEC_SKIP_BUILD=1 \
                 XMMS_SCREENSHOT_UNDER_XVFB=1 ./exec.sh screenshot "$@"
     fi

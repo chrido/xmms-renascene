@@ -1,6 +1,0 @@
-reference-screenshots/equalizer-reset.png PNG 1024x768 1024x768+0+0 8-bit sRGB 33188B 0.000u 0:00.000
-reference-screenshots/main-reset.png PNG 1024x768 1024x768+0+0 8-bit sRGB 22612B 0.000u 0:00.000
-reference-screenshots/playlist-reset.png PNG 1024x768 1024x768+0+0 8-bit sRGB 35405B 0.000u 0:00.000
-rust-preview-screenshots/equalizer-preview.png PNG 1024x768 1024x768+0+0 8-bit sRGB 22975B 0.000u 0:00.000
-rust-preview-screenshots/main-preview.png PNG 1024x768 1024x768+0+0 8-bit sRGB 22612B 0.000u 0:00.000
-rust-preview-screenshots/playlist-preview.png PNG 1024x768 1024x768+0+0 8-bit sRGB 30369B 0.000u 0:00.000

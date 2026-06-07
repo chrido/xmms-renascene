@@ -189,55 +189,55 @@ impl DefaultSkin {
         const BUNDLED_XPMS: &[(SkinPixmapKind, &str)] = &[
             (
                 SkinPixmapKind::Main,
-                include_str!("../../../data/defskin/main.xpm"),
+                include_str!("../../data/defskin/main.xpm"),
             ),
             (
                 SkinPixmapKind::CButtons,
-                include_str!("../../../data/defskin/cbuttons.xpm"),
+                include_str!("../../data/defskin/cbuttons.xpm"),
             ),
             (
                 SkinPixmapKind::Titlebar,
-                include_str!("../../../data/defskin/titlebar.xpm"),
+                include_str!("../../data/defskin/titlebar.xpm"),
             ),
             (
                 SkinPixmapKind::ShufRep,
-                include_str!("../../../data/defskin/shufrep.xpm"),
+                include_str!("../../data/defskin/shufrep.xpm"),
             ),
             (
                 SkinPixmapKind::Text,
-                include_str!("../../../data/defskin/text.xpm"),
+                include_str!("../../data/defskin/text.xpm"),
             ),
             (
                 SkinPixmapKind::Volume,
-                include_str!("../../../data/defskin/volume.xpm"),
+                include_str!("../../data/defskin/volume.xpm"),
             ),
             (
                 SkinPixmapKind::MonoStereo,
-                include_str!("../../../data/defskin/monoster.xpm"),
+                include_str!("../../data/defskin/monoster.xpm"),
             ),
             (
                 SkinPixmapKind::PlayPause,
-                include_str!("../../../data/defskin/playpaus.xpm"),
+                include_str!("../../data/defskin/playpaus.xpm"),
             ),
             (
                 SkinPixmapKind::Numbers,
-                include_str!("../../../data/defskin/nums_ex.xpm"),
+                include_str!("../../data/defskin/nums_ex.xpm"),
             ),
             (
                 SkinPixmapKind::PosBar,
-                include_str!("../../../data/defskin/posbar.xpm"),
+                include_str!("../../data/defskin/posbar.xpm"),
             ),
             (
                 SkinPixmapKind::PlEdit,
-                include_str!("../../../data/defskin/pledit.xpm"),
+                include_str!("../../data/defskin/pledit.xpm"),
             ),
             (
                 SkinPixmapKind::EqMain,
-                include_str!("../../../data/defskin/eqmain.xpm"),
+                include_str!("../../data/defskin/eqmain.xpm"),
             ),
             (
                 SkinPixmapKind::EqEx,
-                include_str!("../../../data/defskin/eq_ex.xpm"),
+                include_str!("../../data/defskin/eq_ex.xpm"),
             ),
         ];
 
