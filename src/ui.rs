@@ -113,7 +113,7 @@ fn run_preview_application(mode: PreviewMode, options: PreviewOptions) {
         flags |= gtk::gio::ApplicationFlags::NON_UNIQUE;
     }
     let app = gtk::Application::builder()
-        .application_id("org.xmms.Resuscitated.RustPreview")
+        .application_id("org.xmms.Renascene.RustPreview")
         .flags(flags)
         .register_session(true)
         .build();
@@ -193,7 +193,7 @@ fn build_preview_window(
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("XMMS Resuscitated Rust Preview")
+        .title("XMMS Renascene Rust Preview")
         .resizable(false)
         .decorated(false)
         .default_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
@@ -1184,7 +1184,7 @@ fn build_equalizer_window(
 ) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("XMMS Resuscitated Rust Equalizer")
+        .title("XMMS Renascene Rust Equalizer")
         .resizable(false)
         .decorated(false)
         .default_width(EQUALIZER_WINDOW_WIDTH * DEFAULT_SCALE)
@@ -1236,7 +1236,7 @@ fn build_playlist_window(
     let (playlist_width, playlist_height) = main_state.borrow().playlist_size();
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("XMMS Resuscitated Rust Playlist")
+        .title("XMMS Renascene Rust Playlist")
         .resizable(true)
         .decorated(false)
         .default_width(playlist_width * DEFAULT_SCALE)
@@ -3566,10 +3566,10 @@ impl MainWindowUiState {
 
     pub(crate) fn formatted_current_title(&self) -> String {
         let Some(position) = self.app_state.playlist.position() else {
-            return "XMMS Resuscitated".to_string();
+            return "XMMS Renascene".to_string();
         };
         let Some(entry) = self.app_state.playlist.entries().get(position) else {
-            return "XMMS Resuscitated".to_string();
+            return "XMMS Renascene".to_string();
         };
         self.formatted_playlist_entry_title(entry)
     }

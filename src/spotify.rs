@@ -547,7 +547,7 @@ fn json_i64_member(body: &str, key: &str) -> Option<i64> {
 
 fn post_form(url: &str, body: &str) -> Result<String, SpotifyHttpError> {
     let result = ureq::post(url)
-        .set("User-Agent", "XMMS Resuscitated")
+        .set("User-Agent", "XMMS Renascene")
         .set("Content-Type", "application/x-www-form-urlencoded")
         .send_string(body);
     let response = match result {

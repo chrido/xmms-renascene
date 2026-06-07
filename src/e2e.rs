@@ -1625,15 +1625,15 @@ impl UiE2e {
 
     pub fn assert_mpris_identity(&mut self) -> &mut Self {
         let root = self.state.mpris_root_properties();
-        assert_eq!(BUS_NAME, "org.mpris.MediaPlayer2.xmms_resuscitated");
+        assert_eq!(BUS_NAME, "org.mpris.MediaPlayer2.xmms_renascene");
         assert_eq!(OBJECT_PATH, "/org/mpris/MediaPlayer2");
         assert_eq!(ROOT_INTERFACE, "org.mpris.MediaPlayer2");
         assert_eq!(PLAYER_INTERFACE, "org.mpris.MediaPlayer2.Player");
         assert!(root.can_quit);
         assert!(root.can_raise);
         assert!(!root.has_track_list);
-        assert_eq!(root.identity, "XMMS Resuscitated");
-        assert_eq!(root.desktop_entry, "org.xmms.Resuscitated");
+        assert_eq!(root.identity, "XMMS Renascene");
+        assert_eq!(root.desktop_entry, "org.xmms.Renascene");
         assert_eq!(root.supported_uri_schemes, ["file", "http", "https"]);
         assert!(root.supported_mime_types.contains(&"audio/mpeg"));
         assert!(root.supported_mime_types.contains(&"audio/ogg"));

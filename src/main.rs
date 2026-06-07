@@ -1,5 +1,5 @@
-use xmms_resuscitated::skin::DefaultSkin;
-use xmms_resuscitated::ui::{self, PreviewOptions};
+use xmms_renascene::skin::DefaultSkin;
+use xmms_renascene::ui::{self, PreviewOptions};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

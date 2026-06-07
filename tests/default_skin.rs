@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use xmms_resuscitated::skin::xpm::XpmImage;
-use xmms_resuscitated::skin::{DefaultSkin, SkinPixmapKind};
+use xmms_renascene::skin::xpm::XpmImage;
+use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

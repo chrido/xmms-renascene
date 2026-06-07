@@ -206,7 +206,7 @@ pub fn save_fallback_state(
 }
 
 pub fn fallback_state_paths(config_dir: &Path) -> (PathBuf, PathBuf) {
-    let dir = config_dir.join("xmms-resuscitated");
+    let dir = config_dir.join("xmms-renascene");
     (dir.join("config"), dir.join("playlist.m3u"))
 }
 

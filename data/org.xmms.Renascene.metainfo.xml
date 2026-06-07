@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>org.xmms.Resuscitated</id>
+  <id>org.xmms.Renascene</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-2.0-or-later</project_license>
-  <name>XMMS Resuscitated</name>
+  <name>XMMS Renascene</name>
   <summary>Music player with Winamp-compatible skinning</summary>
   <description>
     <p>
-      XMMS Resuscitated is a modernized version of the classic X Multimedia
+      XMMS Renascene is a modernized version of the classic X Multimedia
       System music player. It supports Winamp-compatible skins for a fully
       customizable user interface and uses GStreamer for audio playback,
       supporting a wide range of audio formats.
     </p>
   </description>
-  <launchable type="desktop-id">org.xmms.Resuscitated.desktop</launchable>
+  <launchable type="desktop-id">org.xmms.Renascene.desktop</launchable>
   <url type="homepage">https://github.com/xmms</url>
   <content_rating type="oars-1.1" />
   <releases>

@@ -191,7 +191,7 @@ pub fn handle_url_response(
 }
 
 pub fn fetch_url(url: &str) -> Result<PodcastHttpResponse, PodcastFetchError> {
-    let result = ureq::get(url).set("User-Agent", "XMMS Resuscitated").call();
+    let result = ureq::get(url).set("User-Agent", "XMMS Renascene").call();
     let response = match result {
         Ok(response) => response,
         Err(ureq::Error::Status(_, response)) => response,

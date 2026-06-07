@@ -1634,7 +1634,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "xmms-resuscitated-rs"
+name = "xmms-renascene-rs"
 version = "0.1.0"
 dependencies = [
  "bzip2",

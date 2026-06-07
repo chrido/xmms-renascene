@@ -1,14 +1,14 @@
 use std::path::PathBuf;
 
 use cairo::{Context, Format, ImageSurface};
-use xmms_resuscitated::render::{
+use xmms_renascene::render::{
     render_equalizer_state, render_main_player_reset, render_playlist_frame, render_playlist_rows,
     render_visualization, surface_from_xpm, EqualizerRenderState, PlaylistRowRenderEntry,
     PlaylistRowsRenderState, VisualizationRenderState, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
     PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
-use xmms_resuscitated::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
-use xmms_resuscitated::skin::{DefaultSkin, SkinPixmapKind};
+use xmms_renascene::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
+use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

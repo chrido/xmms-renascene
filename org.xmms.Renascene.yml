@@ -1,4 +1,4 @@
-app-id: org.xmms.Resuscitated
+app-id: org.xmms.Renascene
 runtime: org.gnome.Platform
 runtime-version: '48'
 sdk: org.gnome.Sdk
@@ -14,7 +14,7 @@ finish-args:
   # Network for Spotify and podcast integration
   - --share=network
   # MPRIS D-Bus interface
-  - --own-name=org.mpris.MediaPlayer2.xmms_resuscitated
+  - --own-name=org.mpris.MediaPlayer2.xmms_renascene
   # Access music files
   - --filesystem=xdg-music:ro
   - --filesystem=xdg-download:ro
@@ -43,7 +43,7 @@ modules:
         url: https://github.com/libarchive/libarchive/releases/download/v3.7.7/libarchive-3.7.7.tar.xz
         sha256: 879acd83c3399c7caaee73fe5f7418e06087ab2aaf40af3e99b9e29beb29faee
 
-  - name: xmms-resuscitated
+  - name: xmms-renascene
     buildsystem: meson
     sources:
       - type: dir

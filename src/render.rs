@@ -467,7 +467,7 @@ impl Default for MainWindowRenderState {
         Self {
             focused: true,
             shaded: false,
-            title: "XMMS Resuscitated".to_string(),
+            title: "XMMS Renascene".to_string(),
             bitrate_text: String::new(),
             frequency_text: String::new(),
             time_digits: [NumberDisplay::BLANK; 5],

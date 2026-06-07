@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use xmms_resuscitated::e2e::{
+use xmms_renascene::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
 };
-use xmms_resuscitated::mpris::{MprisCommand, MprisEvent};
-use xmms_resuscitated::player::{OutputDevice, OutputDeviceSelection, PlayerState};
-use xmms_resuscitated::playlist::{Playlist, PlaylistSortKey};
-use xmms_resuscitated::podcast::{
+use xmms_renascene::mpris::{MprisCommand, MprisEvent};
+use xmms_renascene::player::{OutputDevice, OutputDeviceSelection, PlayerState};
+use xmms_renascene::playlist::{Playlist, PlaylistSortKey};
+use xmms_renascene::podcast::{
     add_feed_to_playlist, cache_file_is_fresh, cache_is_fresh, cache_path_for_url,
     classify_url_response, cleanup_cache_dir, discover_cached_duration_ms,
     download_url_with_retries, download_with_retries, fetch_url_into_playlist, handle_url_response,
@@ -16,18 +16,18 @@ use xmms_resuscitated::podcast::{
     PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse, PodcastRefreshScheduler,
     PodcastResponseAction, PodcastUrlKind,
 };
-use xmms_resuscitated::render::{
+use xmms_renascene::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
 };
-use xmms_resuscitated::session::{
+use xmms_renascene::session::{
     application_launch_flags, apply_session_command, load_saved_state, parse_session_command,
     restore_state_dict, save_fallback_state, save_session_state, save_state_dict, SessionState,
 };
-use xmms_resuscitated::skin::skin_browser_search_dirs;
-use xmms_resuscitated::skin::widget::{
+use xmms_renascene::skin::skin_browser_search_dirs;
+use xmms_renascene::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
-use xmms_resuscitated::spotify::{
+use xmms_renascene::spotify::{
     auth_code_request_body, authorization_url, code_challenge_for_verifier,
     config_path as spotify_config_path, exchange_code_for_token_with_url, parse_devices_response,
     parse_playback_state_response, parse_playlist_tracks_response, parse_playlists_response,
@@ -35,7 +35,7 @@ use xmms_resuscitated::spotify::{
     refresh_access_token_with_url, SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest,
     SpotifyPlaylist, SpotifyTrack, CLIENT_ID, REDIRECT_URI,
 };
-use xmms_resuscitated::ui::{
+use xmms_renascene::ui::{
     preferences_page_parity_controls, preferences_window_default_size,
     preferences_zoom_spans_full_width, visualization_preference_sensitivity, PanelKind,
     PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
@@ -110,7 +110,7 @@ fn cli_primary_binary_loads_bundled_skin_without_gtk_mode() {
 
 #[test]
 fn session_e2e_flags_secondary_activation_and_state_dict_match_c_contract() {
-    let mut state = xmms_resuscitated::app_state::AppState::default();
+    let mut state = xmms_renascene::app_state::AppState::default();
     let flags = application_launch_flags(Some("1"));
     assert!(flags.handles_command_line);
     assert!(flags.non_unique);
@@ -153,7 +153,7 @@ fn session_e2e_flags_secondary_activation_and_state_dict_match_c_contract() {
         ])
     );
 
-    let mut restored = xmms_resuscitated::app_state::AppState::default();
+    let mut restored = xmms_renascene::app_state::AppState::default();
     restore_state_dict(
         &mut restored,
         &std::collections::BTreeMap::from([
@@ -180,7 +180,7 @@ fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
     let root = unique_temp_dir("xmms-rs-session-save");
     let config_path = root.join("config");
     let playlist_path = root.join("playlist.m3u");
-    let mut state = xmms_resuscitated::app_state::AppState::default();
+    let mut state = xmms_renascene::app_state::AppState::default();
     state.config.playlist_visible = true;
     state.config.equalizer_visible = true;
     state.playlist.add_uri("https://example.test/fallback.mp3");

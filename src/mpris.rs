@@ -1,6 +1,6 @@
 use crate::player::PlayerState;
 
-pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.xmms_resuscitated";
+pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.xmms_renascene";
 pub const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
 pub const ROOT_INTERFACE: &str = "org.mpris.MediaPlayer2";
 pub const PLAYER_INTERFACE: &str = "org.mpris.MediaPlayer2.Player";
@@ -71,8 +71,8 @@ impl Default for MprisRootProperties {
             can_quit: true,
             can_raise: true,
             has_track_list: false,
-            identity: "XMMS Resuscitated",
-            desktop_entry: "org.xmms.Resuscitated",
+            identity: "XMMS Renascene",
+            desktop_entry: "org.xmms.Renascene",
             supported_uri_schemes: vec!["file", "http", "https"],
             supported_mime_types: vec![
                 "audio/mpeg",
