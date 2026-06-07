@@ -51,19 +51,19 @@ pub fn parse_session_command(args: &[String]) -> Result<SessionCommand, String> 
             "--equalizer" => command.options.show_equalizer = true,
             "--dock-playlist" | "--playlist-docked" => {
                 command.options.show_playlist = true;
-                command.options.playlist_detached = false;
+                command.options.playlist_detached = Some(false);
             }
             "--undock-playlist" | "--playlist-undocked" => {
                 command.options.show_playlist = true;
-                command.options.playlist_detached = true;
+                command.options.playlist_detached = Some(true);
             }
             "--dock-equalizer" | "--equalizer-docked" => {
                 command.options.show_equalizer = true;
-                command.options.equalizer_detached = false;
+                command.options.equalizer_detached = Some(false);
             }
             "--undock-equalizer" | "--equalizer-undocked" => {
                 command.options.show_equalizer = true;
-                command.options.equalizer_detached = true;
+                command.options.equalizer_detached = Some(true);
             }
             "--shade-main" | "--shade" | "--main-shaded" => {
                 command.options.main_shaded = Some(true)
@@ -119,8 +119,12 @@ pub fn apply_session_command(
     if command.options.show_equalizer {
         app_state.config.equalizer_visible = true;
     }
-    app_state.config.playlist_detached = command.options.playlist_detached;
-    app_state.config.equalizer_detached = command.options.equalizer_detached;
+    if let Some(detached) = command.options.playlist_detached {
+        app_state.config.playlist_detached = detached;
+    }
+    if let Some(detached) = command.options.equalizer_detached {
+        app_state.config.equalizer_detached = detached;
+    }
     if let Some(skin) = command.options.skin_path.as_ref() {
         app_state.config.skin = Some(skin.clone());
     }
@@ -283,13 +287,30 @@ mod tests {
         .unwrap();
 
         assert!(command.options.show_playlist);
-        assert!(command.options.playlist_detached);
+        assert_eq!(command.options.playlist_detached, Some(true));
         assert_eq!(command.options.playlist_shaded, Some(true));
         assert!(command.options.show_equalizer);
-        assert!(command.options.equalizer_detached);
+        assert_eq!(command.options.equalizer_detached, Some(true));
         assert_eq!(command.playlist_menu, Some(PlaylistMenuKind::List));
         assert_eq!(command.options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
         assert_eq!(command.positional_paths, vec!["/tmp/song.mp3"]);
+    }
+
+    #[test]
+    fn applies_command_preserves_unspecified_docking_state() {
+        let mut state = AppState::from_config(Config {
+            playlist_detached: true,
+            equalizer_detached: true,
+            ..Config::default()
+        });
+        let command = parse_session_command(&args(&["--playlist", "--equalizer"])).unwrap();
+
+        apply_session_command(&mut state, &command).unwrap();
+
+        assert!(state.config.playlist_visible);
+        assert!(state.config.equalizer_visible);
+        assert!(state.config.playlist_detached);
+        assert!(state.config.equalizer_detached);
     }
 
     #[test]

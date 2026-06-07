@@ -533,10 +533,16 @@ mod tests {
             skin: Some("/skins/classic".to_string()),
             output_device: Some("pipewire.node".to_string()),
             playlist_visible: true,
+            playlist_detached: true,
             vim_playlist_navigation: true,
             main_shaded: true,
             playlist_shaded: true,
+            equalizer_visible: true,
             equalizer_shaded: true,
+            equalizer_detached: true,
+            equalizer_active: false,
+            equalizer_auto: true,
+            equalizer_preamp_pos: 25,
             equalizer_band_pos: [10; 10],
             ..Config::default()
         };
@@ -553,10 +559,16 @@ mod tests {
         assert_eq!(reparsed.skin, cfg.skin);
         assert_eq!(reparsed.output_device, cfg.output_device);
         assert!(reparsed.playlist_visible);
+        assert!(reparsed.playlist_detached);
         assert!(reparsed.vim_playlist_navigation);
         assert!(reparsed.main_shaded);
         assert!(reparsed.playlist_shaded);
+        assert!(reparsed.equalizer_visible);
         assert!(reparsed.equalizer_shaded);
+        assert!(reparsed.equalizer_detached);
+        assert!(!reparsed.equalizer_active);
+        assert!(reparsed.equalizer_auto);
+        assert_eq!(reparsed.equalizer_preamp_pos, 25);
         assert_eq!(reparsed.equalizer_band_pos, [10; 10]);
         assert_eq!(reparsed.vis_mode, VisMode::Off);
     }

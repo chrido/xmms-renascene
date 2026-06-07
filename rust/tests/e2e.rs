@@ -257,6 +257,47 @@ fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options(
 }
 
 #[test]
+fn session_e2e_runtime_snapshot_restores_window_and_equalizer_options() {
+    let root = unique_temp_dir("xmms-rs-runtime-options-save");
+    let config_path = root.join("config");
+    let playlist_path = root.join("playlist.m3u");
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_equalizer_visible(true),
+    );
+
+    app.open_preferences_page(PreferencesPage::Options)
+        .set_preference_playlist_docked(false)
+        .set_preference_equalizer_docked(false)
+        .click_panel(PanelTarget::EqualizerOn)
+        .click_panel(PanelTarget::EqualizerAuto)
+        .drag_equalizer_preamp(25)
+        .drag_equalizer_band(0, 10)
+        .save_runtime_snapshot(&config_path, &playlist_path);
+
+    let loaded = load_saved_state(&config_path, &playlist_path, false).unwrap();
+    assert!(loaded.config.playlist_visible);
+    assert!(loaded.config.playlist_detached);
+    assert!(loaded.config.equalizer_visible);
+    assert!(loaded.config.equalizer_detached);
+    assert!(!loaded.config.equalizer_active);
+    assert!(loaded.config.equalizer_auto);
+    assert_eq!(loaded.config.equalizer_preamp_pos, 25);
+    assert_eq!(loaded.config.equalizer_band_pos[0], 11);
+
+    UiE2e::start_from_app_state(loaded)
+        .assert_panel_detached(PanelKind::Playlist, true)
+        .assert_panel_detached(PanelKind::Equalizer, true)
+        .assert_equalizer_active(false)
+        .assert_equalizer_automatic(true)
+        .assert_equalizer_preamp_position(25)
+        .assert_equalizer_band_position(0, 11);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn main_menu_items_trigger_their_preview_actions() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

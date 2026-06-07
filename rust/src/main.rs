@@ -65,16 +65,16 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             options.equalizer_shaded = Some(false);
         } else if arg == "--playlist-undocked" || arg == "--undock-playlist" {
             options.show_playlist = true;
-            options.playlist_detached = true;
+            options.playlist_detached = Some(true);
         } else if arg == "--playlist-docked" || arg == "--dock-playlist" {
             options.show_playlist = true;
-            options.playlist_detached = false;
+            options.playlist_detached = Some(false);
         } else if arg == "--equalizer-undocked" || arg == "--undock-equalizer" {
             options.show_equalizer = true;
-            options.equalizer_detached = true;
+            options.equalizer_detached = Some(true);
         } else if arg == "--equalizer-docked" || arg == "--dock-equalizer" {
             options.show_equalizer = true;
-            options.equalizer_detached = false;
+            options.equalizer_detached = Some(false);
         } else if matches!(
             arg.as_str(),
             "--playlist-menu-add"
@@ -168,8 +168,8 @@ mod tests {
         assert_eq!(options.main_shaded, Some(true));
         assert_eq!(options.playlist_shaded, Some(true));
         assert_eq!(options.equalizer_shaded, Some(true));
-        assert!(options.playlist_detached);
-        assert!(options.equalizer_detached);
+        assert_eq!(options.playlist_detached, Some(true));
+        assert_eq!(options.equalizer_detached, Some(true));
         assert!(options.reset);
         assert_eq!(options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
     }

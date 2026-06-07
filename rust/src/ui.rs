@@ -44,6 +44,35 @@ const DEFAULT_SCALE: i32 = 2;
 type PreferencesChanged = Rc<dyn Fn()>;
 const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
 const PREFERENCES_BALANCE_WIDGET: &str = "xmms-preferences-balance";
+const XMMS_MENU_CSS_TEMPLATE: &str = r#"
+.xmms-menu-popover,
+.xmms-menu-popover contents,
+.xmms-menu-box {
+    background: MENU_NORMAL_BG;
+    color: MENU_NORMAL;
+}
+
+.xmms-menu-button {
+    background: MENU_NORMAL_BG;
+    background-image: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    color: MENU_NORMAL;
+    padding: 4px 12px;
+    text-shadow: none;
+}
+
+.xmms-menu-button:hover {
+    background: MENU_SELECTED_BG;
+    color: MENU_CURRENT;
+}
+
+.xmms-menu-button:active {
+    background: MENU_SELECTED_BG;
+    color: MENU_CURRENT;
+}
+"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
@@ -52,8 +81,8 @@ pub struct PreviewOptions {
     pub main_shaded: Option<bool>,
     pub playlist_shaded: Option<bool>,
     pub equalizer_shaded: Option<bool>,
-    pub playlist_detached: bool,
-    pub equalizer_detached: bool,
+    pub playlist_detached: Option<bool>,
+    pub equalizer_detached: Option<bool>,
     pub playlist_size: Option<(i32, i32)>,
     pub reset: bool,
     pub skin_path: Option<String>,
@@ -118,6 +147,7 @@ fn build_preview_window(
 ) -> Result<(), String> {
     let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
     let skin = Rc::new(skin);
+    install_xmms_menu_css(&skin);
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     let app_state = if persist_session {
         load_saved_state(&config_path, &playlist_path, options.reset)
@@ -150,8 +180,12 @@ fn build_preview_window(
         if let Some(shaded) = options.equalizer_shaded {
             state.equalizer_shaded = shaded;
         }
-        state.app_state.config.playlist_detached = options.playlist_detached;
-        state.app_state.config.equalizer_detached = options.equalizer_detached;
+        if let Some(detached) = options.playlist_detached {
+            state.app_state.config.playlist_detached = detached;
+        }
+        if let Some(detached) = options.equalizer_detached {
+            state.app_state.config.equalizer_detached = detached;
+        }
         if let Some(skin_path) = options.skin_path {
             state.app_state.config.skin = Some(skin_path.clone());
         }
@@ -501,6 +535,49 @@ fn build_preview_window(
     window.set_child(Some(&drawing_area));
     window.present();
     Ok(())
+}
+
+fn install_xmms_menu_css(skin: &DefaultSkin) {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(&xmms_menu_css(skin));
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+fn xmms_menu_css(skin: &DefaultSkin) -> String {
+    let colors = skin.playlist_colors();
+    XMMS_MENU_CSS_TEMPLATE
+        .replace("MENU_NORMAL_BG", &css_rgb(colors.normal_bg))
+        .replace("MENU_NORMAL", &css_rgb(colors.normal))
+        .replace("MENU_SELECTED_BG", &css_rgb(colors.selected_bg))
+        .replace("MENU_CURRENT", &css_rgb(colors.current))
+}
+
+fn css_rgb(color: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+}
+
+fn style_xmms_popover(popover: &gtk::Popover) {
+    popover.add_css_class("xmms-menu-popover");
+}
+
+fn xmms_menu_box(spacing: i32) -> gtk::Box {
+    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, spacing);
+    menu_box.add_css_class("xmms-menu-box");
+    menu_box
+}
+
+fn xmms_menu_button(label: &str) -> gtk::Button {
+    let button = gtk::Button::with_label(label);
+    button.set_halign(gtk::Align::Fill);
+    button.add_css_class("xmms-menu-button");
+    button
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -946,11 +1023,11 @@ fn build_main_menu_popover(
         .autohide(true)
         .has_arrow(false)
         .build();
+    style_xmms_popover(&popover);
     popover.set_parent(parent);
 
-    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let open_files = gtk::Button::with_label("Open Files...");
-    open_files.set_halign(gtk::Align::Fill);
+    let menu_box = xmms_menu_box(0);
+    let open_files = xmms_menu_button("Open Files...");
     {
         let parent_window = parent_window.clone();
         let popover = popover.clone();
@@ -963,8 +1040,7 @@ fn build_main_menu_popover(
     }
     menu_box.append(&open_files);
 
-    let open_location = gtk::Button::with_label("Open Location...");
-    open_location.set_halign(gtk::Align::Fill);
+    let open_location = xmms_menu_button("Open Location...");
     {
         let open_location_window = open_location_window.clone();
         let popover = popover.clone();
@@ -981,8 +1057,7 @@ fn build_main_menu_popover(
     }
     menu_box.append(&open_location);
 
-    let preferences = gtk::Button::with_label("Preferences");
-    preferences.set_halign(gtk::Align::Fill);
+    let preferences = xmms_menu_button("Preferences");
     {
         let preferences_window = preferences_window.clone();
         let popover = popover.clone();
@@ -999,8 +1074,7 @@ fn build_main_menu_popover(
     }
     menu_box.append(&preferences);
 
-    let skin_browser = gtk::Button::with_label("Skin Browser");
-    skin_browser.set_halign(gtk::Align::Fill);
+    let skin_browser = xmms_menu_button("Skin Browser");
     {
         let skin_browser_window = skin_browser_window.clone();
         let popover = popover.clone();
@@ -1017,8 +1091,7 @@ fn build_main_menu_popover(
     }
     menu_box.append(&skin_browser);
 
-    let spotify = gtk::Button::with_label("Spotify Playlists...");
-    spotify.set_halign(gtk::Align::Fill);
+    let spotify = xmms_menu_button("Spotify Playlists...");
     {
         let popover = popover.clone();
         let main_state = Rc::clone(main_state);
@@ -1033,8 +1106,7 @@ fn build_main_menu_popover(
     }
     menu_box.append(&spotify);
 
-    let quit = gtk::Button::with_label("Quit");
-    quit.set_halign(gtk::Align::Fill);
+    let quit = xmms_menu_button("Quit");
     {
         let app = app.clone();
         let popover = popover.clone();
@@ -1408,9 +1480,10 @@ fn add_playlist_context_menu(
 ) {
     let popover = gtk::Popover::new();
     popover.set_has_arrow(false);
+    style_xmms_popover(&popover);
     popover.set_parent(area);
 
-    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let menu_box = xmms_menu_box(4);
     for (label, action) in [
         ("Remove Selected", PlaylistContextAction::RemoveSelected),
         ("Remove Dead Files", PlaylistContextAction::RemoveDead),
@@ -1419,8 +1492,7 @@ fn add_playlist_context_menu(
         ("Select None", PlaylistContextAction::SelectNone),
         ("Invert Selection", PlaylistContextAction::InvertSelection),
     ] {
-        let button = gtk::Button::with_label(label);
-        button.set_halign(gtk::Align::Fill);
+        let button = xmms_menu_button(label);
         let state = Rc::clone(&main_state);
         let area = area.clone();
         let main_area = main_area.clone();
@@ -1523,8 +1595,9 @@ fn build_playlist_sort_popover(
         .autohide(true)
         .has_arrow(false)
         .build();
+    style_xmms_popover(&popover);
     popover.set_parent(parent);
-    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let menu_box = xmms_menu_box(0);
     for (label, action) in [
         ("Sort List: By Title", PlaylistSortAction::ListByTitle),
         ("Sort List: By Filename", PlaylistSortAction::ListByFilename),
@@ -1552,8 +1625,7 @@ fn build_playlist_sort_popover(
         ("Randomize List", PlaylistSortAction::RandomizeList),
         ("Reverse List", PlaylistSortAction::ReverseList),
     ] {
-        let item = gtk::Button::with_label(label);
-        item.set_halign(gtk::Align::Fill);
+        let item = xmms_menu_button(label);
         {
             let main_state = Rc::clone(main_state);
             let parent = parent.clone();
@@ -1596,16 +1668,16 @@ fn build_equalizer_presets_popover(
         .autohide(true)
         .has_arrow(false)
         .build();
+    style_xmms_popover(&popover);
     popover.set_parent(parent);
-    let menu_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let menu_box = xmms_menu_box(0);
     for (label, preset) in [
         ("Flat", 0),
         ("Bass Boost", 1),
         ("Treble Boost", 2),
         ("Rock", 3),
     ] {
-        let item = gtk::Button::with_label(label);
-        item.set_halign(gtk::Align::Fill);
+        let item = xmms_menu_button(label);
         {
             let main_state = Rc::clone(main_state);
             let popover = popover.clone();
@@ -3156,8 +3228,14 @@ fn sync_single_panel_window_values(
     window.set_default_size(scale_dim(width, scale), scale_dim(height, scale));
     area.queue_resize();
     window.queue_resize();
-    window.present();
+    present_if_hidden(window);
     area.queue_draw();
+}
+
+fn present_if_hidden(window: &gtk::ApplicationWindow) {
+    if !window.is_visible() {
+        window.present();
+    }
 }
 
 fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
@@ -3180,7 +3258,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
             scale_dim(EQUALIZER_WINDOW_WIDTH, scale),
             scale_dim(height, scale),
         );
-        windows.equalizer.present();
+        present_if_hidden(&windows.equalizer);
         windows.equalizer_area.queue_draw();
     } else {
         windows.equalizer.hide();
@@ -3205,7 +3283,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         );
         windows.playlist_area.queue_resize();
         windows.playlist.queue_resize();
-        windows.playlist.present();
+        present_if_hidden(&windows.playlist);
         windows.playlist_area.queue_draw();
     } else {
         windows.playlist.hide();
@@ -3423,9 +3501,7 @@ impl MainWindowUiState {
             active_inside: false,
             slider_press_offset: 0,
         };
-        state.playback_position_ms = state.app_state.config.playback_position_ms.max(0);
-        state.position_position = state.position_slider_position();
-        state.apply_visualization_preferences();
+        state.apply_config_to_ui_state();
         state
     }
 
@@ -3442,10 +3518,7 @@ impl MainWindowUiState {
         config_path: &Path,
         playlist_path: &Path,
     ) -> io::Result<()> {
-        self.app_state.config.playback_position_ms = self.playback_position_ms.max(0);
-        self.app_state.config.main_shaded = self.shaded;
-        self.app_state.config.playlist_shaded = self.playlist_shaded;
-        self.app_state.config.equalizer_shaded = self.equalizer_shaded;
+        self.sync_config_from_ui_state();
         save_fallback_state(&mut self.app_state, config_path, playlist_path)
     }
 
@@ -3888,14 +3961,31 @@ impl MainWindowUiState {
         self.preferences_saved = true;
     }
 
-    pub(crate) fn reset_preferences_to_defaults(&mut self) {
-        self.app_state.config = Config::default();
-        self.app_state.apply_config_to_runtime();
+    fn apply_config_to_ui_state(&mut self) {
         self.equalizer_active = self.app_state.config.equalizer_active;
         self.equalizer_automatic = self.app_state.config.equalizer_auto;
         self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
         self.equalizer_band_positions = self.app_state.config.equalizer_band_pos;
+        self.playback_position_ms = self.app_state.config.playback_position_ms.max(0);
+        self.position_position = self.position_slider_position();
         self.apply_visualization_preferences();
+    }
+
+    fn sync_config_from_ui_state(&mut self) {
+        self.app_state.config.playback_position_ms = self.playback_position_ms.max(0);
+        self.app_state.config.main_shaded = self.shaded;
+        self.app_state.config.playlist_shaded = self.playlist_shaded;
+        self.app_state.config.equalizer_shaded = self.equalizer_shaded;
+        self.app_state.config.equalizer_active = self.equalizer_active;
+        self.app_state.config.equalizer_auto = self.equalizer_automatic;
+        self.app_state.config.equalizer_preamp_pos = self.equalizer_preamp_position;
+        self.app_state.config.equalizer_band_pos = self.equalizer_band_positions;
+    }
+
+    pub(crate) fn reset_preferences_to_defaults(&mut self) {
+        self.app_state.config = Config::default();
+        self.app_state.apply_config_to_runtime();
+        self.apply_config_to_ui_state();
         self.mark_preferences_saved();
     }
 
@@ -7030,6 +7120,30 @@ fn parse_time_ms(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xmms_menu_css_uses_playlist_skin_colors() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let colors = skin.playlist_colors();
+        let css = xmms_menu_css(&skin);
+
+        assert!(css.contains(&format!(
+            "background: #{:02x}{:02x}{:02x}",
+            colors.normal_bg[0], colors.normal_bg[1], colors.normal_bg[2]
+        )));
+        assert!(css.contains(&format!(
+            "color: #{:02x}{:02x}{:02x}",
+            colors.normal[0], colors.normal[1], colors.normal[2]
+        )));
+        assert!(css.contains(&format!(
+            "background: #{:02x}{:02x}{:02x}",
+            colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
+        )));
+        assert!(css.contains(&format!(
+            "color: #{:02x}{:02x}{:02x}",
+            colors.current[0], colors.current[1], colors.current[2]
+        )));
+    }
 
     #[test]
     fn main_window_buttons_update_player_and_toggle_state() {
