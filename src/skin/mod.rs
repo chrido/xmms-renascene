@@ -1,3 +1,4 @@
+pub mod layout;
 pub mod widget;
 pub mod xpm;
 
@@ -8,6 +9,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use image::GenericImageView;
+pub use layout::SkinPixmapInfo;
 use xpm::XpmImage;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,13 +36,6 @@ pub enum SkinPixmapKind {
     EqEx,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SkinPixmapInfo {
-    pub file_stem: &'static str,
-    pub width: usize,
-    pub height: usize,
-}
-
 impl SkinPixmapKind {
     pub const ALL: [SkinPixmapKind; 14] = [
         SkinPixmapKind::Main,
@@ -60,78 +55,7 @@ impl SkinPixmapKind {
     ];
 
     pub fn info(self) -> SkinPixmapInfo {
-        match self {
-            SkinPixmapKind::Main => SkinPixmapInfo {
-                file_stem: "main",
-                width: 275,
-                height: 116,
-            },
-            SkinPixmapKind::CButtons => SkinPixmapInfo {
-                file_stem: "cbuttons",
-                width: 136,
-                height: 36,
-            },
-            SkinPixmapKind::Titlebar => SkinPixmapInfo {
-                file_stem: "titlebar",
-                width: 275,
-                height: 116,
-            },
-            SkinPixmapKind::ShufRep => SkinPixmapInfo {
-                file_stem: "shufrep",
-                width: 28,
-                height: 60,
-            },
-            SkinPixmapKind::Text => SkinPixmapInfo {
-                file_stem: "text",
-                width: 155,
-                height: 18,
-            },
-            SkinPixmapKind::Volume => SkinPixmapInfo {
-                file_stem: "volume",
-                width: 68,
-                height: 421,
-            },
-            SkinPixmapKind::Balance => SkinPixmapInfo {
-                file_stem: "balance",
-                width: 38,
-                height: 421,
-            },
-            SkinPixmapKind::MonoStereo => SkinPixmapInfo {
-                file_stem: "monoster",
-                width: 56,
-                height: 12,
-            },
-            SkinPixmapKind::PlayPause => SkinPixmapInfo {
-                file_stem: "playpaus",
-                width: 11,
-                height: 9,
-            },
-            SkinPixmapKind::Numbers => SkinPixmapInfo {
-                file_stem: "nums_ex",
-                width: 108,
-                height: 13,
-            },
-            SkinPixmapKind::PosBar => SkinPixmapInfo {
-                file_stem: "posbar",
-                width: 248,
-                height: 10,
-            },
-            SkinPixmapKind::PlEdit => SkinPixmapInfo {
-                file_stem: "pledit",
-                width: 150,
-                height: 18,
-            },
-            SkinPixmapKind::EqMain => SkinPixmapInfo {
-                file_stem: "eqmain",
-                width: 275,
-                height: 116,
-            },
-            SkinPixmapKind::EqEx => SkinPixmapInfo {
-                file_stem: "eq_ex",
-                width: 275,
-                height: 50,
-            },
-        }
+        layout::pixmap_info(self)
     }
 }
 
@@ -812,7 +736,10 @@ static char * main_xpm[] = {
 
     #[test]
     fn pixmap_info_matches_original_xmms_dimensions() {
-        assert_eq!(SkinPixmapKind::Main.info().width, 275);
+        assert_eq!(
+            SkinPixmapKind::Main.info().width,
+            layout::MAIN_WINDOW_WIDTH as usize
+        );
         assert_eq!(SkinPixmapKind::EqEx.info().height, 50);
         assert_eq!(SkinPixmapKind::Numbers.info().file_stem, "nums_ex");
     }
@@ -821,7 +748,10 @@ static char * main_xpm[] = {
     fn bundled_default_skin_loads_without_filesystem_lookup() {
         let skin = DefaultSkin::load_bundled().unwrap();
         assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
-        assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 275);
+        assert_eq!(
+            skin.get(SkinPixmapKind::Main).unwrap().width(),
+            SkinPixmapKind::Main.info().width
+        );
         assert!(skin.get(SkinPixmapKind::Balance).is_some());
         assert_eq!(skin.vis_colors()[0], [9, 34, 53]);
         assert_eq!(skin.playlist_colors(), DEFAULT_PLAYLIST_COLORS);

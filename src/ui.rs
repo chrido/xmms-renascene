@@ -33,6 +33,13 @@ use crate::render::{
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
 };
+use crate::skin::layout::{
+    equalizer_control_at, equalizer_shaded_slider_at, equalizer_slider_at,
+    equalizer_slider_position, main_push_button_rect, main_slider_layout, main_toggle_button_rect,
+    panel_title_button_at, playlist_footer_button_at, playlist_menu_button_at,
+    playlist_menu_popup_rect, snap_playlist_size, EqualizerSlider, LayoutPanelKind as LayoutPanel,
+    PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton, SkinRect,
+};
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
     VisScopeMode, VisVuMode, Visualization, WidgetId,
@@ -2844,14 +2851,6 @@ pub(crate) enum PanelAction {
     ShowEqualizerPresets,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EqualizerSlider {
-    Preamp,
-    Band(usize),
-    ShadedVolume,
-    ShadedBalance,
-}
-
 fn add_panel_click_controller(
     window: &gtk::ApplicationWindow,
     area: &gtk::DrawingArea,
@@ -3298,18 +3297,6 @@ enum MainControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlaylistFooterButton {
-    Previous,
-    Play,
-    Pause,
-    Stop,
-    Next,
-    Eject,
-    ScrollUp,
-    ScrollDown,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiAction {
     None,
     Quit,
@@ -3686,8 +3673,8 @@ impl MainWindowUiState {
         let Some(duration_ms) = self.current_duration_ms().filter(|duration| *duration > 0) else {
             return 0;
         };
-        ((self.playback_position_ms.clamp(0, duration_ms)
-            * i64::from(slider_max(MainSlider::Position)))
+        let position_slider = main_slider_layout(MainSlider::Position, false);
+        ((self.playback_position_ms.clamp(0, duration_ms) * i64::from(position_slider.max))
             / duration_ms) as i32
     }
 
@@ -4877,7 +4864,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
-        let (width, height) = snap_playlist_size(width, height);
+        let size = snap_playlist_size(width, height);
+        let (width, height) = (size.width, size.height);
         let changed = self.playlist_width != width || self.playlist_height != height;
         self.playlist_width = width;
         self.playlist_height = height;
@@ -5039,13 +5027,13 @@ impl MainWindowUiState {
     fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, coordinate: i32) -> bool {
         match slider {
             EqualizerSlider::Preamp => {
-                let position = ((coordinate - 38) * 100 / 63).clamp(0, 100);
+                let position = equalizer_slider_position(slider, coordinate);
                 let changed = self.equalizer_preamp_position != position;
                 self.equalizer_preamp_position = position;
                 changed
             }
             EqualizerSlider::Band(band) => {
-                let position = ((coordinate - 38) * 100 / 63).clamp(0, 100);
+                let position = equalizer_slider_position(slider, coordinate);
                 let Some(value) = self.equalizer_band_positions.get_mut(band) else {
                     return false;
                 };
@@ -5054,14 +5042,14 @@ impl MainWindowUiState {
                 changed
             }
             EqualizerSlider::ShadedVolume => {
-                let position = (coordinate - 61).clamp(0, 94);
+                let position = equalizer_slider_position(slider, coordinate);
                 let volume = eq_shaded_position_to_volume(position);
                 let changed = self.app_state.player.volume() != volume;
                 self.app_state.player.set_volume(volume);
                 changed
             }
             EqualizerSlider::ShadedBalance => {
-                let position = (coordinate - 164).clamp(0, 39);
+                let position = equalizer_slider_position(slider, coordinate);
                 let balance = eq_shaded_position_to_balance(position);
                 let changed = self.app_state.player.balance() != balance;
                 self.app_state.player.set_balance(balance);
@@ -5672,24 +5660,17 @@ impl MainWindowUiState {
     }
 
     fn panel_title_button_hit(&self, kind: PanelKind, x: i32, y: i32) -> bool {
-        (3..12).contains(&y)
-            && (self.panel_shade_button_hit(kind, x) || self.panel_close_button_hit(kind, x))
+        panel_title_button_at(panel_layout_kind(kind), x, y, self.playlist_width).is_some()
     }
 
     fn panel_shade_button_hit(&self, kind: PanelKind, x: i32) -> bool {
-        let shade_x = match kind {
-            PanelKind::Equalizer => 254,
-            PanelKind::Playlist => self.playlist_width - 21,
-        };
-        (shade_x..shade_x + 9).contains(&x)
+        panel_title_button_at(panel_layout_kind(kind), x, 7, self.playlist_width)
+            == Some(PanelTitleButton::Shade)
     }
 
     fn panel_close_button_hit(&self, kind: PanelKind, x: i32) -> bool {
-        let close_x = match kind {
-            PanelKind::Equalizer => 264,
-            PanelKind::Playlist => self.playlist_width - 11,
-        };
-        (close_x..close_x + 9).contains(&x)
+        panel_title_button_at(panel_layout_kind(kind), x, 7, self.playlist_width)
+            == Some(PanelTitleButton::Close)
     }
 
     pub(crate) fn player_state(&self) -> PlayerState {
@@ -6372,8 +6353,8 @@ impl MainWindowUiState {
                     let position_ms = if self.shaded {
                         (duration_ms * i64::from(position - 1)) / 12
                     } else {
-                        (duration_ms * i64::from(position))
-                            / i64::from(slider_max(MainSlider::Position))
+                        let position_slider = main_slider_layout(MainSlider::Position, false);
+                        (duration_ms * i64::from(position)) / i64::from(position_slider.max)
                     };
                     self.set_playback_position_ms(position_ms);
                 }
@@ -6393,24 +6374,15 @@ impl MainWindowUiState {
     }
 
     fn slider_min(&self, slider: MainSlider) -> i32 {
-        match slider {
-            MainSlider::Position if self.shaded => 1,
-            _ => 0,
-        }
+        main_slider_layout(slider, self.shaded).min
     }
 
     fn slider_max(&self, slider: MainSlider) -> i32 {
-        match slider {
-            MainSlider::Position if self.shaded => 13,
-            _ => slider_max(slider),
-        }
+        main_slider_layout(slider, self.shaded).max
     }
 
     fn slider_knob_width(&self, slider: MainSlider) -> i32 {
-        match slider {
-            MainSlider::Position if self.shaded => 3,
-            _ => slider_knob_width(slider),
-        }
+        main_slider_layout(slider, self.shaded).knob_size.width
     }
 
     fn pressed_push(&self) -> Option<MainPushButton> {
@@ -6436,23 +6408,14 @@ impl MainWindowUiState {
 
     fn control_rect(&self, control: MainControl) -> ControlRect {
         match control {
-            MainControl::Push(button) if self.shaded => shaded_push_button_rect(button),
-            MainControl::Push(button) => push_button_rect(button),
-            MainControl::Toggle(toggle) => toggle_button_rect(toggle),
-            MainControl::Slider(MainSlider::Position) if self.shaded => {
-                ControlRect::new(226, 4, 17, 7)
-            }
+            MainControl::Push(button) => main_push_button_rect(button, self.shaded),
+            MainControl::Toggle(toggle) => main_toggle_button_rect(toggle),
             MainControl::Slider(slider) => self.slider_rect(slider),
         }
     }
 
     fn slider_rect(&self, slider: MainSlider) -> ControlRect {
-        match slider {
-            MainSlider::Volume => ControlRect::new(107, 57, 68, 13),
-            MainSlider::Balance => ControlRect::new(177, 57, 38, 13),
-            MainSlider::Position if self.shaded => ControlRect::new(226, 4, 17, 7),
-            MainSlider::Position => ControlRect::new(16, 72, 248, 10),
-        }
+        main_slider_layout(slider, self.shaded).rect
     }
 }
 
@@ -6462,207 +6425,42 @@ pub(crate) struct PanelVisibility {
     pub(crate) playlist: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ControlRect {
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-}
+type ControlRect = SkinRect;
 
-impl ControlRect {
-    const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self {
-            x,
-            y,
-            width,
-            height,
-        }
+fn panel_layout_kind(kind: PanelKind) -> LayoutPanel {
+    match kind {
+        PanelKind::Equalizer => LayoutPanel::Equalizer,
+        PanelKind::Playlist => LayoutPanel::Playlist,
     }
-
-    fn contains(self, x: i32, y: i32) -> bool {
-        x >= self.x
-            && x < self.x + self.width
-            && y >= self.y
-            && y < self.y + self.height
-            && self.width > 0
-            && self.height > 0
-    }
-}
-
-fn push_button_rect(button: MainPushButton) -> ControlRect {
-    match button {
-        MainPushButton::Menu => ControlRect::new(6, 3, 9, 9),
-        MainPushButton::Minimize => ControlRect::new(244, 3, 9, 9),
-        MainPushButton::Shade => ControlRect::new(254, 3, 9, 9),
-        MainPushButton::Close => ControlRect::new(264, 3, 9, 9),
-        MainPushButton::Previous => ControlRect::new(16, 88, 23, 18),
-        MainPushButton::Play => ControlRect::new(39, 88, 23, 18),
-        MainPushButton::Pause => ControlRect::new(62, 88, 23, 18),
-        MainPushButton::Stop => ControlRect::new(85, 88, 23, 18),
-        MainPushButton::Next => ControlRect::new(108, 88, 22, 18),
-        MainPushButton::Eject => ControlRect::new(136, 89, 22, 16),
-    }
-}
-
-fn shaded_push_button_rect(button: MainPushButton) -> ControlRect {
-    match button {
-        MainPushButton::Previous => ControlRect::new(169, 4, 8, 7),
-        MainPushButton::Play => ControlRect::new(177, 4, 10, 7),
-        MainPushButton::Pause => ControlRect::new(187, 4, 10, 7),
-        MainPushButton::Stop => ControlRect::new(197, 4, 9, 7),
-        MainPushButton::Next => ControlRect::new(206, 4, 8, 7),
-        MainPushButton::Eject => ControlRect::new(216, 4, 9, 7),
-        _ => push_button_rect(button),
-    }
-}
-
-fn equalizer_control_at(x: i32, y: i32) -> Option<EqualizerControl> {
-    [
-        (EqualizerControl::On, ControlRect::new(14, 18, 25, 12)),
-        (EqualizerControl::Auto, ControlRect::new(39, 18, 33, 12)),
-        (EqualizerControl::Presets, ControlRect::new(217, 18, 44, 12)),
-    ]
-    .into_iter()
-    .find_map(|(control, rect)| rect.contains(x, y).then_some(control))
-}
-
-fn equalizer_slider_at(x: i32, y: i32) -> Option<EqualizerSlider> {
-    if ControlRect::new(21, 38, 14, 63).contains(x, y) {
-        return Some(EqualizerSlider::Preamp);
-    }
-
-    (0..10).find_map(|band| {
-        ControlRect::new(78 + band * 18, 38, 14, 63)
-            .contains(x, y)
-            .then_some(EqualizerSlider::Band(band as usize))
-    })
-}
-
-fn equalizer_shaded_slider_at(x: i32, y: i32) -> Option<EqualizerSlider> {
-    if ControlRect::new(61, 4, 97, 8).contains(x, y) {
-        return Some(EqualizerSlider::ShadedVolume);
-    }
-    if ControlRect::new(164, 4, 42, 8).contains(x, y) {
-        return Some(EqualizerSlider::ShadedBalance);
-    }
-    None
 }
 
 fn playlist_menu_at(x: i32, y: i32, width: i32, height: i32) -> Option<PlaylistMenuKind> {
-    [
-        (
-            PlaylistMenuKind::Add,
-            ControlRect::new(12, playlist_button_y(height), 25, 18),
-        ),
-        (
-            PlaylistMenuKind::Remove,
-            ControlRect::new(41, playlist_button_y(height), 25, 18),
-        ),
-        (
-            PlaylistMenuKind::Select,
-            ControlRect::new(70, playlist_button_y(height), 25, 18),
-        ),
-        (
-            PlaylistMenuKind::Misc,
-            ControlRect::new(99, playlist_button_y(height), 25, 18),
-        ),
-        (
-            PlaylistMenuKind::List,
-            ControlRect::new(width - 46, playlist_button_y(height), 23, 18),
-        ),
-    ]
-    .into_iter()
-    .find_map(|(menu, rect)| rect.contains(x, y).then_some(menu))
+    playlist_menu_button_at(x, y, width, height).map(playlist_menu_from_button)
 }
 
-fn playlist_footer_button_at(
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-) -> Option<PlaylistFooterButton> {
-    [
-        (
-            PlaylistFooterButton::Previous,
-            ControlRect::new(width - 144, height - 16, 8, 7),
-        ),
-        (
-            PlaylistFooterButton::Play,
-            ControlRect::new(width - 138, height - 16, 10, 7),
-        ),
-        (
-            PlaylistFooterButton::Pause,
-            ControlRect::new(width - 128, height - 16, 10, 7),
-        ),
-        (
-            PlaylistFooterButton::Stop,
-            ControlRect::new(width - 118, height - 16, 9, 7),
-        ),
-        (
-            PlaylistFooterButton::Next,
-            ControlRect::new(width - 109, height - 16, 8, 7),
-        ),
-        (
-            PlaylistFooterButton::Eject,
-            ControlRect::new(width - 100, height - 16, 9, 7),
-        ),
-        (
-            PlaylistFooterButton::ScrollUp,
-            ControlRect::new(width - 14, height - 35, 8, 5),
-        ),
-        (
-            PlaylistFooterButton::ScrollDown,
-            ControlRect::new(width - 14, height - 30, 8, 5),
-        ),
-    ]
-    .into_iter()
-    .find_map(|(button, rect)| rect.contains(x, y).then_some(button))
+fn playlist_menu_from_button(button: PlaylistMenuButton) -> PlaylistMenuKind {
+    match button {
+        PlaylistMenuButton::Add => PlaylistMenuKind::Add,
+        PlaylistMenuButton::Remove => PlaylistMenuKind::Remove,
+        PlaylistMenuButton::Select => PlaylistMenuKind::Select,
+        PlaylistMenuButton::Misc => PlaylistMenuKind::Misc,
+        PlaylistMenuButton::List => PlaylistMenuKind::List,
+    }
+}
+
+fn playlist_menu_button_from_kind(menu: PlaylistMenuKind) -> PlaylistMenuButton {
+    match menu {
+        PlaylistMenuKind::Add => PlaylistMenuButton::Add,
+        PlaylistMenuKind::Remove => PlaylistMenuButton::Remove,
+        PlaylistMenuKind::Select => PlaylistMenuButton::Select,
+        PlaylistMenuKind::Misc => PlaylistMenuButton::Misc,
+        PlaylistMenuKind::List => PlaylistMenuButton::List,
+    }
 }
 
 fn playlist_menu_rect(menu: PlaylistMenuKind, width: i32, height: i32) -> (i32, i32, i32, i32) {
-    let (x, items) = match menu {
-        PlaylistMenuKind::Add => (12, 3),
-        PlaylistMenuKind::Remove => (41, 4),
-        PlaylistMenuKind::Select => (70, 3),
-        PlaylistMenuKind::Misc => (99, 3),
-        PlaylistMenuKind::List => (width - 46, 3),
-    };
-    let item_height = 18;
-    (
-        x - 1,
-        playlist_button_y(height) - ((items - 1) * item_height) - 1,
-        25,
-        items * item_height,
-    )
-}
-
-const fn playlist_button_y(height: i32) -> i32 {
-    height - 29
-}
-
-fn toggle_button_rect(toggle: MainToggleButton) -> ControlRect {
-    match toggle {
-        MainToggleButton::Shuffle => ControlRect::new(164, 89, 46, 15),
-        MainToggleButton::Repeat => ControlRect::new(210, 89, 28, 15),
-        MainToggleButton::Equalizer => ControlRect::new(219, 58, 23, 12),
-        MainToggleButton::Playlist => ControlRect::new(242, 58, 23, 12),
-    }
-}
-
-fn slider_max(slider: MainSlider) -> i32 {
-    match slider {
-        MainSlider::Volume => 51,
-        MainSlider::Balance => 24,
-        MainSlider::Position => 219,
-    }
-}
-
-fn slider_knob_width(slider: MainSlider) -> i32 {
-    match slider {
-        MainSlider::Volume | MainSlider::Balance => 14,
-        MainSlider::Position => 29,
-    }
+    let rect = playlist_menu_popup_rect(playlist_menu_button_from_kind(menu), width, height);
+    (rect.x, rect.y, rect.width, rect.height)
 }
 
 fn volume_to_position(volume: i32) -> i32 {
@@ -6692,14 +6490,6 @@ fn balance_to_eq_shaded_position(balance: i32) -> i32 {
 fn format_duration(milliseconds: i64) -> String {
     let seconds = (milliseconds.max(0) / 1000) as i32;
     format!("{}:{:02}", seconds / 60, seconds % 60)
-}
-
-fn snap_playlist_size(width: i32, height: i32) -> (i32, i32) {
-    let width_blocks = (width - PLAYLIST_MIN_WIDTH) / 25;
-    let width = (width_blocks * 25 + PLAYLIST_MIN_WIDTH).max(PLAYLIST_MIN_WIDTH);
-    let height_blocks = (height - 58) / 29;
-    let height = (height_blocks * 29 + 58).max(PLAYLIST_MIN_HEIGHT);
-    (width, height)
 }
 
 fn format_playlist_footer_duration(milliseconds: i64, more: bool) -> String {
