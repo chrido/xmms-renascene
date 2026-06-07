@@ -909,7 +909,11 @@ fn clicked_playlist_rows_update_single_selection() {
 
 #[test]
 fn vim_playlist_keys_move_selection_and_play_selected_entry() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_vim_playlist_navigation(true),
+    );
 
     app.drop_on_playlist([
         "file:///music/one.ogg",
@@ -937,11 +941,7 @@ fn vim_playlist_keys_move_selection_and_play_selected_entry() {
     .assert_playlist_position(Some(2))
     .assert_current_playlist_entry("file:///music/three.ogg");
 
-    let mut disabled = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_playlist_visible(true)
-            .with_vim_playlist_navigation(false),
-    );
+    let mut disabled = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
     disabled
         .drop_on_playlist([
             "file:///music/disabled-one.ogg",
@@ -2047,6 +2047,9 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .assert_preference_convert_twenty(false)
         .set_preference_show_numbers_in_playlist(false)
         .assert_preference_show_numbers_in_playlist(false)
+        .assert_preference_vim_playlist_navigation(false)
+        .set_preference_vim_playlist_navigation(true)
+        .assert_preference_vim_playlist_navigation(true)
         .assert_preferences_saved();
 }
 

@@ -578,6 +578,7 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Convert %20 to space",
             "Convert underscore to space",
             "Show numbers in playlist",
+            "Vim-style playlist navigation",
         ],
         PreferencesPage::Fonts => &[
             "Playlist font family:",
@@ -2015,6 +2016,11 @@ fn build_preferences_options_page(
                 state.preference_show_numbers_in_playlist(),
                 PreferenceCheck::ShowNumbers,
             ),
+            (
+                "Vim-style playlist navigation",
+                state.preference_vim_playlist_navigation(),
+                PreferenceCheck::VimPlaylistNavigation,
+            ),
         ]
     };
     for (index, (label, active, action)) in checks.into_iter().enumerate() {
@@ -2048,6 +2054,9 @@ fn build_preferences_options_page(
                     PreferenceCheck::ShowNumbers => {
                         state.set_preference_show_numbers_in_playlist(check.is_active())
                     }
+                    PreferenceCheck::VimPlaylistNavigation => {
+                        state.set_preference_vim_playlist_navigation(check.is_active())
+                    }
                 }
                 drop(state);
                 if let Some(on_change) = &on_change {
@@ -2071,6 +2080,7 @@ enum PreferenceCheck {
     ConvertTwenty,
     ConvertUnderscore,
     ShowNumbers,
+    VimPlaylistNavigation,
 }
 
 fn build_preferences_fonts_page(
@@ -5642,6 +5652,15 @@ impl MainWindowUiState {
 
     pub(crate) fn preference_show_numbers_in_playlist(&self) -> bool {
         self.app_state.config.show_numbers_in_pl
+    }
+
+    pub(crate) fn set_preference_vim_playlist_navigation(&mut self, enabled: bool) {
+        self.app_state.config.vim_playlist_navigation = enabled;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_vim_playlist_navigation(&self) -> bool {
+        self.app_state.config.vim_playlist_navigation
     }
 
     pub(crate) fn set_preference_playlist_font(&mut self, font: &str) {

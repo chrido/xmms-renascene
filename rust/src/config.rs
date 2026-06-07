@@ -92,7 +92,7 @@ impl Default for Config {
             playlist_visible: false,
             playlist_shaded: false,
             playlist_detached: false,
-            vim_playlist_navigation: true,
+            vim_playlist_navigation: false,
             shuffle: false,
             repeat: false,
             playlist_position: -1,
@@ -458,7 +458,7 @@ mod tests {
         assert!(!cfg.main_shaded);
         assert!(!cfg.playlist_shaded);
         assert!(!cfg.equalizer_shaded);
-        assert!(cfg.vim_playlist_navigation);
+        assert!(!cfg.vim_playlist_navigation);
         assert_eq!(cfg.equalizer_band_pos, [50; 10]);
         assert_eq!(cfg.playlist_font, "Helvetica");
         assert_eq!(cfg.title_format, "%p - %t");
@@ -477,7 +477,7 @@ mod tests {
              equalizer_band_3_pos=75\n\
              main_shaded=true\n\
              playlist_shaded=true\n\
-             vim_playlist_navigation=false\n\
+             vim_playlist_navigation=true\n\
              equalizer_shaded=true\n\
              playlist_font=Monospace\n\
              vis_mode=1\n\
@@ -493,7 +493,7 @@ mod tests {
         assert_eq!(cfg.equalizer_band_pos[3], 75);
         assert!(cfg.main_shaded);
         assert!(cfg.playlist_shaded);
-        assert!(!cfg.vim_playlist_navigation);
+        assert!(cfg.vim_playlist_navigation);
         assert!(cfg.equalizer_shaded);
         assert_eq!(cfg.playlist_font, "Monospace");
         assert_eq!(cfg.vis_mode, VisMode::Scope);
@@ -533,7 +533,7 @@ mod tests {
             skin: Some("/skins/classic".to_string()),
             output_device: Some("pipewire.node".to_string()),
             playlist_visible: true,
-            vim_playlist_navigation: false,
+            vim_playlist_navigation: true,
             main_shaded: true,
             playlist_shaded: true,
             equalizer_shaded: true,
@@ -546,14 +546,14 @@ mod tests {
         assert!(serialized.contains("[xmms]\n"));
         assert!(serialized.contains("skin=/skins/classic\n"));
         assert!(serialized.contains("output_device=pipewire.node\n"));
-        assert!(serialized.contains("vim_playlist_navigation=false\n"));
+        assert!(serialized.contains("vim_playlist_navigation=true\n"));
         assert!(serialized.contains("equalizer_band_9_pos=10\n"));
 
         let reparsed = Config::from_key_file_str(&serialized);
         assert_eq!(reparsed.skin, cfg.skin);
         assert_eq!(reparsed.output_device, cfg.output_device);
         assert!(reparsed.playlist_visible);
-        assert!(!reparsed.vim_playlist_navigation);
+        assert!(reparsed.vim_playlist_navigation);
         assert!(reparsed.main_shaded);
         assert!(reparsed.playlist_shaded);
         assert!(reparsed.equalizer_shaded);

@@ -1330,6 +1330,16 @@ impl UiE2e {
         self
     }
 
+    pub fn set_preference_vim_playlist_navigation(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_vim_playlist_navigation(enabled);
+        self
+    }
+
+    pub fn assert_preference_vim_playlist_navigation(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_vim_playlist_navigation(), expected);
+        self
+    }
+
     pub fn set_preference_playlist_font(&mut self, font: &str) -> &mut Self {
         self.state.set_preference_playlist_font(font);
         self
