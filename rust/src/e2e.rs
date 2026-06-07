@@ -40,6 +40,11 @@ impl PlayerSettings {
         self
     }
 
+    pub fn with_vim_playlist_navigation(mut self, enabled: bool) -> Self {
+        self.config.vim_playlist_navigation = enabled;
+        self
+    }
+
     pub fn with_equalizer_visible(mut self, visible: bool) -> Self {
         self.config.equalizer_visible = visible;
         self

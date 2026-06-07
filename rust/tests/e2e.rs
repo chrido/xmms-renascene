@@ -936,6 +936,22 @@ fn vim_playlist_keys_move_selection_and_play_selected_entry() {
     .press_shortcut(Shortcut::PlaylistPlay)
     .assert_playlist_position(Some(2))
     .assert_current_playlist_entry("file:///music/three.ogg");
+
+    let mut disabled = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_vim_playlist_navigation(false),
+    );
+    disabled
+        .drop_on_playlist([
+            "file:///music/disabled-one.ogg",
+            "file:///music/disabled-two.ogg",
+        ])
+        .press_shortcut(Shortcut::PlaylistDown)
+        .assert_playlist_entry_selected(1, false)
+        .press_shortcut(Shortcut::PlaylistPlay)
+        .assert_player_state(PlayerState::Stopped)
+        .assert_playlist_position(None);
 }
 
 #[test]

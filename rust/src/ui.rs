@@ -5266,6 +5266,9 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn move_playlist_selection(&mut self, delta: isize) -> bool {
+        if !self.app_state.config.vim_playlist_navigation {
+            return false;
+        }
         let len = self.app_state.playlist.len();
         if len == 0 {
             return false;
@@ -5281,6 +5284,9 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn play_selected_playlist_entry(&mut self) -> bool {
+        if !self.app_state.config.vim_playlist_navigation {
+            return false;
+        }
         let Some(index) = self
             .selected_playlist_index()
             .or_else(|| self.app_state.playlist.position())
