@@ -656,6 +656,13 @@ fn handle_main_playlist_key_pressed(
     key: gtk::gdk::Key,
     state: gtk::gdk::ModifierType,
 ) -> bool {
+    {
+        let mut ui_state = main_state.borrow_mut();
+        if let Some(handled) = handle_active_playlist_search_key_pressed(&mut ui_state, key, state)
+        {
+            return handled;
+        }
+    }
     if state.intersects(
         gtk::gdk::ModifierType::CONTROL_MASK
             | gtk::gdk::ModifierType::ALT_MASK
@@ -669,6 +676,9 @@ fn handle_main_playlist_key_pressed(
     }
     if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
         return true;
+    }
+    if key == gtk::gdk::Key::slash {
+        return ui_state.start_playlist_search();
     }
     if key != gtk::gdk::Key::Delete && key != gtk::gdk::Key::KP_Delete {
         return false;
@@ -1312,30 +1322,9 @@ fn handle_playlist_key_pressed(
 ) -> bool {
     {
         let mut ui_state = main_state.borrow_mut();
-        if ui_state.playlist_search_active {
-            if key == gtk::gdk::Key::Escape
-                || key == gtk::gdk::Key::Return
-                || key == gtk::gdk::Key::KP_Enter
-            {
-                ui_state.stop_playlist_search();
-                return true;
-            }
-            if key == gtk::gdk::Key::BackSpace {
-                ui_state.pop_playlist_search_char();
-                return true;
-            }
-            if state.intersects(
-                gtk::gdk::ModifierType::CONTROL_MASK
-                    | gtk::gdk::ModifierType::ALT_MASK
-                    | gtk::gdk::ModifierType::META_MASK,
-            ) {
-                return true;
-            }
-            if let Some(ch) = key.to_unicode().filter(|ch| !ch.is_control()) {
-                ui_state.push_playlist_search_char(ch);
-                return true;
-            }
-            return true;
+        if let Some(handled) = handle_active_playlist_search_key_pressed(&mut ui_state, key, state)
+        {
+            return handled;
         }
     }
 
@@ -1356,10 +1345,44 @@ fn handle_playlist_key_pressed(
         }
     }
     if key == gtk::gdk::Key::slash {
-        main_state.borrow_mut().start_playlist_search();
-        return true;
+        return main_state.borrow_mut().start_playlist_search();
     }
     false
+}
+
+fn handle_active_playlist_search_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> Option<bool> {
+    if !ui_state.playlist_search_active {
+        return None;
+    }
+    if key == gtk::gdk::Key::Escape {
+        ui_state.stop_playlist_search();
+        return Some(true);
+    }
+    if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
+        ui_state.stop_playlist_search();
+        ui_state.play_selected_playlist_entry();
+        return Some(true);
+    }
+    if key == gtk::gdk::Key::BackSpace {
+        ui_state.pop_playlist_search_char();
+        return Some(true);
+    }
+    if state.intersects(
+        gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return Some(true);
+    }
+    if let Some(ch) = key.to_unicode().filter(|ch| !ch.is_control()) {
+        ui_state.push_playlist_search_char(ch);
+        return Some(true);
+    }
+    Some(true)
 }
 
 fn handle_playlist_navigation_key_pressed(
@@ -4489,12 +4512,16 @@ impl MainWindowUiState {
         }
     }
 
-    pub(crate) fn start_playlist_search(&mut self) {
+    pub(crate) fn start_playlist_search(&mut self) -> bool {
+        if !self.app_state.config.vim_playlist_navigation {
+            return false;
+        }
         self.playlist_menu = None;
         self.playlist_menu_hover = None;
         self.playlist_menu_pressed = false;
         self.playlist_search_active = true;
         self.playlist_search_query.clear();
+        true
     }
 
     pub(crate) fn stop_playlist_search(&mut self) {

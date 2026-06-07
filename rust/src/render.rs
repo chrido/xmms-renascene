@@ -1817,9 +1817,9 @@ fn draw_playlist_search(
     width: i32,
     height: i32,
 ) -> Result<(), RenderError> {
-    let x = 10;
+    let x = 12;
     let y = height - 48;
-    let w = width - 20;
+    let w = width - 31;
     let h = 14;
 
     set_rgb(cr, colors.normal_bg);

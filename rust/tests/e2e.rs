@@ -2429,7 +2429,17 @@ fn playlist_context_physical_delete_removes_selected_local_files() {
 
 #[test]
 fn playlist_search_selects_matching_rows_and_tracks_query_editing() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut disabled = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    disabled
+        .start_playlist_search()
+        .assert_playlist_search_active(false)
+        .assert_playlist_search_query("");
+
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_playlist_visible(true)
+            .with_vim_playlist_navigation(true),
+    );
 
     for index in 0..20 {
         let name = if index == 18 {
@@ -2453,7 +2463,17 @@ fn playlist_search_selects_matching_rows_and_tracks_query_editing() {
         .assert_playlist_selected(18, true)
         .stop_playlist_search()
         .assert_playlist_search_active(false)
-        .assert_playlist_search_query("");
+        .assert_playlist_search_query("")
+        .assert_playlist_selected(18, true)
+        .start_playlist_search()
+        .type_playlist_search("TARGET")
+        .assert_playlist_selected(18, true)
+        .submit_playlist_search()
+        .assert_playlist_search_active(false)
+        .assert_playlist_search_query("")
+        .assert_player_state(PlayerState::Playing)
+        .assert_playlist_position(Some(18))
+        .assert_current_playlist_entry("file:///tmp/18-target-track.mp3");
 }
 
 #[test]

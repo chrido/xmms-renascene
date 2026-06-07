@@ -453,6 +453,13 @@ impl UiE2e {
         self
     }
 
+    pub fn submit_playlist_search(&mut self) -> &mut Self {
+        self.state.stop_playlist_search();
+        self.state.play_selected_playlist_entry();
+        self.sync_windows();
+        self
+    }
+
     pub fn hover_playlist_menu_item(&mut self, item: usize) -> &mut Self {
         let (x, y0) = self.playlist_menu_anchor();
         let y = 174 + item as i32 * 18 + 8;

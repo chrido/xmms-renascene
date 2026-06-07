@@ -115,6 +115,62 @@ fn renders_playlist_rows_with_selected_background() {
 }
 
 #[test]
+fn playlist_search_overlay_stays_inside_row_area() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+    )
+    .unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_playlist_frame(
+        &cr,
+        &skin,
+        true,
+        false,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+        None,
+        None
+    )
+    .unwrap());
+    assert!(render_playlist_rows(
+        &cr,
+        &skin,
+        &PlaylistRowsRenderState {
+            entries: vec![],
+            scroll_offset: 0,
+            scrollbar_dragging: false,
+            search_query: Some("needle".to_string()),
+            show_numbers: true,
+            font_family: "Helvetica".to_string(),
+            width: PLAYLIST_DEFAULT_WIDTH,
+            height: PLAYLIST_DEFAULT_HEIGHT,
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let colors = skin.playlist_colors();
+    let y = (PLAYLIST_DEFAULT_HEIGHT - 48) as usize;
+    let color_at = |x: usize| {
+        let offset = y * stride + x * 4;
+        [data[offset + 2], data[offset + 1], data[offset]]
+    };
+
+    assert_eq!(color_at(20), colors.selected_bg);
+    assert_ne!(color_at(10), colors.selected_bg);
+    assert_ne!(
+        color_at((PLAYLIST_DEFAULT_WIDTH - 18) as usize),
+        colors.selected_bg
+    );
+}
+
+#[test]
 fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
     let width = PLAYLIST_DEFAULT_WIDTH + 14;
