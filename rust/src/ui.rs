@@ -3220,6 +3220,18 @@ enum MainControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistFooterButton {
+    Previous,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Eject,
+    ScrollUp,
+    ScrollDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiAction {
     None,
     Quit,
@@ -5508,9 +5520,65 @@ impl MainWindowUiState {
                 self.playlist_menu_hover = Some(menu.item_count().saturating_sub(1));
                 return PanelAction::ShowPlaylistMenu(menu);
             }
+            if let Some(button) =
+                playlist_footer_button_at(x, y, self.playlist_width, self.playlist_height)
+            {
+                return self.activate_playlist_footer_button(button);
+            }
         }
 
         PanelAction::None
+    }
+
+    fn activate_playlist_footer_button(&mut self, button: PlaylistFooterButton) -> PanelAction {
+        match button {
+            PlaylistFooterButton::Previous => {
+                if self.app_state.playlist.previous() {
+                    self.start_current_playlist_playback();
+                }
+                self.position_position = 0;
+                self.playback_position_ms = 0;
+                PanelAction::Changed
+            }
+            PlaylistFooterButton::Play => {
+                match self.app_state.player.state() {
+                    PlayerState::Paused => self.unpause_playback(),
+                    PlayerState::Stopped => self.start_current_playlist_playback(),
+                    PlayerState::Playing => {}
+                }
+                PanelAction::Changed
+            }
+            PlaylistFooterButton::Pause => {
+                match self.app_state.player.state() {
+                    PlayerState::Playing => self.pause_playback(),
+                    PlayerState::Paused => self.unpause_playback(),
+                    PlayerState::Stopped => {}
+                }
+                PanelAction::Changed
+            }
+            PlaylistFooterButton::Stop => {
+                self.stop_playback();
+                PanelAction::Changed
+            }
+            PlaylistFooterButton::Next => {
+                if self.app_state.playlist.next() {
+                    self.start_current_playlist_playback();
+                }
+                self.position_position = 0;
+                self.playback_position_ms = 0;
+                PanelAction::Changed
+            }
+            PlaylistFooterButton::Eject => PanelAction::OpenFileDialog,
+            PlaylistFooterButton::ScrollUp => {
+                self.playlist_scroll_offset = self.playlist_scroll_offset.saturating_sub(1);
+                PanelAction::Changed
+            }
+            PlaylistFooterButton::ScrollDown => {
+                self.playlist_scroll_offset =
+                    (self.playlist_scroll_offset + 1).min(self.playlist_max_scroll());
+                PanelAction::Changed
+            }
+        }
     }
 
     fn panel_title_button_hit(&self, kind: PanelKind, x: i32, y: i32) -> bool {
@@ -6416,6 +6484,50 @@ fn playlist_menu_at(x: i32, y: i32, width: i32, height: i32) -> Option<PlaylistM
     ]
     .into_iter()
     .find_map(|(menu, rect)| rect.contains(x, y).then_some(menu))
+}
+
+fn playlist_footer_button_at(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> Option<PlaylistFooterButton> {
+    [
+        (
+            PlaylistFooterButton::Previous,
+            ControlRect::new(width - 144, height - 16, 8, 7),
+        ),
+        (
+            PlaylistFooterButton::Play,
+            ControlRect::new(width - 138, height - 16, 10, 7),
+        ),
+        (
+            PlaylistFooterButton::Pause,
+            ControlRect::new(width - 128, height - 16, 10, 7),
+        ),
+        (
+            PlaylistFooterButton::Stop,
+            ControlRect::new(width - 118, height - 16, 9, 7),
+        ),
+        (
+            PlaylistFooterButton::Next,
+            ControlRect::new(width - 109, height - 16, 8, 7),
+        ),
+        (
+            PlaylistFooterButton::Eject,
+            ControlRect::new(width - 100, height - 16, 9, 7),
+        ),
+        (
+            PlaylistFooterButton::ScrollUp,
+            ControlRect::new(width - 14, height - 35, 8, 5),
+        ),
+        (
+            PlaylistFooterButton::ScrollDown,
+            ControlRect::new(width - 14, height - 30, 8, 5),
+        ),
+    ]
+    .into_iter()
+    .find_map(|(button, rect)| rect.contains(x, y).then_some(button))
 }
 
 fn playlist_menu_rect(menu: PlaylistMenuKind, width: i32, height: i32) -> (i32, i32, i32, i32) {

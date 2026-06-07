@@ -1551,6 +1551,61 @@ fn transport_buttons_update_player_state_and_position() {
 }
 
 #[test]
+fn playlist_footer_transport_buttons_update_player_state_and_position() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.add_spotify_entry("spotify:track:playlist-footer-one", "Footer One", 10_000)
+        .add_spotify_entry("spotify:track:playlist-footer-two", "Footer Two", 12_000)
+        .click_panel(PanelTarget::PlaylistPlay)
+        .assert_player_state(PlayerState::Playing)
+        .assert_playlist_position(Some(0))
+        .click_panel(PanelTarget::PlaylistPause)
+        .assert_player_state(PlayerState::Paused)
+        .click_panel(PanelTarget::PlaylistPause)
+        .assert_player_state(PlayerState::Playing)
+        .click_panel(PanelTarget::PlaylistNext)
+        .assert_playlist_position(Some(1))
+        .assert_player_state(PlayerState::Playing)
+        .click_panel(PanelTarget::PlaylistPrevious)
+        .assert_playlist_position(Some(0))
+        .click_panel(PanelTarget::PlaylistStop)
+        .assert_player_state(PlayerState::Stopped)
+        .click_panel(PanelTarget::PlaylistEject)
+        .assert_file_dialog_visible();
+}
+
+#[test]
+fn docked_playlist_footer_transport_buttons_use_current_geometry() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.add_spotify_entry(
+        "spotify:track:docked-playlist-footer",
+        "Docked Footer",
+        10_000,
+    )
+    .click_docked_panel(PanelTarget::PlaylistPlay)
+    .assert_player_state(PlayerState::Playing)
+    .click_docked_panel(PanelTarget::PlaylistStop)
+    .assert_player_state(PlayerState::Stopped);
+}
+
+#[test]
+fn playlist_footer_scroll_buttons_update_scroll_offset() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    for index in 0..30 {
+        app.accept_open_location(&format!("file:///tmp/footer-scroll-{index:02}.mp3"));
+    }
+
+    app.assert_playlist_scroll_offset(0)
+        .assert_playlist_scrollbar_visible(true)
+        .click_panel(PanelTarget::PlaylistScrollDown)
+        .assert_playlist_scroll_offset(1)
+        .click_panel(PanelTarget::PlaylistScrollUp)
+        .assert_playlist_scroll_offset(0);
+}
+
+#[test]
 fn mono_stereo_indicator_tracks_stream_channel_count() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 

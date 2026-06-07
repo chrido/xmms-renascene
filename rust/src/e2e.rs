@@ -139,6 +139,14 @@ pub enum PanelTarget {
     PlaylistSelect,
     PlaylistMisc,
     PlaylistList,
+    PlaylistPrevious,
+    PlaylistPlay,
+    PlaylistPause,
+    PlaylistStop,
+    PlaylistNext,
+    PlaylistEject,
+    PlaylistScrollUp,
+    PlaylistScrollDown,
 }
 
 impl PanelTarget {
@@ -158,26 +166,64 @@ impl PanelTarget {
             Self::PlaylistSelect => (PanelKind::Playlist, 82, playlist_button_y),
             Self::PlaylistMisc => (PanelKind::Playlist, 111, playlist_button_y),
             Self::PlaylistList => (PanelKind::Playlist, playlist_width - 35, playlist_button_y),
+            Self::PlaylistPrevious => (
+                PanelKind::Playlist,
+                playlist_width - 140,
+                playlist_height - 13,
+            ),
+            Self::PlaylistPlay => (
+                PanelKind::Playlist,
+                playlist_width - 133,
+                playlist_height - 13,
+            ),
+            Self::PlaylistPause => (
+                PanelKind::Playlist,
+                playlist_width - 123,
+                playlist_height - 13,
+            ),
+            Self::PlaylistStop => (
+                PanelKind::Playlist,
+                playlist_width - 114,
+                playlist_height - 13,
+            ),
+            Self::PlaylistNext => (
+                PanelKind::Playlist,
+                playlist_width - 105,
+                playlist_height - 13,
+            ),
+            Self::PlaylistEject => (
+                PanelKind::Playlist,
+                playlist_width - 96,
+                playlist_height - 13,
+            ),
+            Self::PlaylistScrollUp => (
+                PanelKind::Playlist,
+                playlist_width - 10,
+                playlist_height - 33,
+            ),
+            Self::PlaylistScrollDown => (
+                PanelKind::Playlist,
+                playlist_width - 10,
+                playlist_height - 28,
+            ),
         }
     }
 
-    fn click(self, state: &mut MainWindowUiState) {
+    fn click(self, state: &mut MainWindowUiState) -> PanelAction {
         let (kind, x, y) = self.point(state);
         match self {
-            Self::EqualizerShade | Self::EqualizerClose => {
-                state.panel_click(kind, x, y);
-            }
+            Self::EqualizerShade | Self::EqualizerClose => state.panel_click(kind, x, y),
             Self::EqualizerOn => {
                 state.equalizer_press(x, y);
-                state.equalizer_release(x, y);
+                state.equalizer_release(x, y)
             }
             Self::EqualizerAuto => {
                 state.equalizer_press(x, y);
-                state.equalizer_release(x, y);
+                state.equalizer_release(x, y)
             }
             Self::EqualizerPresets => {
                 state.equalizer_press(x, y);
-                state.equalizer_release(x, y);
+                state.equalizer_release(x, y)
             }
             Self::PlaylistShade
             | Self::PlaylistClose
@@ -185,9 +231,15 @@ impl PanelTarget {
             | Self::PlaylistRemove
             | Self::PlaylistSelect
             | Self::PlaylistMisc
-            | Self::PlaylistList => {
-                state.panel_click(kind, x, y);
-            }
+            | Self::PlaylistList
+            | Self::PlaylistPrevious
+            | Self::PlaylistPlay
+            | Self::PlaylistPause
+            | Self::PlaylistStop
+            | Self::PlaylistNext
+            | Self::PlaylistEject
+            | Self::PlaylistScrollUp
+            | Self::PlaylistScrollDown => state.panel_click(kind, x, y),
         }
     }
 }
@@ -335,7 +387,8 @@ impl UiE2e {
     }
 
     pub fn click_panel(&mut self, target: PanelTarget) -> &mut Self {
-        target.click(&mut self.state);
+        let action = target.click(&mut self.state);
+        self.apply_panel_action(action);
         self.sync_windows();
         self
     }
@@ -362,7 +415,8 @@ impl UiE2e {
                 }
             }
             PanelKind::Playlist => {
-                self.state.panel_click(actual_kind, panel_x, panel_y);
+                let action = self.state.panel_click(actual_kind, panel_x, panel_y);
+                self.apply_panel_action(action);
             }
         }
         self.sync_windows();
@@ -2033,6 +2087,31 @@ impl UiE2e {
                 self.file_dialog_visible = false;
                 self.directory_dialog_visible = false;
             }
+        }
+    }
+
+    fn apply_panel_action(&mut self, action: PanelAction) {
+        match action {
+            PanelAction::None | PanelAction::Changed | PanelAction::ShowPlaylistSortMenu => {}
+            PanelAction::OpenDirectoryDialog => {
+                self.directory_dialog_visible = true;
+                self.state.set_directory_dialog_visible(true);
+            }
+            PanelAction::OpenFileDialog => {
+                self.file_dialog_visible = true;
+                self.state.set_file_dialog_visible(true);
+            }
+            PanelAction::OpenLocationWindow => {
+                self.open_location_visible = true;
+                self.state.set_open_location_visible(true);
+            }
+            PanelAction::OpenPlaylistLoadDialog => {
+                self.state.set_playlist_load_dialog_visible(true)
+            }
+            PanelAction::OpenPlaylistSaveDialog => {
+                self.state.set_playlist_save_dialog_visible(true)
+            }
+            PanelAction::ShowPlaylistMenu(_) | PanelAction::ShowEqualizerPresets => {}
         }
     }
 
