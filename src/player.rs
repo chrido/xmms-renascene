@@ -35,6 +35,7 @@ pub struct GStreamerBackend {
     audio_sink_bin: gst::Bin,
     audio_chain: Vec<String>,
     panorama: gst::Element,
+    preamp: gst::Element,
     equalizer: gst::Element,
     requested_state: Cell<PlayerState>,
     requested_uri: RefCell<Option<String>>,
@@ -44,6 +45,7 @@ struct AudioSinkBin {
     bin: gst::Bin,
     chain: Vec<String>,
     panorama: gst::Element,
+    preamp: gst::Element,
     equalizer: gst::Element,
 }
 
@@ -125,6 +127,7 @@ impl GStreamerBackend {
             audio_sink_bin: audio_sink.bin,
             audio_chain: audio_sink.chain,
             panorama: audio_sink.panorama,
+            preamp: audio_sink.preamp,
             equalizer: audio_sink.equalizer,
             requested_state: Cell::new(PlayerState::Stopped),
             requested_uri: RefCell::new(None),
@@ -267,13 +270,34 @@ impl GStreamerBackend {
         Ok(self.equalizer.property::<f64>(property))
     }
 
+    pub fn set_equalizer_preamp_db(&self, db: f64) {
+        self.preamp.set_property(
+            "amplification",
+            db_to_amplification(db.clamp(-20.0, 20.0)) as f32,
+        );
+    }
+
+    pub fn equalizer_preamp_db(&self) -> f64 {
+        amplification_to_db(f64::from(self.preamp.property::<f32>("amplification")))
+    }
+
     pub fn set_equalizer_bands_db(&self, bands: [f64; EQUALIZER_BANDS]) {
         for (index, db) in bands.into_iter().enumerate() {
             let _ = self.set_equalizer_band_db(index, db);
         }
     }
 
-    pub fn set_equalizer_from_positions(&self, active: bool, positions: [i32; EQUALIZER_BANDS]) {
+    pub fn set_equalizer_from_positions(
+        &self,
+        active: bool,
+        preamp_position: i32,
+        positions: [i32; EQUALIZER_BANDS],
+    ) {
+        self.set_equalizer_preamp_db(if active {
+            equalizer_position_to_db(preamp_position)
+        } else {
+            0.0
+        });
         let bands = if active {
             positions.map(equalizer_position_to_db)
         } else {
@@ -292,6 +316,7 @@ impl GStreamerBackend {
         self.audio_sink_bin = audio_sink.bin;
         self.audio_chain = audio_sink.chain;
         self.panorama = audio_sink.panorama;
+        self.preamp = audio_sink.preamp;
         self.equalizer = audio_sink.equalizer;
         Ok(())
     }
@@ -593,6 +618,7 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
     let bin = gst::Bin::builder().name("audio-sink-bin").build();
     let convert = make_element("audioconvert", "convert")?;
     let panorama = make_element("audiopanorama", "panorama")?;
+    let preamp = make_element("audioamplify", "preamp")?;
     let equalizer = make_element("equalizer-10bands", "eq")?;
     let spectrum = make_element("spectrum", "spectrum")?;
     let sink = make_element(sink_factory, "sink")?;
@@ -616,6 +642,8 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
         .map_err(|err| format!("failed to add audioconvert to bin: {err}"))?;
     bin.add(&panorama)
         .map_err(|err| format!("failed to add audiopanorama to bin: {err}"))?;
+    bin.add(&preamp)
+        .map_err(|err| format!("failed to add audioamplify to bin: {err}"))?;
     bin.add(&equalizer)
         .map_err(|err| format!("failed to add equalizer-10bands to bin: {err}"))?;
     bin.add(&spectrum)
@@ -626,6 +654,7 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
     let chain = vec![
         convert.clone(),
         panorama.clone(),
+        preamp.clone(),
         equalizer.clone(),
         spectrum.clone(),
         sink.clone(),
@@ -657,6 +686,7 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
         bin,
         chain: names,
         panorama,
+        preamp,
         equalizer,
     })
 }
@@ -686,6 +716,14 @@ fn equalizer_band_property(band: usize) -> Result<&'static str, String> {
 
 pub fn equalizer_position_to_db(position: i32) -> f64 {
     (50 - position.clamp(0, 100)) as f64 * 20.0 / 50.0
+}
+
+fn db_to_amplification(db: f64) -> f64 {
+    10.0_f64.powf(db / 20.0)
+}
+
+fn amplification_to_db(amplification: f64) -> f64 {
+    20.0 * amplification.max(f64::MIN_POSITIVE).log10()
 }
 
 fn event_from_message(
@@ -904,6 +942,7 @@ mod tests {
             &[
                 "audioconvert".to_string(),
                 "audiopanorama".to_string(),
+                "audioamplify".to_string(),
                 "equalizer-10bands".to_string(),
                 "spectrum".to_string(),
                 "autoaudiosink".to_string(),
@@ -924,6 +963,7 @@ mod tests {
             &[
                 "audioconvert".to_string(),
                 "audiopanorama".to_string(),
+                "audioamplify".to_string(),
                 "equalizer-10bands".to_string(),
                 "spectrum".to_string(),
                 "fakesink".to_string(),
@@ -1011,6 +1051,9 @@ mod tests {
         let _guard = gst_test_guard();
         let backend = GStreamerBackend::new().expect("GStreamer backend should construct");
 
+        backend.set_equalizer_preamp_db(6.0);
+        assert!((backend.equalizer_preamp_db() - 6.0).abs() < 0.001);
+
         backend
             .set_equalizer_band_db(0, 24.0)
             .expect("band 0 should be set");
@@ -1039,13 +1082,15 @@ mod tests {
         assert_eq!(equalizer_position_to_db(50), 0.0);
         assert_eq!(equalizer_position_to_db(100), -20.0);
 
-        backend.set_equalizer_from_positions(true, [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        backend.set_equalizer_from_positions(true, 25, [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+        assert!((backend.equalizer_preamp_db() - 10.0).abs() < 0.001);
         assert_eq!(backend.equalizer_band_db(0).unwrap(), 12.0);
         assert_eq!(backend.equalizer_band_db(2).unwrap(), 12.0);
         assert_eq!(backend.equalizer_band_db(5).unwrap(), 0.0);
         assert_eq!(backend.equalizer_band_db(9).unwrap(), -16.0);
 
-        backend.set_equalizer_from_positions(false, [0; 10]);
+        backend.set_equalizer_from_positions(false, 0, [0; 10]);
+        assert!((backend.equalizer_preamp_db() - 0.0).abs() < 0.001);
         for band in 0..10 {
             assert_eq!(backend.equalizer_band_db(band).unwrap(), 0.0);
         }

@@ -1,6 +1,7 @@
 pub mod app_state;
 pub mod config;
 pub mod e2e;
+pub mod equalizer;
 pub mod mpris;
 pub mod player;
 pub mod playlist;
