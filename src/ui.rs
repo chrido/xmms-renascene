@@ -8257,7 +8257,7 @@ fn apply_ui_action(
             );
         }
         UiAction::ShowMenu => {
-            show_main_menu(menu_popover, drawing_area);
+            show_main_menu(menu_popover, drawing_area, &state.borrow());
         }
         UiAction::OpenFileDialog => {
             state.borrow_mut().set_file_dialog_visible(true);
@@ -8444,17 +8444,38 @@ fn files_from_list_model(files: gtk::gio::ListModel) -> Vec<String> {
         .collect()
 }
 
-fn show_main_menu(menu_popover: &gtk::Popover, drawing_area: &gtk::DrawingArea) {
-    let scale_x = drawing_area.allocated_width().max(1) as f64 / f64::from(MAIN_WINDOW_WIDTH);
-    let scale_y = drawing_area.allocated_height().max(1) as f64 / f64::from(MAIN_WINDOW_HEIGHT);
-    let rect = gtk::gdk::Rectangle::new(
-        (6.0 * scale_x) as i32,
-        (12.0 * scale_y) as i32,
-        (9.0 * scale_x).max(1.0) as i32,
-        (1.0 * scale_y).max(1.0) as i32,
+fn show_main_menu(
+    menu_popover: &gtk::Popover,
+    drawing_area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+) {
+    let (base_width, base_height) = state.docked_panel_size();
+    let rect = main_menu_anchor_rect(
+        drawing_area.allocated_width(),
+        drawing_area.allocated_height(),
+        base_width,
+        base_height,
     );
+    menu_popover.set_position(gtk::PositionType::Bottom);
     menu_popover.set_pointing_to(Some(&rect));
     menu_popover.popup();
+}
+
+fn main_menu_anchor_rect(
+    allocated_width: i32,
+    allocated_height: i32,
+    base_width: i32,
+    base_height: i32,
+) -> gtk::gdk::Rectangle {
+    let scale_x = allocated_width.max(1) as f64 / f64::from(base_width.max(1));
+    let scale_y = allocated_height.max(1) as f64 / f64::from(base_height.max(1));
+    let rect = main_push_button_rect(MainPushButton::Menu, false);
+    gtk::gdk::Rectangle::new(
+        (f64::from(rect.x) * scale_x) as i32,
+        (f64::from(rect.y) * scale_y) as i32,
+        (f64::from(rect.width) * scale_x).max(1.0) as i32,
+        (f64::from(rect.height) * scale_y).max(1.0) as i32,
+    )
 }
 
 fn shortcut_matches(key: gtk::gdk::Key, state: gtk::gdk::ModifierType, accelerator: &str) -> bool {
@@ -8698,6 +8719,34 @@ static char * main_xpm[] = {
         assert!(import_skin_to_user_dir(&unsupported, &user_skins).is_err());
 
         fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn main_menu_anchor_uses_full_menu_button_rect() {
+        let rect = main_menu_anchor_rect(
+            MAIN_WINDOW_WIDTH * 2,
+            MAIN_WINDOW_HEIGHT * 2,
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT,
+        );
+
+        assert_eq!(rect.x(), 12);
+        assert_eq!(rect.y(), 6);
+        assert_eq!(rect.width(), 18);
+        assert_eq!(rect.height(), 18);
+
+        let docked_height = MAIN_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT;
+        let rect = main_menu_anchor_rect(
+            MAIN_WINDOW_WIDTH * 2,
+            docked_height * 2,
+            MAIN_WINDOW_WIDTH,
+            docked_height,
+        );
+
+        assert_eq!(rect.x(), 12);
+        assert_eq!(rect.y(), 6);
+        assert_eq!(rect.width(), 18);
+        assert_eq!(rect.height(), 18);
     }
 
     #[test]
