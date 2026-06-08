@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -115,6 +116,7 @@ pub struct PreviewOptions {
     pub playlist_size: Option<(i32, i32)>,
     pub reset: bool,
     pub skin_path: Option<String>,
+    pub screenshot_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +131,21 @@ pub fn run_default_skin_preview(options: PreviewOptions) {
 
 pub fn run_default_skin_preview_smoke(options: PreviewOptions) {
     run_preview_application(PreviewMode::Smoke, options);
+}
+
+pub fn write_player_screenshot(options: PreviewOptions, path: &Path) -> Result<(), String> {
+    let state = preview_state_from_options(options)?;
+    let docked_state = state.docked_panel_state();
+    let (width, height) = docked_panel_size(docked_state);
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .map_err(|err| format!("failed to create screenshot surface: {err}"))?;
+    let cr = cairo::Context::new(&surface)
+        .map_err(|err| format!("failed to create screenshot context: {err}"))?;
+    render_docked_ui_state(&cr, state.active_skin(), &state)
+        .map_err(|err| format!("failed to render screenshot: {err}"))?;
+    drop(cr);
+    write_surface_png(&mut surface, path)
+        .map_err(|err| format!("failed to write screenshot '{}': {err}", path.display()))
 }
 
 enum PreviewMode {
@@ -181,47 +198,15 @@ fn build_preview_window(
     } else {
         AppState::default()
     };
-    let main_state = Rc::new(RefCell::new(MainWindowUiState::from_app_state(app_state)));
-    {
-        let mut state = main_state.borrow_mut();
-        if let Some(config_dir) = config_path.parent() {
-            state.set_equalizer_preset_dir(config_dir.to_path_buf());
-        }
-        match GStreamerBackend::new() {
-            Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
-            Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
-        }
-        if let Some((width, height)) = options.playlist_size {
-            state.set_playlist_size(width, height);
-        }
-        if options.show_playlist || options.playlist_size.is_some() {
-            state.app_state.config.playlist_visible = true;
-        }
-        if options.show_equalizer {
-            state.app_state.config.equalizer_visible = true;
-        }
-        if let Some(shaded) = options.main_shaded {
-            state.shaded = shaded;
-        }
-        if let Some(shaded) = options.playlist_shaded {
-            state.playlist_shaded = shaded;
-        }
-        if let Some(shaded) = options.equalizer_shaded {
-            state.equalizer_shaded = shaded;
-        }
-        if let Some(detached) = options.playlist_detached {
-            state.app_state.config.playlist_detached = detached;
-        }
-        if let Some(detached) = options.equalizer_detached {
-            state.app_state.config.equalizer_detached = detached;
-        }
-        if let Some(skin_path) = options.skin_path {
-            state.app_state.config.skin = Some(skin_path.clone());
-            state
-                .reload_skin()
-                .map_err(|err| format!("failed to load skin '{}': {err}", skin_path))?;
-        }
+    let mut state = preview_state_from_app_state(app_state, options)?;
+    if let Some(config_dir) = config_path.parent() {
+        state.set_equalizer_preset_dir(config_dir.to_path_buf());
     }
+    match GStreamerBackend::new() {
+        Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
+        Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
+    }
+    let main_state = Rc::new(RefCell::new(state));
     install_xmms_menu_css(main_state.borrow().active_skin());
 
     let window = gtk::ApplicationWindow::builder()
@@ -614,6 +599,85 @@ fn load_skin_from_config(config: &Config) -> io::Result<DefaultSkin> {
         Some(path) => DefaultSkin::load_from_path(Path::new(path)),
         None => DefaultSkin::load_bundled(),
     }
+}
+
+fn preview_state_from_options(options: PreviewOptions) -> Result<MainWindowUiState, String> {
+    preview_state_from_app_state(AppState::default(), options)
+}
+
+fn preview_state_from_app_state(
+    mut app_state: AppState,
+    options: PreviewOptions,
+) -> Result<MainWindowUiState, String> {
+    if options.reset {
+        app_state = AppState::default();
+    }
+    if options.show_playlist || options.playlist_size.is_some() {
+        app_state.config.playlist_visible = true;
+    }
+    if options.show_equalizer {
+        app_state.config.equalizer_visible = true;
+    }
+    if let Some(shaded) = options.main_shaded {
+        app_state.config.main_shaded = shaded;
+    }
+    if let Some(shaded) = options.playlist_shaded {
+        app_state.config.playlist_shaded = shaded;
+    }
+    if let Some(shaded) = options.equalizer_shaded {
+        app_state.config.equalizer_shaded = shaded;
+    }
+    if let Some(detached) = options.playlist_detached {
+        app_state.config.playlist_detached = detached;
+    }
+    if let Some(detached) = options.equalizer_detached {
+        app_state.config.equalizer_detached = detached;
+    }
+    if let Some(skin_path) = options.skin_path.as_ref() {
+        app_state.config.skin = Some(skin_path.clone());
+    }
+
+    let mut state = MainWindowUiState::from_app_state(app_state);
+    if let Some((width, height)) = options.playlist_size {
+        state.set_playlist_size(width, height);
+    }
+    if let Some(skin_path) = options.skin_path.as_ref() {
+        state
+            .load_configured_skin()
+            .map_err(|err| format!("failed to load skin '{}': {err}", skin_path))?;
+    }
+    Ok(state)
+}
+
+fn write_surface_png(surface: &mut cairo::ImageSurface, path: &Path) -> io::Result<()> {
+    surface.flush();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let width = surface.width() as u32;
+    let height = surface.height() as u32;
+    let stride = surface.stride() as usize;
+    let data = surface
+        .data()
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+
+    for y in 0..height as usize {
+        let row = &data[y * stride..][..width as usize * 4];
+        for pixel in row.chunks_exact(4) {
+            let argb = u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+            rgba.push(((argb >> 16) & 0xff) as u8);
+            rgba.push(((argb >> 8) & 0xff) as u8);
+            rgba.push((argb & 0xff) as u8);
+            rgba.push(((argb >> 24) & 0xff) as u8);
+        }
+    }
+
+    image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| io::Error::other("invalid screenshot pixel buffer"))?
+        .save(path)
+        .map_err(io::Error::other)
 }
 
 fn style_xmms_popover(popover: &gtk::Popover) {

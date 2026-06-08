@@ -1,3 +1,4 @@
+use image::GenericImageView;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -130,6 +131,63 @@ fn cli_primary_binary_loads_requested_skin_without_gtk_mode() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("xmms-rs: loaded 1 skin pixmaps"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_screenshot_renders_requested_skin_to_png() {
+    let root = unique_temp_dir("xmms-rs-cli-screenshot-skin");
+    fs::create_dir_all(&root).unwrap();
+    let skin = root.join("base-2.9.1.wsz");
+    let screenshot = root.join("player.png");
+    write_one_pixel_wsz(&skin, "#112233");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
+        .args([
+            "--skin",
+            skin.to_str().unwrap(),
+            "--screenshot",
+            screenshot.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let image = image::open(&screenshot).unwrap().to_rgba8();
+    assert_eq!(
+        image.dimensions(),
+        (MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32)
+    );
+    assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0xff]);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cli_screenshot_includes_visible_docked_panels() {
+    let root = unique_temp_dir("xmms-rs-cli-screenshot-panels");
+    let screenshot = root.join("player-panels.png");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
+        .args([
+            "--playlist",
+            "--equalizer",
+            "--screenshot",
+            screenshot.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let image = image::open(&screenshot).unwrap();
+    assert_eq!(
+        image.dimensions(),
+        (
+            MAIN_WINDOW_WIDTH as u32,
+            (MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT) as u32,
+        )
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
