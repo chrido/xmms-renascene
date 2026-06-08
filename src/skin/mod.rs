@@ -265,16 +265,24 @@ impl DefaultSkin {
         }
         let cases = [name, lower.as_str(), upper.as_str(), title.as_str()];
         let exts = [".bmp", ".BMP", ".png", ".PNG", ".xpm", ".XPM"];
+        let mut candidates = Vec::new();
 
         for ext in exts {
             for case in cases {
-                let path = dir.join(format!("{case}{ext}"));
-                if path.exists() {
-                    return Some(path);
-                }
+                candidates.push(format!("{case}{ext}"));
             }
         }
 
+        for candidate in &candidates {
+            if let Some(path) = find_file_in_dir_case_insensitive(dir, candidate) {
+                return Some(path);
+            }
+        }
+        for candidate in &candidates {
+            if let Some(path) = find_file_recursively_case_insensitive(dir, candidate) {
+                return Some(path);
+            }
+        }
         None
     }
 
@@ -504,6 +512,42 @@ fn zip_error(err: zip::result::ZipError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err)
 }
 
+fn find_file_in_dir_case_insensitive(dir: &Path, file: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if file_name.eq_ignore_ascii_case(file) {
+            return Some(entry.path());
+        }
+    }
+    None
+}
+
+fn find_file_recursively_case_insensitive(dir: &Path, file: &str) -> Option<PathBuf> {
+    if let Some(path) = find_file_in_dir_case_insensitive(dir, file) {
+        return Some(path);
+    }
+
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries {
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_dir() {
+            continue;
+        }
+        if let Some(path) = find_file_recursively_case_insensitive(&entry.path(), file) {
+            return Some(path);
+        }
+    }
+    None
+}
+
 fn find_archive_skin_entry<'a>(
     entries: &'a [(String, Vec<u8>)],
     name: &str,
@@ -527,10 +571,9 @@ fn find_archive_skin_entry<'a>(
 }
 
 fn load_vis_colors_from_dir(dir: &Path) -> io::Result<[[u8; 3]; 24]> {
-    let path = dir.join("viscolor.txt");
-    if !path.exists() {
+    let Some(path) = find_file_recursively_case_insensitive(dir, "viscolor.txt") else {
         return Ok(DEFAULT_VIS_COLORS);
-    }
+    };
     let contents = fs::read_to_string(&path)?;
     Ok(parse_vis_colors(&contents))
 }
@@ -551,10 +594,9 @@ fn load_vis_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<[[u
 }
 
 fn load_playlist_colors_from_dir(dir: &Path) -> io::Result<PlaylistColors> {
-    let path = dir.join("pledit.txt");
-    if !path.exists() {
+    let Some(path) = find_file_recursively_case_insensitive(dir, "pledit.txt") else {
         return Ok(DEFAULT_PLAYLIST_COLORS);
-    }
+    };
     let contents = fs::read_to_string(&path)?;
     Ok(parse_playlist_colors(&contents))
 }
@@ -791,6 +833,53 @@ static char * main_xpm[] = {
         assert_eq!(
             skin.get(SkinPixmapKind::Titlebar).unwrap().pixels_argb(),
             bundled.get(SkinPixmapKind::Titlebar).unwrap().pixels_argb()
+        );
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn directory_loader_finds_skin_files_recursively_case_insensitively() {
+        let tmp = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-test-{}-recursive",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let nested = tmp.join("Nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("MAIN.XPM"), ONE_PIXEL_XPM).unwrap();
+        std::fs::write(nested.join("VISCOLOR.TXT"), "7,8,9\n").unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+
+        assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 1);
+        assert_eq!(skin.vis_colors()[0], [7, 8, 9]);
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn directory_loader_prefers_top_level_files_before_nested_files() {
+        let tmp = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-test-{}-recursive-prefer",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let nested = tmp.join("Nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let mut top = image::RgbaImage::new(1, 1);
+        top.put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
+        top.save(tmp.join("main.png")).unwrap();
+        let mut nested_image = image::RgbaImage::new(1, 1);
+        nested_image.put_pixel(0, 0, image::Rgba([4, 5, 6, 255]));
+        nested_image.save(nested.join("main.png")).unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+
+        assert_eq!(
+            skin.get(SkinPixmapKind::Main).unwrap().pixel_argb(0, 0),
+            Some(0xff010203)
         );
 
         std::fs::remove_dir_all(tmp).unwrap();
