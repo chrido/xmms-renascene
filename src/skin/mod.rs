@@ -64,6 +64,7 @@ pub struct DefaultSkin {
     pixmaps: BTreeMap<SkinPixmapKind, XpmImage>,
     vis_colors: [[u8; 3]; 24],
     playlist_colors: PlaylistColors,
+    region_masks: RegionMasks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,38 @@ pub struct PlaylistColors {
     pub current: [u8; 3],
     pub normal_bg: [u8; 3],
     pub selected_bg: [u8; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RegionMasks {
+    pub normal: Option<SkinMask>,
+    pub window_shade: Option<SkinMask>,
+    pub equalizer: Option<SkinMask>,
+    pub equalizer_ws: Option<SkinMask>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkinMask {
+    polygons: Vec<Vec<[i32; 2]>>,
+}
+
+impl SkinMask {
+    pub fn polygons(&self) -> &[Vec<[i32; 2]>] {
+        &self.polygons
+    }
+
+    pub fn scaled_polygons(&self, doublesize: bool) -> Vec<Vec<[i32; 2]>> {
+        let scale = if doublesize { 2 } else { 1 };
+        self.polygons
+            .iter()
+            .map(|polygon| {
+                polygon
+                    .iter()
+                    .map(|point| [point[0] * scale, point[1] * scale])
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 pub const DEFAULT_PLAYLIST_COLORS: PlaylistColors = PlaylistColors {
@@ -180,6 +213,7 @@ impl DefaultSkin {
             pixmaps,
             vis_colors: DEFAULT_VIS_COLORS,
             playlist_colors: DEFAULT_PLAYLIST_COLORS,
+            region_masks: RegionMasks::default(),
         })
     }
 
@@ -209,6 +243,7 @@ impl DefaultSkin {
         apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
         skin.vis_colors = load_vis_colors_from_dir(dir)?;
         skin.playlist_colors = load_playlist_colors_from_dir(dir)?;
+        skin.region_masks = load_region_masks_from_dir(dir)?;
 
         Ok(skin)
     }
@@ -252,6 +287,7 @@ impl DefaultSkin {
         apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
         skin.vis_colors = load_vis_colors_from_archive(&entries)?;
         skin.playlist_colors = load_playlist_colors_from_archive(&entries)?;
+        skin.region_masks = load_region_masks_from_archive(&entries)?;
 
         Ok(skin)
     }
@@ -342,6 +378,10 @@ impl DefaultSkin {
 
     pub fn playlist_colors(&self) -> PlaylistColors {
         self.playlist_colors
+    }
+
+    pub fn region_masks(&self) -> &RegionMasks {
+        &self.region_masks
     }
 }
 
@@ -616,6 +656,61 @@ fn load_playlist_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Resul
     Ok(parse_playlist_colors(contents))
 }
 
+fn load_region_masks_from_dir(dir: &Path) -> io::Result<RegionMasks> {
+    let Some(path) = find_file_recursively_case_insensitive(dir, "region.txt") else {
+        return Ok(RegionMasks::default());
+    };
+    let contents = fs::read_to_string(&path)?;
+    Ok(parse_region_masks(&contents))
+}
+
+fn load_region_masks_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<RegionMasks> {
+    let Some((name, contents)) = entries.iter().find(|(name, _)| {
+        Path::new(name)
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .is_some_and(|file_name| file_name.eq_ignore_ascii_case("region.txt"))
+    }) else {
+        return Ok(RegionMasks::default());
+    };
+
+    let contents = std::str::from_utf8(contents)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {err}")))?;
+    Ok(parse_region_masks(contents))
+}
+
+fn parse_region_masks(contents: &str) -> RegionMasks {
+    RegionMasks {
+        normal: parse_region_mask_section(contents, "Normal"),
+        window_shade: parse_region_mask_section(contents, "WindowShade"),
+        equalizer: parse_region_mask_section(contents, "Equalizer"),
+        equalizer_ws: parse_region_mask_section(contents, "EqualizerWS"),
+    }
+}
+
+fn parse_region_mask_section(contents: &str, section: &str) -> Option<SkinMask> {
+    let nums = parse_ini_ints(contents, section, "NumPoints")?;
+    let points = parse_ini_ints(contents, section, "PointList")?;
+    let mut polygons = Vec::new();
+    let mut offset = 0;
+
+    for count in nums {
+        let count = usize::try_from(count).ok()?;
+        let point_values = count.checked_mul(2)?;
+        if points.len().saturating_sub(offset) < point_values {
+            continue;
+        }
+        let mut polygon = Vec::with_capacity(count);
+        for index in 0..count {
+            polygon.push([points[offset + index * 2], points[offset + index * 2 + 1]]);
+        }
+        offset += point_values;
+        polygons.push(polygon);
+    }
+
+    (!polygons.is_empty()).then_some(SkinMask { polygons })
+}
+
 fn parse_playlist_colors(contents: &str) -> PlaylistColors {
     let mut colors = DEFAULT_PLAYLIST_COLORS;
 
@@ -653,6 +748,63 @@ fn parse_playlist_colors(contents: &str) -> PlaylistColors {
     }
 
     colors
+}
+
+fn parse_ini_ints(contents: &str, section: &str, key: &str) -> Option<Vec<i32>> {
+    let value = read_ini_value(contents, section, key)?;
+    Some(parse_int_list(&value))
+}
+
+fn read_ini_value(contents: &str, section: &str, key: &str) -> Option<String> {
+    let mut in_section = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(section_name) = line.strip_prefix('[').and_then(|line| line.split_once(']')) {
+            in_section = section_name.0.eq_ignore_ascii_case(section);
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some((line_key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if line_key.trim().eq_ignore_ascii_case(key) {
+            let value = value
+                .split_once(';')
+                .map_or(value, |(value, _)| value)
+                .trim();
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn parse_int_list(value: &str) -> Vec<i32> {
+    let mut values = Vec::new();
+    let mut start = None;
+    for (index, ch) in value.char_indices() {
+        if start.is_none() && (ch == '-' || ch == '+' || ch.is_ascii_digit()) {
+            start = Some(index);
+            continue;
+        }
+        if start.is_some() && !ch.is_ascii_digit() && ch != '-' && ch != '+' {
+            if let Some(begin) = start.take() {
+                if let Ok(value) = value[begin..index].parse() {
+                    values.push(value);
+                }
+            }
+        }
+    }
+    if let Some(begin) = start {
+        if let Ok(value) = value[begin..].parse() {
+            values.push(value);
+        }
+    }
+    values
 }
 
 fn parse_hex_rgb(value: &str) -> Option<[u8; 3]> {
@@ -920,6 +1072,75 @@ static char * main_xpm[] = {
         assert_eq!(
             skin.playlist_colors().selected_bg,
             DEFAULT_PLAYLIST_COLORS.selected_bg
+        );
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn parses_region_masks_for_all_original_sections() {
+        let masks = parse_region_masks(
+            r#"
+            [Normal]
+            NumPoints=3
+            PointList=0,0, 10,0, 10,10
+            [WindowShade]
+            NumPoints=2
+            PointList=1,2,3,4
+            [Equalizer]
+            NumPoints=4
+            PointList=0,0,5,0,5,5,0,5
+            [EqualizerWS]
+            NumPoints=2
+            PointList=6,7,8,9
+            "#,
+        );
+
+        assert_eq!(
+            masks.normal.unwrap().polygons(),
+            &[vec![[0, 0], [10, 0], [10, 10]]]
+        );
+        assert_eq!(
+            masks.window_shade.unwrap().scaled_polygons(true),
+            vec![vec![[2, 4], [6, 8]]]
+        );
+        assert!(masks.equalizer.is_some());
+        assert!(masks.equalizer_ws.is_some());
+    }
+
+    #[test]
+    fn region_masks_ignore_missing_and_malformed_sections() {
+        let masks = parse_region_masks(
+            r#"
+            [Normal]
+            NumPoints=3
+            PointList=1,2
+            [Equalizer]
+            PointList=0,0,1,1
+            "#,
+        );
+
+        assert_eq!(masks, RegionMasks::default());
+    }
+
+    #[test]
+    fn directory_loader_accepts_nested_region_masks() {
+        let tmp =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-region", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let nested = tmp.join("Nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(
+            nested.join("REGION.TXT"),
+            "[Normal]\nNumPoints=2\nPointList=1,2,3,4\n",
+        )
+        .unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+
+        assert_eq!(
+            skin.region_masks().normal.as_ref().unwrap().polygons(),
+            &[vec![[1, 2], [3, 4]]]
         );
 
         std::fs::remove_dir_all(tmp).unwrap();
