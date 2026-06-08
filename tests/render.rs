@@ -2,11 +2,12 @@ use std::path::PathBuf;
 
 use cairo::{Context, Format, ImageSurface};
 use xmms_renascene::render::{
-    render_equalizer_state, render_main_player_reset, render_playlist_frame, render_playlist_rows,
-    render_visualization, surface_from_xpm, EqualizerRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    render_equalizer_state, render_main_player_reset, render_main_player_state,
+    render_playlist_frame, render_playlist_rows, render_visualization, surface_from_xpm,
+    EqualizerRenderState, MainWindowRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
+    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH,
 };
 use xmms_renascene::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
 use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
@@ -52,6 +53,84 @@ fn renders_reset_state_widgets_over_main_skin() {
         .count();
 
     assert!(changed_pixels > 1_000);
+}
+
+#[test]
+fn main_volume_slider_knob_is_vertically_centered_like_original() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_main_player_state(
+        &cr,
+        &skin,
+        &MainWindowRenderState {
+            volume_position: 0,
+            ..MainWindowRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let volume = skin.get(SkinPixmapKind::Volume).unwrap();
+    let (dx, dy, expected) = (0..14_usize)
+        .flat_map(|y| (0..14_usize).map(move |x| (x, y)))
+        .find_map(|(x, y)| {
+            volume
+                .pixel_argb(15 + x, 422 + y)
+                .filter(|pixel| *pixel != 0)
+                .map(|pixel| (x, y, pixel))
+        })
+        .expect("default volume skin should contain visible slider knob pixels");
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let centered_y = 57 + 1;
+    let offset = (centered_y as usize + dy) * stride + (107 + dx) * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        EQUALIZER_WINDOW_WIDTH,
+        EQUALIZER_WINDOW_HEIGHT,
+    )
+    .unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_equalizer_state(
+        &cr,
+        &skin,
+        &EqualizerRenderState {
+            preamp_position: 0,
+            ..EqualizerRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let eqmain = skin.get(SkinPixmapKind::EqMain).unwrap();
+    let (dx, dy, expected) = (0..11_usize)
+        .flat_map(|y| (0..11_usize).map(move |x| (x, y)))
+        .find_map(|(x, y)| {
+            eqmain
+                .pixel_argb(x, 164 + y)
+                .filter(|pixel| *pixel != 0)
+                .map(|pixel| (x, y, pixel))
+        })
+        .expect("default eqmain skin should contain visible equalizer slider knob pixels");
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let centered_x = 21 + 1;
+    let offset = (38 + 50 + dy) * stride + (centered_x as usize + dx) * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual, expected);
 }
 
 #[test]
