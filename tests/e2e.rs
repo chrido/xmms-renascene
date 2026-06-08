@@ -130,7 +130,7 @@ fn cli_primary_binary_loads_requested_skin_without_gtk_mode() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("xmms-rs: loaded 1 skin pixmaps"));
+    assert!(stdout.contains("xmms-rs: loaded 14 skin pixmaps"));
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -138,10 +138,9 @@ fn cli_primary_binary_loads_requested_skin_without_gtk_mode() {
 #[test]
 fn cli_screenshot_renders_requested_skin_to_png() {
     let root = unique_temp_dir("xmms-rs-cli-screenshot-skin");
-    fs::create_dir_all(&root).unwrap();
-    let skin = root.join("base-2.9.1.wsz");
+    let skin = root.join("base-2.9.1");
     let screenshot = root.join("player.png");
-    write_one_pixel_wsz(&skin, "#112233");
+    write_solid_main_png_skin(&skin, [0x11, 0x22, 0x33]);
 
     let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
         .args([
@@ -159,7 +158,10 @@ fn cli_screenshot_renders_requested_skin_to_png() {
         image.dimensions(),
         (MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32)
     );
-    assert_eq!(image.get_pixel(0, 0).0, [0x11, 0x22, 0x33, 0xff]);
+    assert_eq!(
+        image.get_pixel(0, (MAIN_WINDOW_HEIGHT - 1) as u32).0,
+        [0x11, 0x22, 0x33, 0xff]
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1681,6 +1683,15 @@ fn write_one_pixel_wsz(path: &Path, color: &str) {
     archive.start_file("base-2.9.1/main.xpm", options).unwrap();
     archive.write_all(one_pixel_xpm(color).as_bytes()).unwrap();
     archive.finish().unwrap();
+}
+
+fn write_solid_main_png_skin(dir: &Path, color: [u8; 3]) {
+    fs::create_dir_all(dir).unwrap();
+    let mut image = image::RgbaImage::new(MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32);
+    for pixel in image.pixels_mut() {
+        *pixel = image::Rgba([color[0], color[1], color[2], 0xff]);
+    }
+    image.save(dir.join("main.png")).unwrap();
 }
 
 fn file_uri(path: &Path) -> String {

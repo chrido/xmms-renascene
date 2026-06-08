@@ -2,7 +2,7 @@ pub mod layout;
 pub mod widget;
 pub mod xpm;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::fs::File;
 use std::io::{self, Read};
@@ -184,13 +184,10 @@ impl DefaultSkin {
     }
 
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
-        let mut pixmaps = BTreeMap::new();
+        let mut skin = Self::load_bundled()?;
+        let mut loaded = BTreeSet::new();
 
         for kind in SkinPixmapKind::ALL {
-            if kind == SkinPixmapKind::Balance {
-                continue;
-            }
-
             let mut numbers_fallback = false;
             let mut path = Self::find_skin_file(dir, kind.info().file_stem);
             if path.is_none() && kind == SkinPixmapKind::Numbers {
@@ -205,18 +202,15 @@ impl DefaultSkin {
             if numbers_fallback {
                 image = expand_numbers_fallback(image);
             }
-            pixmaps.insert(kind, image);
+            skin.pixmaps.insert(kind, image);
+            loaded.insert(kind);
         }
 
-        apply_balance_fallback(&mut pixmaps);
-        let vis_colors = load_vis_colors_from_dir(dir)?;
-        let playlist_colors = load_playlist_colors_from_dir(dir)?;
+        apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
+        skin.vis_colors = load_vis_colors_from_dir(dir)?;
+        skin.playlist_colors = load_playlist_colors_from_dir(dir)?;
 
-        Ok(Self {
-            pixmaps,
-            vis_colors,
-            playlist_colors,
-        })
+        Ok(skin)
     }
 
     pub fn load_from_path(path: &Path) -> io::Result<Self> {
@@ -229,13 +223,10 @@ impl DefaultSkin {
 
     fn load_from_archive(path: &Path) -> io::Result<Self> {
         let entries = archive_entries(path)?;
-        let mut pixmaps = BTreeMap::new();
+        let mut skin = Self::load_bundled()?;
+        let mut loaded = BTreeSet::new();
 
         for kind in SkinPixmapKind::ALL {
-            if kind == SkinPixmapKind::Balance {
-                continue;
-            }
-
             let mut numbers_fallback = false;
             let mut entry = find_archive_skin_entry(&entries, kind.info().file_stem);
             if entry.is_none() && kind == SkinPixmapKind::Numbers {
@@ -254,18 +245,15 @@ impl DefaultSkin {
             if numbers_fallback {
                 image = expand_numbers_fallback(image);
             }
-            pixmaps.insert(kind, image);
+            skin.pixmaps.insert(kind, image);
+            loaded.insert(kind);
         }
 
-        apply_balance_fallback(&mut pixmaps);
-        let vis_colors = load_vis_colors_from_archive(&entries)?;
-        let playlist_colors = load_playlist_colors_from_archive(&entries)?;
+        apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
+        skin.vis_colors = load_vis_colors_from_archive(&entries)?;
+        skin.playlist_colors = load_playlist_colors_from_archive(&entries)?;
 
-        Ok(Self {
-            pixmaps,
-            vis_colors,
-            playlist_colors,
-        })
+        Ok(skin)
     }
 
     fn find_skin_file(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -698,6 +686,17 @@ fn apply_balance_fallback(pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>) {
     }
 }
 
+fn apply_loaded_balance_fallback(
+    pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>,
+    loaded: &BTreeSet<SkinPixmapKind>,
+) {
+    if !loaded.contains(&SkinPixmapKind::Balance) {
+        if let Some(volume) = pixmaps.get(&SkinPixmapKind::Volume).cloned() {
+            pixmaps.insert(SkinPixmapKind::Balance, volume);
+        }
+    }
+}
+
 fn expand_numbers_fallback(image: XpmImage) -> XpmImage {
     if image.width() < 99 || image.height() < 13 {
         return image;
@@ -772,6 +771,27 @@ static char * main_xpm[] = {
         assert_eq!(main.width(), 1);
         assert_eq!(main.height(), 1);
         assert_eq!(main.pixel_argb(0, 0), Some(0));
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn directory_loader_preserves_default_pixmaps_for_partial_skins() {
+        let tmp =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-partial", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("main.xpm"), ONE_PIXEL_XPM).unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        let bundled = DefaultSkin::load_bundled().unwrap();
+
+        assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
+        assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 1);
+        assert_eq!(
+            skin.get(SkinPixmapKind::Titlebar).unwrap().pixels_argb(),
+            bundled.get(SkinPixmapKind::Titlebar).unwrap().pixels_argb()
+        );
 
         std::fs::remove_dir_all(tmp).unwrap();
     }
@@ -882,6 +902,35 @@ static char * main_xpm[] = {
         assert_eq!(main.height(), 1);
         assert_eq!(skin.vis_colors()[0], [4, 5, 6]);
         assert_eq!(skin.playlist_colors().normal, [7, 8, 9]);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn archive_loader_preserves_default_pixmaps_for_partial_skins() {
+        let path = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-test-{}-partial.wsz",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let file = File::create(&path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        archive.start_file("Example/Main.xpm", options).unwrap();
+        archive.write_all(ONE_PIXEL_XPM.as_bytes()).unwrap();
+        archive.finish().unwrap();
+
+        let skin = DefaultSkin::load_from_path(&path).unwrap();
+        let bundled = DefaultSkin::load_bundled().unwrap();
+
+        assert_eq!(skin.loaded_pixmap_count(), SkinPixmapKind::ALL.len());
+        assert_eq!(skin.get(SkinPixmapKind::Main).unwrap().width(), 1);
+        assert_eq!(
+            skin.get(SkinPixmapKind::EqMain).unwrap().pixels_argb(),
+            bundled.get(SkinPixmapKind::EqMain).unwrap().pixels_argb()
+        );
 
         std::fs::remove_file(path).unwrap();
     }
