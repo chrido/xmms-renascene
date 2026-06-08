@@ -21,15 +21,20 @@ fn main() {
         return;
     }
 
-    match DefaultSkin::load_bundled() {
+    let skin = match preview_options.skin_path.as_deref() {
+        Some(path) => DefaultSkin::load_from_path(std::path::Path::new(path)),
+        None => DefaultSkin::load_bundled(),
+    };
+
+    match skin {
         Ok(skin) => {
             println!(
-                "xmms-rs: loaded {} bundled default skin pixmaps",
+                "xmms-rs: loaded {} skin pixmaps",
                 skin.loaded_pixmap_count(),
             );
         }
         Err(err) => {
-            eprintln!("xmms-rs: failed to load default skin: {err}");
+            eprintln!("xmms-rs: failed to load skin: {err}");
             std::process::exit(1);
         }
     }

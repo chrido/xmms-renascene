@@ -50,7 +50,7 @@ use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
     VisScopeMode, VisVuMode, Visualization, WidgetId,
 };
-use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry};
+use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry, SkinPixmapKind};
 use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
@@ -174,9 +174,6 @@ fn build_preview_window(
     options: PreviewOptions,
     persist_session: bool,
 ) -> Result<(), String> {
-    let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
-    let skin = Rc::new(skin);
-    install_xmms_menu_css(&skin);
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     let app_state = if persist_session {
         load_saved_state(&config_path, &playlist_path, options.reset)
@@ -220,8 +217,12 @@ fn build_preview_window(
         }
         if let Some(skin_path) = options.skin_path {
             state.app_state.config.skin = Some(skin_path.clone());
+            state
+                .reload_skin()
+                .map_err(|err| format!("failed to load skin '{}': {err}", skin_path))?;
         }
     }
+    install_xmms_menu_css(main_state.borrow().active_skin());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -264,13 +265,7 @@ fn build_preview_window(
         .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let panel_windows = Rc::new(PanelWindows::new(
-        app,
-        &skin,
-        &main_state,
-        &drawing_area,
-        &window,
-    ));
+    let panel_windows = Rc::new(PanelWindows::new(app, &main_state, &drawing_area, &window));
     let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
     resize_main_window(&window, &drawing_area, &main_state.borrow());
@@ -295,7 +290,6 @@ fn build_preview_window(
     ));
 
     {
-        let skin = Rc::clone(&skin);
         let main_state = Rc::clone(&main_state);
         drawing_area.set_draw_func(move |_area, cr, width, height| {
             let state = main_state.borrow();
@@ -305,7 +299,7 @@ fn build_preview_window(
                 width as f64 / base_width as f64,
                 height as f64 / base_height as f64,
             );
-            if let Err(err) = render_docked_ui_state(cr, &skin, &state) {
+            if let Err(err) = render_docked_ui_state(cr, state.active_skin(), &state) {
                 eprintln!("xmms-rs: failed to render main-window preview: {err}");
             }
         });
@@ -613,6 +607,13 @@ fn xmms_menu_css(skin: &DefaultSkin) -> String {
 
 fn css_rgb(color: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+}
+
+fn load_skin_from_config(config: &Config) -> io::Result<DefaultSkin> {
+    match config.skin.as_deref() {
+        Some(path) => DefaultSkin::load_from_path(Path::new(path)),
+        None => DefaultSkin::load_bundled(),
+    }
 }
 
 fn style_xmms_popover(popover: &gtk::Popover) {
@@ -1193,18 +1194,17 @@ struct PanelWindows {
 impl PanelWindows {
     fn new(
         app: &gtk::Application,
-        skin: &Rc<DefaultSkin>,
         main_state: &Rc<RefCell<MainWindowUiState>>,
         main_area: &gtk::DrawingArea,
         parent_window: &gtk::ApplicationWindow,
     ) -> Self {
-        let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
+        let (equalizer, equalizer_area) = build_equalizer_window(app, main_state, main_area);
         let open_location =
             build_prompt_window(app, parent_window, main_state, PromptKind::OpenLocation);
         let jump_time = build_prompt_window(app, parent_window, main_state, PromptKind::JumpTime);
         let skin_browser = build_skin_browser_window(app, main_state);
         let (playlist, playlist_area) =
-            build_playlist_window(app, skin, main_state, main_area, &open_location);
+            build_playlist_window(app, main_state, main_area, &open_location);
         let preferences = build_preferences_window(
             app,
             main_state,
@@ -1230,7 +1230,6 @@ impl PanelWindows {
 
 fn build_equalizer_window(
     app: &gtk::Application,
-    skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
 ) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
@@ -1247,10 +1246,10 @@ fn build_equalizer_window(
         .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
-        let render_state = state.borrow().equalizer_render_state();
+        let state = state.borrow();
+        let render_state = state.equalizer_render_state();
         let base_height = if render_state.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
@@ -1260,7 +1259,7 @@ fn build_equalizer_window(
             width as f64 / EQUALIZER_WINDOW_WIDTH as f64,
             height as f64 / base_height as f64,
         );
-        if let Err(err) = render_equalizer_state(cr, &skin, &render_state) {
+        if let Err(err) = render_equalizer_state(cr, state.active_skin(), &render_state) {
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
     });
@@ -1282,7 +1281,6 @@ fn build_equalizer_window(
 
 fn build_playlist_window(
     app: &gtk::Application,
-    skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
     open_location_window: &gtk::ApplicationWindow,
@@ -1301,10 +1299,10 @@ fn build_playlist_window(
         .content_height(playlist_height * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
+        let skin = state.active_skin();
         let shaded = state.playlist_shaded;
         let focused = state.playlist_focused || state.playlist_dragging_title;
         let playlist_width = state.playlist_width;
@@ -1320,7 +1318,7 @@ fn build_playlist_window(
         );
         if let Err(err) = render_playlist_frame(
             cr,
-            &skin,
+            skin,
             focused,
             shaded,
             playlist_width,
@@ -1359,7 +1357,7 @@ fn build_playlist_window(
                 width: playlist_width,
                 height: playlist_height,
             };
-            if let Err(err) = render_playlist_rows(cr, &skin, &row_state) {
+            if let Err(err) = render_playlist_rows(cr, skin, &row_state) {
                 eprintln!("xmms-rs: failed to render playlist rows: {err}");
             }
         }
@@ -1374,7 +1372,7 @@ fn build_playlist_window(
                 kind: menu.render_kind(),
                 hover: state.playlist_menu_hover(),
             };
-            if let Err(err) = render_playlist_menu(cr, &skin, render_state) {
+            if let Err(err) = render_playlist_menu(cr, skin, render_state) {
                 eprintln!("xmms-rs: failed to render playlist menu: {err}");
             }
             if let Err(err) = cr.restore() {
@@ -4103,6 +4101,7 @@ pub(crate) struct MainWindowUiState {
     playlist_load_dialog_visible: bool,
     playlist_save_dialog_visible: bool,
     last_playlist_file_info: Option<String>,
+    active_skin: DefaultSkin,
     playlist_options_opened: bool,
     preferences_visible: bool,
     preferences_page: PreferencesPage,
@@ -4167,6 +4166,10 @@ impl MainWindowUiState {
         let main_shaded = app_state.config.main_shaded;
         let equalizer_shaded = app_state.config.equalizer_shaded;
         let playlist_shaded = app_state.config.playlist_shaded;
+        let active_skin = load_skin_from_config(&app_state.config).unwrap_or_else(|err| {
+            eprintln!("xmms-rs: failed to load configured skin: {err}");
+            DefaultSkin::load_bundled().expect("bundled default skin should load")
+        });
         let mut state = Self {
             app_state,
             playback_backend: None,
@@ -4211,6 +4214,7 @@ impl MainWindowUiState {
             playlist_load_dialog_visible: false,
             playlist_save_dialog_visible: false,
             last_playlist_file_info: None,
+            active_skin,
             playlist_options_opened: false,
             preferences_visible: false,
             preferences_page: PreferencesPage::Options,
@@ -4255,6 +4259,15 @@ impl MainWindowUiState {
 
     pub(crate) fn app_state_mut(&mut self) -> &mut AppState {
         &mut self.app_state
+    }
+
+    pub(crate) fn active_skin(&self) -> &DefaultSkin {
+        &self.active_skin
+    }
+
+    fn load_configured_skin(&mut self) -> io::Result<()> {
+        self.active_skin = load_skin_from_config(&self.app_state.config)?;
+        Ok(())
     }
 
     fn set_equalizer_preset_dir(&mut self, dir: PathBuf) {
@@ -5151,28 +5164,47 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn select_skin_browser_index(&mut self, index: usize) -> bool {
+        let previous_skin = self.app_state.config.skin.clone();
+        let previous_index = self.selected_skin_index;
         if index == 0 {
             self.app_state.config.skin = None;
             self.selected_skin_index = 0;
-            self.reload_skin();
-            return true;
+        } else {
+            let Some(entry) = self.skin_browser_entries.get(index - 1) else {
+                return false;
+            };
+            self.app_state.config.skin = Some(entry.path.display().to_string());
+            self.selected_skin_index = index;
         }
 
-        let Some(entry) = self.skin_browser_entries.get(index - 1) else {
+        if let Err(err) = self.reload_skin() {
+            eprintln!("xmms-rs: failed to load selected skin: {err}");
+            self.app_state.config.skin = previous_skin;
+            self.selected_skin_index = previous_index;
             return false;
-        };
-        self.app_state.config.skin = Some(entry.path.display().to_string());
-        self.selected_skin_index = index;
-        self.reload_skin();
+        }
         true
     }
 
-    pub(crate) fn reload_skin(&mut self) {
+    pub(crate) fn reload_skin(&mut self) -> io::Result<()> {
+        self.load_configured_skin()?;
         self.skin_reload_count = self.skin_reload_count.saturating_add(1);
+        Ok(())
     }
 
     pub(crate) fn skin_reload_count(&self) -> u32 {
         self.skin_reload_count
+    }
+
+    pub(crate) fn active_skin_pixel_argb(
+        &self,
+        kind: SkinPixmapKind,
+        x: usize,
+        y: usize,
+    ) -> Option<u32> {
+        self.active_skin
+            .get(kind)
+            .and_then(|image| image.pixel_argb(x, y))
     }
 
     pub(crate) fn toggle_sticky(&mut self) {

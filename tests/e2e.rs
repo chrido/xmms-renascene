@@ -1,4 +1,6 @@
 use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use xmms_renascene::e2e::{
@@ -23,10 +25,10 @@ use xmms_renascene::session::{
     application_launch_flags, apply_session_command, load_saved_state, parse_session_command,
     restore_state_dict, save_fallback_state, save_session_state, save_state_dict, SessionState,
 };
-use xmms_renascene::skin::skin_browser_search_dirs;
 use xmms_renascene::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
+use xmms_renascene::skin::{skin_browser_search_dirs, SkinPixmapKind};
 use xmms_renascene::spotify::{
     auth_code_request_body, authorization_url, code_challenge_for_verifier,
     config_path as spotify_config_path, exchange_code_for_token_with_url, parse_devices_response,
@@ -75,6 +77,11 @@ fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
 
 #[test]
 fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
+    let root = unique_temp_dir("xmms-rs-cli-smoke-skin");
+    fs::create_dir_all(&root).unwrap();
+    let skin = root.join("base-2.9.1.wsz");
+    write_one_pixel_wsz(&skin, "#010203");
+
     let status = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
         .args([
             "--gtk-smoke",
@@ -88,13 +95,14 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
             "--playlist-menu-list",
             "--reset",
             "--skin",
-            "/tmp/example.wsz",
+            skin.to_str().unwrap(),
             "--playlist-size=325x280",
         ])
         .status()
         .unwrap();
 
     assert!(status.success());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -105,7 +113,25 @@ fn cli_primary_binary_loads_bundled_skin_without_gtk_mode() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("xmms-rs: loaded 14 bundled default skin pixmaps"));
+    assert!(stdout.contains("xmms-rs: loaded 14 skin pixmaps"));
+}
+
+#[test]
+fn cli_primary_binary_loads_requested_skin_without_gtk_mode() {
+    let root = unique_temp_dir("xmms-rs-cli-primary-skin");
+    let skin = root.join("base-2.9.1");
+    write_one_pixel_skin(&skin, "#010203");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
+        .args(["--skin", skin.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("xmms-rs: loaded 1 skin pixmaps"));
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1311,11 +1337,12 @@ fn skin_browser_discovers_user_and_system_skins_sorted_like_c() {
 fn skin_browser_selects_default_and_installed_skin_paths() {
     let root = unique_temp_dir("xmms-rs-skin-browser-select");
     let skins = root.join("Skins");
-    fs::create_dir_all(skins.join("Classic")).unwrap();
-    fs::write(skins.join("Packed.tar.gz"), b"archive").unwrap();
+    write_one_pixel_skin(&skins.join("Classic"), "#010203");
+    fs::create_dir_all(&skins).unwrap();
+    write_one_pixel_wsz(&skins.join("Packed.wsz"), "#040506");
 
     let classic = skins.join("Classic");
-    let packed = skins.join("Packed.tar.gz");
+    let packed = skins.join("Packed.wsz");
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
     app.scan_skin_browser_dirs(&[skins.clone()])
@@ -1323,17 +1350,37 @@ fn skin_browser_selects_default_and_installed_skin_paths() {
         .select_skin_browser_index(1)
         .assert_selected_skin_index(1)
         .assert_selected_skin_path(Some(classic.as_path()))
+        .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff010203)
         .assert_skin_reload_count(1)
         .select_skin_browser_index(2)
         .assert_selected_skin_index(2)
         .assert_selected_skin_path(Some(packed.as_path()))
+        .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff040506)
         .assert_skin_reload_count(2)
         .select_skin_browser_index(0)
         .assert_selected_skin_index(0)
         .assert_selected_skin_path(None)
+        .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff000000)
         .assert_skin_reload_count(3)
         .reload_skin()
         .assert_skin_reload_count(4);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn startup_config_loads_directory_and_wsz_skins() {
+    let root = unique_temp_dir("xmms-rs-skin-startup");
+    let dir_skin = root.join("base-2.9.1");
+    let wsz_skin = root.join("base-2.9.1.wsz");
+    write_one_pixel_skin(&dir_skin, "#070809");
+    fs::create_dir_all(&root).unwrap();
+    write_one_pixel_wsz(&wsz_skin, "#0a0b0c");
+
+    UiE2e::start_player(PlayerSettings::default().with_skin(dir_skin.display().to_string()))
+        .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff070809);
+    UiE2e::start_player(PlayerSettings::default().with_skin(wsz_skin.display().to_string()))
+        .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff0a0b0c);
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1550,6 +1597,32 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+}
+
+fn one_pixel_xpm(color: &str) -> String {
+    format!(
+        r#"/* XPM */
+static char * main_xpm[] = {{
+"1 1 1 1",
+". c {color}",
+"."}};
+"#
+    )
+}
+
+fn write_one_pixel_skin(dir: &Path, color: &str) {
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("main.xpm"), one_pixel_xpm(color)).unwrap();
+}
+
+fn write_one_pixel_wsz(path: &Path, color: &str) {
+    let file = File::create(path).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    archive.start_file("base-2.9.1/main.xpm", options).unwrap();
+    archive.write_all(one_pixel_xpm(color).as_bytes()).unwrap();
+    archive.finish().unwrap();
 }
 
 fn file_uri(path: &Path) -> String {
