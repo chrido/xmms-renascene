@@ -18,6 +18,7 @@ pub struct EqualizerRenderState {
     pub active: bool,
     pub automatic: bool,
     pub pressed_control: Option<EqualizerControl>,
+    pub pressed_slider: Option<EqualizerSlider>,
     pub preamp_position: i32,
     pub band_positions: [i32; 10],
     pub volume_position: i32,
@@ -32,6 +33,7 @@ impl Default for EqualizerRenderState {
             active: true,
             automatic: false,
             pressed_control: None,
+            pressed_slider: None,
             preamp_position: 50,
             band_positions: [50; 10],
             volume_position: 94,
@@ -141,17 +143,26 @@ pub fn render_equalizer_state(
         &eqmain,
         equalizer_slider_layout(EqualizerSlider::Preamp),
         state.preamp_position,
+        state.pressed_slider == Some(EqualizerSlider::Preamp),
     )?;
     for (idx, position) in state.band_positions.iter().enumerate() {
+        let slider = EqualizerSlider::Band(idx);
         rendered |= draw_eq_slider(
             cr,
             &eqmain,
-            equalizer_slider_layout(EqualizerSlider::Band(idx)),
+            equalizer_slider_layout(slider),
             *position,
+            state.pressed_slider == Some(slider),
         )?;
     }
 
-    draw_eq_graph(cr, eqmain_image, &state.band_positions)?;
+    draw_eq_graph(
+        cr,
+        &eqmain,
+        eqmain_image,
+        state.preamp_position,
+        &state.band_positions,
+    )?;
 
     Ok(rendered)
 }
@@ -231,59 +242,128 @@ fn draw_eq_slider(
     eqmain: &ImageSurface,
     layout: SliderLayout,
     position: i32,
+    pressed: bool,
 ) -> Result<bool, RenderError> {
-    let knob_y = layout.rect.y
-        + (position.clamp(0, 100) * (layout.rect.height - layout.knob_size.height)) / 100;
-    blit_surface_rect(
+    let slider_position = eq_slider_pixel_position(position);
+    let frame = 27 - ((slider_position * 27) / 50);
+    let (frame_x, frame_y) = if frame < 14 {
+        ((frame * 15) + 13, 164)
+    } else {
+        (((frame - 14) * 15) + 13, 229)
+    };
+    let mut rendered = blit_surface_rect(
+        cr,
+        eqmain,
+        frame_x,
+        frame_y,
+        layout.rect.x,
+        layout.rect.y,
+        layout.rect.width,
+        layout.rect.height,
+    )?;
+    rendered |= blit_surface_rect(
         cr,
         eqmain,
         0,
-        164,
+        if pressed { 176 } else { 164 },
         layout.rect.x,
-        knob_y,
-        layout.knob_size.width,
+        layout.rect.y + slider_position,
+        11,
         layout.knob_size.height,
-    )
+    )?;
+    Ok(rendered)
 }
 
 fn draw_eq_graph(
     cr: &Context,
+    eqmain_surface: &ImageSurface,
     eqmain: &XpmImage,
+    preamp_position: i32,
     band_positions: &[i32; 10],
 ) -> Result<(), RenderError> {
-    let points = eq_graph_points(band_positions);
-    for pair in points.windows(2) {
-        let (x0, y0) = pair[0];
-        let (x1, y1) = pair[1];
-        for y in y0.min(y1)..=y0.max(y1) {
-            set_eq_graph_color(cr, eqmain, y);
-            cr.rectangle(f64::from(x0), f64::from(17 + y), 1.0, 1.0);
+    blit_surface_rect(cr, eqmain_surface, 0, 294, 86, 17, 113, 19)?;
+    blit_surface_rect(
+        cr,
+        eqmain_surface,
+        0,
+        314,
+        86,
+        17 + preamp_line_y(preamp_position),
+        113,
+        1,
+    )?;
+
+    let x_values = [0.0, 11.0, 23.0, 35.0, 47.0, 59.0, 71.0, 83.0, 97.0, 109.0];
+    let y_values = band_positions.map(position_to_db);
+    let y2 = spline_second_derivatives(&x_values, &y_values);
+    let mut previous_y = 0;
+    for x in 0..109 {
+        let mut y =
+            9 - ((eval_spline(&x_values, &y_values, &y2, f64::from(x)) * 9.0) / 20.0) as i32;
+        y = y.clamp(0, 18);
+        if x == 0 {
+            previous_y = y;
+        }
+        for draw_y in y.min(previous_y)..=y.max(previous_y) {
+            set_eq_graph_color(cr, eqmain, draw_y);
+            cr.rectangle(f64::from(88 + x), f64::from(17 + draw_y), 1.0, 1.0);
             cr.fill()?;
         }
-        if x1 != x0 {
-            for x in x0.min(x1)..=x0.max(x1) {
-                let t = f64::from(x - x0) / f64::from(x1 - x0);
-                let y = (f64::from(y0) + (f64::from(y1 - y0) * t)).round() as i32;
-                set_eq_graph_color(cr, eqmain, y);
-                cr.rectangle(f64::from(x), f64::from(17 + y), 1.0, 1.0);
-                cr.fill()?;
-            }
-        }
+        previous_y = y;
     }
     Ok(())
 }
 
-fn eq_graph_points(band_positions: &[i32; 10]) -> Vec<(i32, i32)> {
-    band_positions
-        .iter()
-        .enumerate()
-        .map(|(idx, position)| {
-            let x = 88 + ((idx as i32 * 109) / 9);
-            let value = 50 - (*position).clamp(0, 100);
-            let y = (9 - ((value * 9) / 50)).clamp(0, 18);
-            (x, y)
-        })
-        .collect()
+fn eq_slider_pixel_position(position: i32) -> i32 {
+    let pixel = position.clamp(0, 100) / 2;
+    if (24..=26).contains(&pixel) {
+        25
+    } else {
+        pixel
+    }
+}
+
+fn position_to_db(position: i32) -> f64 {
+    f64::from(50 - position.clamp(0, 100)) * 20.0 / 50.0
+}
+
+fn preamp_line_y(position: i32) -> i32 {
+    9 + ((position_to_db(position) * 9.0) / 20.0) as i32
+}
+
+fn spline_second_derivatives(x: &[f64; 10], y: &[f64; 10]) -> [f64; 10] {
+    let mut y2 = [0.0; 10];
+    let mut u = [0.0; 10];
+    for i in 1..9 {
+        let sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]);
+        let p = sig * y2[i - 1] + 2.0;
+        y2[i] = (sig - 1.0) / p;
+        u[i] = ((y[i + 1] - y[i]) / (x[i + 1] - x[i])) - ((y[i] - y[i - 1]) / (x[i] - x[i - 1]));
+        u[i] = ((6.0 * u[i]) / (x[i + 1] - x[i - 1]) - sig * u[i - 1]) / p;
+    }
+    for k in (0..9).rev() {
+        y2[k] = y2[k] * y2[k + 1] + u[k];
+    }
+    y2
+}
+
+fn eval_spline(xa: &[f64; 10], ya: &[f64; 10], y2a: &[f64; 10], x: f64) -> f64 {
+    let mut klo = 0;
+    let mut khi = 9;
+    while khi - klo > 1 {
+        let k = (khi + klo) >> 1;
+        if xa[k] > x {
+            khi = k;
+        } else {
+            klo = k;
+        }
+    }
+    let h = xa[khi] - xa[klo];
+    let a = (xa[khi] - x) / h;
+    let b = (x - xa[klo]) / h;
+    (a * ya[klo])
+        + (b * ya[khi])
+        + (((a * a * a - a) * y2a[klo] + (b * b * b - b) * y2a[khi]) * (h * h) / 6.0)
 }
 
 fn set_eq_graph_color(cr: &Context, eqmain: &XpmImage, y: i32) {

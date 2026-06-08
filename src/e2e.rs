@@ -2231,19 +2231,32 @@ impl UiE2e {
     }
 
     fn drag_equalizer_slider(&mut self, x: i32, position: i32) -> &mut Self {
-        let y = 38 + (position.clamp(0, 100) * 63 + 99) / 100;
-        self.state.equalizer_press(x, y);
-        self.state.equalizer_motion(x, y);
-        self.state.equalizer_release(x, y);
+        let current = if x == 21 {
+            self.state.equalizer_preamp_position()
+        } else {
+            let band = ((x - 78) / 18).max(0) as usize;
+            self.state.equalizer_band_position(band).unwrap_or(50)
+        };
+        let press_y = 38 + (current.clamp(0, 100) / 2).clamp(0, 50) + 5;
+        let target_y = 38 + (position.clamp(0, 100) / 2).clamp(0, 50) + 5;
+        self.state.equalizer_press(x, press_y);
+        self.state.equalizer_motion(x, target_y);
+        self.state.equalizer_release(x, target_y);
         self
     }
 
     fn drag_equalizer_shaded_slider(&mut self, x: i32, position: i32) -> &mut Self {
         let y = 8;
-        let x = x + position;
-        self.state.equalizer_press(x, y);
-        self.state.equalizer_motion(x, y);
-        self.state.equalizer_release(x, y);
+        let current = if x == 61 {
+            ((self.state.volume().clamp(0, 100) * 94 + 50) / 100).clamp(0, 94)
+        } else {
+            (19 + (self.state.balance().clamp(-100, 100) * 19) / 100).clamp(0, 39)
+        };
+        let press_x = x + current + 1;
+        let target_x = x + position + 1;
+        self.state.equalizer_press(press_x, y);
+        self.state.equalizer_motion(target_x, y);
+        self.state.equalizer_release(target_x, y);
         self
     }
 }

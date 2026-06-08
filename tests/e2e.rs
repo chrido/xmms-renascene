@@ -283,16 +283,16 @@ fn session_e2e_runtime_snapshot_restores_window_and_equalizer_options() {
     assert!(loaded.config.equalizer_detached);
     assert!(!loaded.config.equalizer_active);
     assert!(loaded.config.equalizer_auto);
-    assert_eq!(loaded.config.equalizer_preamp_pos, 25);
-    assert_eq!(loaded.config.equalizer_band_pos[0], 11);
+    assert_eq!(loaded.config.equalizer_preamp_pos, 24);
+    assert_eq!(loaded.config.equalizer_band_pos[0], 10);
 
     UiE2e::start_from_app_state(loaded)
         .assert_panel_detached(PanelKind::Playlist, true)
         .assert_panel_detached(PanelKind::Equalizer, true)
         .assert_equalizer_active(false)
         .assert_equalizer_automatic(true)
-        .assert_equalizer_preamp_position(25)
-        .assert_equalizer_band_position(0, 11);
+        .assert_equalizer_preamp_position(24)
+        .assert_equalizer_band_position(0, 10);
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1774,9 +1774,9 @@ fn equalizer_buttons_sliders_and_presets_update_state() {
         .assert_equalizer_automatic(true);
 
     app.drag_equalizer_preamp(25)
-        .assert_equalizer_preamp_position(25)
+        .assert_equalizer_preamp_position(24)
         .drag_equalizer_band(0, 10)
-        .assert_equalizer_band_position(0, 11)
+        .assert_equalizer_band_position(0, 10)
         .drag_equalizer_band(9, 80)
         .assert_equalizer_band_position(9, 80);
 
@@ -1798,7 +1798,7 @@ fn equalizer_all_bands_expose_c_compatible_gstreamer_db_mapping() {
         .assert_equalizer_preamp_db(20.0);
 
     let requested_positions = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
-    let snapped_positions = [0, 11, 20, 30, 41, 50, 60, 71, 80, 90];
+    let snapped_positions = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90];
     for (band, (requested, snapped)) in requested_positions
         .into_iter()
         .zip(snapped_positions)
@@ -1810,7 +1810,7 @@ fn equalizer_all_bands_expose_c_compatible_gstreamer_db_mapping() {
     }
 
     app.assert_equalizer_gstreamer_band_db_values([
-        20.0, 15.6, 12.0, 8.0, 3.6, 0.0, -4.0, -8.4, -12.0, -16.0,
+        20.0, 16.0, 12.0, 8.0, 4.0, 0.0, -4.0, -8.0, -12.0, -16.0,
     ]);
 
     app.click_panel(PanelTarget::EqualizerOn)

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -11,6 +11,12 @@ use gtk::prelude::*;
 
 use crate::app_state::AppState;
 use crate::config::{Config, TimerMode};
+use crate::equalizer::{
+    default_equalizer_presets, find_preset, import_winamp_eqf, load_preset_store,
+    load_winamp_eqf_first, load_xmms_preset_file, preset_store_path, remove_presets,
+    save_preset_store, save_winamp_eqf, save_xmms_preset_file, sort_presets, upsert_preset,
+    winamp_original_presets, EqualizerPreset,
+};
 use crate::mpris::{
     gio_service::MprisService, playback_status as mpris_playback_status, MprisCommand, MprisEvent,
     MprisMetadata, MprisPlayerProperties, MprisRootProperties,
@@ -34,11 +40,11 @@ use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
 };
 use crate::skin::layout::{
-    equalizer_control_at, equalizer_shaded_slider_at, equalizer_slider_at,
-    equalizer_slider_position, main_push_button_rect, main_slider_layout, main_toggle_button_rect,
-    panel_title_button_at, playlist_footer_button_at, playlist_menu_button_at,
-    playlist_menu_popup_rect, snap_playlist_size, EqualizerSlider, LayoutPanelKind as LayoutPanel,
-    PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton, SkinRect,
+    equalizer_control_at, equalizer_shaded_slider_at, equalizer_slider_at, equalizer_slider_layout,
+    main_push_button_rect, main_slider_layout, main_toggle_button_rect, panel_title_button_at,
+    playlist_footer_button_at, playlist_menu_button_at, playlist_menu_popup_rect,
+    snap_playlist_size, EqualizerSlider, LayoutPanelKind as LayoutPanel, PanelTitleButton,
+    PlaylistFooterButton, PlaylistMenuButton, SkinRect,
 };
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
@@ -76,6 +82,22 @@ const XMMS_MENU_CSS_TEMPLATE: &str = r#"
 }
 
 .xmms-menu-button:active {
+    background: MENU_SELECTED_BG;
+    color: MENU_CURRENT;
+}
+
+.xmms-menu-popover modelbutton {
+    background: MENU_NORMAL_BG;
+    background-image: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    color: MENU_NORMAL;
+    padding: 4px 12px;
+    text-shadow: none;
+}
+
+.xmms-menu-popover modelbutton:hover {
     background: MENU_SELECTED_BG;
     color: MENU_CURRENT;
 }
@@ -165,6 +187,9 @@ fn build_preview_window(
     let main_state = Rc::new(RefCell::new(MainWindowUiState::from_app_state(app_state)));
     {
         let mut state = main_state.borrow_mut();
+        if let Some(config_dir) = config_path.parent() {
+            state.set_equalizer_preset_dir(config_dir.to_path_buf());
+        }
         match GStreamerBackend::new() {
             Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
             Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
@@ -263,6 +288,11 @@ fn build_preview_window(
         &main_state,
         &drawing_area,
     ));
+    let equalizer_presets_popover = Rc::new(build_equalizer_presets_popover(
+        &drawing_area,
+        &main_state,
+        &drawing_area,
+    ));
 
     {
         let skin = Rc::clone(&skin);
@@ -293,6 +323,18 @@ fn build_preview_window(
             let (base_x, base_y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let docked_panel = { main_state.borrow().docked_panel_at(base_x, base_y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
+                if n_press >= 2
+                    && kind == PanelKind::Equalizer
+                    && main_state
+                        .borrow()
+                        .panel_title_drag_region(kind, panel_x, panel_y)
+                {
+                    main_state.borrow_mut().toggle_equalizer_shaded();
+                    sync_panel_windows(&panel_windows, &main_state.borrow());
+                    resize_main_window(&window, &drawing_area, &main_state.borrow());
+                    drawing_area.queue_draw();
+                    return;
+                }
                 match kind {
                     PanelKind::Equalizer => {
                         if main_state.borrow_mut().equalizer_press(panel_x, panel_y) {
@@ -363,6 +405,7 @@ fn build_preview_window(
         let drawing_area = drawing_area.clone();
         let menu_popover = Rc::clone(&menu_popover);
         let playlist_sort_popover = Rc::clone(&playlist_sort_popover);
+        let equalizer_presets_popover = Rc::clone(&equalizer_presets_popover);
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
@@ -406,6 +449,7 @@ fn build_preview_window(
                     &panel_windows,
                     &main_state,
                     &playlist_sort_popover,
+                    &equalizer_presets_popover,
                 );
                 drawing_area.queue_draw();
                 return;
@@ -541,6 +585,7 @@ fn build_preview_window(
 
     window.set_child(Some(&drawing_area));
     window.present();
+    present_visible_panel_windows(&panel_windows, &main_state.borrow());
     Ok(())
 }
 
@@ -1200,6 +1245,7 @@ fn build_equalizer_window(
     let drawing_area = gtk::DrawingArea::builder()
         .content_width(EQUALIZER_WINDOW_WIDTH * DEFAULT_SCALE)
         .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
+        .focusable(true)
         .build();
     let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
@@ -1218,7 +1264,7 @@ fn build_equalizer_window(
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
     });
-    let presets_menu = build_equalizer_presets_popover(&drawing_area, main_state);
+    let presets_menu = build_equalizer_presets_popover(&drawing_area, main_state, main_area);
     add_panel_click_controller(
         &window,
         &drawing_area,
@@ -1229,6 +1275,7 @@ fn build_equalizer_window(
         None,
         None,
     );
+    add_equalizer_key_controller(&drawing_area, Rc::clone(main_state));
     window.set_child(Some(&drawing_area));
     (window, drawing_area)
 }
@@ -1388,6 +1435,41 @@ fn add_playlist_key_controller(
         let area = area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
             if handle_playlist_key_pressed(&main_state, key, state) {
+                area.queue_draw();
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+    }
+    area.add_controller(key_controller);
+}
+
+fn add_equalizer_key_controller(
+    area: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
+    let key_controller = gtk::EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+            if state.intersects(
+                gtk::gdk::ModifierType::CONTROL_MASK
+                    | gtk::gdk::ModifierType::ALT_MASK
+                    | gtk::gdk::ModifierType::META_MASK,
+            ) {
+                return gtk::glib::Propagation::Proceed;
+            }
+            let diff = match key {
+                gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => -4,
+                gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => 4,
+                _ => return gtk::glib::Propagation::Proceed,
+            };
+            if main_state
+                .borrow_mut()
+                .adjust_shaded_equalizer_balance(diff)
+            {
                 area.queue_draw();
                 gtk::glib::Propagation::Stop
             } else {
@@ -1670,33 +1752,227 @@ fn show_playlist_sort_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
 fn build_equalizer_presets_popover(
     parent: &gtk::DrawingArea,
     main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
 ) -> gtk::Popover {
-    let popover = gtk::Popover::builder()
-        .autohide(true)
-        .has_arrow(false)
-        .build();
+    let action_group = gtk::gio::SimpleActionGroup::new();
+    let menu = gtk::gio::Menu::new();
+
+    for (label, actions) in [
+        (
+            "Load",
+            &[
+                ("Preset", EqualizerPresetAction::LoadPreset),
+                ("Auto-load preset", EqualizerPresetAction::LoadAutoPreset),
+                ("Default", EqualizerPresetAction::LoadDefault),
+                ("Zero", EqualizerPresetAction::LoadZero),
+                ("From file", EqualizerPresetAction::LoadFromFile),
+                (
+                    "From WinAMP EQF file",
+                    EqualizerPresetAction::LoadFromWinampFile,
+                ),
+            ][..],
+        ),
+        (
+            "Import",
+            &[("WinAMP Presets", EqualizerPresetAction::ImportWinampPresets)][..],
+        ),
+        (
+            "Save",
+            &[
+                ("Preset", EqualizerPresetAction::SavePreset),
+                ("Auto-load preset", EqualizerPresetAction::SaveAutoPreset),
+                ("Default", EqualizerPresetAction::SaveDefault),
+                ("To file", EqualizerPresetAction::SaveToFile),
+                (
+                    "To WinAMP EQF file",
+                    EqualizerPresetAction::SaveToWinampFile,
+                ),
+            ][..],
+        ),
+        (
+            "Delete",
+            &[
+                ("Preset", EqualizerPresetAction::DeletePreset),
+                ("Auto-load preset", EqualizerPresetAction::DeleteAutoPreset),
+            ][..],
+        ),
+    ] {
+        let submenu = gtk::gio::Menu::new();
+        for (child_label, action) in actions {
+            let action_name = equalizer_preset_action_name(*action);
+            submenu.append(
+                Some(child_label),
+                Some(&format!("eq-presets.{action_name}")),
+            );
+            install_equalizer_preset_action(
+                &action_group,
+                *action,
+                action_name,
+                parent,
+                main_state,
+                main_area,
+            );
+        }
+        if label == "Load" {
+            let winamp_section = gtk::gio::Menu::new();
+            for (index, preset) in winamp_original_presets().into_iter().enumerate() {
+                let action_name = format!("load-winamp-original-preset-{index}");
+                winamp_section.append(
+                    Some(&preset.name),
+                    Some(&format!("eq-presets.{action_name}")),
+                );
+                install_equalizer_direct_preset_action(
+                    &action_group,
+                    action_name,
+                    preset,
+                    parent,
+                    main_state,
+                    main_area,
+                );
+            }
+            submenu.append_section(Some("Winamp original presets"), &winamp_section);
+
+            let preset_section = gtk::gio::Menu::new();
+            for (index, preset) in main_state
+                .borrow()
+                .sorted_equalizer_presets(false)
+                .into_iter()
+                .filter(|preset| !preset.name.eq_ignore_ascii_case("Default"))
+                .enumerate()
+            {
+                let action_name = format!("load-named-preset-{index}");
+                preset_section.append(
+                    Some(&preset.name),
+                    Some(&format!("eq-presets.{action_name}")),
+                );
+                install_equalizer_named_preset_action(
+                    &action_group,
+                    action_name,
+                    preset.name,
+                    parent,
+                    main_state,
+                    main_area,
+                );
+            }
+            if preset_section.n_items() > 0 {
+                submenu.append_section(Some("Presets"), &preset_section);
+            }
+        }
+        menu.append_submenu(Some(label), &submenu);
+    }
+
+    install_equalizer_preset_action(
+        &action_group,
+        EqualizerPresetAction::Configure,
+        equalizer_preset_action_name(EqualizerPresetAction::Configure),
+        parent,
+        main_state,
+        main_area,
+    );
+    menu.append(
+        Some("Configure Equalizer"),
+        Some(&format!(
+            "eq-presets.{}",
+            equalizer_preset_action_name(EqualizerPresetAction::Configure)
+        )),
+    );
+
+    parent.insert_action_group("eq-presets", Some(&action_group));
+    let popover_menu = gtk::PopoverMenu::from_model_full(&menu, gtk::PopoverMenuFlags::NESTED);
+    popover_menu.set_autohide(true);
+    popover_menu.set_has_arrow(false);
+    let popover: gtk::Popover = popover_menu.upcast();
     style_xmms_popover(&popover);
     popover.set_parent(parent);
-    let menu_box = xmms_menu_box(0);
-    for (label, preset) in [
-        ("Flat", 0),
-        ("Bass Boost", 1),
-        ("Treble Boost", 2),
-        ("Rock", 3),
-    ] {
-        let item = xmms_menu_button(label);
-        {
-            let main_state = Rc::clone(main_state);
-            let popover = popover.clone();
-            item.connect_clicked(move |_| {
-                main_state.borrow_mut().apply_equalizer_preset(preset);
-                popover.popdown();
-            });
-        }
-        menu_box.append(&item);
-    }
-    popover.set_child(Some(&menu_box));
     popover
+}
+
+fn install_equalizer_preset_action(
+    group: &gtk::gio::SimpleActionGroup,
+    action: EqualizerPresetAction,
+    action_name: &'static str,
+    parent: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+) {
+    let simple_action = gtk::gio::SimpleAction::new(action_name, None);
+    let main_state = Rc::clone(main_state);
+    let parent = parent.clone();
+    let main_area = main_area.clone();
+    simple_action.connect_activate(move |_, _| {
+        activate_equalizer_preset_action(
+            action,
+            &parent,
+            Rc::clone(&main_state),
+            parent.clone(),
+            main_area.clone(),
+        );
+    });
+    group.add_action(&simple_action);
+}
+
+fn install_equalizer_direct_preset_action(
+    group: &gtk::gio::SimpleActionGroup,
+    action_name: String,
+    preset: EqualizerPreset,
+    parent: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+) {
+    let simple_action = gtk::gio::SimpleAction::new(&action_name, None);
+    let main_state = Rc::clone(main_state);
+    let parent = parent.clone();
+    let main_area = main_area.clone();
+    simple_action.connect_activate(move |_, _| {
+        main_state
+            .borrow_mut()
+            .apply_equalizer_preset_values(&preset);
+        parent.queue_draw();
+        main_area.queue_draw();
+    });
+    group.add_action(&simple_action);
+}
+
+fn install_equalizer_named_preset_action(
+    group: &gtk::gio::SimpleActionGroup,
+    action_name: String,
+    preset_name: String,
+    parent: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+) {
+    let simple_action = gtk::gio::SimpleAction::new(&action_name, None);
+    let main_state = Rc::clone(main_state);
+    let parent = parent.clone();
+    let main_area = main_area.clone();
+    simple_action.connect_activate(move |_, _| {
+        main_state
+            .borrow_mut()
+            .load_named_equalizer_preset(&preset_name, false);
+        parent.queue_draw();
+        main_area.queue_draw();
+    });
+    group.add_action(&simple_action);
+}
+
+fn equalizer_preset_action_name(action: EqualizerPresetAction) -> &'static str {
+    match action {
+        EqualizerPresetAction::LoadPreset => "load-preset",
+        EqualizerPresetAction::LoadAutoPreset => "load-auto-preset",
+        EqualizerPresetAction::LoadDefault => "load-default",
+        EqualizerPresetAction::LoadZero => "load-zero",
+        EqualizerPresetAction::LoadFromFile => "load-from-file",
+        EqualizerPresetAction::LoadFromWinampFile => "load-from-winamp-file",
+        EqualizerPresetAction::ImportWinampPresets => "import-winamp-presets",
+        EqualizerPresetAction::SavePreset => "save-preset",
+        EqualizerPresetAction::SaveAutoPreset => "save-auto-preset",
+        EqualizerPresetAction::SaveDefault => "save-default",
+        EqualizerPresetAction::SaveToFile => "save-to-file",
+        EqualizerPresetAction::SaveToWinampFile => "save-to-winamp-file",
+        EqualizerPresetAction::DeletePreset => "delete-preset",
+        EqualizerPresetAction::DeleteAutoPreset => "delete-auto-preset",
+        EqualizerPresetAction::Configure => "configure",
+    }
 }
 
 fn build_preferences_window(
@@ -2821,6 +3097,25 @@ pub enum PlaylistSortAction {
     ReverseList,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EqualizerPresetAction {
+    LoadPreset,
+    LoadAutoPreset,
+    LoadDefault,
+    LoadZero,
+    LoadFromFile,
+    LoadFromWinampFile,
+    ImportWinampPresets,
+    SavePreset,
+    SaveAutoPreset,
+    SaveDefault,
+    SaveToFile,
+    SaveToWinampFile,
+    DeletePreset,
+    DeleteAutoPreset,
+    Configure,
+}
+
 impl PlaylistMenuKind {
     fn render_kind(self) -> PlaylistMenuRenderKind {
         match self {
@@ -2872,6 +3167,17 @@ fn add_panel_click_controller(
             area.grab_focus();
             let (base_x, base_y) =
                 panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            if n_press >= 2
+                && kind == PanelKind::Equalizer
+                && main_state
+                    .borrow()
+                    .panel_title_drag_region(kind, base_x, base_y)
+            {
+                main_state.borrow_mut().toggle_equalizer_shaded();
+                sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+                area.queue_draw();
+                return;
+            }
             if !main_state
                 .borrow()
                 .panel_title_drag_region(kind, base_x, base_y)
@@ -3056,6 +3362,32 @@ fn add_panel_click_controller(
     }
     window.add_controller(motion);
 
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        scroll.connect_scroll(move |scroll, _dx, dy| {
+            if kind != PanelKind::Equalizer {
+                return gtk::glib::Propagation::Proceed;
+            }
+            let Some((event_x, event_y)) =
+                scroll.current_event().and_then(|event| event.position())
+            else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let (x, y) =
+                panel_event_to_base_coords(kind, &area, &main_state.borrow(), event_x, event_y);
+            if main_state.borrow_mut().equalizer_scroll(x, y, dy) {
+                area.queue_draw();
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+    }
+    window.add_controller(scroll);
+
     {
         let area = area.clone();
         let main_state = Rc::clone(&main_state);
@@ -3079,6 +3411,412 @@ fn show_equalizer_presets_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) 
     );
     popover.set_pointing_to(Some(&rect));
     popover.popup();
+}
+
+fn show_docked_equalizer_presets_menu(
+    popover: &gtk::Popover,
+    area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+) {
+    let (base_width, base_height) = state.docked_panel_size();
+    let scale_x = area.allocated_width().max(1) as f64 / f64::from(base_width);
+    let scale_y = area.allocated_height().max(1) as f64 / f64::from(base_height);
+    let y_offset = main_window_height(state.shaded);
+    let rect = gtk::gdk::Rectangle::new(
+        (217.0 * scale_x) as i32,
+        (f64::from(y_offset + 30) * scale_y) as i32,
+        (44.0 * scale_x).max(1.0) as i32,
+        1,
+    );
+    popover.set_pointing_to(Some(&rect));
+    popover.popup();
+}
+
+fn activate_equalizer_preset_action(
+    action: EqualizerPresetAction,
+    parent: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    equalizer_area: gtk::DrawingArea,
+    main_area: gtk::DrawingArea,
+) {
+    match action {
+        EqualizerPresetAction::LoadPreset => show_equalizer_preset_list_dialog(
+            parent,
+            "Load preset",
+            false,
+            false,
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::LoadAutoPreset => show_equalizer_preset_list_dialog(
+            parent,
+            "Load auto-preset",
+            true,
+            false,
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::LoadDefault => {
+            main_state.borrow_mut().load_equalizer_default_preset();
+            queue_equalizer_areas(&equalizer_area, &main_area);
+        }
+        EqualizerPresetAction::LoadZero => {
+            main_state.borrow_mut().load_equalizer_zero_preset();
+            queue_equalizer_areas(&equalizer_area, &main_area);
+        }
+        EqualizerPresetAction::LoadFromFile => show_equalizer_file_dialog(
+            parent,
+            "Load equalizer preset",
+            gtk::FileChooserAction::Open,
+            "Open",
+            move |state, path| state.load_equalizer_preset_file(path).map(|_| ()),
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::LoadFromWinampFile => show_equalizer_file_dialog(
+            parent,
+            "Load WinAMP equalizer preset",
+            gtk::FileChooserAction::Open,
+            "Open",
+            move |state, path| state.load_equalizer_winamp_file(path).map(|_| ()),
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::ImportWinampPresets => show_equalizer_file_dialog(
+            parent,
+            "Import WinAMP equalizer presets",
+            gtk::FileChooserAction::Open,
+            "Import",
+            move |state, path| state.import_equalizer_winamp_file(path).map(|_| ()),
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::SavePreset => show_equalizer_save_name_dialog(
+            parent,
+            "Save preset",
+            None,
+            false,
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::SaveAutoPreset => {
+            let default_name = main_state.borrow().current_playlist_basename();
+            show_equalizer_save_name_dialog(
+                parent,
+                "Save auto-preset",
+                default_name,
+                true,
+                main_state,
+                equalizer_area,
+                main_area,
+            );
+        }
+        EqualizerPresetAction::SaveDefault => {
+            if let Err(err) = main_state.borrow_mut().save_equalizer_default_preset() {
+                eprintln!("xmms-rs: failed to save default equalizer preset: {err}");
+            }
+        }
+        EqualizerPresetAction::SaveToFile => show_equalizer_file_dialog(
+            parent,
+            "Save equalizer preset",
+            gtk::FileChooserAction::Save,
+            "Save",
+            move |state, path| state.save_equalizer_preset_file(path).map(|_| ()),
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::SaveToWinampFile => show_equalizer_file_dialog(
+            parent,
+            "Save WinAMP equalizer preset",
+            gtk::FileChooserAction::Save,
+            "Save",
+            move |state, path| state.save_equalizer_winamp_file(path).map(|_| ()),
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::DeletePreset => show_equalizer_preset_list_dialog(
+            parent,
+            "Delete preset",
+            false,
+            true,
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::DeleteAutoPreset => show_equalizer_preset_list_dialog(
+            parent,
+            "Delete auto-preset",
+            true,
+            true,
+            main_state,
+            equalizer_area,
+            main_area,
+        ),
+        EqualizerPresetAction::Configure => {
+            show_equalizer_configure_dialog(parent, main_state, equalizer_area, main_area);
+        }
+    }
+}
+
+fn queue_equalizer_areas(equalizer_area: &gtk::DrawingArea, main_area: &gtk::DrawingArea) {
+    equalizer_area.queue_draw();
+    main_area.queue_draw();
+}
+
+fn area_window(parent: &gtk::DrawingArea) -> Option<gtk::Window> {
+    parent
+        .root()
+        .and_then(|root| root.downcast::<gtk::Window>().ok())
+}
+
+fn show_equalizer_file_dialog(
+    parent: &gtk::DrawingArea,
+    title: &'static str,
+    action: gtk::FileChooserAction,
+    accept: &'static str,
+    handler: impl Fn(&mut MainWindowUiState, &Path) -> io::Result<()> + 'static,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    equalizer_area: gtk::DrawingArea,
+    main_area: gtk::DrawingArea,
+) {
+    let parent_window = area_window(parent);
+    let dialog = gtk::FileChooserNative::new(
+        Some(title),
+        parent_window.as_ref(),
+        action,
+        Some(accept),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            if let Some(path) = dialog.file().and_then(|file| file.path()) {
+                if let Err(err) = handler(&mut main_state.borrow_mut(), &path) {
+                    eprintln!(
+                        "xmms-rs: equalizer file action failed for {}: {err}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        queue_equalizer_areas(&equalizer_area, &main_area);
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn show_equalizer_save_name_dialog(
+    parent: &gtk::DrawingArea,
+    title: &'static str,
+    default_name: Option<String>,
+    automatic: bool,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    equalizer_area: gtk::DrawingArea,
+    main_area: gtk::DrawingArea,
+) {
+    let window = gtk::Window::builder()
+        .title(title)
+        .modal(true)
+        .default_width(320)
+        .default_height(90)
+        .build();
+    if let Some(parent_window) = area_window(parent) {
+        window.set_transient_for(Some(&parent_window));
+    }
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.set_margin_top(8);
+    layout.set_margin_bottom(8);
+    layout.set_margin_start(8);
+    layout.set_margin_end(8);
+    let entry = gtk::Entry::new();
+    entry.set_text(default_name.as_deref().unwrap_or(""));
+    layout.append(&entry);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let ok = gtk::Button::with_label("Ok");
+    let cancel = gtk::Button::with_label("Cancel");
+    {
+        let window = window.clone();
+        let entry = entry.clone();
+        ok.connect_clicked(move |_| {
+            let name = entry.text().trim().to_string();
+            if !name.is_empty() {
+                if let Err(err) = main_state
+                    .borrow_mut()
+                    .save_named_equalizer_preset(name, automatic)
+                {
+                    eprintln!("xmms-rs: failed to save equalizer preset: {err}");
+                }
+            }
+            queue_equalizer_areas(&equalizer_area, &main_area);
+            window.close();
+        });
+    }
+    {
+        let window = window.clone();
+        cancel.connect_clicked(move |_| window.close());
+    }
+    buttons.append(&ok);
+    buttons.append(&cancel);
+    layout.append(&buttons);
+    window.set_child(Some(&layout));
+    window.present();
+}
+
+fn show_equalizer_preset_list_dialog(
+    parent: &gtk::DrawingArea,
+    title: &'static str,
+    automatic: bool,
+    delete_mode: bool,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    equalizer_area: gtk::DrawingArea,
+    main_area: gtk::DrawingArea,
+) {
+    let window = gtk::Window::builder()
+        .title(title)
+        .modal(true)
+        .default_width(350)
+        .default_height(300)
+        .build();
+    if let Some(parent_window) = area_window(parent) {
+        window.set_transient_for(Some(&parent_window));
+    }
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.set_margin_top(8);
+    layout.set_margin_bottom(8);
+    layout.set_margin_start(8);
+    layout.set_margin_end(8);
+    let presets = main_state.borrow().sorted_equalizer_presets(automatic);
+    if delete_mode {
+        let mut checks = Vec::new();
+        for preset in presets {
+            let check = gtk::CheckButton::with_label(&preset.name);
+            layout.append(&check);
+            checks.push((preset.name, check));
+        }
+        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let delete = gtk::Button::with_label("Delete");
+        let close = gtk::Button::with_label("Close");
+        {
+            let window = window.clone();
+            delete.connect_clicked(move |_| {
+                let names: Vec<String> = checks
+                    .iter()
+                    .filter(|(_, check)| check.is_active())
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                if let Err(err) = main_state
+                    .borrow_mut()
+                    .delete_named_equalizer_presets(names, automatic)
+                {
+                    eprintln!("xmms-rs: failed to delete equalizer presets: {err}");
+                }
+                queue_equalizer_areas(&equalizer_area, &main_area);
+                window.close();
+            });
+        }
+        {
+            let window = window.clone();
+            close.connect_clicked(move |_| window.close());
+        }
+        buttons.append(&delete);
+        buttons.append(&close);
+        layout.append(&buttons);
+    } else {
+        for preset in presets {
+            let button = gtk::Button::with_label(&preset.name);
+            {
+                let window = window.clone();
+                let name = preset.name.clone();
+                let main_state = Rc::clone(&main_state);
+                let equalizer_area = equalizer_area.clone();
+                let main_area = main_area.clone();
+                button.connect_clicked(move |_| {
+                    main_state
+                        .borrow_mut()
+                        .load_named_equalizer_preset(&name, automatic);
+                    queue_equalizer_areas(&equalizer_area, &main_area);
+                    window.close();
+                });
+            }
+            layout.append(&button);
+        }
+        let close = gtk::Button::with_label("Cancel");
+        {
+            let window = window.clone();
+            close.connect_clicked(move |_| window.close());
+        }
+        layout.append(&close);
+    }
+    window.set_child(Some(&layout));
+    window.present();
+}
+
+fn show_equalizer_configure_dialog(
+    parent: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    equalizer_area: gtk::DrawingArea,
+    main_area: gtk::DrawingArea,
+) {
+    let window = gtk::Window::builder()
+        .title("Configure Equalizer")
+        .modal(true)
+        .default_width(360)
+        .default_height(140)
+        .build();
+    if let Some(parent_window) = area_window(parent) {
+        window.set_transient_for(Some(&parent_window));
+    }
+    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.set_margin_top(8);
+    layout.set_margin_bottom(8);
+    layout.set_margin_start(8);
+    layout.set_margin_end(8);
+    let default_file = gtk::Entry::new();
+    let extension = gtk::Entry::new();
+    {
+        let state = main_state.borrow();
+        default_file.set_text(&state.app_state.config.eqpreset_default_file);
+        extension.set_text(&state.app_state.config.eqpreset_extension);
+    }
+    layout.append(&gtk::Label::new(Some("Directory preset file:")));
+    layout.append(&default_file);
+    layout.append(&gtk::Label::new(Some("File preset extension:")));
+    layout.append(&extension);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let ok = gtk::Button::with_label("Ok");
+    let cancel = gtk::Button::with_label("Cancel");
+    {
+        let window = window.clone();
+        ok.connect_clicked(move |_| {
+            let mut state = main_state.borrow_mut();
+            state.app_state.config.eqpreset_default_file = default_file
+                .text()
+                .trim()
+                .trim_start_matches('.')
+                .to_string();
+            state.app_state.config.eqpreset_extension =
+                extension.text().trim().trim_start_matches('.').to_string();
+            queue_equalizer_areas(&equalizer_area, &main_area);
+            window.close();
+        });
+    }
+    {
+        let window = window.clone();
+        cancel.connect_clicked(move |_| window.close());
+    }
+    buttons.append(&ok);
+    buttons.append(&cancel);
+    layout.append(&buttons);
+    window.set_child(Some(&layout));
+    window.present();
 }
 
 fn panel_event_to_base_coords(
@@ -3121,6 +3859,7 @@ fn handle_panel_action_for_main_window(
     panel_windows: &Rc<PanelWindows>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     playlist_sort_menu: &gtk::Popover,
+    equalizer_presets_menu: &gtk::Popover,
 ) {
     match action {
         PanelAction::None => {}
@@ -3156,7 +3895,11 @@ fn handle_panel_action_for_main_window(
             show_playlist_sort_menu(playlist_sort_menu, area);
             area.queue_draw();
         }
-        PanelAction::ShowPlaylistMenu(_) | PanelAction::ShowEqualizerPresets => {
+        PanelAction::ShowPlaylistMenu(_) => {
+            area.queue_draw();
+        }
+        PanelAction::ShowEqualizerPresets => {
+            show_docked_equalizer_presets_menu(equalizer_presets_menu, area, &main_state.borrow());
             area.queue_draw();
         }
     }
@@ -3234,6 +3977,16 @@ fn sync_single_panel_window_values(
 fn present_if_hidden(window: &gtk::ApplicationWindow) {
     if !window.is_visible() {
         window.present();
+    }
+}
+
+fn present_visible_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
+    let visibility = state.panel_visibility();
+    if visibility.equalizer {
+        windows.equalizer.present();
+    }
+    if visibility.playlist {
+        windows.playlist.present();
     }
 }
 
@@ -3322,8 +4075,12 @@ pub(crate) struct MainWindowUiState {
     equalizer_pressed_control: Option<EqualizerControl>,
     equalizer_pressed_inside: bool,
     equalizer_dragging: Option<EqualizerSlider>,
+    equalizer_slider_press_offset: i32,
     equalizer_preamp_position: i32,
     equalizer_band_positions: [i32; 10],
+    equalizer_preset_dir: PathBuf,
+    equalizer_presets: Vec<EqualizerPreset>,
+    equalizer_auto_presets: Vec<EqualizerPreset>,
     playlist_shaded: bool,
     playlist_focused: bool,
     playlist_dragging_title: bool,
@@ -3426,8 +4183,12 @@ impl MainWindowUiState {
             equalizer_pressed_control: None,
             equalizer_pressed_inside: false,
             equalizer_dragging: None,
+            equalizer_slider_press_offset: 0,
             equalizer_preamp_position: 50,
             equalizer_band_positions: [50; 10],
+            equalizer_preset_dir: default_config_dir().join("xmms-renascene"),
+            equalizer_presets: Vec::new(),
+            equalizer_auto_presets: Vec::new(),
             playlist_shaded,
             playlist_focused: false,
             playlist_dragging_title: false,
@@ -3496,6 +4257,148 @@ impl MainWindowUiState {
         &mut self.app_state
     }
 
+    fn set_equalizer_preset_dir(&mut self, dir: PathBuf) {
+        self.equalizer_preset_dir = dir;
+        if let Err(err) = self.load_equalizer_preset_stores() {
+            eprintln!("xmms-rs: failed to load equalizer presets: {err}");
+        }
+    }
+
+    fn load_equalizer_preset_stores(&mut self) -> io::Result<()> {
+        self.equalizer_presets =
+            load_preset_store(&preset_store_path(&self.equalizer_preset_dir, "eq.preset"))?;
+        if self.equalizer_presets.is_empty() {
+            self.equalizer_presets = default_equalizer_presets();
+        }
+        self.equalizer_auto_presets = load_preset_store(&preset_store_path(
+            &self.equalizer_preset_dir,
+            "eq.auto_preset",
+        ))?;
+        Ok(())
+    }
+
+    fn save_equalizer_presets(&self) -> io::Result<()> {
+        save_preset_store(
+            &preset_store_path(&self.equalizer_preset_dir, "eq.preset"),
+            &self.equalizer_presets,
+        )
+    }
+
+    fn save_equalizer_auto_presets(&self) -> io::Result<()> {
+        save_preset_store(
+            &preset_store_path(&self.equalizer_preset_dir, "eq.auto_preset"),
+            &self.equalizer_auto_presets,
+        )
+    }
+
+    fn current_equalizer_preset(&self, name: impl Into<String>) -> EqualizerPreset {
+        EqualizerPreset::from_positions(
+            name,
+            self.equalizer_preamp_position,
+            self.equalizer_band_positions,
+        )
+    }
+
+    fn apply_equalizer_preset_values(&mut self, preset: &EqualizerPreset) {
+        self.equalizer_preamp_position = preset.preamp_position();
+        self.equalizer_band_positions = preset.band_positions();
+        self.sync_equalizer_to_backend();
+    }
+
+    fn load_named_equalizer_preset(&mut self, name: &str, automatic: bool) -> bool {
+        let preset = if automatic {
+            find_preset(&self.equalizer_auto_presets, name)
+        } else {
+            find_preset(&self.equalizer_presets, name)
+        }
+        .cloned();
+        if let Some(preset) = preset {
+            self.apply_equalizer_preset_values(&preset);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn save_named_equalizer_preset(&mut self, name: String, automatic: bool) -> io::Result<()> {
+        let preset = self.current_equalizer_preset(name);
+        if automatic {
+            upsert_preset(&mut self.equalizer_auto_presets, preset);
+            self.save_equalizer_auto_presets()
+        } else {
+            upsert_preset(&mut self.equalizer_presets, preset);
+            self.save_equalizer_presets()
+        }
+    }
+
+    fn delete_named_equalizer_presets(
+        &mut self,
+        names: Vec<String>,
+        automatic: bool,
+    ) -> io::Result<()> {
+        if automatic {
+            remove_presets(&mut self.equalizer_auto_presets, &names);
+            self.save_equalizer_auto_presets()
+        } else {
+            remove_presets(&mut self.equalizer_presets, &names);
+            self.save_equalizer_presets()
+        }
+    }
+
+    fn load_equalizer_zero_preset(&mut self) {
+        self.apply_equalizer_preset_values(&EqualizerPreset::zero("Zero"));
+    }
+
+    fn load_equalizer_default_preset(&mut self) {
+        self.load_named_equalizer_preset("Default", false);
+    }
+
+    fn save_equalizer_default_preset(&mut self) -> io::Result<()> {
+        self.save_named_equalizer_preset("Default".to_string(), false)
+    }
+
+    fn load_equalizer_preset_file(&mut self, path: &Path) -> io::Result<()> {
+        if let Some(preset) = load_xmms_preset_file(path)? {
+            self.apply_equalizer_preset_values(&preset);
+        }
+        Ok(())
+    }
+
+    fn save_equalizer_preset_file(&self, path: &Path) -> io::Result<()> {
+        save_xmms_preset_file(path, &self.current_equalizer_preset("File"))
+    }
+
+    fn load_equalizer_winamp_file(&mut self, path: &Path) -> io::Result<()> {
+        if let Some(preset) = load_winamp_eqf_first(path)? {
+            self.apply_equalizer_preset_values(&preset);
+        }
+        Ok(())
+    }
+
+    fn import_equalizer_winamp_file(&mut self, path: &Path) -> io::Result<usize> {
+        let imported = import_winamp_eqf(path)?;
+        let count = imported.len();
+        for preset in imported {
+            upsert_preset(&mut self.equalizer_presets, preset);
+        }
+        self.save_equalizer_presets()?;
+        Ok(count)
+    }
+
+    fn save_equalizer_winamp_file(&self, path: &Path) -> io::Result<()> {
+        save_winamp_eqf(path, &self.current_equalizer_preset("Entry1"))
+    }
+
+    fn sorted_equalizer_presets(&self, automatic: bool) -> Vec<EqualizerPreset> {
+        let mut presets = if automatic {
+            self.equalizer_auto_presets.clone()
+        } else {
+            self.equalizer_presets.clone()
+        };
+        sort_presets(&mut presets);
+        presets
+    }
+
     pub(crate) fn scale_factor(&self) -> f64 {
         self.app_state.config.scale_factor
     }
@@ -3515,15 +4418,20 @@ impl MainWindowUiState {
             let backend = backend.borrow();
             backend.set_volume_percent(player.volume());
             backend.set_balance_percent(player.balance());
-            backend
-                .set_equalizer_from_positions(self.equalizer_active, self.equalizer_band_positions);
+            backend.set_equalizer_from_positions(
+                self.equalizer_active,
+                self.equalizer_preamp_position,
+                self.equalizer_band_positions,
+            );
         }
         self.playback_backend = Some(backend);
     }
 
     fn render_state(&self) -> MainWindowRenderState {
         MainWindowRenderState {
-            title: self.formatted_current_title(),
+            title: self
+                .equalizer_drag_info_text()
+                .unwrap_or_else(|| self.formatted_current_title()),
             shaded: self.shaded,
             volume_position: volume_to_position(self.app_state.player.volume()),
             balance_position: balance_to_position(self.app_state.player.balance()),
@@ -3559,6 +4467,30 @@ impl MainWindowUiState {
             return "XMMS Renascene".to_string();
         };
         self.formatted_playlist_entry_title(entry)
+    }
+
+    fn equalizer_drag_info_text(&self) -> Option<String> {
+        let slider = self.equalizer_dragging?;
+        let (label, position) = match slider {
+            EqualizerSlider::Preamp => ("PREAMP", self.equalizer_preamp_position),
+            EqualizerSlider::Band(0) => ("60HZ", self.equalizer_band_positions[0]),
+            EqualizerSlider::Band(1) => ("170HZ", self.equalizer_band_positions[1]),
+            EqualizerSlider::Band(2) => ("310HZ", self.equalizer_band_positions[2]),
+            EqualizerSlider::Band(3) => ("600HZ", self.equalizer_band_positions[3]),
+            EqualizerSlider::Band(4) => ("1KHZ", self.equalizer_band_positions[4]),
+            EqualizerSlider::Band(5) => ("3KHZ", self.equalizer_band_positions[5]),
+            EqualizerSlider::Band(6) => ("6KHZ", self.equalizer_band_positions[6]),
+            EqualizerSlider::Band(7) => ("12KHZ", self.equalizer_band_positions[7]),
+            EqualizerSlider::Band(8) => ("14KHZ", self.equalizer_band_positions[8]),
+            EqualizerSlider::Band(9) => ("16KHZ", self.equalizer_band_positions[9]),
+            EqualizerSlider::Band(_)
+            | EqualizerSlider::ShadedVolume
+            | EqualizerSlider::ShadedBalance => return None,
+        };
+        Some(format!(
+            "EQ: {label}: {:+.1} DB",
+            equalizer_position_to_db(position)
+        ))
     }
 
     fn formatted_playlist_entry_title(&self, entry: &crate::playlist::PlaylistEntry) -> String {
@@ -3786,6 +4718,7 @@ impl MainWindowUiState {
             pressed_control: self
                 .equalizer_pressed_control
                 .filter(|_| self.equalizer_pressed_inside),
+            pressed_slider: self.equalizer_dragging,
             preamp_position: self.equalizer_preamp_position,
             band_positions: self.equalizer_band_positions,
             volume_position: volume_to_eq_shaded_position(self.app_state.player.volume()),
@@ -4517,6 +5450,17 @@ impl MainWindowUiState {
             .and_then(|position| self.playlist_entry_uri(position))
     }
 
+    fn current_playlist_basename(&self) -> Option<String> {
+        self.current_playlist_entry_uri().and_then(|uri| {
+            file_uri_to_path(uri)
+                .and_then(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                })
+                .or_else(|| uri.rsplit('/').next().map(ToString::to_string))
+        })
+    }
+
     fn start_current_playlist_playback(&mut self) {
         if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
             self.app_state.playlist.set_position(0);
@@ -4535,6 +5479,7 @@ impl MainWindowUiState {
             let duration_ms = self.playlist_entry_length_ms(position).unwrap_or(0);
             self.app_state.player.play_spotify_uri(uri, duration_ms);
         } else {
+            self.load_equalizer_auto_preset_for_uri(&uri);
             self.playback_requests.push(uri.clone());
             if let Some(backend) = &self.playback_backend {
                 if let Err(err) = backend.borrow().play_uri(&uri) {
@@ -4545,6 +5490,61 @@ impl MainWindowUiState {
             }
             self.app_state.player.mark_playing();
         }
+    }
+
+    fn load_equalizer_auto_preset_for_uri(&mut self, uri: &str) {
+        if !self.equalizer_automatic {
+            return;
+        }
+        let Some(path) = file_uri_to_path(uri) else {
+            self.load_equalizer_default_preset();
+            return;
+        };
+
+        if !self.app_state.config.eqpreset_extension.is_empty() {
+            let per_file = PathBuf::from(format!(
+                "{}.{}",
+                path.to_string_lossy(),
+                self.app_state.config.eqpreset_extension
+            ));
+            match load_xmms_preset_file(&per_file) {
+                Ok(Some(preset)) => {
+                    self.apply_equalizer_preset_values(&preset);
+                    return;
+                }
+                Ok(None) => {}
+                Err(err) => eprintln!(
+                    "xmms-rs: failed to load equalizer preset {}: {err}",
+                    per_file.display()
+                ),
+            }
+        }
+
+        if !self.app_state.config.eqpreset_default_file.is_empty() {
+            if let Some(parent) = path.parent() {
+                let directory_preset = parent.join(&self.app_state.config.eqpreset_default_file);
+                match load_xmms_preset_file(&directory_preset) {
+                    Ok(Some(preset)) => {
+                        self.apply_equalizer_preset_values(&preset);
+                        return;
+                    }
+                    Ok(None) => {}
+                    Err(err) => eprintln!(
+                        "xmms-rs: failed to load equalizer preset {}: {err}",
+                        directory_preset.display()
+                    ),
+                }
+            }
+        }
+
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| self.load_named_equalizer_preset(name, true))
+        {
+            return;
+        }
+        self.load_equalizer_default_preset();
     }
 
     fn pause_playback(&mut self) {
@@ -4937,7 +5937,7 @@ impl MainWindowUiState {
         if self.equalizer_shaded {
             if let Some(slider) = equalizer_shaded_slider_at(x, y) {
                 self.equalizer_dragging = Some(slider);
-                self.set_equalizer_slider_position(slider, x);
+                self.begin_equalizer_slider_drag(slider, x, y);
                 return true;
             }
             return false;
@@ -4951,7 +5951,7 @@ impl MainWindowUiState {
 
         if let Some(slider) = equalizer_slider_at(x, y) {
             self.equalizer_dragging = Some(slider);
-            self.set_equalizer_slider_position(slider, y);
+            self.begin_equalizer_slider_drag(slider, x, y);
             return true;
         }
 
@@ -4976,6 +5976,58 @@ impl MainWindowUiState {
         self.set_equalizer_slider_position(slider, coordinate)
     }
 
+    pub(crate) fn equalizer_scroll(&mut self, x: i32, y: i32, dy: f64) -> bool {
+        let Some(slider) = equalizer_slider_at(x, y) else {
+            return false;
+        };
+        let diff = if dy < 0.0 {
+            -4
+        } else if dy > 0.0 {
+            4
+        } else {
+            return false;
+        };
+        match slider {
+            EqualizerSlider::Preamp => {
+                let next = (self.equalizer_preamp_position + diff).clamp(0, 100);
+                let changed = self.equalizer_preamp_position != next;
+                self.equalizer_preamp_position = next;
+                if changed {
+                    self.sync_equalizer_to_backend();
+                }
+                changed
+            }
+            EqualizerSlider::Band(band) => {
+                let Some(value) = self.equalizer_band_positions.get_mut(band) else {
+                    return false;
+                };
+                let next = (*value + diff).clamp(0, 100);
+                let changed = *value != next;
+                *value = next;
+                if changed {
+                    self.sync_equalizer_to_backend();
+                }
+                changed
+            }
+            EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => false,
+        }
+    }
+
+    pub(crate) fn adjust_shaded_equalizer_balance(&mut self, diff: i32) -> bool {
+        if !self.equalizer_shaded {
+            return false;
+        }
+        let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
+        let changed = self.app_state.player.balance() != balance;
+        self.app_state.player.set_balance(balance);
+        if changed {
+            if let Some(backend) = &self.playback_backend {
+                backend.borrow().set_balance_percent(balance);
+            }
+        }
+        changed
+    }
+
     pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
         if let Some(control) = self.equalizer_pressed_control.take() {
             let activated =
@@ -4983,7 +6035,10 @@ impl MainWindowUiState {
             self.equalizer_pressed_inside = false;
             if activated {
                 match control {
-                    EqualizerControl::On => self.equalizer_active = !self.equalizer_active,
+                    EqualizerControl::On => {
+                        self.equalizer_active = !self.equalizer_active;
+                        self.sync_equalizer_to_backend();
+                    }
                     EqualizerControl::Auto => self.equalizer_automatic = !self.equalizer_automatic,
                     EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
                 }
@@ -5022,18 +6077,27 @@ impl MainWindowUiState {
             }
             _ => {}
         }
+        self.sync_equalizer_to_backend();
     }
 
     fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, coordinate: i32) -> bool {
-        match slider {
+        let changed = match slider {
             EqualizerSlider::Preamp => {
-                let position = equalizer_slider_position(slider, coordinate);
+                let position = eq_slider_pixel_to_position(
+                    coordinate
+                        - equalizer_slider_layout(slider).rect.y
+                        - self.equalizer_slider_press_offset,
+                );
                 let changed = self.equalizer_preamp_position != position;
                 self.equalizer_preamp_position = position;
                 changed
             }
             EqualizerSlider::Band(band) => {
-                let position = equalizer_slider_position(slider, coordinate);
+                let position = eq_slider_pixel_to_position(
+                    coordinate
+                        - equalizer_slider_layout(slider).rect.y
+                        - self.equalizer_slider_press_offset,
+                );
                 let Some(value) = self.equalizer_band_positions.get_mut(band) else {
                     return false;
                 };
@@ -5042,19 +6106,101 @@ impl MainWindowUiState {
                 changed
             }
             EqualizerSlider::ShadedVolume => {
-                let position = equalizer_slider_position(slider, coordinate);
+                let position = (coordinate
+                    - equalizer_slider_layout(slider).rect.x
+                    - self.equalizer_slider_press_offset)
+                    .clamp(0, 94);
                 let volume = eq_shaded_position_to_volume(position);
                 let changed = self.app_state.player.volume() != volume;
                 self.app_state.player.set_volume(volume);
                 changed
             }
             EqualizerSlider::ShadedBalance => {
-                let position = equalizer_slider_position(slider, coordinate);
+                let position = (coordinate
+                    - equalizer_slider_layout(slider).rect.x
+                    - self.equalizer_slider_press_offset)
+                    .clamp(0, 39);
                 let balance = eq_shaded_position_to_balance(position);
                 let changed = self.app_state.player.balance() != balance;
                 self.app_state.player.set_balance(balance);
                 changed
             }
+        };
+        if changed {
+            match slider {
+                EqualizerSlider::Preamp | EqualizerSlider::Band(_) => {
+                    self.sync_equalizer_to_backend()
+                }
+                EqualizerSlider::ShadedVolume => {
+                    if let Some(backend) = &self.playback_backend {
+                        backend
+                            .borrow()
+                            .set_volume_percent(self.app_state.player.volume());
+                    }
+                }
+                EqualizerSlider::ShadedBalance => {
+                    if let Some(backend) = &self.playback_backend {
+                        backend
+                            .borrow()
+                            .set_balance_percent(self.app_state.player.balance());
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    fn begin_equalizer_slider_drag(&mut self, slider: EqualizerSlider, x: i32, y: i32) {
+        let layout = equalizer_slider_layout(slider);
+        match slider {
+            EqualizerSlider::Preamp | EqualizerSlider::Band(_) => {
+                let position = self.equalizer_slider_pixel_position(slider);
+                let local_y = y - layout.rect.y;
+                if local_y >= position && local_y < position + 11 {
+                    self.equalizer_slider_press_offset = local_y - position;
+                } else {
+                    self.equalizer_slider_press_offset = 5;
+                    self.set_equalizer_slider_position(slider, y);
+                }
+            }
+            EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => {
+                let position = self.equalizer_slider_pixel_position(slider);
+                let local_x = x - layout.rect.x;
+                if local_x >= position && local_x < position + layout.knob_size.width {
+                    self.equalizer_slider_press_offset = local_x - position;
+                } else {
+                    self.equalizer_slider_press_offset = layout.knob_size.width / 2;
+                    self.set_equalizer_slider_position(slider, x);
+                }
+            }
+        }
+    }
+
+    fn equalizer_slider_pixel_position(&self, slider: EqualizerSlider) -> i32 {
+        match slider {
+            EqualizerSlider::Preamp => eq_slider_position_to_pixel(self.equalizer_preamp_position),
+            EqualizerSlider::Band(band) => self
+                .equalizer_band_positions
+                .get(band)
+                .copied()
+                .map(eq_slider_position_to_pixel)
+                .unwrap_or(25),
+            EqualizerSlider::ShadedVolume => {
+                volume_to_eq_shaded_position(self.app_state.player.volume())
+            }
+            EqualizerSlider::ShadedBalance => {
+                balance_to_eq_shaded_position(self.app_state.player.balance())
+            }
+        }
+    }
+
+    fn sync_equalizer_to_backend(&self) {
+        if let Some(backend) = &self.playback_backend {
+            backend.borrow().set_equalizer_from_positions(
+                self.equalizer_active,
+                self.equalizer_preamp_position,
+                self.equalizer_band_positions,
+            );
         }
     }
 
@@ -5746,6 +6892,7 @@ impl MainWindowUiState {
                 eprintln!("xmms-rs: failed to switch output device: {err}");
             }
         }
+        self.sync_equalizer_to_backend();
         self.app_state.config.output_device = device;
         self.mark_preferences_saved();
     }
@@ -6633,6 +7780,24 @@ fn eq_shaded_position_to_volume(position: i32) -> i32 {
 fn eq_shaded_position_to_balance(position: i32) -> i32 {
     let position = position.clamp(0, 38);
     (((position - 19) * 100 + if position >= 19 { 9 } else { -9 }) / 19).clamp(-100, 100)
+}
+
+fn eq_slider_position_to_pixel(position: i32) -> i32 {
+    let pixel = position.clamp(0, 100) / 2;
+    if (24..=26).contains(&pixel) {
+        25
+    } else {
+        pixel
+    }
+}
+
+fn eq_slider_pixel_to_position(pixel: i32) -> i32 {
+    let pixel = pixel.clamp(0, 50);
+    if (24..=26).contains(&pixel) {
+        50
+    } else {
+        pixel * 2
+    }
 }
 
 fn event_to_base_coords(

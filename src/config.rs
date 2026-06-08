@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::equalizer::{default_preset_extension, default_preset_file};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
@@ -37,6 +38,8 @@ pub struct Config {
     pub equalizer_auto: bool,
     pub equalizer_preamp_pos: i32,
     pub equalizer_band_pos: [i32; 10],
+    pub eqpreset_default_file: String,
+    pub eqpreset_extension: String,
     pub convert_underscore: bool,
     pub convert_twenty: bool,
     pub show_numbers_in_pl: bool,
@@ -104,6 +107,8 @@ impl Default for Config {
             equalizer_auto: false,
             equalizer_preamp_pos: 50,
             equalizer_band_pos: [50; 10],
+            eqpreset_default_file: default_preset_file().to_string(),
+            eqpreset_extension: default_preset_extension().to_string(),
             convert_underscore: true,
             convert_twenty: true,
             show_numbers_in_pl: true,
@@ -188,13 +193,22 @@ impl Config {
         cfg.equalizer_active = get_bool(&keys, "equalizer_active").unwrap_or(cfg.equalizer_active);
         cfg.equalizer_auto = get_bool(&keys, "equalizer_auto").unwrap_or(cfg.equalizer_auto);
         cfg.equalizer_preamp_pos = get_i32(&keys, "equalizer_preamp_pos")
+            .or_else(|| get_f64(&keys, "equalizer_preamp").map(db_to_equalizer_position))
             .unwrap_or(cfg.equalizer_preamp_pos)
             .clamp(0, 100);
         for i in 0..10 {
             let key = format!("equalizer_band_{i}_pos");
+            let legacy_key = format!("equalizer_band{i}");
             cfg.equalizer_band_pos[i] = get_i32(&keys, &key)
+                .or_else(|| get_f64(&keys, &legacy_key).map(db_to_equalizer_position))
                 .unwrap_or(cfg.equalizer_band_pos[i])
                 .clamp(0, 100);
+        }
+        if let Some(value) = get_non_empty_string(&keys, "eqpreset_default_file") {
+            cfg.eqpreset_default_file = trim_leading_dots(value);
+        }
+        if let Some(value) = get_non_empty_string(&keys, "eqpreset_extension") {
+            cfg.eqpreset_extension = trim_leading_dots(value);
         }
         cfg.convert_underscore =
             get_bool(&keys, "convert_underscore").unwrap_or(cfg.convert_underscore);
@@ -302,13 +316,29 @@ impl Config {
         push_bool(&mut out, "equalizer_active", self.equalizer_active);
         push_bool(&mut out, "equalizer_auto", self.equalizer_auto);
         push_i32(&mut out, "equalizer_preamp_pos", self.equalizer_preamp_pos);
+        push_f64(
+            &mut out,
+            "equalizer_preamp",
+            equalizer_position_to_db(self.equalizer_preamp_pos),
+        );
         for i in 0..10 {
             push_i32(
                 &mut out,
                 &format!("equalizer_band_{i}_pos"),
                 self.equalizer_band_pos[i],
             );
+            push_f64(
+                &mut out,
+                &format!("equalizer_band{i}"),
+                equalizer_position_to_db(self.equalizer_band_pos[i]),
+            );
         }
+        push_string(
+            &mut out,
+            "eqpreset_default_file",
+            &self.eqpreset_default_file,
+        );
+        push_string(&mut out, "eqpreset_extension", &self.eqpreset_extension);
         if let Some(skin) = &self.skin {
             push_string(&mut out, "skin", skin);
         }
@@ -441,6 +471,20 @@ fn push_string(out: &mut String, key: &str, value: &str) {
     out.push('=');
     out.push_str(value);
     out.push('\n');
+}
+
+fn equalizer_position_to_db(position: i32) -> f64 {
+    (50 - position.clamp(0, 100)) as f64 * 20.0 / 50.0
+}
+
+fn db_to_equalizer_position(db: f64) -> i32 {
+    (50.0 - (db.clamp(-20.0, 20.0) * 50.0 / 20.0))
+        .round()
+        .clamp(0.0, 100.0) as i32
+}
+
+fn trim_leading_dots(value: String) -> String {
+    value.trim().trim_start_matches('.').to_string()
 }
 
 #[cfg(test)]
