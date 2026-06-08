@@ -400,7 +400,7 @@ pub fn main_slider_layout(slider: MainSlider, shaded: bool) -> SliderLayout {
             min: 0,
             max: 24,
             frame_height: 15,
-            frame_offset: 0,
+            frame_offset: 9,
         },
         (MainSlider::Position, false) => SliderLayout {
             rect: SkinRect::new(16, 72, 248, 10),

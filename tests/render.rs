@@ -142,6 +142,43 @@ fn main_stream_info_text_is_drawn_at_original_positions() {
 }
 
 #[test]
+fn main_balance_slider_bar_uses_original_frame_offset() {
+    let tmp = unique_temp_dir("xmms-rs-balance-bar-offset");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut balance = image::RgbaImage::new(68, 433);
+    for pixel in balance.pixels_mut() {
+        *pixel = image::Rgba([0, 0, 0, 255]);
+    }
+    balance.put_pixel(9, 0, image::Rgba([0x44, 0xbb, 0xdd, 0xff]));
+    balance.save(tmp.join("balance.png")).unwrap();
+
+    let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_main_player_state(
+        &cr,
+        &skin,
+        &MainWindowRenderState {
+            balance_position: 0,
+            ..MainWindowRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = 57 * stride + 177 * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual, 0xff44bbdd);
+
+    std::fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
 fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
     let tmp = unique_temp_dir("xmms-rs-eq-slider-align");
     std::fs::create_dir_all(&tmp).unwrap();
