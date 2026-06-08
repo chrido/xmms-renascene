@@ -452,13 +452,16 @@ fn scan_skin_dir(dir: &Path, skins: &mut Vec<SkinEntry>) -> io::Result<()> {
 }
 
 fn is_skin_archive_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            ["zip", "wsz", "tgz", "gz", "bz2"]
-                .iter()
-                .any(|known| ext.eq_ignore_ascii_case(known))
-        })
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        ".zip", ".wsz", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix))
 }
 
 fn skin_display_name(path: &Path) -> String {
@@ -1322,5 +1325,101 @@ static char * main_xpm[] = {
         assert_eq!(main.height(), 1);
 
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn archive_discovery_matches_loader_supported_extensions() {
+        assert!(is_skin_archive_path(Path::new("Example.zip")));
+        assert!(is_skin_archive_path(Path::new("Example.wsz")));
+        assert!(is_skin_archive_path(Path::new("Example.tar")));
+        assert!(is_skin_archive_path(Path::new("Example.tar.gz")));
+        assert!(is_skin_archive_path(Path::new("Example.tgz")));
+        assert!(is_skin_archive_path(Path::new("Example.tar.bz2")));
+        assert!(is_skin_archive_path(Path::new("Example.tbz2")));
+        assert!(!is_skin_archive_path(Path::new("Example.gz")));
+        assert!(!is_skin_archive_path(Path::new("Example.bz2")));
+        assert!(!is_skin_archive_path(Path::new("Example.txt")));
+    }
+
+    #[test]
+    fn path_loader_accepts_every_discovered_archive_extension() {
+        let root =
+            std::env::temp_dir().join(format!("xmms-rs-skin-test-{}-archives", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        for extension in ["zip", "wsz", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2"] {
+            let path = root.join(format!("Example.{extension}"));
+            write_test_skin_archive(&path, ONE_PIXEL_XPM.as_bytes()).unwrap();
+            let skin = DefaultSkin::load_from_path(&path).unwrap();
+            assert_eq!(
+                skin.get(SkinPixmapKind::Main).unwrap().pixel_argb(0, 0),
+                Some(0xff010203),
+                "{extension}"
+            );
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_test_skin_archive(path: &Path, contents: &[u8]) -> io::Result<()> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        if name.ends_with(".zip") || name.ends_with(".wsz") {
+            let file = File::create(path)?;
+            let mut archive = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            archive.start_file("Example/main.xpm", options)?;
+            archive.write_all(contents)?;
+            archive.finish()?;
+            return Ok(());
+        }
+
+        if name.ends_with(".tar") {
+            let file = File::create(path)?;
+            let mut archive = tar::Builder::new(file);
+            append_test_skin_tar_entry(&mut archive, contents)?;
+            archive.finish()?;
+            return Ok(());
+        }
+
+        if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+            let file = File::create(path)?;
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            append_test_skin_tar_entry(&mut archive, contents)?;
+            archive.into_inner()?.finish()?;
+            return Ok(());
+        }
+
+        if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") {
+            let file = File::create(path)?;
+            let encoder = bzip2::write::BzEncoder::new(file, bzip2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            append_test_skin_tar_entry(&mut archive, contents)?;
+            archive.into_inner()?.finish()?;
+            return Ok(());
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported test archive: {}", path.display()),
+        ))
+    }
+
+    fn append_test_skin_tar_entry<W: Write>(
+        archive: &mut tar::Builder<W>,
+        contents: &[u8],
+    ) -> io::Result<()> {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive.append_data(&mut header, "Example/main.xpm", Cursor::new(contents))
     }
 }
