@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cairo::{Context, Format, ImageSurface};
 use xmms_renascene::render::{
@@ -14,6 +15,15 @@ use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 #[test]
@@ -93,8 +103,56 @@ fn main_volume_slider_knob_is_vertically_centered_like_original() {
 }
 
 #[test]
-fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
+fn main_stream_info_text_is_drawn_at_original_positions() {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let main = skin.get(SkinPixmapKind::Main).unwrap();
+    let text = skin.get(SkinPixmapKind::Text).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_main_player_state(
+        &cr,
+        &skin,
+        &MainWindowRenderState {
+            bitrate_text: "192".to_string(),
+            frequency_text: "44".to_string(),
+            ..MainWindowRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    for (dest_x, digit) in [(111_usize, 1_usize), (156_usize, 4_usize)] {
+        let (dx, dy, expected) = (0..6_usize)
+            .flat_map(|y| (0..5_usize).map(move |x| (x, y)))
+            .find_map(|(x, y)| {
+                let expected = text.pixel_argb(digit * 5 + x, 6 + y)?;
+                let background = main.pixel_argb(dest_x + x, 43 + y)?;
+                (expected != background).then_some((x, y, expected))
+            })
+            .expect("default text skin should differ from the main background");
+        let offset = (43 + dy) * stride + (dest_x + dx) * 4;
+        let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
+    let tmp = unique_temp_dir("xmms-rs-eq-slider-align");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut eqmain = image::RgbaImage::new(275, 315);
+    for pixel in eqmain.pixels_mut() {
+        *pixel = image::Rgba([0, 0, 0, 255]);
+    }
+    eqmain.put_pixel(0, 164, image::Rgba([0xee, 0x11, 0x22, 0xff]));
+    eqmain.save(tmp.join("eqmain.png")).unwrap();
+
+    let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
     let mut surface = ImageSurface::create(
         Format::ARgb32,
         EQUALIZER_WINDOW_WIDTH,
@@ -114,23 +172,21 @@ fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
     drop(cr);
     surface.flush();
 
-    let eqmain = skin.get(SkinPixmapKind::EqMain).unwrap();
-    let (dx, dy, expected) = (0..11_usize)
-        .flat_map(|y| (0..11_usize).map(move |x| (x, y)))
-        .find_map(|(x, y)| {
-            eqmain
-                .pixel_argb(x, 164 + y)
-                .filter(|pixel| *pixel != 0)
-                .map(|pixel| (x, y, pixel))
-        })
-        .expect("default eqmain skin should contain visible equalizer slider knob pixels");
     let stride = surface.stride() as usize;
     let data = surface.data().unwrap();
-    let centered_x = 21 + 1;
-    let offset = (38 + 50 + dy) * stride + (centered_x as usize + dx) * 4;
-    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+    let old_offset = 38 * stride + 21 * 4;
+    let centered_offset = 38 * stride + (21 + 1) * 4;
+    let old_pixel = u32::from_ne_bytes(data[old_offset..old_offset + 4].try_into().unwrap());
+    let centered_pixel = u32::from_ne_bytes(
+        data[centered_offset..centered_offset + 4]
+            .try_into()
+            .unwrap(),
+    );
 
-    assert_eq!(actual, expected);
+    assert_eq!(old_pixel, 0xff000000);
+    assert_eq!(centered_pixel, 0xffee1122);
+
+    std::fs::remove_dir_all(tmp).unwrap();
 }
 
 #[test]

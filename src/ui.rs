@@ -4518,6 +4518,8 @@ impl MainWindowUiState {
             time_digits: self.time_digits(),
             shaded_time_min: self.shaded_time_min_text(),
             shaded_time_sec: self.shaded_time_sec_text(),
+            bitrate_text: self.bitrate_text(),
+            frequency_text: self.frequency_text(),
             shuffle_selected: self.app_state.playlist.shuffle(),
             repeat_selected: self.app_state.playlist.repeat(),
             equalizer_selected: self.app_state.config.equalizer_visible,
@@ -4534,6 +4536,31 @@ impl MainWindowUiState {
             visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
         }
+    }
+
+    fn bitrate_text(&self) -> String {
+        let bitrate = self.app_state.player.bitrate();
+        if bitrate <= 0 {
+            return "   ".to_string();
+        }
+        if bitrate < 1000 {
+            format!("{bitrate:>3}")
+        } else {
+            format!("{:>2}H", bitrate / 100)
+        }
+    }
+
+    fn frequency_text(&self) -> String {
+        let frequency = self.app_state.player.frequency();
+        if frequency <= 0 {
+            return "  ".to_string();
+        }
+        let khz = if frequency >= 1000 {
+            (frequency + 500) / 1000
+        } else {
+            frequency
+        };
+        format!("{khz:>2}")
     }
 
     pub(crate) fn formatted_current_title(&self) -> String {
@@ -8223,6 +8250,28 @@ mod tests {
         state.press(243, 59);
         assert_eq!(state.release(243, 59), UiAction::None);
         assert!(state.app_state.config.playlist_visible);
+    }
+
+    #[test]
+    fn main_render_state_formats_stream_info_like_xmms() {
+        let mut state = MainWindowUiState::default();
+
+        assert_eq!(state.render_state().bitrate_text, "   ");
+        assert_eq!(state.render_state().frequency_text, "  ");
+
+        state
+            .app_state_mut()
+            .player
+            .set_stream_info(Some(192), Some(44_100), Some(2));
+        assert_eq!(state.render_state().bitrate_text, "192");
+        assert_eq!(state.render_state().frequency_text, "44");
+
+        state
+            .app_state_mut()
+            .player
+            .set_stream_info(Some(1280), Some(48), Some(2));
+        assert_eq!(state.render_state().bitrate_text, "12H");
+        assert_eq!(state.render_state().frequency_text, "48");
     }
 
     #[test]
