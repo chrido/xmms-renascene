@@ -12,6 +12,16 @@ fn main() {
         }
     };
 
+    if let Some(path) = preview_options.screenshot_path.as_deref() {
+        if let Err(err) =
+            ui::write_player_screenshot(preview_options.clone(), std::path::Path::new(path))
+        {
+            eprintln!("xmms-rs: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if args.iter().any(|arg| arg == "--gtk") {
         ui::run_default_skin_preview(preview_options);
         return;
@@ -21,15 +31,20 @@ fn main() {
         return;
     }
 
-    match DefaultSkin::load_bundled() {
+    let skin = match preview_options.skin_path.as_deref() {
+        Some(path) => DefaultSkin::load_from_path(std::path::Path::new(path)),
+        None => DefaultSkin::load_bundled(),
+    };
+
+    match skin {
         Ok(skin) => {
             println!(
-                "xmms-rs: loaded {} bundled default skin pixmaps",
+                "xmms-rs: loaded {} skin pixmaps",
                 skin.loaded_pixmap_count(),
             );
         }
         Err(err) => {
-            eprintln!("xmms-rs: failed to load default skin: {err}");
+            eprintln!("xmms-rs: failed to load skin: {err}");
             std::process::exit(1);
         }
     }
@@ -93,6 +108,13 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
                 return Err("--skin requires PATH".to_string());
             };
             options.skin_path = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--screenshot=") {
+            options.screenshot_path = Some(value.to_string());
+        } else if arg == "--screenshot" {
+            let Some(value) = iter.next() else {
+                return Err("--screenshot requires PATH".to_string());
+            };
+            options.screenshot_path = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("--playlist-size=") {
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
@@ -160,6 +182,8 @@ mod tests {
             "--reset",
             "--skin",
             "/tmp/skin.wsz",
+            "--screenshot",
+            "/tmp/player.png",
         ]))
         .unwrap();
 
@@ -172,5 +196,6 @@ mod tests {
         assert_eq!(options.equalizer_detached, Some(true));
         assert!(options.reset);
         assert_eq!(options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
+        assert_eq!(options.screenshot_path.as_deref(), Some("/tmp/player.png"));
     }
 }

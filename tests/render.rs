@@ -1,18 +1,29 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cairo::{Context, Format, ImageSurface};
 use xmms_renascene::render::{
-    render_equalizer_state, render_main_player_reset, render_playlist_frame, render_playlist_rows,
-    render_visualization, surface_from_xpm, EqualizerRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    render_equalizer_state, render_main_player_reset, render_main_player_state,
+    render_playlist_frame, render_playlist_rows, render_visualization, surface_from_xpm,
+    EqualizerRenderState, MainWindowRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
+    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH,
 };
 use xmms_renascene::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
 use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn unique_temp_dir(prefix: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 #[test]
@@ -52,6 +63,167 @@ fn renders_reset_state_widgets_over_main_skin() {
         .count();
 
     assert!(changed_pixels > 1_000);
+}
+
+#[test]
+fn main_volume_slider_knob_is_vertically_centered_like_original() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_main_player_state(
+        &cr,
+        &skin,
+        &MainWindowRenderState {
+            volume_position: 0,
+            ..MainWindowRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let volume = skin.get(SkinPixmapKind::Volume).unwrap();
+    let (dx, dy, expected) = (0..14_usize)
+        .flat_map(|y| (0..14_usize).map(move |x| (x, y)))
+        .find_map(|(x, y)| {
+            volume
+                .pixel_argb(15 + x, 422 + y)
+                .filter(|pixel| *pixel != 0)
+                .map(|pixel| (x, y, pixel))
+        })
+        .expect("default volume skin should contain visible slider knob pixels");
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let centered_y = 57 + 1;
+    let offset = (centered_y as usize + dy) * stride + (107 + dx) * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn main_stream_info_text_is_drawn_at_original_positions() {
+    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let main = skin.get(SkinPixmapKind::Main).unwrap();
+    let text = skin.get(SkinPixmapKind::Text).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_main_player_state(
+        &cr,
+        &skin,
+        &MainWindowRenderState {
+            bitrate_text: "192".to_string(),
+            frequency_text: "44".to_string(),
+            ..MainWindowRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    for (dest_x, digit) in [(111_usize, 1_usize), (156_usize, 4_usize)] {
+        let (dx, dy, expected) = (0..6_usize)
+            .flat_map(|y| (0..5_usize).map(move |x| (x, y)))
+            .find_map(|(x, y)| {
+                let expected = text.pixel_argb(digit * 5 + x, 6 + y)?;
+                let background = main.pixel_argb(dest_x + x, 43 + y)?;
+                (expected != background).then_some((x, y, expected))
+            })
+            .expect("default text skin should differ from the main background");
+        let offset = (43 + dy) * stride + (dest_x + dx) * 4;
+        let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn main_balance_slider_bar_uses_original_frame_offset() {
+    let tmp = unique_temp_dir("xmms-rs-balance-bar-offset");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut balance = image::RgbaImage::new(68, 433);
+    for pixel in balance.pixels_mut() {
+        *pixel = image::Rgba([0, 0, 0, 255]);
+    }
+    balance.put_pixel(9, 0, image::Rgba([0x44, 0xbb, 0xdd, 0xff]));
+    balance.save(tmp.join("balance.png")).unwrap();
+
+    let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+    let mut surface =
+        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_main_player_state(
+        &cr,
+        &skin,
+        &MainWindowRenderState {
+            balance_position: 0,
+            ..MainWindowRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = 57 * stride + 177 * 4;
+    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+
+    assert_eq!(actual, 0xff44bbdd);
+
+    std::fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
+fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
+    let tmp = unique_temp_dir("xmms-rs-eq-slider-align");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let mut eqmain = image::RgbaImage::new(275, 315);
+    for pixel in eqmain.pixels_mut() {
+        *pixel = image::Rgba([0, 0, 0, 255]);
+    }
+    eqmain.put_pixel(0, 164, image::Rgba([0xee, 0x11, 0x22, 0xff]));
+    eqmain.save(tmp.join("eqmain.png")).unwrap();
+
+    let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        EQUALIZER_WINDOW_WIDTH,
+        EQUALIZER_WINDOW_HEIGHT,
+    )
+    .unwrap();
+    let cr = Context::new(&surface).unwrap();
+    assert!(render_equalizer_state(
+        &cr,
+        &skin,
+        &EqualizerRenderState {
+            preamp_position: 0,
+            ..EqualizerRenderState::default()
+        }
+    )
+    .unwrap());
+    drop(cr);
+    surface.flush();
+
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let old_offset = 38 * stride + 21 * 4;
+    let centered_offset = 38 * stride + (21 + 1) * 4;
+    let old_pixel = u32::from_ne_bytes(data[old_offset..old_offset + 4].try_into().unwrap());
+    let centered_pixel = u32::from_ne_bytes(
+        data[centered_offset..centered_offset + 4]
+            .try_into()
+            .unwrap(),
+    );
+
+    assert_eq!(old_pixel, 0xff000000);
+    assert_eq!(centered_pixel, 0xffee1122);
+
+    std::fs::remove_dir_all(tmp).unwrap();
 }
 
 #[test]

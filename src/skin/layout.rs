@@ -400,7 +400,7 @@ pub fn main_slider_layout(slider: MainSlider, shaded: bool) -> SliderLayout {
             min: 0,
             max: 24,
             frame_height: 15,
-            frame_offset: 0,
+            frame_offset: 9,
         },
         (MainSlider::Position, false) => SliderLayout {
             rect: SkinRect::new(16, 72, 248, 10),
@@ -471,7 +471,7 @@ pub fn equalizer_slider_layout(slider: EqualizerSlider) -> SliderLayout {
     match slider {
         EqualizerSlider::Preamp => SliderLayout {
             rect: SkinRect::new(21, 38, 14, 63),
-            knob_size: Size::new(14, 11),
+            knob_size: Size::new(11, 11),
             min: 0,
             max: 100,
             frame_height: 1,
@@ -479,7 +479,7 @@ pub fn equalizer_slider_layout(slider: EqualizerSlider) -> SliderLayout {
         },
         EqualizerSlider::Band(band) => SliderLayout {
             rect: SkinRect::new(78 + band as i32 * 18, 38, 14, 63),
-            knob_size: Size::new(14, 11),
+            knob_size: Size::new(11, 11),
             min: 0,
             max: 100,
             frame_height: 1,

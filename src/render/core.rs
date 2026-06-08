@@ -234,7 +234,7 @@ pub(super) fn render_horizontal_slider(
         spec.knob_source_x,
         spec.knob_source_y,
         spec.x + spec.position,
-        spec.y,
+        spec.y + ((spec.height - spec.knob_height) / 2),
         spec.knob_width,
         spec.knob_height,
     )?;

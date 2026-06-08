@@ -1,5 +1,6 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -50,13 +51,20 @@ use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
     VisScopeMode, VisVuMode, Visualization, WidgetId,
 };
-use crate::skin::{discover_skins_in_dirs, DefaultSkin, SkinEntry};
+use crate::skin::{
+    discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry, SkinPixmapKind,
+};
 use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
 type PreferencesChanged = Rc<dyn Fn()>;
 const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
 const PREFERENCES_BALANCE_WIDGET: &str = "xmms-preferences-balance";
+const SKIN_BROWSER_ROOT_WIDGET: &str = "xmms-skin-browser-root";
+const SKIN_BROWSER_HEADER_WIDGET: &str = "xmms-skin-browser-header";
+const SKIN_BROWSER_LIST_WIDGET: &str = "xmms-skin-browser-list";
+const SKIN_BROWSER_ADD_WIDGET: &str = "xmms-skin-browser-add";
+const SKIN_BROWSER_CLOSE_WIDGET: &str = "xmms-skin-browser-close";
 const XMMS_MENU_CSS_TEMPLATE: &str = r#"
 .xmms-menu-popover,
 .xmms-menu-popover contents,
@@ -115,6 +123,7 @@ pub struct PreviewOptions {
     pub playlist_size: Option<(i32, i32)>,
     pub reset: bool,
     pub skin_path: Option<String>,
+    pub screenshot_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +138,21 @@ pub fn run_default_skin_preview(options: PreviewOptions) {
 
 pub fn run_default_skin_preview_smoke(options: PreviewOptions) {
     run_preview_application(PreviewMode::Smoke, options);
+}
+
+pub fn write_player_screenshot(options: PreviewOptions, path: &Path) -> Result<(), String> {
+    let state = preview_state_from_options(options)?;
+    let docked_state = state.docked_panel_state();
+    let (width, height) = docked_panel_size(docked_state);
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+        .map_err(|err| format!("failed to create screenshot surface: {err}"))?;
+    let cr = cairo::Context::new(&surface)
+        .map_err(|err| format!("failed to create screenshot context: {err}"))?;
+    render_docked_ui_state(&cr, state.active_skin(), &state)
+        .map_err(|err| format!("failed to render screenshot: {err}"))?;
+    drop(cr);
+    write_surface_png(&mut surface, path)
+        .map_err(|err| format!("failed to write screenshot '{}': {err}", path.display()))
 }
 
 enum PreviewMode {
@@ -174,9 +198,6 @@ fn build_preview_window(
     options: PreviewOptions,
     persist_session: bool,
 ) -> Result<(), String> {
-    let skin = DefaultSkin::load_bundled().map_err(|err| err.to_string())?;
-    let skin = Rc::new(skin);
-    install_xmms_menu_css(&skin);
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     let app_state = if persist_session {
         load_saved_state(&config_path, &playlist_path, options.reset)
@@ -184,44 +205,16 @@ fn build_preview_window(
     } else {
         AppState::default()
     };
-    let main_state = Rc::new(RefCell::new(MainWindowUiState::from_app_state(app_state)));
-    {
-        let mut state = main_state.borrow_mut();
-        if let Some(config_dir) = config_path.parent() {
-            state.set_equalizer_preset_dir(config_dir.to_path_buf());
-        }
-        match GStreamerBackend::new() {
-            Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
-            Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
-        }
-        if let Some((width, height)) = options.playlist_size {
-            state.set_playlist_size(width, height);
-        }
-        if options.show_playlist || options.playlist_size.is_some() {
-            state.app_state.config.playlist_visible = true;
-        }
-        if options.show_equalizer {
-            state.app_state.config.equalizer_visible = true;
-        }
-        if let Some(shaded) = options.main_shaded {
-            state.shaded = shaded;
-        }
-        if let Some(shaded) = options.playlist_shaded {
-            state.playlist_shaded = shaded;
-        }
-        if let Some(shaded) = options.equalizer_shaded {
-            state.equalizer_shaded = shaded;
-        }
-        if let Some(detached) = options.playlist_detached {
-            state.app_state.config.playlist_detached = detached;
-        }
-        if let Some(detached) = options.equalizer_detached {
-            state.app_state.config.equalizer_detached = detached;
-        }
-        if let Some(skin_path) = options.skin_path {
-            state.app_state.config.skin = Some(skin_path.clone());
-        }
+    let mut state = preview_state_from_app_state(app_state, options)?;
+    if let Some(config_dir) = config_path.parent() {
+        state.set_equalizer_preset_dir(config_dir.to_path_buf());
     }
+    match GStreamerBackend::new() {
+        Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
+        Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
+    }
+    let main_state = Rc::new(RefCell::new(state));
+    install_xmms_menu_css(main_state.borrow().active_skin());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -264,13 +257,7 @@ fn build_preview_window(
         .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let panel_windows = Rc::new(PanelWindows::new(
-        app,
-        &skin,
-        &main_state,
-        &drawing_area,
-        &window,
-    ));
+    let panel_windows = Rc::new(PanelWindows::new(app, &main_state, &drawing_area, &window));
     let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
     resize_main_window(&window, &drawing_area, &main_state.borrow());
@@ -295,7 +282,6 @@ fn build_preview_window(
     ));
 
     {
-        let skin = Rc::clone(&skin);
         let main_state = Rc::clone(&main_state);
         drawing_area.set_draw_func(move |_area, cr, width, height| {
             let state = main_state.borrow();
@@ -305,7 +291,7 @@ fn build_preview_window(
                 width as f64 / base_width as f64,
                 height as f64 / base_height as f64,
             );
-            if let Err(err) = render_docked_ui_state(cr, &skin, &state) {
+            if let Err(err) = render_docked_ui_state(cr, state.active_skin(), &state) {
                 eprintln!("xmms-rs: failed to render main-window preview: {err}");
             }
         });
@@ -613,6 +599,92 @@ fn xmms_menu_css(skin: &DefaultSkin) -> String {
 
 fn css_rgb(color: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+}
+
+fn load_skin_from_config(config: &Config) -> io::Result<DefaultSkin> {
+    match config.skin.as_deref() {
+        Some(path) => DefaultSkin::load_from_path(Path::new(path)),
+        None => DefaultSkin::load_bundled(),
+    }
+}
+
+fn preview_state_from_options(options: PreviewOptions) -> Result<MainWindowUiState, String> {
+    preview_state_from_app_state(AppState::default(), options)
+}
+
+fn preview_state_from_app_state(
+    mut app_state: AppState,
+    options: PreviewOptions,
+) -> Result<MainWindowUiState, String> {
+    if options.reset {
+        app_state = AppState::default();
+    }
+    if options.show_playlist || options.playlist_size.is_some() {
+        app_state.config.playlist_visible = true;
+    }
+    if options.show_equalizer {
+        app_state.config.equalizer_visible = true;
+    }
+    if let Some(shaded) = options.main_shaded {
+        app_state.config.main_shaded = shaded;
+    }
+    if let Some(shaded) = options.playlist_shaded {
+        app_state.config.playlist_shaded = shaded;
+    }
+    if let Some(shaded) = options.equalizer_shaded {
+        app_state.config.equalizer_shaded = shaded;
+    }
+    if let Some(detached) = options.playlist_detached {
+        app_state.config.playlist_detached = detached;
+    }
+    if let Some(detached) = options.equalizer_detached {
+        app_state.config.equalizer_detached = detached;
+    }
+    if let Some(skin_path) = options.skin_path.as_ref() {
+        app_state.config.skin = Some(skin_path.clone());
+    }
+
+    let mut state = MainWindowUiState::from_app_state(app_state);
+    if let Some((width, height)) = options.playlist_size {
+        state.set_playlist_size(width, height);
+    }
+    if let Some(skin_path) = options.skin_path.as_ref() {
+        state
+            .load_configured_skin()
+            .map_err(|err| format!("failed to load skin '{}': {err}", skin_path))?;
+    }
+    Ok(state)
+}
+
+fn write_surface_png(surface: &mut cairo::ImageSurface, path: &Path) -> io::Result<()> {
+    surface.flush();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let width = surface.width() as u32;
+    let height = surface.height() as u32;
+    let stride = surface.stride() as usize;
+    let data = surface
+        .data()
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+
+    for y in 0..height as usize {
+        let row = &data[y * stride..][..width as usize * 4];
+        for pixel in row.chunks_exact(4) {
+            let argb = u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
+            rgba.push(((argb >> 16) & 0xff) as u8);
+            rgba.push(((argb >> 8) & 0xff) as u8);
+            rgba.push((argb & 0xff) as u8);
+            rgba.push(((argb >> 24) & 0xff) as u8);
+        }
+    }
+
+    image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| io::Error::other("invalid screenshot pixel buffer"))?
+        .save(path)
+        .map_err(io::Error::other)
 }
 
 fn style_xmms_popover(popover: &gtk::Popover) {
@@ -1193,18 +1265,18 @@ struct PanelWindows {
 impl PanelWindows {
     fn new(
         app: &gtk::Application,
-        skin: &Rc<DefaultSkin>,
         main_state: &Rc<RefCell<MainWindowUiState>>,
         main_area: &gtk::DrawingArea,
         parent_window: &gtk::ApplicationWindow,
     ) -> Self {
-        let (equalizer, equalizer_area) = build_equalizer_window(app, skin, main_state, main_area);
+        let (equalizer, equalizer_area) = build_equalizer_window(app, main_state, main_area);
         let open_location =
             build_prompt_window(app, parent_window, main_state, PromptKind::OpenLocation);
         let jump_time = build_prompt_window(app, parent_window, main_state, PromptKind::JumpTime);
-        let skin_browser = build_skin_browser_window(app, main_state);
         let (playlist, playlist_area) =
-            build_playlist_window(app, skin, main_state, main_area, &open_location);
+            build_playlist_window(app, main_state, main_area, &open_location);
+        let skin_browser =
+            build_skin_browser_window(app, main_state, main_area, &equalizer_area, &playlist_area);
         let preferences = build_preferences_window(
             app,
             main_state,
@@ -1230,7 +1302,6 @@ impl PanelWindows {
 
 fn build_equalizer_window(
     app: &gtk::Application,
-    skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
 ) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
@@ -1247,10 +1318,10 @@ fn build_equalizer_window(
         .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
-        let render_state = state.borrow().equalizer_render_state();
+        let state = state.borrow();
+        let render_state = state.equalizer_render_state();
         let base_height = if render_state.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
@@ -1260,7 +1331,7 @@ fn build_equalizer_window(
             width as f64 / EQUALIZER_WINDOW_WIDTH as f64,
             height as f64 / base_height as f64,
         );
-        if let Err(err) = render_equalizer_state(cr, &skin, &render_state) {
+        if let Err(err) = render_equalizer_state(cr, state.active_skin(), &render_state) {
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
     });
@@ -1282,7 +1353,6 @@ fn build_equalizer_window(
 
 fn build_playlist_window(
     app: &gtk::Application,
-    skin: &Rc<DefaultSkin>,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     main_area: &gtk::DrawingArea,
     open_location_window: &gtk::ApplicationWindow,
@@ -1301,10 +1371,10 @@ fn build_playlist_window(
         .content_height(playlist_height * DEFAULT_SCALE)
         .focusable(true)
         .build();
-    let skin = Rc::clone(skin);
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
+        let skin = state.active_skin();
         let shaded = state.playlist_shaded;
         let focused = state.playlist_focused || state.playlist_dragging_title;
         let playlist_width = state.playlist_width;
@@ -1320,7 +1390,7 @@ fn build_playlist_window(
         );
         if let Err(err) = render_playlist_frame(
             cr,
-            &skin,
+            skin,
             focused,
             shaded,
             playlist_width,
@@ -1359,7 +1429,7 @@ fn build_playlist_window(
                 width: playlist_width,
                 height: playlist_height,
             };
-            if let Err(err) = render_playlist_rows(cr, &skin, &row_state) {
+            if let Err(err) = render_playlist_rows(cr, skin, &row_state) {
                 eprintln!("xmms-rs: failed to render playlist rows: {err}");
             }
         }
@@ -1374,7 +1444,7 @@ fn build_playlist_window(
                 kind: menu.render_kind(),
                 hover: state.playlist_menu_hover(),
             };
-            if let Err(err) = render_playlist_menu(cr, &skin, render_state) {
+            if let Err(err) = render_playlist_menu(cr, skin, render_state) {
                 eprintln!("xmms-rs: failed to render playlist menu: {err}");
             }
             if let Err(err) = cr.restore() {
@@ -3013,49 +3083,329 @@ fn build_prompt_window(
 fn build_skin_browser_window(
     app: &gtk::Application,
     main_state: &Rc<RefCell<MainWindowUiState>>,
-) -> gtk::ApplicationWindow {
-    build_placeholder_window(
-        app,
-        main_state,
-        "Skin Browser",
-        520,
-        420,
-        "Skin Browser placeholder for the Rust port",
-        MainWindowUiState::set_skin_browser_visible,
-    )
-}
-
-fn build_placeholder_window(
-    app: &gtk::Application,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    title: &str,
-    default_width: i32,
-    default_height: i32,
-    label: &str,
-    set_visible: fn(&mut MainWindowUiState, bool),
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title(title)
-        .default_width(default_width)
-        .default_height(default_height)
+        .title("Skin selector")
+        .default_width(300)
+        .default_height(280)
         .build();
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    content.set_margin_top(12);
-    content.set_margin_bottom(12);
-    content.set_margin_start(12);
-    content.set_margin_end(12);
-    content.append(&gtk::Label::new(Some(label)));
+    let add = gtk::Button::with_label("Add...");
+    add.set_widget_name(SKIN_BROWSER_ADD_WIDGET);
+    let close = gtk::Button::with_label("Close");
+    close.set_widget_name(SKIN_BROWSER_CLOSE_WIDGET);
+    let (content, list) = build_skin_browser_content(&add, &close);
     window.set_child(Some(&content));
+    let populating = Rc::new(Cell::new(false));
+
+    {
+        let window = window.clone();
+        let main_state = Rc::clone(main_state);
+        let list = list.clone();
+        let populating = Rc::clone(&populating);
+        add.connect_clicked(move |_| {
+            show_add_skin_dialog(
+                &window,
+                Rc::clone(&main_state),
+                list.clone(),
+                Rc::clone(&populating),
+            );
+        });
+    }
+    {
+        let window = window.clone();
+        close.connect_clicked(move |_| window.hide());
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        let populating = Rc::clone(&populating);
+        let list = list.clone();
+        window.connect_show(move |_| {
+            let dirs = runtime_skin_browser_dirs();
+            populating.set(true);
+            if let Err(err) = refresh_skin_browser_list(&list, &mut main_state.borrow_mut(), &dirs)
+            {
+                eprintln!("xmms-rs: failed to scan skins: {err}");
+            }
+            populating.set(false);
+        });
+    }
+    connect_skin_browser_selection(
+        &list,
+        main_state,
+        main_area,
+        equalizer_area,
+        playlist_area,
+        &populating,
+    );
     {
         let main_state = Rc::clone(main_state);
         window.connect_close_request(move |window| {
-            set_visible(&mut main_state.borrow_mut(), false);
+            main_state.borrow_mut().set_skin_browser_visible(false);
             window.hide();
             gtk::glib::Propagation::Stop
         });
     }
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_hide(move |_| {
+            main_state.borrow_mut().set_skin_browser_visible(false);
+        });
+    }
     window
+}
+
+fn connect_skin_browser_selection(
+    list: &gtk::ListBox,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
+    populating: &Rc<Cell<bool>>,
+) {
+    let main_state = Rc::clone(main_state);
+    let main_area = main_area.clone();
+    let equalizer_area = equalizer_area.clone();
+    let playlist_area = playlist_area.clone();
+    let populating = Rc::clone(populating);
+    list.connect_row_selected(move |list, row| {
+        if populating.get() {
+            return;
+        }
+        let Some(row) = row else {
+            return;
+        };
+        let selected = row.index().max(0) as usize;
+        if main_state.borrow_mut().select_skin_browser_index(selected) {
+            main_area.queue_draw();
+            equalizer_area.queue_draw();
+            playlist_area.queue_draw();
+        } else {
+            populating.set(true);
+            populate_skin_browser_list(list, &main_state.borrow());
+            populating.set(false);
+        }
+    });
+}
+
+fn show_add_skin_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    list: gtk::ListBox,
+    populating: Rc<Cell<bool>>,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Add Skin"),
+        Some(parent),
+        gtk::FileChooserAction::Open,
+        Some("Add"),
+        Some("Cancel"),
+    );
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            if let Some(path) = dialog.file().and_then(|file| file.path()) {
+                let user_skin_dir = user_skin_import_dir();
+                match import_skin_to_user_dir(&path, &user_skin_dir) {
+                    Ok(imported) => {
+                        let dirs = runtime_skin_browser_dirs();
+                        let mut state = main_state.borrow_mut();
+                        state.app_state.config.skin = Some(imported.display().to_string());
+                        if let Err(err) = state.reload_skin() {
+                            eprintln!("xmms-rs: failed to load imported skin: {err}");
+                            state.app_state.config.skin = None;
+                        }
+                        populating.set(true);
+                        if let Err(err) = refresh_skin_browser_list(&list, &mut state, &dirs) {
+                            eprintln!("xmms-rs: failed to refresh skins after import: {err}");
+                        }
+                        populating.set(false);
+                    }
+                    Err(err) => eprintln!("xmms-rs: failed to import skin: {err}"),
+                }
+            }
+        }
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
+fn build_skin_browser_content(add: &gtk::Button, close: &gtk::Button) -> (gtk::Box, gtk::ListBox) {
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    root.set_widget_name(SKIN_BROWSER_ROOT_WIDGET);
+    root.set_margin_top(10);
+    root.set_margin_bottom(10);
+    root.set_margin_start(10);
+    root.set_margin_end(10);
+
+    let header = gtk::Label::new(Some("Skins"));
+    header.set_widget_name(SKIN_BROWSER_HEADER_WIDGET);
+    header.set_xalign(0.0);
+
+    let list = gtk::ListBox::new();
+    list.set_widget_name(SKIN_BROWSER_LIST_WIDGET);
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    list.set_vexpand(true);
+
+    let scrolled = gtk::ScrolledWindow::new();
+    scrolled.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Always);
+    scrolled.set_min_content_width(250);
+    scrolled.set_min_content_height(200);
+    scrolled.set_vexpand(true);
+    scrolled.set_child(Some(&list));
+
+    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+    buttons.set_halign(gtk::Align::End);
+    buttons.append(add);
+    buttons.append(close);
+
+    root.append(&header);
+    root.append(&scrolled);
+    root.append(&separator);
+    root.append(&buttons);
+    (root, list)
+}
+
+fn user_skin_import_dir() -> PathBuf {
+    default_config_dir().join("xmms").join("Skins")
+}
+
+fn runtime_skin_browser_dirs() -> Vec<PathBuf> {
+    let home_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let system_skin_dir = std::env::var_os("XMMS_RS_SYSTEM_SKIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/share/xmms/Skins"));
+    let skinsdir = std::env::var("SKINSDIR").ok();
+    skin_browser_search_dirs(
+        &default_config_dir(),
+        &home_dir,
+        &system_skin_dir,
+        skinsdir.as_deref(),
+    )
+}
+
+fn import_skin_to_user_dir(source: &Path, user_skin_dir: &Path) -> io::Result<PathBuf> {
+    if !source.is_dir() && !source.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a skin file or directory: {}", source.display()),
+        ));
+    }
+    if source.is_file() && !is_importable_skin_archive(source) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported skin archive: {}", source.display()),
+        ));
+    }
+
+    fs::create_dir_all(user_skin_dir)?;
+    let name = source.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("skin path has no file name: {}", source.display()),
+        )
+    })?;
+    let destination = unique_import_destination(user_skin_dir, name);
+    if source.is_dir() {
+        copy_dir_recursive(source, &destination)?;
+    } else {
+        fs::copy(source, &destination)?;
+    }
+    Ok(destination)
+}
+
+fn is_importable_skin_archive(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        ".zip", ".wsz", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".gz", ".bz2",
+    ]
+    .iter()
+    .any(|suffix| name.ends_with(suffix))
+}
+
+fn unique_import_destination(user_skin_dir: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let candidate = user_skin_dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let path = Path::new(name);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("Skin");
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    for index in 1.. {
+        let file_name = match extension {
+            Some(extension) => format!("{stem} {index}.{extension}"),
+            None => format!("{stem} {index}"),
+        };
+        let candidate = user_skin_dir.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let entry_source = entry.path();
+        let entry_destination = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_recursive(&entry_source, &entry_destination)?;
+        } else {
+            fs::copy(entry_source, entry_destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn refresh_skin_browser_list<P: AsRef<Path>>(
+    list: &gtk::ListBox,
+    state: &mut MainWindowUiState,
+    dirs: &[P],
+) -> io::Result<()> {
+    state.scan_skin_browser_dirs(dirs)?;
+    populate_skin_browser_list(list, state);
+    Ok(())
+}
+
+fn populate_skin_browser_list(list: &gtk::ListBox, state: &MainWindowUiState) {
+    while let Some(child) = list.first_child() {
+        list.remove(&child);
+    }
+
+    append_skin_browser_row(list, "default");
+    for entry in state.skin_browser_entries() {
+        append_skin_browser_row(list, &entry.name);
+    }
+
+    if let Some(row) = list.row_at_index(state.selected_skin_index() as i32) {
+        list.select_row(Some(&row));
+    }
+}
+
+fn append_skin_browser_row(list: &gtk::ListBox, label: &str) {
+    let row_label = gtk::Label::new(Some(label));
+    row_label.set_xalign(0.0);
+    row_label.set_margin_top(2);
+    row_label.set_margin_bottom(2);
+    row_label.set_margin_start(4);
+    row_label.set_margin_end(4);
+    list.append(&row_label);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4103,6 +4453,7 @@ pub(crate) struct MainWindowUiState {
     playlist_load_dialog_visible: bool,
     playlist_save_dialog_visible: bool,
     last_playlist_file_info: Option<String>,
+    active_skin: DefaultSkin,
     playlist_options_opened: bool,
     preferences_visible: bool,
     preferences_page: PreferencesPage,
@@ -4167,6 +4518,10 @@ impl MainWindowUiState {
         let main_shaded = app_state.config.main_shaded;
         let equalizer_shaded = app_state.config.equalizer_shaded;
         let playlist_shaded = app_state.config.playlist_shaded;
+        let active_skin = load_skin_from_config(&app_state.config).unwrap_or_else(|err| {
+            eprintln!("xmms-rs: failed to load configured skin: {err}");
+            DefaultSkin::load_bundled().expect("bundled default skin should load")
+        });
         let mut state = Self {
             app_state,
             playback_backend: None,
@@ -4211,6 +4566,7 @@ impl MainWindowUiState {
             playlist_load_dialog_visible: false,
             playlist_save_dialog_visible: false,
             last_playlist_file_info: None,
+            active_skin,
             playlist_options_opened: false,
             preferences_visible: false,
             preferences_page: PreferencesPage::Options,
@@ -4255,6 +4611,15 @@ impl MainWindowUiState {
 
     pub(crate) fn app_state_mut(&mut self) -> &mut AppState {
         &mut self.app_state
+    }
+
+    pub(crate) fn active_skin(&self) -> &DefaultSkin {
+        &self.active_skin
+    }
+
+    fn load_configured_skin(&mut self) -> io::Result<()> {
+        self.active_skin = load_skin_from_config(&self.app_state.config)?;
+        Ok(())
     }
 
     fn set_equalizer_preset_dir(&mut self, dir: PathBuf) {
@@ -4441,6 +4806,8 @@ impl MainWindowUiState {
             time_digits: self.time_digits(),
             shaded_time_min: self.shaded_time_min_text(),
             shaded_time_sec: self.shaded_time_sec_text(),
+            bitrate_text: self.bitrate_text(),
+            frequency_text: self.frequency_text(),
             shuffle_selected: self.app_state.playlist.shuffle(),
             repeat_selected: self.app_state.playlist.repeat(),
             equalizer_selected: self.app_state.config.equalizer_visible,
@@ -4457,6 +4824,31 @@ impl MainWindowUiState {
             visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
         }
+    }
+
+    fn bitrate_text(&self) -> String {
+        let bitrate = self.app_state.player.bitrate();
+        if bitrate <= 0 {
+            return "   ".to_string();
+        }
+        if bitrate < 1000 {
+            format!("{bitrate:>3}")
+        } else {
+            format!("{:>2}H", bitrate / 100)
+        }
+    }
+
+    fn frequency_text(&self) -> String {
+        let frequency = self.app_state.player.frequency();
+        if frequency <= 0 {
+            return "  ".to_string();
+        }
+        let khz = if frequency >= 1000 {
+            (frequency + 500) / 1000
+        } else {
+            frequency
+        };
+        format!("{khz:>2}")
     }
 
     pub(crate) fn formatted_current_title(&self) -> String {
@@ -5151,28 +5543,47 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn select_skin_browser_index(&mut self, index: usize) -> bool {
+        let previous_skin = self.app_state.config.skin.clone();
+        let previous_index = self.selected_skin_index;
         if index == 0 {
             self.app_state.config.skin = None;
             self.selected_skin_index = 0;
-            self.reload_skin();
-            return true;
+        } else {
+            let Some(entry) = self.skin_browser_entries.get(index - 1) else {
+                return false;
+            };
+            self.app_state.config.skin = Some(entry.path.display().to_string());
+            self.selected_skin_index = index;
         }
 
-        let Some(entry) = self.skin_browser_entries.get(index - 1) else {
+        if let Err(err) = self.reload_skin() {
+            eprintln!("xmms-rs: failed to load selected skin: {err}");
+            self.app_state.config.skin = previous_skin;
+            self.selected_skin_index = previous_index;
             return false;
-        };
-        self.app_state.config.skin = Some(entry.path.display().to_string());
-        self.selected_skin_index = index;
-        self.reload_skin();
+        }
         true
     }
 
-    pub(crate) fn reload_skin(&mut self) {
+    pub(crate) fn reload_skin(&mut self) -> io::Result<()> {
+        self.load_configured_skin()?;
         self.skin_reload_count = self.skin_reload_count.saturating_add(1);
+        Ok(())
     }
 
     pub(crate) fn skin_reload_count(&self) -> u32 {
         self.skin_reload_count
+    }
+
+    pub(crate) fn active_skin_pixel_argb(
+        &self,
+        kind: SkinPixmapKind,
+        x: usize,
+        y: usize,
+    ) -> Option<u32> {
+        self.active_skin
+            .get(kind)
+            .and_then(|image| image.pixel_argb(x, y))
     }
 
     pub(crate) fn toggle_sticky(&mut self) {
@@ -7846,7 +8257,7 @@ fn apply_ui_action(
             );
         }
         UiAction::ShowMenu => {
-            show_main_menu(menu_popover, drawing_area);
+            show_main_menu(menu_popover, drawing_area, &state.borrow());
         }
         UiAction::OpenFileDialog => {
             state.borrow_mut().set_file_dialog_visible(true);
@@ -8033,17 +8444,38 @@ fn files_from_list_model(files: gtk::gio::ListModel) -> Vec<String> {
         .collect()
 }
 
-fn show_main_menu(menu_popover: &gtk::Popover, drawing_area: &gtk::DrawingArea) {
-    let scale_x = drawing_area.allocated_width().max(1) as f64 / f64::from(MAIN_WINDOW_WIDTH);
-    let scale_y = drawing_area.allocated_height().max(1) as f64 / f64::from(MAIN_WINDOW_HEIGHT);
-    let rect = gtk::gdk::Rectangle::new(
-        (6.0 * scale_x) as i32,
-        (12.0 * scale_y) as i32,
-        (9.0 * scale_x).max(1.0) as i32,
-        (1.0 * scale_y).max(1.0) as i32,
+fn show_main_menu(
+    menu_popover: &gtk::Popover,
+    drawing_area: &gtk::DrawingArea,
+    state: &MainWindowUiState,
+) {
+    let (base_width, base_height) = state.docked_panel_size();
+    let rect = main_menu_anchor_rect(
+        drawing_area.allocated_width(),
+        drawing_area.allocated_height(),
+        base_width,
+        base_height,
     );
+    menu_popover.set_position(gtk::PositionType::Bottom);
     menu_popover.set_pointing_to(Some(&rect));
     menu_popover.popup();
+}
+
+fn main_menu_anchor_rect(
+    allocated_width: i32,
+    allocated_height: i32,
+    base_width: i32,
+    base_height: i32,
+) -> gtk::gdk::Rectangle {
+    let scale_x = allocated_width.max(1) as f64 / f64::from(base_width.max(1));
+    let scale_y = allocated_height.max(1) as f64 / f64::from(base_height.max(1));
+    let rect = main_push_button_rect(MainPushButton::Menu, false);
+    gtk::gdk::Rectangle::new(
+        (f64::from(rect.x) * scale_x) as i32,
+        (f64::from(rect.y) * scale_y) as i32,
+        (f64::from(rect.width) * scale_x).max(1.0) as i32,
+        (f64::from(rect.height) * scale_y).max(1.0) as i32,
+    )
 }
 
 fn shortcut_matches(key: gtk::gdk::Key, state: gtk::gdk::ModifierType, accelerator: &str) -> bool {
@@ -8075,6 +8507,247 @@ fn parse_time_ms(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn init_gtk_for_tests() -> std::sync::MutexGuard<'static, ()> {
+        static GTK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = GTK_TEST_LOCK.lock().unwrap();
+        gtk::init().expect("GTK should initialize for widget tests");
+        guard
+    }
+
+    fn find_named_widget<W: IsA<gtk::Widget> + Clone + 'static>(
+        root: &impl IsA<gtk::Widget>,
+        name: &str,
+    ) -> Option<W> {
+        let root = root.as_ref();
+        if root.widget_name() == name {
+            if let Ok(widget) = root.clone().downcast::<W>() {
+                return Some(widget);
+            }
+        }
+
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            if let Some(found) = find_named_widget::<W>(&widget, name) {
+                return Some(found);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+
+    fn collect_label_text(root: &impl IsA<gtk::Widget>, labels: &mut Vec<String>) {
+        let root = root.as_ref();
+        if let Ok(label) = root.clone().downcast::<gtk::Label>() {
+            labels.push(label.text().to_string());
+        }
+
+        let mut child = root.first_child();
+        while let Some(widget) = child {
+            collect_label_text(&widget, labels);
+            child = widget.next_sibling();
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
+    }
+
+    fn skin_browser_list_labels(list: &gtk::ListBox) -> Vec<String> {
+        let mut labels = Vec::new();
+        let mut index = 0;
+        while let Some(row) = list.row_at_index(index) {
+            let label = row
+                .child()
+                .and_then(|child| child.downcast::<gtk::Label>().ok())
+                .expect("skin browser rows should contain labels");
+            labels.push(label.text().to_string());
+            index += 1;
+        }
+        labels
+    }
+
+    #[test]
+    fn skin_browser_content_and_refresh_match_original_selector() {
+        let _gtk = init_gtk_for_tests();
+
+        let add = gtk::Button::with_label("Add...");
+        add.set_widget_name(SKIN_BROWSER_ADD_WIDGET);
+        let close = gtk::Button::with_label("Close");
+        close.set_widget_name(SKIN_BROWSER_CLOSE_WIDGET);
+        let (content, _content_list) = build_skin_browser_content(&add, &close);
+
+        let header = find_named_widget::<gtk::Label>(&content, SKIN_BROWSER_HEADER_WIDGET)
+            .expect("skin browser should have a Skins header");
+        assert_eq!(header.text(), "Skins");
+
+        let list = find_named_widget::<gtk::ListBox>(&content, SKIN_BROWSER_LIST_WIDGET)
+            .expect("skin browser should have a selectable skin list");
+        assert_eq!(list.selection_mode(), gtk::SelectionMode::Single);
+
+        let add = find_named_widget::<gtk::Button>(&content, SKIN_BROWSER_ADD_WIDGET)
+            .expect("skin browser should have an Add button");
+        assert_eq!(add.label().as_deref(), Some("Add..."));
+
+        let close = find_named_widget::<gtk::Button>(&content, SKIN_BROWSER_CLOSE_WIDGET)
+            .expect("skin browser should have a Close button");
+        assert_eq!(close.label().as_deref(), Some("Close"));
+
+        let mut labels = Vec::new();
+        collect_label_text(&content, &mut labels);
+        assert!(!labels
+            .iter()
+            .any(|label| label.contains("placeholder for the Rust port")));
+
+        let tmp = unique_temp_dir("xmms-rs-skin-browser-refresh");
+        let skins = tmp.join("Skins");
+        let broken = skins.join("Broken");
+        let classic = skins.join("Classic");
+        fs::create_dir_all(&broken).unwrap();
+        fs::create_dir_all(&classic).unwrap();
+        fs::write(broken.join("main.xpm"), b"not an xpm").unwrap();
+        fs::write(skins.join("Blue.wsz"), b"archive").unwrap();
+
+        let mut state = MainWindowUiState::default();
+        refresh_skin_browser_list(&list, &mut state, std::slice::from_ref(&skins)).unwrap();
+
+        assert_eq!(
+            skin_browser_list_labels(&list),
+            ["default", "Blue", "Broken", "Classic"]
+        );
+        assert_eq!(list.selected_row().map(|row| row.index()), Some(0));
+
+        state.app_state.config.skin = Some(classic.display().to_string());
+        fs::create_dir_all(skins.join("Zed")).unwrap();
+        refresh_skin_browser_list(&list, &mut state, std::slice::from_ref(&skins)).unwrap();
+
+        assert_eq!(
+            skin_browser_list_labels(&list),
+            ["default", "Blue", "Broken", "Classic", "Zed"]
+        );
+        assert_eq!(list.selected_row().map(|row| row.index()), Some(3));
+
+        fs::write(
+            classic.join("main.xpm"),
+            r#"/* XPM */
+static char * main_xpm[] = {
+"1 1 1 1",
+". c #010203",
+"."};
+"#,
+        )
+        .unwrap();
+        let main_state = Rc::new(RefCell::new(state));
+        let main_area = gtk::DrawingArea::new();
+        let equalizer_area = gtk::DrawingArea::new();
+        let playlist_area = gtk::DrawingArea::new();
+        let populating = Rc::new(Cell::new(false));
+        connect_skin_browser_selection(
+            &list,
+            &main_state,
+            &main_area,
+            &equalizer_area,
+            &playlist_area,
+            &populating,
+        );
+        list.select_row(list.row_at_index(0).as_ref());
+        list.select_row(list.row_at_index(3).as_ref());
+
+        let state = main_state.borrow();
+        let classic_path = classic.display().to_string();
+        assert_eq!(state.selected_skin(), Some(classic_path.as_str()));
+        assert_eq!(
+            state
+                .active_skin()
+                .get(SkinPixmapKind::Main)
+                .unwrap()
+                .pixel_argb(0, 0),
+            Some(0xff010203)
+        );
+        drop(state);
+
+        list.select_row(list.row_at_index(2).as_ref());
+        let state = main_state.borrow();
+        assert_eq!(state.selected_skin(), Some(classic_path.as_str()));
+        assert_eq!(state.selected_skin_index(), 3);
+        assert_eq!(list.selected_row().map(|row| row.index()), Some(3));
+        assert_eq!(
+            state
+                .active_skin()
+                .get(SkinPixmapKind::Main)
+                .unwrap()
+                .pixel_argb(0, 0),
+            Some(0xff010203)
+        );
+
+        fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn skin_browser_import_copies_archives_and_directories_to_user_skin_dir() {
+        let tmp = unique_temp_dir("xmms-rs-skin-browser-import");
+        let source = tmp.join("source");
+        let user_skins = tmp.join("user-skins");
+        fs::create_dir_all(&source).unwrap();
+
+        let archive = source.join("Blue.wsz");
+        fs::write(&archive, b"archive").unwrap();
+        let imported_archive = import_skin_to_user_dir(&archive, &user_skins).unwrap();
+        assert_eq!(imported_archive, user_skins.join("Blue.wsz"));
+        assert_eq!(fs::read(&imported_archive).unwrap(), b"archive");
+
+        let duplicate_archive = import_skin_to_user_dir(&archive, &user_skins).unwrap();
+        assert_eq!(duplicate_archive, user_skins.join("Blue 1.wsz"));
+
+        let dir_skin = source.join("Classic");
+        fs::create_dir_all(dir_skin.join("nested")).unwrap();
+        fs::write(dir_skin.join("main.xpm"), b"main").unwrap();
+        fs::write(dir_skin.join("nested").join("eqmain.xpm"), b"eq").unwrap();
+        let imported_dir = import_skin_to_user_dir(&dir_skin, &user_skins).unwrap();
+        assert_eq!(fs::read(imported_dir.join("main.xpm")).unwrap(), b"main");
+        assert_eq!(
+            fs::read(imported_dir.join("nested").join("eqmain.xpm")).unwrap(),
+            b"eq"
+        );
+
+        let unsupported = source.join("notes.txt");
+        fs::write(&unsupported, b"not a skin").unwrap();
+        assert!(import_skin_to_user_dir(&unsupported, &user_skins).is_err());
+
+        fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn main_menu_anchor_uses_full_menu_button_rect() {
+        let rect = main_menu_anchor_rect(
+            MAIN_WINDOW_WIDTH * 2,
+            MAIN_WINDOW_HEIGHT * 2,
+            MAIN_WINDOW_WIDTH,
+            MAIN_WINDOW_HEIGHT,
+        );
+
+        assert_eq!(rect.x(), 12);
+        assert_eq!(rect.y(), 6);
+        assert_eq!(rect.width(), 18);
+        assert_eq!(rect.height(), 18);
+
+        let docked_height = MAIN_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT;
+        let rect = main_menu_anchor_rect(
+            MAIN_WINDOW_WIDTH * 2,
+            docked_height * 2,
+            MAIN_WINDOW_WIDTH,
+            docked_height,
+        );
+
+        assert_eq!(rect.x(), 12);
+        assert_eq!(rect.y(), 6);
+        assert_eq!(rect.width(), 18);
+        assert_eq!(rect.height(), 18);
+    }
 
     #[test]
     fn xmms_menu_css_uses_playlist_skin_colors() {
@@ -8127,6 +8800,28 @@ mod tests {
         state.press(243, 59);
         assert_eq!(state.release(243, 59), UiAction::None);
         assert!(state.app_state.config.playlist_visible);
+    }
+
+    #[test]
+    fn main_render_state_formats_stream_info_like_xmms() {
+        let mut state = MainWindowUiState::default();
+
+        assert_eq!(state.render_state().bitrate_text, "   ");
+        assert_eq!(state.render_state().frequency_text, "  ");
+
+        state
+            .app_state_mut()
+            .player
+            .set_stream_info(Some(192), Some(44_100), Some(2));
+        assert_eq!(state.render_state().bitrate_text, "192");
+        assert_eq!(state.render_state().frequency_text, "44");
+
+        state
+            .app_state_mut()
+            .player
+            .set_stream_info(Some(1280), Some(48), Some(2));
+        assert_eq!(state.render_state().bitrate_text, "12H");
+        assert_eq!(state.render_state().frequency_text, "48");
     }
 
     #[test]

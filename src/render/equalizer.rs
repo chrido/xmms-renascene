@@ -266,7 +266,7 @@ fn draw_eq_slider(
         eqmain,
         0,
         if pressed { 176 } else { 164 },
-        layout.rect.x,
+        layout.rect.x + ((layout.rect.width - layout.knob_size.width) / 2),
         layout.rect.y + slider_position,
         11,
         layout.knob_size.height,

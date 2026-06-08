@@ -21,6 +21,7 @@ use crate::skin::layout::{
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
+use crate::skin::SkinPixmapKind;
 use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 use crate::ui::{
     MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind,
@@ -53,6 +54,11 @@ impl PlayerSettings {
 
     pub fn with_equalizer_visible(mut self, visible: bool) -> Self {
         self.config.equalizer_visible = visible;
+        self
+    }
+
+    pub fn with_skin(mut self, skin: impl Into<String>) -> Self {
+        self.config.skin = Some(skin.into());
         self
     }
 
@@ -830,7 +836,7 @@ impl UiE2e {
                 self.state.set_skin_browser_visible(true);
             }
             Shortcut::ReloadSkin => {
-                self.state.reload_skin();
+                self.state.reload_skin().unwrap();
             }
             Shortcut::TogglePlaylist => {
                 self.state.activate_toggle(MainToggleButton::Playlist);
@@ -1599,12 +1605,26 @@ impl UiE2e {
     }
 
     pub fn reload_skin(&mut self) -> &mut Self {
-        self.state.reload_skin();
+        self.state.reload_skin().unwrap();
         self
     }
 
     pub fn assert_skin_reload_count(&mut self, expected: u32) -> &mut Self {
         assert_eq!(self.state.skin_reload_count(), expected);
+        self
+    }
+
+    pub fn assert_active_skin_pixel(
+        &mut self,
+        kind: SkinPixmapKind,
+        x: usize,
+        y: usize,
+        expected: u32,
+    ) -> &mut Self {
+        assert_eq!(
+            self.state.active_skin_pixel_argb(kind, x, y),
+            Some(expected)
+        );
         self
     }
 
