@@ -714,36 +714,16 @@ fn parse_region_mask_section(contents: &str, section: &str) -> Option<SkinMask> 
 fn parse_playlist_colors(contents: &str) -> PlaylistColors {
     let mut colors = DEFAULT_PLAYLIST_COLORS;
 
-    for line in contents.lines() {
-        let line = line.trim();
-        if let Some(value) = line
-            .strip_prefix("Normal=")
-            .or_else(|| line.strip_prefix("normal="))
-        {
-            if let Some(color) = parse_hex_rgb(value) {
-                colors.normal = color;
-            }
-        } else if let Some(value) = line
-            .strip_prefix("Current=")
-            .or_else(|| line.strip_prefix("current="))
-        {
-            if let Some(color) = parse_hex_rgb(value) {
-                colors.current = color;
-            }
-        } else if let Some(value) = line
-            .strip_prefix("NormalBG=")
-            .or_else(|| line.strip_prefix("normalbg="))
-        {
-            if let Some(color) = parse_hex_rgb(value) {
-                colors.normal_bg = color;
-            }
-        } else if let Some(value) = line
-            .strip_prefix("SelectedBG=")
-            .or_else(|| line.strip_prefix("selectedbg="))
-        {
-            if let Some(color) = parse_hex_rgb(value) {
-                colors.selected_bg = color;
-            }
+    for (key, target) in [
+        ("normal", &mut colors.normal),
+        ("current", &mut colors.current),
+        ("normalbg", &mut colors.normal_bg),
+        ("selectedbg", &mut colors.selected_bg),
+    ] {
+        let value = read_ini_value(contents, "text", key)
+            .or_else(|| read_top_level_ini_value(contents, key));
+        if let Some(value) = value.and_then(|value| parse_skin_color(&value)) {
+            *target = value;
         }
     }
 
@@ -762,12 +742,33 @@ fn read_ini_value(contents: &str, section: &str, key: &str) -> Option<String> {
         if line.is_empty() {
             continue;
         }
+
         if let Some(section_name) = line.strip_prefix('[').and_then(|line| line.split_once(']')) {
             in_section = section_name.0.eq_ignore_ascii_case(section);
             continue;
         }
         if !in_section {
             continue;
+        }
+        let Some((line_key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if line_key.trim().eq_ignore_ascii_case(key) {
+            let value = value
+                .split_once(';')
+                .map_or(value, |(value, _)| value)
+                .trim();
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn read_top_level_ini_value(contents: &str, key: &str) -> Option<String> {
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            break;
         }
         let Some((line_key, value)) = line.split_once('=') else {
             continue;
@@ -807,17 +808,31 @@ fn parse_int_list(value: &str) -> Vec<i32> {
     values
 }
 
-fn parse_hex_rgb(value: &str) -> Option<[u8; 3]> {
+fn parse_skin_color(value: &str) -> Option<[u8; 3]> {
     let value = value.trim();
-    let value = value.strip_prefix('#')?;
-    if value.len() < 6 {
+    let value = value.strip_prefix('#').unwrap_or(value);
+    if value.len() < 2 {
         return None;
     }
+    let mut color = [0, 0, 0];
+    if value.len() >= 6 {
+        color[0] = parse_hex_byte(&value[0..2])?;
+        color[1] = parse_hex_byte(&value[2..4])?;
+        color[2] = parse_hex_byte(&value[4..6])?;
+    } else if value.len() >= 4 {
+        color[1] = parse_hex_byte(&value[0..2])?;
+        color[2] = parse_hex_byte(&value[2..4])?;
+    } else {
+        color[2] = parse_hex_byte(&value[0..2])?;
+    }
+    Some(color)
+}
 
-    let r = u8::from_str_radix(&value[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&value[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&value[4..6], 16).ok()?;
-    Some([r, g, b])
+fn parse_hex_byte(value: &str) -> Option<u8> {
+    if !value.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    u8::from_str_radix(value, 16).ok()
 }
 
 fn parse_vis_colors(contents: &str) -> [[u8; 3]; 24] {
@@ -1061,7 +1076,7 @@ static char * main_xpm[] = {
         std::fs::create_dir_all(&tmp).unwrap();
         std::fs::write(
             tmp.join("pledit.txt"),
-            "Normal=#010203\ncurrent=#A0B0C0\nNormalBG=#11223344\nSelectedBG=bad\n",
+            "Normal=#010203\ncurrent=#A0B0C0\nNormalBG=#11223344\nSelectedBG=zz\n",
         )
         .unwrap();
 
@@ -1075,6 +1090,42 @@ static char * main_xpm[] = {
         );
 
         std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn playlist_color_parser_matches_original_ini_compatibility() {
+        let colors = parse_playlist_colors(
+            r#"
+            [text]
+            Normal=010203 ; comment
+            CURRENT=#A0B0C0
+            normalbg=1234
+            selectedbg=#56
+            "#,
+        );
+
+        assert_eq!(colors.normal, [1, 2, 3]);
+        assert_eq!(colors.current, [160, 176, 192]);
+        assert_eq!(colors.normal_bg, [0, 0x12, 0x34]);
+        assert_eq!(colors.selected_bg, [0, 0, 0x56]);
+    }
+
+    #[test]
+    fn playlist_color_parser_keeps_defaults_for_invalid_values() {
+        let colors = parse_playlist_colors(
+            r#"
+            [text]
+            Normal=zzzzzz
+            Current=#
+            NormalBG=1
+            SelectedBG=#010203
+            "#,
+        );
+
+        assert_eq!(colors.normal, DEFAULT_PLAYLIST_COLORS.normal);
+        assert_eq!(colors.current, DEFAULT_PLAYLIST_COLORS.current);
+        assert_eq!(colors.normal_bg, DEFAULT_PLAYLIST_COLORS.normal_bg);
+        assert_eq!(colors.selected_bg, [1, 2, 3]);
     }
 
     #[test]
