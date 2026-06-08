@@ -65,6 +65,7 @@ pub struct DefaultSkin {
     vis_colors: [[u8; 3]; 24],
     playlist_colors: PlaylistColors,
     region_masks: RegionMasks,
+    text_colors: TextColors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +74,21 @@ pub struct PlaylistColors {
     pub current: [u8; 3],
     pub normal_bg: [u8; 3],
     pub selected_bg: [u8; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextColors {
+    pub background: [[u8; 3]; 6],
+    pub foreground: [[u8; 3]; 6],
+}
+
+impl Default for TextColors {
+    fn default() -> Self {
+        Self {
+            background: [[0, 0, 0]; 6],
+            foreground: [[255, 255, 255]; 6],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -209,11 +225,13 @@ impl DefaultSkin {
             pixmaps.insert(*kind, image);
         }
         apply_balance_fallback(&mut pixmaps);
+        let text_colors = text_colors_from_pixmaps(&pixmaps);
         Ok(Self {
             pixmaps,
             vis_colors: DEFAULT_VIS_COLORS,
             playlist_colors: DEFAULT_PLAYLIST_COLORS,
             region_masks: RegionMasks::default(),
+            text_colors,
         })
     }
 
@@ -244,6 +262,7 @@ impl DefaultSkin {
         skin.vis_colors = load_vis_colors_from_dir(dir)?;
         skin.playlist_colors = load_playlist_colors_from_dir(dir)?;
         skin.region_masks = load_region_masks_from_dir(dir)?;
+        skin.text_colors = text_colors_from_pixmaps(&skin.pixmaps);
 
         Ok(skin)
     }
@@ -288,6 +307,7 @@ impl DefaultSkin {
         skin.vis_colors = load_vis_colors_from_archive(&entries)?;
         skin.playlist_colors = load_playlist_colors_from_archive(&entries)?;
         skin.region_masks = load_region_masks_from_archive(&entries)?;
+        skin.text_colors = text_colors_from_pixmaps(&skin.pixmaps);
 
         Ok(skin)
     }
@@ -382,6 +402,10 @@ impl DefaultSkin {
 
     pub fn region_masks(&self) -> &RegionMasks {
         &self.region_masks
+    }
+
+    pub fn text_colors(&self) -> TextColors {
+        self.text_colors
     }
 }
 
@@ -909,6 +933,54 @@ fn apply_loaded_balance_fallback(
     }
 }
 
+fn text_colors_from_pixmaps(pixmaps: &BTreeMap<SkinPixmapKind, XpmImage>) -> TextColors {
+    let Some(text) = pixmaps.get(&SkinPixmapKind::Text) else {
+        return TextColors::default();
+    };
+    if text.width() <= 151 || text.height() < 6 {
+        return TextColors::default();
+    }
+
+    let mut colors = TextColors::default();
+    for y in 0..6 {
+        let bg = rgb_from_argb(text.pixel_argb(151, y).unwrap_or(0));
+        colors.background[y] = bg;
+
+        let bg_luminance = luminance(bg);
+        let mut max_distance = 0.0;
+        let mut fg = colors.foreground[y];
+        for x in 1..150 {
+            let candidate = rgb_from_argb(text.pixel_argb(x, y).unwrap_or(0));
+            let distance = (luminance(candidate) - bg_luminance).abs();
+            if distance > max_distance {
+                max_distance = distance;
+                fg = candidate;
+            }
+        }
+        colors.foreground[y] = fg;
+    }
+    colors
+}
+
+fn rgb_from_argb(argb: u32) -> [u8; 3] {
+    let a = ((argb >> 24) & 0xff) as u8;
+    let r = ((argb >> 16) & 0xff) as u8;
+    let g = ((argb >> 8) & 0xff) as u8;
+    let b = (argb & 0xff) as u8;
+    if a == 0 || a == 255 {
+        return [r, g, b];
+    }
+    [
+        ((u16::from(r) * 255) / u16::from(a)).min(255) as u8,
+        ((u16::from(g) * 255) / u16::from(a)).min(255) as u8,
+        ((u16::from(b) * 255) / u16::from(a)).min(255) as u8,
+    ]
+}
+
+fn luminance(color: [u8; 3]) -> f64 {
+    0.212671 * f64::from(color[0]) + 0.715160 * f64::from(color[1]) + 0.072169 * f64::from(color[2])
+}
+
 fn expand_numbers_fallback(image: XpmImage) -> XpmImage {
     if image.width() < 99 || image.height() < 13 {
         return image;
@@ -1238,6 +1310,36 @@ static char * main_xpm[] = {
         assert_eq!(balance.width(), 1);
         assert_eq!(balance.height(), 1);
         assert_eq!(balance.pixel_argb(0, 0), Some(0xff0a141e));
+
+        std::fs::remove_dir_all(tmp).unwrap();
+    }
+
+    #[test]
+    fn directory_loader_derives_text_colors_from_text_pixmap() {
+        let tmp = std::env::temp_dir().join(format!(
+            "xmms-rs-skin-test-{}-text-colors",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut image = image::RgbaImage::new(155, 6);
+        for y in 0..6 {
+            for x in 0..155 {
+                image.put_pixel(x, y, image::Rgba([10, 20, 30, 255]));
+            }
+            image.put_pixel(1, y, image::Rgba([200, 210, 220, 255]));
+            image.put_pixel(151, y, image::Rgba([1, 2, 3 + y as u8, 255]));
+        }
+        image.save(tmp.join("text.png")).unwrap();
+
+        let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
+        let colors = skin.text_colors();
+
+        assert_eq!(colors.background[0], [1, 2, 3]);
+        assert_eq!(colors.background[5], [1, 2, 8]);
+        assert_eq!(colors.foreground[0], [200, 210, 220]);
+        assert_eq!(colors.foreground[5], [200, 210, 220]);
 
         std::fs::remove_dir_all(tmp).unwrap();
     }
