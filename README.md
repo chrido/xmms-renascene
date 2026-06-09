@@ -9,8 +9,7 @@ A modernized version of the classic [XMMS](https://en.wikipedia.org/wiki/XMMS) (
 - **Spectrum analyzer** visualization, Milkdrop inspired
 - **Playlist editor** with drag-and-drop support
 - **MPRIS2 D-Bus interface** for media key integration
-- **Spotify integration** — browse playlists, stream tracks, and control playback via the Spotify Web API (no setup required, client ID is built-in)
-- **Unified output device picker** — seamlessly switch between local audio, network devices, and Spotify Connect devices
+- **Unified output device picker** — seamlessly switch between local and network audio devices
 - **Skin browser** for switching between installed skins
 - Wide audio format support via GStreamer (MP3, OGG, FLAC, WAV, AAC, and more)
 - Vim-like playlist navigation (j/k, p for playback, / for incremental search)
@@ -22,12 +21,6 @@ A modernized version of the classic [XMMS](https://en.wikipedia.org/wiki/XMMS) (
 
 ### Playlist Editor
 ![Playlist Editor](screenshots/xmmsplaylist.png)
-
-### Spotify Integration
-![Spotify Integration Menu](screenshots/spotifyintegration.png)
-
-### Spotify Playlist Chooser
-![Spotify Playlist Chooser](screenshots/spotifyplaylistchooserxmms.png)
 
 ## Dependencies
 

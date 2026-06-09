@@ -55,7 +55,6 @@ use crate::skin::widget::{
 use crate::skin::{
     discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry, SkinPixmapKind,
 };
-use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
 const STOP_FADE_DURATION_MS: i64 = 1_000;
@@ -126,12 +125,6 @@ pub struct PreviewOptions {
     pub reset: bool,
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpotifyChooserPage {
-    Playlists,
-    Tracks,
 }
 
 pub fn run_default_skin_preview(options: PreviewOptions) {
@@ -815,6 +808,7 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Pause between songs",
             "Pause between songs time (seconds):",
             "Mouse Wheel adjusts Volume by (%):",
+            "Stop with fadeout",
             "Time remaining",
             "Dock playlist",
             "Dock equalizer",
@@ -1256,36 +1250,6 @@ fn build_main_menu_popover(
         });
     }
     menu_box.append(&skin_browser);
-
-    let spotify = xmms_menu_button("Spotify Playlists...");
-    {
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        spotify.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.open_spotify_window();
-            }
-            popover.popdown();
-        });
-    }
-    menu_box.append(&spotify);
-
-    let stop_with_fade = xmms_menu_button("Stop with Fadeout");
-    {
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        stop_with_fade.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.stop_with_fade();
-            }
-            popover.popdown();
-        });
-    }
-    menu_box.append(&stop_with_fade);
 
     let quit = xmms_menu_button("Quit");
     {
@@ -2533,6 +2497,11 @@ fn build_preferences_options_page(
                 PreferenceCheck::PauseBetweenSongs,
             ),
             (
+                "Stop with fadeout",
+                state.preference_stop_with_fadeout(),
+                PreferenceCheck::StopWithFadeout,
+            ),
+            (
                 "Time remaining",
                 state.preference_timer_remaining(),
                 PreferenceCheck::TimerRemaining,
@@ -2585,6 +2554,9 @@ fn build_preferences_options_page(
                     PreferenceCheck::PauseBetweenSongs => {
                         state.set_preference_pause_between_songs(check.is_active())
                     }
+                    PreferenceCheck::StopWithFadeout => {
+                        state.set_preference_stop_with_fadeout(check.is_active())
+                    }
                     PreferenceCheck::TimerRemaining => {
                         state.set_preference_timer_remaining(check.is_active())
                     }
@@ -2624,6 +2596,7 @@ enum PreferenceCheck {
     Shuffle,
     NoAdvance,
     PauseBetweenSongs,
+    StopWithFadeout,
     TimerRemaining,
     DockPlaylist,
     DockEqualizer,
@@ -4606,20 +4579,9 @@ pub(crate) struct MainWindowUiState {
     skin_browser_entries: Vec<SkinEntry>,
     selected_skin_index: usize,
     skin_reload_count: u32,
-    spotify_authenticated: bool,
-    spotify_auth_prompt_visible: bool,
-    spotify_window_visible: bool,
-    spotify_page: SpotifyChooserPage,
-    spotify_status: String,
-    spotify_playlists: Vec<SpotifyPlaylist>,
-    spotify_tracks: Vec<SpotifyTrack>,
-    spotify_current_playlist_uri: Option<String>,
-    spotify_last_track_request: Option<String>,
     output_device_picker_visible: bool,
     output_device_groups: OutputDeviceGroups,
-    selected_spotify_output_device: Option<String>,
     output_switch_count: u32,
-    spotify_playback_poll_requests: u32,
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
     seek_state: SeekState,
@@ -4722,20 +4684,9 @@ impl MainWindowUiState {
             skin_browser_entries: Vec::new(),
             selected_skin_index: 0,
             skin_reload_count: 0,
-            spotify_authenticated: false,
-            spotify_auth_prompt_visible: false,
-            spotify_window_visible: false,
-            spotify_page: SpotifyChooserPage::Playlists,
-            spotify_status: String::new(),
-            spotify_playlists: Vec::new(),
-            spotify_tracks: Vec::new(),
-            spotify_current_playlist_uri: None,
-            spotify_last_track_request: None,
             output_device_picker_visible: false,
             output_device_groups: OutputDeviceGroups::default(),
-            selected_spotify_output_device: None,
             output_switch_count: 0,
-            spotify_playback_poll_requests: 0,
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
             seek_state: SeekState::Idle,
@@ -5497,12 +5448,8 @@ impl MainWindowUiState {
         self.output_device_picker_visible = visible;
     }
 
-    pub(crate) fn set_output_devices(
-        &mut self,
-        system_devices: Vec<OutputDevice>,
-        spotify_devices: Vec<OutputDevice>,
-    ) {
-        self.output_device_groups = group_output_devices(system_devices, spotify_devices);
+    pub(crate) fn set_output_devices(&mut self, system_devices: Vec<OutputDevice>) {
+        self.output_device_groups = group_output_devices(system_devices);
     }
 
     pub(crate) fn output_device_groups(&self) -> &OutputDeviceGroups {
@@ -5511,10 +5458,6 @@ impl MainWindowUiState {
 
     pub(crate) fn selected_output_device(&self) -> Option<&str> {
         self.app_state.config.output_device.as_deref()
-    }
-
-    pub(crate) fn selected_spotify_output_device(&self) -> Option<&str> {
-        self.selected_spotify_output_device.as_deref()
     }
 
     pub(crate) fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> bool {
@@ -5538,28 +5481,11 @@ impl MainWindowUiState {
                 self.output_switch_count = self.output_switch_count.saturating_add(1);
                 true
             }
-            OutputDeviceSelection::Spotify(id) => {
-                if !self
-                    .output_device_groups
-                    .spotify
-                    .iter()
-                    .any(|device| device.id == id)
-                {
-                    return false;
-                }
-                self.selected_spotify_output_device = Some(id.to_string());
-                self.output_switch_count = self.output_switch_count.saturating_add(1);
-                true
-            }
         }
     }
 
     pub(crate) fn output_switch_count(&self) -> u32 {
         self.output_switch_count
-    }
-
-    pub(crate) fn spotify_playback_poll_requests(&self) -> u32 {
-        self.spotify_playback_poll_requests
     }
 
     pub(crate) fn mpris_root_properties(&self) -> MprisRootProperties {
@@ -5789,121 +5715,6 @@ impl MainWindowUiState {
         }
     }
 
-    pub(crate) fn set_spotify_authenticated(&mut self, authenticated: bool) {
-        self.spotify_authenticated = authenticated;
-    }
-
-    pub(crate) fn open_spotify_window(&mut self) {
-        self.spotify_auth_prompt_visible = false;
-        if !self.spotify_authenticated {
-            self.spotify_auth_prompt_visible = true;
-            self.spotify_window_visible = false;
-            self.spotify_status = "Authentication required".to_string();
-            return;
-        }
-        self.spotify_window_visible = true;
-        self.spotify_page = SpotifyChooserPage::Playlists;
-        self.spotify_status = "Loading playlists...".to_string();
-    }
-
-    pub(crate) fn spotify_window_visible(&self) -> bool {
-        self.spotify_window_visible
-    }
-
-    pub(crate) fn spotify_auth_prompt_visible(&self) -> bool {
-        self.spotify_auth_prompt_visible
-    }
-
-    pub(crate) fn spotify_page(&self) -> SpotifyChooserPage {
-        self.spotify_page
-    }
-
-    pub(crate) fn spotify_status(&self) -> &str {
-        &self.spotify_status
-    }
-
-    pub(crate) fn spotify_playlist_names(&self) -> Vec<&str> {
-        self.spotify_playlists
-            .iter()
-            .map(|playlist| playlist.name.as_str())
-            .collect()
-    }
-
-    pub(crate) fn spotify_track_titles(&self) -> Vec<String> {
-        self.spotify_tracks
-            .iter()
-            .enumerate()
-            .map(|(index, track)| {
-                format!(
-                    "{}. {} - {}",
-                    index + 1,
-                    track.artist.as_deref().unwrap_or("Unknown"),
-                    track.name
-                )
-            })
-            .collect()
-    }
-
-    pub(crate) fn set_spotify_playlists(&mut self, playlists: Vec<SpotifyPlaylist>) {
-        let count = playlists.len();
-        self.spotify_playlists = playlists;
-        self.spotify_page = SpotifyChooserPage::Playlists;
-        self.spotify_status = format!("{count} playlists");
-    }
-
-    pub(crate) fn select_spotify_playlist(&mut self, index: usize) -> bool {
-        let Some(playlist) = self.spotify_playlists.get(index) else {
-            return false;
-        };
-        self.spotify_current_playlist_uri = Some(playlist.uri.clone());
-        self.spotify_last_track_request = Some(playlist.id.clone());
-        self.spotify_status = "Loading tracks...".to_string();
-        true
-    }
-
-    pub(crate) fn spotify_last_track_request(&self) -> Option<&str> {
-        self.spotify_last_track_request.as_deref()
-    }
-
-    pub(crate) fn set_spotify_tracks(&mut self, tracks: Vec<SpotifyTrack>) {
-        let count = tracks.len();
-        self.spotify_tracks = tracks;
-        self.spotify_page = SpotifyChooserPage::Tracks;
-        self.spotify_status = format!("{count} tracks");
-    }
-
-    pub(crate) fn show_spotify_playlists_page(&mut self) {
-        self.spotify_page = SpotifyChooserPage::Playlists;
-    }
-
-    pub(crate) fn set_spotify_error(&mut self, message: impl Into<String>) {
-        self.spotify_status = message.into();
-    }
-
-    pub(crate) fn load_spotify_tracks_into_playlist(&mut self) -> bool {
-        if self.spotify_tracks.is_empty() {
-            return false;
-        }
-        self.app_state.playlist.clear();
-        for track in &self.spotify_tracks {
-            let title = format!(
-                "{} - {}",
-                track.artist.as_deref().unwrap_or("Unknown"),
-                track.name
-            );
-            self.app_state
-                .playlist
-                .add_spotify(&track.uri, title, i64::from(track.duration_ms));
-        }
-        self.app_state.playlist.set_position(0);
-        self.spotify_window_visible = false;
-        true
-    }
-
-    pub(crate) fn close_spotify_window(&mut self) {
-        self.spotify_window_visible = false;
-    }
-
     pub(crate) fn is_file_dialog_visible(&self) -> bool {
         self.file_dialog_visible
     }
@@ -6064,31 +5875,19 @@ impl MainWindowUiState {
         };
         self.playback_position_ms = position_ms.max(0);
         self.position_position = self.position_slider_position();
-        if uri.starts_with("spotify:") {
-            let duration_ms = self.playlist_entry_length_ms(position).unwrap_or(0);
-            self.app_state.player.play_spotify_uri(uri, duration_ms);
+        self.load_equalizer_auto_preset_for_uri(&uri);
+        self.playback_requests.push(uri.clone());
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend.borrow().play_uri(&uri) {
+                eprintln!("xmms-rs: failed to play {uri}: {err}");
+                self.app_state.player.stop();
+                return;
+            }
             if self.playback_position_ms > 0 {
-                self.app_state.player.apply_spotify_playback_state(
-                    true,
-                    self.playback_position_ms,
-                    duration_ms,
-                );
+                self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
             }
-        } else {
-            self.load_equalizer_auto_preset_for_uri(&uri);
-            self.playback_requests.push(uri.clone());
-            if let Some(backend) = &self.playback_backend {
-                if let Err(err) = backend.borrow().play_uri(&uri) {
-                    eprintln!("xmms-rs: failed to play {uri}: {err}");
-                    self.app_state.player.stop();
-                    return;
-                }
-                if self.playback_position_ms > 0 {
-                    self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
-                }
-            }
-            self.app_state.player.mark_playing();
         }
+        self.app_state.player.mark_playing();
     }
 
     fn load_equalizer_auto_preset_for_uri(&mut self, uri: &str) {
@@ -6179,7 +5978,15 @@ impl MainWindowUiState {
         self.playback_position_ms = 0;
     }
 
-    pub(crate) fn stop_with_fade(&mut self) {
+    fn request_stop_playback(&mut self) {
+        if self.app_state.config.stop_with_fadeout {
+            self.stop_with_fade();
+        } else {
+            self.stop_playback();
+        }
+    }
+
+    fn stop_with_fade(&mut self) {
         if self.app_state.player.state() == PlayerState::Stopped {
             self.stop_playback();
             return;
@@ -6202,18 +6009,6 @@ impl MainWindowUiState {
         }
     }
 
-    pub(crate) fn player_spotify_mode(&self) -> bool {
-        self.app_state.player.spotify_mode()
-    }
-
-    pub(crate) fn player_spotify_uri(&self) -> Option<&str> {
-        self.app_state.player.spotify_uri()
-    }
-
-    pub(crate) fn player_spotify_position_ms(&self) -> i64 {
-        self.app_state.player.spotify_position_ms()
-    }
-
     pub(crate) fn playback_position_ms(&self) -> i64 {
         self.playback_position_ms
     }
@@ -6222,12 +6017,10 @@ impl MainWindowUiState {
         self.playback_requests.last().map(String::as_str)
     }
 
-    pub(crate) fn player_spotify_duration_ms(&self) -> i64 {
-        self.app_state.player.spotify_duration_ms()
-    }
-
-    pub(crate) fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
-        self.app_state.playlist.add_spotify(uri, title, duration_ms);
+    pub(crate) fn add_timed_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
+        self.app_state
+            .playlist
+            .add_timed_uri(uri, title, duration_ms);
     }
 
     pub(crate) fn set_stream_channels_for_e2e(&mut self, channels: i32) {
@@ -7435,7 +7228,7 @@ impl MainWindowUiState {
                 PanelAction::Changed
             }
             PlaylistFooterButton::Stop => {
-                self.stop_playback();
+                self.request_stop_playback();
                 PanelAction::Changed
             }
             PlaylistFooterButton::Next => {
@@ -7613,6 +7406,15 @@ impl MainWindowUiState {
 
     pub(crate) fn preference_pause_between_songs(&self) -> bool {
         self.app_state.config.pause_between_songs
+    }
+
+    pub(crate) fn set_preference_stop_with_fadeout(&mut self, enabled: bool) {
+        self.app_state.config.stop_with_fadeout = enabled;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_stop_with_fadeout(&self) -> bool {
+        self.app_state.config.stop_with_fadeout
     }
 
     pub(crate) fn set_preference_pause_between_songs_time(&mut self, seconds: i32) {
@@ -7871,17 +7673,7 @@ impl MainWindowUiState {
                 position_ms.max(0)
             };
         self.position_position = self.position_slider_position();
-        if self.app_state.player.state() != PlayerState::Stopped {
-            if self.app_state.player.spotify_mode() {
-                let duration_ms = self.current_duration_ms().unwrap_or(0);
-                self.app_state.player.apply_spotify_playback_state(
-                    self.app_state.player.state() == PlayerState::Playing,
-                    self.playback_position_ms,
-                    duration_ms,
-                );
-                return;
-            }
-        } else {
+        if self.app_state.player.state() == PlayerState::Stopped {
             self.seek_state = if self.playback_position_ms > 0 {
                 SeekState::StoppedAt(self.playback_position_ms)
             } else {
@@ -7898,13 +7690,6 @@ impl MainWindowUiState {
                 eprintln!("xmms-rs: failed to seek playback: {err}");
             }
         }
-        if self.app_state.player.spotify_mode() {
-            self.app_state.player.apply_spotify_playback_state(
-                self.app_state.player.state() == PlayerState::Playing,
-                self.playback_position_ms,
-                duration.unwrap_or(0),
-            );
-        }
     }
 
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
@@ -7917,21 +7702,10 @@ impl MainWindowUiState {
             return duration_changed || fading || eof_waiting;
         }
 
-        if self
-            .app_state
-            .player
-            .tick_spotify_playback(i64::from(elapsed_ms))
-        {
-            self.spotify_playback_poll_requests =
-                self.spotify_playback_poll_requests.saturating_add(1);
-        }
-        if self.playback_backend.is_none() || self.app_state.player.spotify_mode() {
+        if self.playback_backend.is_none() {
             self.playback_position_ms = self
                 .playback_position_ms
                 .saturating_add(i64::from(elapsed_ms));
-            if self.app_state.player.spotify_mode() {
-                self.playback_position_ms = self.app_state.player.spotify_position_ms();
-            }
         }
         self.position_position = self.position_slider_position();
         self.visualization_tick_counter += 1;
@@ -8303,7 +8077,7 @@ impl MainWindowUiState {
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.stop_playback();
+                self.request_stop_playback();
                 UiAction::None
             }
             MainPushButton::Previous => {
@@ -9087,7 +8861,7 @@ mod tests {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:test", "Test", 120_000);
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
         state.app_state.playlist.set_position(0);
 
         assert!(state.scroll_main(108, 58, -1.0));
@@ -9107,7 +8881,7 @@ mod tests {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:test", "Test", 120_000);
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
 
         assert_eq!(state.app_state.playlist.position(), None);
         assert!(state.scroll_main(140, 73, 1.0));
@@ -9127,7 +8901,7 @@ mod tests {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:test", "Test", 120_000);
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
         state.app_state.playlist.set_position(0);
         state.app_state.player.mark_playing();
         state.shaded = true;
@@ -9236,7 +9010,7 @@ mod tests {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:test", "Test", 120_000);
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
         state.app_state.playlist.set_position(0);
 
         state.playlist_eof_reached();
@@ -9253,7 +9027,7 @@ mod tests {
 
         assert_eq!(state.seek_state, SeekState::Idle);
         assert_eq!(state.playback_position_ms, 0);
-        assert_eq!(state.app_state.player.spotify_position_ms(), 0);
+        assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
     }
 
@@ -9284,14 +9058,15 @@ mod tests {
     }
 
     #[test]
-    fn stop_with_fade_ramps_down_then_restores_volume() {
+    fn stop_preference_with_fadeout_ramps_down_then_restores_volume() {
         let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
             volume: 80,
+            stop_with_fadeout: true,
             ..Config::default()
         }));
         state.app_state.player.mark_playing();
 
-        state.stop_with_fade();
+        state.activate_push(MainPushButton::Stop);
         assert!(state.stop_fade_remaining_ms > 0);
 
         assert!(state.update_timer_tick(500));
@@ -9308,7 +9083,7 @@ mod tests {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:test", "Test", 120_000);
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
         state.set_playback_position_ms(42_000);
 
         state.press(40, 90);
@@ -9316,7 +9091,7 @@ mod tests {
 
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
         assert_eq!(state.playback_position_ms, 42_000);
-        assert_eq!(state.app_state.player.spotify_position_ms(), 42_000);
+        assert_eq!(state.playback_position_ms, 42_000);
     }
 
     #[test]
@@ -9325,11 +9100,11 @@ mod tests {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:one", "One", 120_000);
+            .add_timed_uri("file:///tmp/one.ogg", "One", 120_000);
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:two", "Two", 120_000);
+            .add_timed_uri("file:///tmp/two.ogg", "Two", 120_000);
         state.app_state.playlist.set_position(0);
         state.set_playback_position_ms(42_000);
 
@@ -9338,7 +9113,7 @@ mod tests {
 
         assert_eq!(state.app_state.playlist.position(), Some(1));
         assert_eq!(state.playback_position_ms, 0);
-        assert_eq!(state.app_state.player.spotify_position_ms(), 0);
+        assert_eq!(state.playback_position_ms, 0);
     }
 
     #[test]
@@ -9554,7 +9329,7 @@ static char * main_xpm[] = {
         state
             .app_state
             .playlist
-            .add_spotify("spotify:track:test", "Test", 10_000);
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 10_000);
         state.press(40, 90);
         assert_eq!(state.release(40, 90), UiAction::None);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
