@@ -30,19 +30,10 @@ use xmms_renascene::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
 use xmms_renascene::skin::{skin_browser_search_dirs, SkinPixmapKind};
-use xmms_renascene::spotify::{
-    auth_code_request_body, authorization_url, code_challenge_for_verifier,
-    config_path as spotify_config_path, exchange_code_for_token_with_url, parse_devices_response,
-    parse_playback_state_response, parse_playlist_tracks_response, parse_playlists_response,
-    play_track_body, playlist_tracks_endpoint, playlists_endpoint, preferred_device_id,
-    refresh_access_token_with_url, SpotifyAuthConfig, SpotifyAuthState, SpotifyPlaybackRequest,
-    SpotifyPlaylist, SpotifyTrack, CLIENT_ID, REDIRECT_URI,
-};
 use xmms_renascene::ui::{
     preferences_page_parity_controls, preferences_window_default_size,
     preferences_zoom_spans_full_width, visualization_preference_sensitivity, PanelKind,
     PlaylistContextAction, PlaylistMenuKind, PlaylistSortAction, PreferencesPage,
-    SpotifyChooserPage,
 };
 
 #[test]
@@ -463,7 +454,7 @@ fn prompt_keyboard_shortcuts_open_location_and_jump_time() {
 fn main_keyboard_shortcuts_trigger_preview_actions() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.add_spotify_entry("spotify:track:shortcut", "Shortcut", 10_000)
+    app.add_timed_entry("file:///music/shortcut", "Shortcut", 10_000)
         .press_shortcut(Shortcut::Play)
         .assert_player_state(PlayerState::Playing)
         .press_shortcut(Shortcut::Pause)
@@ -629,7 +620,7 @@ fn shaded_transport_controls_trigger_playback_actions() {
 fn shaded_player_displays_time_and_position_slider() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.add_spotify_entry("spotify:track:one", "Song", 130_000)
+    app.add_timed_entry("file:///music/one", "Song", 130_000)
         .press_shortcut(Shortcut::PlayFirst)
         .click(MainTarget::SHADE)
         .assert_player_shaded()
@@ -681,10 +672,10 @@ fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
 }
 
 #[test]
-fn spotify_and_podcast_entries_are_available_to_e2e_playlist_state() {
+fn timed_and_podcast_entries_are_available_to_e2e_playlist_state() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.add_spotify_entry("spotify:track:123", "Spotify Song", 123_000)
+    app.add_timed_entry("file:///music/123", "Timed Song", 123_000)
         .add_podcast_entry(
             "https://example.test/episode.mp3",
             "Podcast Episode",
@@ -692,279 +683,10 @@ fn spotify_and_podcast_entries_are_available_to_e2e_playlist_state() {
             "episode-1",
         )
         .assert_playlist_len(2)
-        .assert_playlist_entry(0, "spotify:track:123")
-        .assert_playlist_title(0, "Spotify Song")
+        .assert_playlist_entry(0, "file:///music/123")
+        .assert_playlist_title(0, "Timed Song")
         .assert_playlist_entry(1, "https://example.test/episode.mp3")
         .assert_playlist_title(1, "Podcast Episode");
-}
-
-#[test]
-fn spotify_auth_config_and_url_match_c_contract() {
-    let dir = unique_temp_dir("spotify-auth");
-    let path = spotify_config_path(&dir);
-
-    let missing = SpotifyAuthConfig::load_from_file(&path).unwrap();
-    assert!(!missing.is_authenticated());
-
-    SpotifyAuthConfig {
-        refresh_token: Some("stored-refresh-token".to_string()),
-    }
-    .save_to_file(&path)
-    .unwrap();
-
-    let loaded = SpotifyAuthConfig::load_from_file(&path).unwrap();
-    assert_eq!(
-        loaded.refresh_token.as_deref(),
-        Some("stored-refresh-token")
-    );
-    assert!(loaded.is_authenticated());
-
-    let auth_url = authorization_url("pkce-challenge");
-    assert!(auth_url.contains(&format!("client_id={CLIENT_ID}")));
-    assert!(auth_url.contains(&format!("redirect_uri={REDIRECT_URI}")));
-    assert!(auth_url.contains("scope=user-read-playback-state%20user-modify-playback-state"));
-    assert!(auth_url.contains("code_challenge_method=S256"));
-    assert!(auth_url.contains("code_challenge=pkce-challenge"));
-
-    fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn spotify_pkce_helpers_and_auth_code_body_match_c_contract() {
-    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-
-    assert_eq!(
-        code_challenge_for_verifier(verifier),
-        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-    );
-    let body = auth_code_request_body("code value", verifier);
-    assert!(body.contains("grant_type=authorization_code"));
-    assert!(body.contains("code=code%20value"));
-    assert!(body.contains(&format!("client_id={CLIENT_ID}")));
-    assert!(body.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A8391%2Fcallback"));
-    assert!(body.contains("code_verifier=dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"));
-}
-
-#[test]
-fn spotify_token_refresh_state_matches_c_contract() {
-    let mut state = SpotifyAuthState::from_config(SpotifyAuthConfig {
-        refresh_token: Some("refresh-token".to_string()),
-    });
-
-    assert!(state.is_authenticated());
-    let expected_body =
-        format!("grant_type=refresh_token&refresh_token=refresh-token&client_id={CLIENT_ID}");
-    assert_eq!(
-        state.refresh_request_body().as_deref(),
-        Some(expected_body.as_str())
-    );
-
-    assert!(state.apply_token_response(
-        r#"{"access_token":"access-token","expires_in":120,"refresh_token":"new-refresh"}"#,
-        10,
-    ));
-    assert_eq!(state.access_token.as_deref(), Some("access-token"));
-    assert_eq!(state.refresh_token.as_deref(), Some("new-refresh"));
-    assert_eq!(state.token_expiry_unix, 70);
-    assert!(state.access_token_valid(69));
-    assert!(!state.access_token_valid(70));
-}
-
-#[test]
-fn spotify_live_token_exchange_and_refresh_use_http_token_endpoint() {
-    let response = r#"{"access_token":"access","expires_in":120,"refresh_token":"refresh-new"}"#;
-    let (token_url, server) = local_http_server(vec![
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            response.len(),
-            response
-        ),
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            response.len(),
-            response
-        ),
-    ]);
-    let mut state = SpotifyAuthState::default();
-
-    assert!(
-        exchange_code_for_token_with_url(&mut state, &token_url, "code", "verifier", 100).unwrap()
-    );
-    assert_eq!(state.access_token.as_deref(), Some("access"));
-    assert_eq!(state.refresh_token.as_deref(), Some("refresh-new"));
-    assert_eq!(state.token_expiry_unix, 160);
-
-    assert!(refresh_access_token_with_url(&mut state, &token_url, 200).unwrap());
-    assert_eq!(state.token_expiry_unix, 260);
-    server.join().unwrap();
-}
-
-#[test]
-fn spotify_api_parsers_and_requests_match_c_contract() {
-    assert_eq!(playlists_endpoint(50), "/me/playlists?limit=50&offset=50");
-    assert_eq!(
-        playlist_tracks_endpoint("playlist-id", 100),
-        "/playlists/playlist-id/items?limit=100&offset=100"
-    );
-
-    let (playlists, total) = parse_playlists_response(
-        r#"{"total":2,"items":[
-            {"id":"old","name":"Old","uri":"spotify:playlist:old","tracks":{"total":7}},
-            {"id":"new","name":"New","uri":"spotify:playlist:new","items":{"total":8}}
-        ]}"#,
-    )
-    .unwrap();
-    assert_eq!(total, 2);
-    assert_eq!(playlists[0].name, "Old");
-    assert_eq!(playlists[1].total_tracks, 8);
-
-    let (tracks, total) = parse_playlist_tracks_response(
-        r#"{"total":3,"items":[
-            {"track":{"id":"one","name":"One","uri":"spotify:track:one","duration_ms":1000,"artists":[{"name":"Artist"}],"album":{"name":"Album"}}},
-            {"item":{"id":"two","name":"Two","uri":"spotify:track:two","duration_ms":2000}},
-            {"track":{"id":null}}
-        ]}"#,
-    )
-    .unwrap();
-    assert_eq!(total, 3);
-    assert_eq!(tracks.len(), 2);
-    assert_eq!(tracks[0].artist.as_deref(), Some("Artist"));
-    assert_eq!(tracks[0].album.as_deref(), Some("Album"));
-
-    let devices = parse_devices_response(
-        r#"{"devices":[
-            {"id":"inactive","name":"Laptop","type":"Computer","is_active":false},
-            {"id":"active","name":"Phone","type":"Smartphone","is_active":true}
-        ]}"#,
-    )
-    .unwrap();
-    assert_eq!(preferred_device_id(&devices), Some("active"));
-
-    let playback = parse_playback_state_response(
-        r#"{"is_playing":true,"progress_ms":42,"item":{"name":"Song","duration_ms":123,"artists":[{"name":"Artist"}]}}"#,
-    )
-    .unwrap();
-    assert!(playback.is_playing);
-    assert_eq!(playback.progress_ms, 42);
-    assert_eq!(playback.track_name.as_deref(), Some("Song"));
-
-    assert_eq!(
-        play_track_body(Some("spotify:track:one"), None, 0),
-        r#"{"uris":["spotify:track:one"]}"#
-    );
-    assert_eq!(
-        SpotifyPlaybackRequest::TransferDevice {
-            device_id: "active".to_string(),
-        }
-        .body()
-        .as_deref(),
-        Some(r#"{"device_ids":["active"],"play":false}"#)
-    );
-    assert_eq!(SpotifyPlaybackRequest::Next.method(), "POST");
-    assert_eq!(SpotifyPlaybackRequest::Pause.endpoint(), "/me/player/pause");
-}
-
-#[test]
-fn spotify_uri_playback_updates_player_state_like_c_player() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-
-    app.add_spotify_entry("spotify:track:one", "Spotify One", 123_000)
-        .press_shortcut(Shortcut::Play)
-        .assert_player_state(PlayerState::Playing)
-        .assert_player_spotify_mode(true)
-        .assert_player_spotify_uri(Some("spotify:track:one"))
-        .assert_player_spotify_duration_ms(123_000)
-        .assert_player_spotify_position_ms(0)
-        .update_timer_tick(100)
-        .assert_player_spotify_position_ms(100)
-        .assert_spotify_playback_poll_requests(0);
-
-    for _ in 0..19 {
-        app.update_timer_tick(100);
-    }
-
-    app.assert_spotify_playback_poll_requests(1)
-        .press_shortcut(Shortcut::Pause)
-        .assert_player_state(PlayerState::Paused)
-        .assert_player_spotify_mode(true)
-        .press_shortcut(Shortcut::Stop)
-        .assert_player_state(PlayerState::Stopped)
-        .assert_player_spotify_mode(false)
-        .assert_player_spotify_uri(None);
-
-    app.add_playlist_uri("file:///music/local.ogg")
-        .execute_mpris_command(MprisCommand::Next)
-        .assert_player_state(PlayerState::Playing)
-        .assert_player_spotify_mode(false);
-}
-
-#[test]
-fn spotify_playlist_window_auth_selection_import_and_empty_states_are_wired() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-
-    app.click_menu_item(MenuItem::Spotify)
-        .assert_spotify_auth_prompt_visible(true)
-        .assert_spotify_window_visible(false)
-        .assert_spotify_status("Authentication required")
-        .set_spotify_authenticated(true)
-        .click_menu_item(MenuItem::Spotify)
-        .assert_spotify_window_visible(true)
-        .assert_spotify_page(SpotifyChooserPage::Playlists)
-        .assert_spotify_status("Loading playlists...")
-        .receive_spotify_playlists(Vec::new())
-        .assert_spotify_status("0 playlists")
-        .set_spotify_error("Failed to load playlists")
-        .assert_spotify_status("Failed to load playlists")
-        .receive_spotify_playlists(vec![SpotifyPlaylist {
-            id: "playlist-id".to_string(),
-            name: "Favorites".to_string(),
-            total_tracks: 2,
-            uri: "spotify:playlist:favorites".to_string(),
-        }])
-        .assert_spotify_playlists(&["Favorites"])
-        .select_spotify_playlist(0)
-        .assert_spotify_last_track_request(Some("playlist-id"))
-        .assert_spotify_status("Loading tracks...")
-        .receive_spotify_tracks(vec![
-            SpotifyTrack {
-                id: "one".to_string(),
-                name: "One".to_string(),
-                artist: Some("Artist".to_string()),
-                album: Some("Album".to_string()),
-                uri: "spotify:track:one".to_string(),
-                duration_ms: 1_000,
-            },
-            SpotifyTrack {
-                id: "two".to_string(),
-                name: "Two".to_string(),
-                artist: None,
-                album: None,
-                uri: "spotify:track:two".to_string(),
-                duration_ms: 2_000,
-            },
-        ])
-        .assert_spotify_page(SpotifyChooserPage::Tracks)
-        .assert_spotify_status("2 tracks")
-        .assert_spotify_tracks(&["1. Artist - One", "2. Unknown - Two"])
-        .spotify_back_to_playlists()
-        .assert_spotify_page(SpotifyChooserPage::Playlists)
-        .receive_spotify_tracks(vec![SpotifyTrack {
-            id: "three".to_string(),
-            name: "Three".to_string(),
-            artist: Some("Artist".to_string()),
-            album: None,
-            uri: "spotify:track:three".to_string(),
-            duration_ms: 3_000,
-        }])
-        .load_spotify_tracks_into_playlist()
-        .assert_spotify_window_visible(false)
-        .assert_playlist_len(1)
-        .assert_playlist_entry(0, "spotify:track:three")
-        .assert_playlist_title(0, "Artist - Three")
-        .click_menu_item(MenuItem::Spotify)
-        .assert_spotify_window_visible(true)
-        .close_spotify_window()
-        .assert_spotify_window_visible(false);
 }
 
 #[test]
@@ -994,9 +716,9 @@ fn playlist_sort_e2e_orders_entries_and_preserves_current_item() {
 fn playlist_row_selection_footer_and_drag_reorder_are_wired() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
-    app.add_spotify_entry("spotify:track:one", "One", 60_000)
+    app.add_timed_entry("file:///music/one", "One", 60_000)
         .add_playlist_uri("file:///music/unknown.ogg")
-        .add_spotify_entry("spotify:track:two", "Two", 90_000)
+        .add_timed_entry("file:///music/two", "Two", 90_000)
         .assert_playlist_footer_info("0:00/2:30+")
         .click_playlist_row(1)
         .assert_playlist_entry_selected(0, false)
@@ -1005,13 +727,13 @@ fn playlist_row_selection_footer_and_drag_reorder_are_wired() {
         .assert_playlist_footer_info("?/2:30+")
         .drag_playlist_row(1, 0)
         .assert_playlist_entry(0, "file:///music/unknown.ogg")
-        .assert_playlist_entry(1, "spotify:track:one")
+        .assert_playlist_entry(1, "file:///music/one")
         .assert_playlist_entry_selected(0, true)
         .assert_playlist_footer_info("?/2:30+")
         .drag_playlist_row(2, 1)
         .assert_playlist_entry(0, "file:///music/unknown.ogg")
-        .assert_playlist_entry(1, "spotify:track:two")
-        .assert_playlist_entry(2, "spotify:track:one");
+        .assert_playlist_entry(1, "file:///music/two")
+        .assert_playlist_entry(2, "file:///music/one");
 }
 
 #[test]
@@ -1128,15 +850,15 @@ fn double_clicking_playlist_row_starts_that_entry() {
 fn playlist_sort_e2e_supports_title_and_date_keys() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.add_spotify_entry("spotify:track:z", "Zulu", 1_000)
-        .add_spotify_entry("spotify:track:a", "alpha", 1_000)
-        .add_spotify_entry("spotify:track:e", "Echo", 1_000)
+    app.add_timed_entry("file:///music/z", "Zulu", 1_000)
+        .add_timed_entry("file:///music/a", "alpha", 1_000)
+        .add_timed_entry("file:///music/e", "Echo", 1_000)
         .sort_playlist_by(PlaylistSortKey::Title)
-        .assert_playlist_entry(0, "spotify:track:a")
+        .assert_playlist_entry(0, "file:///music/a")
         .assert_playlist_title(0, "alpha")
-        .assert_playlist_entry(1, "spotify:track:e")
+        .assert_playlist_entry(1, "file:///music/e")
         .assert_playlist_title(1, "Echo")
-        .assert_playlist_entry(2, "spotify:track:z")
+        .assert_playlist_entry(2, "file:///music/z")
         .assert_playlist_title(2, "Zulu");
 
     let music_dir = unique_temp_dir("xmms-rs-e2e-sort-date");
@@ -1224,13 +946,13 @@ fn playlist_misc_sort_menu_actions_cover_each_list_sort() {
     .assert_playlist_entry(2, "file:///music/Gamma/a_song.ogg");
 
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
-    app.add_spotify_entry("spotify:track:z", "Zulu", 1_000)
-        .add_spotify_entry("spotify:track:a", "alpha", 1_000)
-        .add_spotify_entry("spotify:track:e", "Echo", 1_000)
+    app.add_timed_entry("file:///music/z", "Zulu", 1_000)
+        .add_timed_entry("file:///music/a", "alpha", 1_000)
+        .add_timed_entry("file:///music/e", "Echo", 1_000)
         .activate_playlist_sort_action(PlaylistSortAction::ListByTitle)
-        .assert_playlist_entry(0, "spotify:track:a")
-        .assert_playlist_entry(1, "spotify:track:e")
-        .assert_playlist_entry(2, "spotify:track:z");
+        .assert_playlist_entry(0, "file:///music/a")
+        .assert_playlist_entry(1, "file:///music/e")
+        .assert_playlist_entry(2, "file:///music/z");
 
     let music_dir = unique_temp_dir("xmms-rs-misc-sort-date");
     fs::create_dir_all(&music_dir).unwrap();
@@ -1257,15 +979,15 @@ fn playlist_misc_sort_menu_actions_cover_each_list_sort() {
 #[test]
 fn playlist_misc_sort_menu_actions_cover_each_selected_sort() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
-    app.add_spotify_entry("spotify:track:z", "Zulu", 1_000)
-        .add_spotify_entry("spotify:track:middle", "middle", 1_000)
-        .add_spotify_entry("spotify:track:a", "alpha", 1_000)
+    app.add_timed_entry("file:///music/z", "Zulu", 1_000)
+        .add_timed_entry("file:///music/middle", "middle", 1_000)
+        .add_timed_entry("file:///music/a", "alpha", 1_000)
         .select_playlist_entry(0)
         .select_playlist_entry(2)
         .activate_playlist_sort_action(PlaylistSortAction::SelectionByTitle)
-        .assert_playlist_entry(0, "spotify:track:a")
-        .assert_playlist_entry(1, "spotify:track:middle")
-        .assert_playlist_entry(2, "spotify:track:z");
+        .assert_playlist_entry(0, "file:///music/a")
+        .assert_playlist_entry(1, "file:///music/middle")
+        .assert_playlist_entry(2, "file:///music/z");
 
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
     app.drop_on_playlist([
@@ -1295,8 +1017,8 @@ fn playlist_misc_sort_menu_actions_cover_each_selected_sort() {
 fn playlist_misc_file_info_and_options_actions_are_wired() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
-    app.add_spotify_entry("spotify:track:one", "Info Target", 1_000)
-        .add_spotify_entry("spotify:track:two", "Other Track", 1_000)
+    app.add_timed_entry("file:///music/one", "Info Target", 1_000)
+        .add_timed_entry("file:///music/two", "Other Track", 1_000)
         .select_playlist_entry(0)
         .click_panel(PanelTarget::PlaylistMisc)
         .activate_playlist_menu_item(1)
@@ -1311,7 +1033,7 @@ fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
     app.drop_on_playlist(["file:///music/a.ogg", "file:///music/b.ogg"])
-        .add_spotify_entry("spotify:track:skip", "Spotify", 123_000)
+        .add_timed_entry("file:///music/skip", "Known Duration", 123_000)
         .add_podcast_entry(
             "https://example.test/episode.mp3",
             "Episode",
@@ -1324,7 +1046,7 @@ fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
         .assert_playlist_length_ms(1, 2_000)
         .assert_playlist_title(1, "Indexed 2")
         .assert_playlist_length_ms(2, 123_000)
-        .assert_playlist_title(2, "Spotify")
+        .assert_playlist_title(2, "Known Duration")
         .assert_playlist_length_ms(3, -1)
         .assert_playlist_title(3, "Episode");
 }
@@ -1355,7 +1077,7 @@ fn update_timer_advances_position_while_playing_only() {
         .update_timer_tick(1_000)
         .assert_position(0)
         .assert_main_time_digits([10, 10, 10, 10, 10])
-        .add_spotify_entry("spotify:track:one", "Song", 10_000)
+        .add_timed_entry("file:///music/one", "Song", 10_000)
         .press_shortcut(Shortcut::PlayFirst)
         .assert_player_state(PlayerState::Playing)
         .update_timer_tick(5_000)
@@ -1489,15 +1211,12 @@ fn output_device_picker_groups_and_deduplicates_system_devices() {
 
     app.open_output_device_picker()
         .assert_window_visible(Window::OutputDevicePicker)
-        .set_output_devices(
-            vec![
-                OutputDevice::system("speaker", "Speakers", "pipewire-proplist", false),
-                OutputDevice::system("speaker", "Speakers via Pulse", "pulse-proplist", false),
-                OutputDevice::system("raw", "Raw ALSA", "alsa-proplist", false),
-                OutputDevice::system("cast", "Living Room", "pipewire-proplist", true),
-            ],
-            vec![],
-        )
+        .set_output_devices(vec![
+            OutputDevice::system("speaker", "Speakers", "pipewire-proplist", false),
+            OutputDevice::system("speaker", "Speakers via Pulse", "pulse-proplist", false),
+            OutputDevice::system("raw", "Raw ALSA", "alsa-proplist", false),
+            OutputDevice::system("cast", "Living Room", "pipewire-proplist", true),
+        ])
         .assert_local_output_devices(&["Speakers"])
         .assert_network_output_devices(&["Living Room"]);
 }
@@ -1506,15 +1225,12 @@ fn output_device_picker_groups_and_deduplicates_system_devices() {
 fn output_device_picker_preserves_automatic_system_default() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.set_output_devices(
-        vec![OutputDevice::system(
-            "speaker",
-            "Speakers",
-            "pipewire-proplist",
-            false,
-        )],
-        vec![],
-    )
+    app.set_output_devices(vec![OutputDevice::system(
+        "speaker",
+        "Speakers",
+        "pipewire-proplist",
+        false,
+    )])
     .assert_selected_output_device(None)
     .select_output_device(OutputDeviceSelection::System("speaker"))
     .assert_selected_output_device(Some("speaker"))
@@ -1528,40 +1244,19 @@ fn output_device_picker_preserves_automatic_system_default() {
 fn output_device_picker_switches_system_device_without_stopping_playback() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.add_spotify_entry("spotify:track:output", "Output", 10_000)
+    app.add_timed_entry("file:///music/output", "Output", 10_000)
         .press_shortcut(Shortcut::Play)
         .assert_player_state(PlayerState::Playing)
-        .set_output_devices(
-            vec![OutputDevice::system(
-                "headphones",
-                "Headphones",
-                "pipewire-proplist",
-                false,
-            )],
-            vec![],
-        )
+        .set_output_devices(vec![OutputDevice::system(
+            "headphones",
+            "Headphones",
+            "pipewire-proplist",
+            false,
+        )])
         .select_output_device(OutputDeviceSelection::System("headphones"))
         .assert_selected_output_device(Some("headphones"))
         .assert_player_state(PlayerState::Playing)
         .assert_output_switch_count(1);
-}
-
-#[test]
-fn output_device_picker_lists_and_selects_spotify_devices() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-
-    app.set_output_devices(
-        vec![],
-        vec![
-            OutputDevice::spotify("phone", "Phone", "Smartphone"),
-            OutputDevice::spotify("desktop", "Desktop", "Computer"),
-        ],
-    )
-    .assert_spotify_output_devices(&["Phone", "Desktop"])
-    .select_output_device(OutputDeviceSelection::Spotify("desktop"))
-    .assert_selected_spotify_output_device(Some("desktop"))
-    .assert_selected_output_device(None)
-    .assert_output_switch_count(1);
 }
 
 #[test]
@@ -1590,7 +1285,7 @@ fn mpris_root_and_player_properties_match_xmms_contract() {
 fn mpris_volume_seek_and_set_position_update_player_state() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.add_spotify_entry("spotify:track:mpris", "MPRIS", 10_000)
+    app.add_timed_entry("file:///music/mpris", "MPRIS", 10_000)
         .set_mpris_volume(0.25)
         .assert_volume(25)
         .assert_mpris_volume(0.25)
@@ -1704,7 +1399,7 @@ fn transport_buttons_update_player_state_and_position() {
 
     app.click(MainTarget::PLAY)
         .assert_player_state(PlayerState::Stopped)
-        .add_spotify_entry("spotify:track:transport", "Transport", 10_000)
+        .add_timed_entry("file:///music/transport", "Transport", 10_000)
         .click(MainTarget::PLAY)
         .assert_player_state(PlayerState::Playing);
 
@@ -1737,8 +1432,8 @@ fn transport_buttons_update_player_state_and_position() {
 fn playlist_footer_transport_buttons_update_player_state_and_position() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
-    app.add_spotify_entry("spotify:track:playlist-footer-one", "Footer One", 10_000)
-        .add_spotify_entry("spotify:track:playlist-footer-two", "Footer Two", 12_000)
+    app.add_timed_entry("file:///music/playlist-footer-one", "Footer One", 10_000)
+        .add_timed_entry("file:///music/playlist-footer-two", "Footer Two", 12_000)
         .click_panel(PanelTarget::PlaylistPlay)
         .assert_player_state(PlayerState::Playing)
         .assert_playlist_position(Some(0))
@@ -1761,8 +1456,8 @@ fn playlist_footer_transport_buttons_update_player_state_and_position() {
 fn docked_playlist_footer_transport_buttons_use_current_geometry() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
-    app.add_spotify_entry(
-        "spotify:track:docked-playlist-footer",
+    app.add_timed_entry(
+        "file:///music/docked-playlist-footer",
         "Docked Footer",
         10_000,
     )
@@ -1827,7 +1522,7 @@ fn volume_balance_and_position_sliders_update_player_values() {
     app.click(MainTarget::balance(12)).assert_balance(0);
     app.click(MainTarget::balance(24)).assert_balance(100);
 
-    app.add_spotify_entry("spotify:track:slider", "Slider", 10_000)
+    app.add_timed_entry("file:///music/slider", "Slider", 10_000)
         .press_shortcut(Shortcut::PlayFirst)
         .click(MainTarget::position(0))
         .assert_position(0);
@@ -2235,7 +1930,6 @@ fn local_file_playback_requests_gstreamer_uri_instead_of_only_toggling_ui_state(
 
     app.drop_on_main(["file:///music/local-song.ogg"])
         .assert_player_state(PlayerState::Playing)
-        .assert_player_spotify_uri(None)
         .assert_last_playback_request(Some("file:///music/local-song.ogg"));
 }
 

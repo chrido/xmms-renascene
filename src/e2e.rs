@@ -22,10 +22,9 @@ use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
 use crate::skin::SkinPixmapKind;
-use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 use crate::ui::{
     MainWindowUiState, PanelAction, PanelKind, PlaylistContextAction, PlaylistMenuKind,
-    PlaylistSortAction, PreferencesPage, SpotifyChooserPage, UiAction,
+    PlaylistSortAction, PreferencesPage, UiAction,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -355,7 +354,6 @@ pub enum MenuItem {
     OpenLocation,
     Preferences,
     SkinBrowser,
-    Spotify,
     Quit,
 }
 
@@ -778,9 +776,6 @@ impl UiE2e {
             MenuItem::SkinBrowser => {
                 self.state.set_skin_browser_visible(true);
             }
-            MenuItem::Spotify => {
-                self.state.open_spotify_window();
-            }
             MenuItem::Quit => {
                 self.apply_action(UiAction::Quit);
             }
@@ -930,86 +925,9 @@ impl UiE2e {
         self
     }
 
-    pub fn add_spotify_entry(&mut self, uri: &str, title: &str, duration_ms: i64) -> &mut Self {
-        self.state.add_spotify_entry(uri, title, duration_ms);
+    pub fn add_timed_entry(&mut self, uri: &str, title: &str, duration_ms: i64) -> &mut Self {
+        self.state.add_timed_entry(uri, title, duration_ms);
         self.sync_windows();
-        self
-    }
-
-    pub fn set_spotify_authenticated(&mut self, authenticated: bool) -> &mut Self {
-        self.state.set_spotify_authenticated(authenticated);
-        self
-    }
-
-    pub fn assert_spotify_window_visible(&mut self, expected: bool) -> &mut Self {
-        assert_eq!(self.state.spotify_window_visible(), expected);
-        self
-    }
-
-    pub fn assert_spotify_auth_prompt_visible(&mut self, expected: bool) -> &mut Self {
-        assert_eq!(self.state.spotify_auth_prompt_visible(), expected);
-        self
-    }
-
-    pub fn assert_spotify_page(&mut self, expected: SpotifyChooserPage) -> &mut Self {
-        assert_eq!(self.state.spotify_page(), expected);
-        self
-    }
-
-    pub fn assert_spotify_status(&mut self, expected: &str) -> &mut Self {
-        assert_eq!(self.state.spotify_status(), expected);
-        self
-    }
-
-    pub fn receive_spotify_playlists(&mut self, playlists: Vec<SpotifyPlaylist>) -> &mut Self {
-        self.state.set_spotify_playlists(playlists);
-        self
-    }
-
-    pub fn assert_spotify_playlists(&mut self, expected: &[&str]) -> &mut Self {
-        assert_eq!(self.state.spotify_playlist_names(), expected);
-        self
-    }
-
-    pub fn select_spotify_playlist(&mut self, index: usize) -> &mut Self {
-        assert!(self.state.select_spotify_playlist(index));
-        self
-    }
-
-    pub fn assert_spotify_last_track_request(&mut self, expected: Option<&str>) -> &mut Self {
-        assert_eq!(self.state.spotify_last_track_request(), expected);
-        self
-    }
-
-    pub fn receive_spotify_tracks(&mut self, tracks: Vec<SpotifyTrack>) -> &mut Self {
-        self.state.set_spotify_tracks(tracks);
-        self
-    }
-
-    pub fn assert_spotify_tracks(&mut self, expected: &[&str]) -> &mut Self {
-        let expected: Vec<String> = expected.iter().map(|value| value.to_string()).collect();
-        assert_eq!(self.state.spotify_track_titles(), expected);
-        self
-    }
-
-    pub fn spotify_back_to_playlists(&mut self) -> &mut Self {
-        self.state.show_spotify_playlists_page();
-        self
-    }
-
-    pub fn set_spotify_error(&mut self, message: &str) -> &mut Self {
-        self.state.set_spotify_error(message);
-        self
-    }
-
-    pub fn load_spotify_tracks_into_playlist(&mut self) -> &mut Self {
-        assert!(self.state.load_spotify_tracks_into_playlist());
-        self.sync_windows();
-        self
-    }
-
-    pub fn close_spotify_window(&mut self) -> &mut Self {
-        self.state.close_spotify_window();
         self
     }
 
@@ -1644,13 +1562,8 @@ impl UiE2e {
         self
     }
 
-    pub fn set_output_devices(
-        &mut self,
-        system_devices: Vec<OutputDevice>,
-        spotify_devices: Vec<OutputDevice>,
-    ) -> &mut Self {
-        self.state
-            .set_output_devices(system_devices, spotify_devices);
+    pub fn set_output_devices(&mut self, system_devices: Vec<OutputDevice>) -> &mut Self {
+        self.state.set_output_devices(system_devices);
         self
     }
 
@@ -1678,18 +1591,6 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_spotify_output_devices(&mut self, expected: &[&str]) -> &mut Self {
-        let actual: Vec<&str> = self
-            .state
-            .output_device_groups()
-            .spotify
-            .iter()
-            .map(|device| device.display_name.as_str())
-            .collect();
-        assert_eq!(actual, expected);
-        self
-    }
-
     pub fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> &mut Self {
         assert!(
             self.state.select_output_device(selection),
@@ -1703,43 +1604,13 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_selected_spotify_output_device(&mut self, expected: Option<&str>) -> &mut Self {
-        assert_eq!(self.state.selected_spotify_output_device(), expected);
-        self
-    }
-
     pub fn assert_output_switch_count(&mut self, expected: u32) -> &mut Self {
         assert_eq!(self.state.output_switch_count(), expected);
         self
     }
 
-    pub fn assert_player_spotify_mode(&mut self, expected: bool) -> &mut Self {
-        assert_eq!(self.state.player_spotify_mode(), expected);
-        self
-    }
-
-    pub fn assert_player_spotify_uri(&mut self, expected: Option<&str>) -> &mut Self {
-        assert_eq!(self.state.player_spotify_uri(), expected);
-        self
-    }
-
     pub fn assert_last_playback_request(&mut self, expected: Option<&str>) -> &mut Self {
         assert_eq!(self.state.last_playback_request(), expected);
-        self
-    }
-
-    pub fn assert_player_spotify_position_ms(&mut self, expected: i64) -> &mut Self {
-        assert_eq!(self.state.player_spotify_position_ms(), expected);
-        self
-    }
-
-    pub fn assert_player_spotify_duration_ms(&mut self, expected: i64) -> &mut Self {
-        assert_eq!(self.state.player_spotify_duration_ms(), expected);
-        self
-    }
-
-    pub fn assert_spotify_playback_poll_requests(&mut self, expected: u32) -> &mut Self {
-        assert_eq!(self.state.spotify_playback_poll_requests(), expected);
         self
     }
 

@@ -213,13 +213,13 @@ impl Playlist {
         self.invalidate_shuffle_order();
     }
 
-    pub fn add_spotify(
+    pub fn add_timed_uri(
         &mut self,
-        spotify_uri: impl Into<String>,
+        uri: impl Into<String>,
         title: impl Into<String>,
         duration_ms: i64,
     ) {
-        let mut entry = PlaylistEntry::new_uri(spotify_uri);
+        let mut entry = PlaylistEntry::new_uri(uri);
         entry.title = title.into();
         entry.length_ms = duration_ms;
         self.entries.push(entry);
@@ -465,10 +465,7 @@ impl Playlist {
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                entry.length_ms < 0
-                    && !entry.filename.is_empty()
-                    && !entry.is_podcast
-                    && !entry.filename.starts_with("spotify:")
+                entry.length_ms < 0 && !entry.filename.is_empty() && !entry.is_podcast
             })
             .map(|(index, entry)| DurationIndexItem {
                 index,
@@ -820,7 +817,6 @@ fn normalize_playlist_path(line: &str, base_dir: &Path) -> String {
     if line.starts_with("file://")
         || line.starts_with("http://")
         || line.starts_with("https://")
-        || line.starts_with("spotify:")
         || Path::new(line).is_absolute()
     {
         return line.to_string();
@@ -1273,12 +1269,11 @@ mod tests {
     }
 
     #[test]
-    fn duration_indexing_skips_known_spotify_and_podcast_entries() {
+    fn duration_indexing_skips_known_and_podcast_entries() {
         let mut playlist = Playlist::new();
         playlist.add_uri("file:///music/missing.ogg");
         playlist.add_uri("file:///music/known.ogg");
         playlist.entries[1].length_ms = 42_000;
-        playlist.add_spotify("spotify:track:1", "Spotify", 10_000);
         playlist.add_podcast_entry(
             "https://example.test/episode.mp3",
             Some("Episode".to_string()),

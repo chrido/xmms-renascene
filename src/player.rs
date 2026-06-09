@@ -23,11 +23,6 @@ pub struct Player {
     balance: i32,
     vis_data: [f32; 75],
     vis_data_valid: bool,
-    spotify_mode: bool,
-    spotify_uri: Option<String>,
-    spotify_position_ms: i64,
-    spotify_duration_ms: i64,
-    spotify_poll_counter: u32,
 }
 
 pub struct GStreamerBackend {
@@ -87,14 +82,12 @@ pub struct OutputDevice {
 pub struct OutputDeviceGroups {
     pub local: Vec<OutputDevice>,
     pub network: Vec<OutputDevice>,
-    pub spotify: Vec<OutputDevice>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputDeviceSelection<'a> {
     Automatic,
     System(&'a str),
-    Spotify(&'a str),
 }
 
 impl OutputDevice {
@@ -105,10 +98,6 @@ impl OutputDevice {
             class_name: class_name.to_string(),
             is_network,
         }
-    }
-
-    pub fn spotify(id: &str, display_name: &str, device_type: &str) -> Self {
-        Self::system(id, display_name, device_type, true)
     }
 }
 
@@ -358,10 +347,7 @@ pub fn normalize_output_devices(devices: Vec<OutputDevice>) -> Vec<OutputDevice>
         .collect()
 }
 
-pub fn group_output_devices(
-    system_devices: Vec<OutputDevice>,
-    spotify_devices: Vec<OutputDevice>,
-) -> OutputDeviceGroups {
+pub fn group_output_devices(system_devices: Vec<OutputDevice>) -> OutputDeviceGroups {
     let mut groups = OutputDeviceGroups::default();
     for device in normalize_output_devices(system_devices) {
         if device.is_network {
@@ -370,7 +356,6 @@ pub fn group_output_devices(
             groups.local.push(device);
         }
     }
-    groups.spotify = spotify_devices;
     groups
 }
 
@@ -422,11 +407,6 @@ impl Default for Player {
             balance: 0,
             vis_data: [0.0; 75],
             vis_data_valid: false,
-            spotify_mode: false,
-            spotify_uri: None,
-            spotify_position_ms: 0,
-            spotify_duration_ms: 0,
-            spotify_poll_counter: 0,
         }
     }
 }
@@ -441,73 +421,7 @@ impl Player {
     }
 
     pub fn mark_playing(&mut self) {
-        self.spotify_mode = false;
-        self.spotify_uri = None;
-        self.spotify_position_ms = 0;
-        self.spotify_duration_ms = 0;
-        self.spotify_poll_counter = 0;
         self.state = PlayerState::Playing;
-    }
-
-    pub fn play_spotify_uri(&mut self, uri: impl Into<String>, duration_ms: i64) {
-        self.spotify_mode = true;
-        self.spotify_uri = Some(uri.into());
-        self.spotify_position_ms = 0;
-        self.spotify_duration_ms = duration_ms.max(0);
-        self.spotify_poll_counter = 0;
-        self.duration_ms = (self.spotify_duration_ms > 0).then_some(self.spotify_duration_ms);
-        self.state = PlayerState::Playing;
-    }
-
-    pub fn spotify_mode(&self) -> bool {
-        self.spotify_mode
-    }
-
-    pub fn spotify_uri(&self) -> Option<&str> {
-        self.spotify_uri.as_deref()
-    }
-
-    pub fn spotify_position_ms(&self) -> i64 {
-        self.spotify_position_ms
-    }
-
-    pub fn spotify_duration_ms(&self) -> i64 {
-        self.spotify_duration_ms
-    }
-
-    pub fn tick_spotify_playback(&mut self, elapsed_ms: i64) -> bool {
-        if !(self.spotify_mode && self.state == PlayerState::Playing) {
-            return false;
-        }
-        self.spotify_poll_counter = self.spotify_poll_counter.saturating_add(1);
-        if self.spotify_poll_counter >= 20 {
-            self.spotify_poll_counter = 0;
-            return true;
-        }
-        self.spotify_position_ms = self.spotify_position_ms.saturating_add(elapsed_ms.max(0));
-        if self.spotify_duration_ms > 0 {
-            self.spotify_position_ms = self.spotify_position_ms.min(self.spotify_duration_ms);
-        }
-        false
-    }
-
-    pub fn apply_spotify_playback_state(
-        &mut self,
-        is_playing: bool,
-        progress_ms: i64,
-        duration_ms: i64,
-    ) {
-        if !self.spotify_mode {
-            return;
-        }
-        self.state = if is_playing {
-            PlayerState::Playing
-        } else {
-            PlayerState::Paused
-        };
-        self.spotify_position_ms = progress_ms.max(0);
-        self.spotify_duration_ms = duration_ms.max(0);
-        self.duration_ms = (self.spotify_duration_ms > 0).then_some(self.spotify_duration_ms);
     }
 
     pub fn pause(&mut self) {
@@ -528,11 +442,6 @@ impl Player {
         self.bitrate = 0;
         self.frequency = 0;
         self.channels = 0;
-        self.spotify_mode = false;
-        self.spotify_uri = None;
-        self.spotify_position_ms = 0;
-        self.spotify_duration_ms = 0;
-        self.spotify_poll_counter = 0;
     }
 
     pub fn set_volume(&mut self, percent: i32) {
@@ -890,35 +799,6 @@ mod tests {
         assert_eq!(player.state(), PlayerState::Paused);
         player.unpause();
         assert_eq!(player.state(), PlayerState::Playing);
-    }
-
-    #[test]
-    fn spotify_playback_mode_tracks_uri_position_duration_and_polling() {
-        let mut player = Player::default();
-
-        player.play_spotify_uri("spotify:track:one", 1_000);
-        assert_eq!(player.state(), PlayerState::Playing);
-        assert!(player.spotify_mode());
-        assert_eq!(player.spotify_uri(), Some("spotify:track:one"));
-        assert_eq!(player.duration_ms(), Some(1_000));
-        assert!(!player.tick_spotify_playback(100));
-        assert_eq!(player.spotify_position_ms(), 100);
-
-        for _ in 0..18 {
-            assert!(!player.tick_spotify_playback(100));
-        }
-        assert!(player.tick_spotify_playback(100));
-        assert_eq!(player.spotify_position_ms(), 1_000);
-
-        player.apply_spotify_playback_state(false, 500, 2_000);
-        assert_eq!(player.state(), PlayerState::Paused);
-        assert_eq!(player.spotify_position_ms(), 500);
-        assert_eq!(player.spotify_duration_ms(), 2_000);
-        assert_eq!(player.duration_ms(), Some(2_000));
-
-        player.mark_playing();
-        assert!(!player.spotify_mode());
-        assert_eq!(player.spotify_uri(), None);
     }
 
     #[test]

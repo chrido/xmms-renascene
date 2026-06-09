@@ -9,5 +9,4 @@ pub mod podcast;
 pub mod render;
 pub mod session;
 pub mod skin;
-pub mod spotify;
 pub mod ui;
