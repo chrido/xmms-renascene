@@ -7978,13 +7978,17 @@ impl MainWindowUiState {
             );
             applied_pending_seek |= self.apply_pending_backend_seek(&backend, true);
         }
-        if !applied_pending_seek {
+        if self.should_sync_backend_position(applied_pending_seek) {
             let position_ms = { backend.borrow().position_ms() };
             if let Some(position_ms) = position_ms {
                 self.playback_position_ms = position_ms.max(0);
                 self.position_position = self.position_slider_position();
             }
         }
+    }
+
+    fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
+        !applied_pending_seek && self.pending_eof_advance_ms.is_none()
     }
 
     fn apply_pending_backend_seek(
@@ -9189,6 +9193,27 @@ mod tests {
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.app_state.player.spotify_position_ms(), 0);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+    }
+
+    #[test]
+    fn eof_pause_blocks_stale_backend_position_sync() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            pause_between_songs: true,
+            pause_between_songs_time: 2,
+            ..Config::default()
+        }));
+        state.app_state.playlist.add_uri("file:///tmp/one.mp3");
+        state.app_state.playlist.add_uri("file:///tmp/two.mp3");
+        state.app_state.playlist.set_position(0);
+
+        assert!(state.should_sync_backend_position(false));
+
+        state.playlist_eof_reached();
+
+        assert_eq!(state.pending_eof_advance_ms, Some(2_000));
+        assert_eq!(state.playback_position_ms, 0);
+        assert!(!state.should_sync_backend_position(false));
+        assert!(!state.should_sync_backend_position(true));
     }
 
     #[test]
