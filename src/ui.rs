@@ -3486,12 +3486,77 @@ pub enum PanelKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelState {
+    Hidden,
+    Docked { shaded: bool },
+    Detached { shaded: bool },
+}
+
+impl PanelState {
+    fn is_detached_visible(self) -> bool {
+        matches!(self, PanelState::Detached { .. })
+    }
+
+    fn is_docked_visible(self) -> bool {
+        matches!(self, PanelState::Docked { .. })
+    }
+
+    fn shaded(self) -> bool {
+        match self {
+            PanelState::Hidden => false,
+            PanelState::Docked { shaded } | PanelState::Detached { shaded } => shaded,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistMenuKind {
     Add,
     Remove,
     Select,
     Misc,
     List,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistMenuCommand {
+    OpenLocationWindow,
+    OpenDirectoryDialog,
+    OpenFileDialog,
+    ShowSortMenu,
+    ShowFileInfo,
+    OpenOptions,
+    ClearList,
+    CropToSelection,
+    RemoveSelectedOrCurrent,
+    InvertSelection,
+    SelectNone,
+    SelectAll,
+    SavePlaylist,
+    LoadPlaylist,
+}
+
+impl PlaylistMenuCommand {
+    fn from_menu_item(menu: PlaylistMenuKind, item: usize) -> Option<Self> {
+        match (menu, item) {
+            (PlaylistMenuKind::Add, 0) => Some(Self::OpenLocationWindow),
+            (PlaylistMenuKind::Add, 1) => Some(Self::OpenDirectoryDialog),
+            (PlaylistMenuKind::Add, 2) => Some(Self::OpenFileDialog),
+            (PlaylistMenuKind::Misc, 0) => Some(Self::ShowSortMenu),
+            (PlaylistMenuKind::Misc, 1) => Some(Self::ShowFileInfo),
+            (PlaylistMenuKind::Misc, 2) => Some(Self::OpenOptions),
+            (PlaylistMenuKind::Remove, 1) => Some(Self::ClearList),
+            (PlaylistMenuKind::Remove, 2) => Some(Self::CropToSelection),
+            (PlaylistMenuKind::Remove, 3) => Some(Self::RemoveSelectedOrCurrent),
+            (PlaylistMenuKind::Select, 0) => Some(Self::InvertSelection),
+            (PlaylistMenuKind::Select, 1) => Some(Self::SelectNone),
+            (PlaylistMenuKind::Select, 2) => Some(Self::SelectAll),
+            (PlaylistMenuKind::List, 0) => Some(Self::ClearList),
+            (PlaylistMenuKind::List, 1) => Some(Self::SavePlaylist),
+            (PlaylistMenuKind::List, 2) => Some(Self::LoadPlaylist),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4364,14 +4429,14 @@ fn sync_single_panel_window_from_state(
 fn panel_window_values(kind: PanelKind, state: &MainWindowUiState) -> (bool, bool, i32, i32) {
     match kind {
         PanelKind::Equalizer => (
-            state.app_state.config.equalizer_visible && state.app_state.config.equalizer_detached,
-            state.equalizer_shaded,
+            state.panel_state(kind).is_detached_visible(),
+            state.panel_state(kind).shaded(),
             EQUALIZER_WINDOW_WIDTH,
             EQUALIZER_WINDOW_HEIGHT,
         ),
         PanelKind::Playlist => (
-            state.app_state.config.playlist_visible && state.app_state.config.playlist_detached,
-            state.playlist_shaded,
+            state.panel_state(kind).is_detached_visible(),
+            state.panel_state(kind).shaded(),
             state.playlist_width,
             state.playlist_height,
         ),
@@ -4483,33 +4548,61 @@ enum MainControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SeekState {
+enum PlaybackControlEvent {
+    Play,
+    Pause,
+    PauseToggle,
+    Stop,
+    Previous,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackTransitionState {
     Idle,
     StoppedAt(i64),
     PendingBackendSeek(i64),
-    WaitingBetweenSongs { remaining_ms: i64 },
+    WaitingBetweenSongs {
+        remaining_ms: i64,
+    },
+    FadingOut {
+        remaining_ms: i64,
+        start_volume: i32,
+    },
 }
 
-impl SeekState {
+impl PlaybackTransitionState {
     fn eof_pause_remaining_ms(self) -> Option<i64> {
         match self {
-            SeekState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
+            PlaybackTransitionState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
             _ => None,
         }
     }
 
     fn pending_backend_seek_ms(self) -> Option<i64> {
         match self {
-            SeekState::PendingBackendSeek(position_ms) => Some(position_ms),
+            PlaybackTransitionState::PendingBackendSeek(position_ms) => Some(position_ms),
+            _ => None,
+        }
+    }
+
+    fn fadeout(self) -> Option<(i64, i32)> {
+        match self {
+            PlaybackTransitionState::FadingOut {
+                remaining_ms,
+                start_volume,
+            } => Some((remaining_ms, start_volume)),
             _ => None,
         }
     }
 
     fn play_start_position_ms(self, fallback_ms: i64) -> i64 {
         match self {
-            SeekState::StoppedAt(position_ms) => position_ms,
-            SeekState::WaitingBetweenSongs { .. } => 0,
-            SeekState::Idle | SeekState::PendingBackendSeek(_) => fallback_ms,
+            PlaybackTransitionState::StoppedAt(position_ms) => position_ms,
+            PlaybackTransitionState::WaitingBetweenSongs { .. } => 0,
+            PlaybackTransitionState::Idle
+            | PlaybackTransitionState::PendingBackendSeek(_)
+            | PlaybackTransitionState::FadingOut { .. } => fallback_ms,
         }
     }
 }
@@ -4584,9 +4677,7 @@ pub(crate) struct MainWindowUiState {
     output_switch_count: u32,
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
-    seek_state: SeekState,
-    stop_fade_remaining_ms: i64,
-    stop_fade_start_volume: i32,
+    playback_transition: PlaybackTransitionState,
     file_dialog_visible: bool,
     directory_dialog_visible: bool,
     last_open_location: Option<String>,
@@ -4689,9 +4780,7 @@ impl MainWindowUiState {
             output_switch_count: 0,
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
-            seek_state: SeekState::Idle,
-            stop_fade_remaining_ms: 0,
-            stop_fade_start_volume: 100,
+            playback_transition: PlaybackTransitionState::Idle,
             file_dialog_visible: false,
             directory_dialog_visible: false,
             last_open_location: None,
@@ -5123,7 +5212,7 @@ impl MainWindowUiState {
     }
 
     fn display_time_ms(&self) -> i64 {
-        if let Some(remaining) = self.seek_state.eof_pause_remaining_ms() {
+        if let Some(remaining) = self.playback_transition.eof_pause_remaining_ms() {
             return remaining.max(0);
         }
         let elapsed = self.playback_position_ms.max(0);
@@ -5137,7 +5226,7 @@ impl MainWindowUiState {
 
     fn time_digits(&self) -> [i32; 5] {
         if self.app_state.player.state() == PlayerState::Stopped
-            && self.seek_state.eof_pause_remaining_ms().is_none()
+            && self.playback_transition.eof_pause_remaining_ms().is_none()
         {
             return [NumberDisplay::BLANK; 5];
         }
@@ -5228,12 +5317,39 @@ impl MainWindowUiState {
         }
     }
 
+    fn panel_state(&self, kind: PanelKind) -> PanelState {
+        match kind {
+            PanelKind::Equalizer => match (
+                self.app_state.config.equalizer_visible,
+                self.app_state.config.equalizer_detached,
+            ) {
+                (false, _) => PanelState::Hidden,
+                (true, true) => PanelState::Detached {
+                    shaded: self.equalizer_shaded,
+                },
+                (true, false) => PanelState::Docked {
+                    shaded: self.equalizer_shaded,
+                },
+            },
+            PanelKind::Playlist => match (
+                self.app_state.config.playlist_visible,
+                self.app_state.config.playlist_detached,
+            ) {
+                (false, _) => PanelState::Hidden,
+                (true, true) => PanelState::Detached {
+                    shaded: self.playlist_shaded,
+                },
+                (true, false) => PanelState::Docked {
+                    shaded: self.playlist_shaded,
+                },
+            },
+        }
+    }
+
     pub(crate) fn panel_visibility(&self) -> PanelVisibility {
         PanelVisibility {
-            equalizer: self.app_state.config.equalizer_visible
-                && self.app_state.config.equalizer_detached,
-            playlist: self.app_state.config.playlist_visible
-                && self.app_state.config.playlist_detached,
+            equalizer: self.panel_state(PanelKind::Equalizer).is_detached_visible(),
+            playlist: self.panel_state(PanelKind::Playlist).is_detached_visible(),
         }
     }
 
@@ -5260,7 +5376,7 @@ impl MainWindowUiState {
 
     pub(crate) fn docked_panel_at(&self, x: i32, y: i32) -> Option<(PanelKind, i32, i32)> {
         let mut offset_y = main_window_height(self.shaded);
-        if self.app_state.config.equalizer_visible && !self.app_state.config.equalizer_detached {
+        if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
             let height = equalizer_window_height(self.equalizer_shaded);
             if x >= 0 && x < EQUALIZER_WINDOW_WIDTH && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Equalizer, x, y - offset_y));
@@ -5268,7 +5384,7 @@ impl MainWindowUiState {
             offset_y += height;
         }
 
-        if self.app_state.config.playlist_visible && !self.app_state.config.playlist_detached {
+        if self.panel_state(PanelKind::Playlist).is_docked_visible() {
             let height = playlist_window_height(self.playlist_shaded, self.playlist_height);
             if x >= 0 && x < self.playlist_width && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Playlist, x, y - offset_y));
@@ -5279,11 +5395,11 @@ impl MainWindowUiState {
     }
 
     fn docked_playlist_local_y(&self, y: i32) -> Option<i32> {
-        if !self.app_state.config.playlist_visible || self.app_state.config.playlist_detached {
+        if !self.panel_state(PanelKind::Playlist).is_docked_visible() {
             return None;
         }
         let mut offset_y = main_window_height(self.shaded);
-        if self.app_state.config.equalizer_visible && !self.app_state.config.equalizer_detached {
+        if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
             offset_y += equalizer_window_height(self.equalizer_shaded);
         }
         Some(y - offset_y)
@@ -5389,10 +5505,10 @@ impl MainWindowUiState {
         self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
         self.equalizer_band_positions = self.app_state.config.equalizer_band_pos;
         self.playback_position_ms = self.app_state.config.playback_position_ms.max(0);
-        self.seek_state = if self.playback_position_ms > 0 {
-            SeekState::StoppedAt(self.playback_position_ms)
+        self.playback_transition = if self.playback_position_ms > 0 {
+            PlaybackTransitionState::StoppedAt(self.playback_position_ms)
         } else {
-            SeekState::Idle
+            PlaybackTransitionState::Idle
         };
         self.position_position = self.position_slider_position();
         self.apply_visualization_preferences();
@@ -5555,8 +5671,7 @@ impl MainWindowUiState {
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Pause => {
-                if self.app_state.player.state() == PlayerState::Playing {
-                    self.app_state.player.pause();
+                if self.handle_playback_control_event(PlaybackControlEvent::Pause) {
                     self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
                 }
             }
@@ -5569,16 +5684,7 @@ impl MainWindowUiState {
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Play => {
-                if self.app_state.player.state() == PlayerState::Paused {
-                    self.app_state.player.unpause();
-                } else {
-                    if self.app_state.playlist.position().is_none()
-                        && self.app_state.playlist.len() > 0
-                    {
-                        self.app_state.playlist.set_position(0);
-                    }
-                    self.start_current_playlist_playback();
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::Play);
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Seek { offset_us } => {
@@ -5849,7 +5955,7 @@ impl MainWindowUiState {
 
     fn start_current_playlist_playback(&mut self) {
         self.start_current_playlist_playback_at(
-            self.seek_state
+            self.playback_transition
                 .play_start_position_ms(self.playback_position_ms),
         );
     }
@@ -5859,8 +5965,7 @@ impl MainWindowUiState {
     }
 
     fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
-        self.seek_state = SeekState::Idle;
-        self.stop_fade_remaining_ms = 0;
+        self.playback_transition = PlaybackTransitionState::Idle;
         self.set_runtime_volume(self.app_state.config.volume);
         if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
             self.app_state.playlist.set_position(0);
@@ -5884,7 +5989,8 @@ impl MainWindowUiState {
                 return;
             }
             if self.playback_position_ms > 0 {
-                self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
+                self.playback_transition =
+                    PlaybackTransitionState::PendingBackendSeek(self.playback_position_ms);
             }
         }
         self.app_state.player.mark_playing();
@@ -5963,9 +6069,63 @@ impl MainWindowUiState {
         self.app_state.player.unpause();
     }
 
+    fn handle_playback_control_event(&mut self, event: PlaybackControlEvent) -> bool {
+        match event {
+            PlaybackControlEvent::Play => match self.app_state.player.state() {
+                PlayerState::Paused => {
+                    self.unpause_playback();
+                    true
+                }
+                PlayerState::Stopped => {
+                    self.start_current_playlist_playback();
+                    true
+                }
+                PlayerState::Playing => false,
+            },
+            PlaybackControlEvent::Pause => {
+                if self.app_state.player.state() == PlayerState::Playing {
+                    self.pause_playback();
+                    true
+                } else {
+                    false
+                }
+            }
+            PlaybackControlEvent::PauseToggle => match self.app_state.player.state() {
+                PlayerState::Playing => {
+                    self.pause_playback();
+                    true
+                }
+                PlayerState::Paused => {
+                    self.unpause_playback();
+                    true
+                }
+                PlayerState::Stopped => false,
+            },
+            PlaybackControlEvent::Stop => {
+                self.request_stop_playback();
+                true
+            }
+            PlaybackControlEvent::Previous => {
+                if self.app_state.playlist.previous() {
+                    self.start_current_playlist_playback_from_beginning();
+                }
+                self.position_position = 0;
+                self.playback_position_ms = 0;
+                true
+            }
+            PlaybackControlEvent::Next => {
+                if self.app_state.playlist.next() {
+                    self.start_current_playlist_playback_from_beginning();
+                }
+                self.position_position = 0;
+                self.playback_position_ms = 0;
+                true
+            }
+        }
+    }
+
     fn stop_playback(&mut self) {
-        self.seek_state = SeekState::Idle;
-        self.stop_fade_remaining_ms = 0;
+        self.playback_transition = PlaybackTransitionState::Idle;
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().stop() {
                 eprintln!("xmms-rs: failed to stop playback: {err}");
@@ -5991,14 +6151,16 @@ impl MainWindowUiState {
             self.stop_playback();
             return;
         }
-        self.seek_state = SeekState::Idle;
-        self.stop_fade_start_volume = self.app_state.player.volume().max(0);
-        if self.stop_fade_start_volume == 0 {
+        let start_volume = self.app_state.player.volume().max(0);
+        if start_volume == 0 {
             self.stop_playback();
             self.set_runtime_volume(self.app_state.config.volume);
             return;
         }
-        self.stop_fade_remaining_ms = STOP_FADE_DURATION_MS;
+        self.playback_transition = PlaybackTransitionState::FadingOut {
+            remaining_ms: STOP_FADE_DURATION_MS,
+            start_volume,
+        };
     }
 
     fn set_runtime_volume(&mut self, volume: i32) {
@@ -6857,12 +7019,15 @@ impl MainWindowUiState {
     }
 
     fn activate_playlist_menu_item(&mut self, menu: PlaylistMenuKind, item: usize) -> PanelAction {
-        let changed = match (menu, item) {
-            (PlaylistMenuKind::Add, 0) => return PanelAction::OpenLocationWindow,
-            (PlaylistMenuKind::Add, 1) => return PanelAction::OpenDirectoryDialog,
-            (PlaylistMenuKind::Add, 2) => return PanelAction::OpenFileDialog,
-            (PlaylistMenuKind::Misc, 0) => return PanelAction::ShowPlaylistSortMenu,
-            (PlaylistMenuKind::Misc, 1) => {
+        let Some(command) = PlaylistMenuCommand::from_menu_item(menu, item) else {
+            return PanelAction::None;
+        };
+        let changed = match command {
+            PlaylistMenuCommand::OpenLocationWindow => return PanelAction::OpenLocationWindow,
+            PlaylistMenuCommand::OpenDirectoryDialog => return PanelAction::OpenDirectoryDialog,
+            PlaylistMenuCommand::OpenFileDialog => return PanelAction::OpenFileDialog,
+            PlaylistMenuCommand::ShowSortMenu => return PanelAction::ShowPlaylistSortMenu,
+            PlaylistMenuCommand::ShowFileInfo => {
                 self.last_playlist_file_info = self
                     .selected_playlist_index()
                     .or_else(|| self.app_state.playlist.position())
@@ -6870,35 +7035,34 @@ impl MainWindowUiState {
                     .map(|entry| entry.title.clone());
                 true
             }
-            (PlaylistMenuKind::Misc, 2) => {
+            PlaylistMenuCommand::OpenOptions => {
                 self.playlist_options_opened = true;
                 true
             }
-            (PlaylistMenuKind::Remove, 1) => {
+            PlaylistMenuCommand::ClearList => {
                 self.app_state.playlist.clear();
                 true
             }
-            (PlaylistMenuKind::Remove, 2) => self.app_state.playlist.crop_to_selected_or_current(),
-            (PlaylistMenuKind::Remove, 3) => self.app_state.playlist.remove_selected_or_current(),
-            (PlaylistMenuKind::Select, 0) => {
+            PlaylistMenuCommand::CropToSelection => {
+                self.app_state.playlist.crop_to_selected_or_current()
+            }
+            PlaylistMenuCommand::RemoveSelectedOrCurrent => {
+                self.app_state.playlist.remove_selected_or_current()
+            }
+            PlaylistMenuCommand::InvertSelection => {
                 self.app_state.playlist.invert_selection();
                 true
             }
-            (PlaylistMenuKind::Select, 1) => {
+            PlaylistMenuCommand::SelectNone => {
                 self.app_state.playlist.select_all(false);
                 true
             }
-            (PlaylistMenuKind::Select, 2) => {
+            PlaylistMenuCommand::SelectAll => {
                 self.app_state.playlist.select_all(true);
                 true
             }
-            (PlaylistMenuKind::List, 0) => {
-                self.app_state.playlist.clear();
-                true
-            }
-            (PlaylistMenuKind::List, 1) => return PanelAction::OpenPlaylistSaveDialog,
-            (PlaylistMenuKind::List, 2) => return PanelAction::OpenPlaylistLoadDialog,
-            _ => false,
+            PlaylistMenuCommand::SavePlaylist => return PanelAction::OpenPlaylistSaveDialog,
+            PlaylistMenuCommand::LoadPlaylist => return PanelAction::OpenPlaylistLoadDialog,
         };
         if changed {
             self.clamp_playlist_scroll_offset();
@@ -7204,39 +7368,23 @@ impl MainWindowUiState {
     fn activate_playlist_footer_button(&mut self, button: PlaylistFooterButton) -> PanelAction {
         match button {
             PlaylistFooterButton::Previous => {
-                if self.app_state.playlist.previous() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Previous);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Play => {
-                match self.app_state.player.state() {
-                    PlayerState::Paused => self.unpause_playback(),
-                    PlayerState::Stopped => self.start_current_playlist_playback(),
-                    PlayerState::Playing => {}
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::Play);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Pause => {
-                match self.app_state.player.state() {
-                    PlayerState::Playing => self.pause_playback(),
-                    PlayerState::Paused => self.unpause_playback(),
-                    PlayerState::Stopped => {}
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::PauseToggle);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Stop => {
-                self.request_stop_playback();
+                self.handle_playback_control_event(PlaybackControlEvent::Stop);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Next => {
-                if self.app_state.playlist.next() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Next);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Eject => PanelAction::OpenFileDialog,
@@ -7399,7 +7547,7 @@ impl MainWindowUiState {
     pub(crate) fn set_preference_pause_between_songs(&mut self, enabled: bool) {
         self.app_state.config.pause_between_songs = enabled;
         if !enabled {
-            self.seek_state = SeekState::Idle;
+            self.playback_transition = PlaybackTransitionState::Idle;
         }
         self.mark_preferences_saved();
     }
@@ -7674,15 +7822,16 @@ impl MainWindowUiState {
             };
         self.position_position = self.position_slider_position();
         if self.app_state.player.state() == PlayerState::Stopped {
-            self.seek_state = if self.playback_position_ms > 0 {
-                SeekState::StoppedAt(self.playback_position_ms)
+            self.playback_transition = if self.playback_position_ms > 0 {
+                PlaybackTransitionState::StoppedAt(self.playback_position_ms)
             } else {
-                SeekState::Idle
+                PlaybackTransitionState::Idle
             };
             return;
         }
-        if self.seek_state.pending_backend_seek_ms().is_some() {
-            self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
+        if self.playback_transition.pending_backend_seek_ms().is_some() {
+            self.playback_transition =
+                PlaybackTransitionState::PendingBackendSeek(self.playback_position_ms);
             return;
         }
         if let Some(backend) = &self.playback_backend {
@@ -7722,35 +7871,38 @@ impl MainWindowUiState {
     }
 
     fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
-        if self.stop_fade_remaining_ms <= 0 {
+        let Some((remaining_ms, start_volume)) = self.playback_transition.fadeout() else {
             return false;
-        }
-        self.stop_fade_remaining_ms = (self.stop_fade_remaining_ms - i64::from(elapsed_ms)).max(0);
-        if self.stop_fade_remaining_ms == 0 {
+        };
+        let remaining_ms = (remaining_ms - i64::from(elapsed_ms)).max(0);
+        if remaining_ms == 0 {
             let restore_volume = self.app_state.config.volume;
             self.stop_playback();
             self.set_runtime_volume(restore_volume);
             return true;
         }
-        let volume = ((i64::from(self.stop_fade_start_volume) * self.stop_fade_remaining_ms)
-            / STOP_FADE_DURATION_MS)
-            .clamp(0, 100) as i32;
+        self.playback_transition = PlaybackTransitionState::FadingOut {
+            remaining_ms,
+            start_volume,
+        };
+        let volume =
+            ((i64::from(start_volume) * remaining_ms) / STOP_FADE_DURATION_MS).clamp(0, 100) as i32;
         self.set_runtime_volume(volume);
         true
     }
 
     fn update_pending_eof_advance(&mut self, elapsed_ms: u32) -> bool {
-        let Some(remaining) = self.seek_state.eof_pause_remaining_ms() else {
+        let Some(remaining) = self.playback_transition.eof_pause_remaining_ms() else {
             return false;
         };
         let remaining = remaining - i64::from(elapsed_ms);
         if remaining > 0 {
-            self.seek_state = SeekState::WaitingBetweenSongs {
+            self.playback_transition = PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: remaining,
             };
             return true;
         }
-        self.seek_state = SeekState::Idle;
+        self.playback_transition = PlaybackTransitionState::Idle;
         self.advance_playlist_after_eof();
         true
     }
@@ -7808,7 +7960,7 @@ impl MainWindowUiState {
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
-        !applied_pending_seek && self.seek_state.eof_pause_remaining_ms().is_none()
+        !applied_pending_seek && self.playback_transition.eof_pause_remaining_ms().is_none()
     }
 
     fn apply_pending_backend_seek(
@@ -7816,18 +7968,18 @@ impl MainWindowUiState {
         backend: &Rc<RefCell<GStreamerBackend>>,
         log_failure: bool,
     ) -> bool {
-        let Some(position_ms) = self.seek_state.pending_backend_seek_ms() else {
+        let Some(position_ms) = self.playback_transition.pending_backend_seek_ms() else {
             return false;
         };
         match backend.borrow().seek_to_ms(position_ms) {
             Ok(()) => {
-                self.seek_state = SeekState::Idle;
+                self.playback_transition = PlaybackTransitionState::Idle;
                 true
             }
             Err(err) => {
                 if log_failure {
                     eprintln!("xmms-rs: failed to seek playback: {err}");
-                    self.seek_state = SeekState::Idle;
+                    self.playback_transition = PlaybackTransitionState::Idle;
                 }
                 false
             }
@@ -7835,12 +7987,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_eof_reached(&mut self) {
-        self.stop_fade_remaining_ms = 0;
         self.position_position = 0;
         if self.app_state.config.pause_between_songs
             && self.app_state.config.pause_between_songs_time > 0
         {
-            self.seek_state = SeekState::WaitingBetweenSongs {
+            self.playback_transition = PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: i64::from(self.app_state.config.pause_between_songs_time) * 1_000,
             };
             self.playback_position_ms = 0;
@@ -8065,35 +8216,23 @@ impl MainWindowUiState {
                 UiAction::Resize
             }
             MainPushButton::Play => {
-                self.start_current_playlist_playback();
+                self.handle_playback_control_event(PlaybackControlEvent::Play);
                 UiAction::None
             }
             MainPushButton::Pause => {
-                match self.app_state.player.state() {
-                    PlayerState::Playing => self.pause_playback(),
-                    PlayerState::Paused => self.unpause_playback(),
-                    PlayerState::Stopped => {}
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::PauseToggle);
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.request_stop_playback();
+                self.handle_playback_control_event(PlaybackControlEvent::Stop);
                 UiAction::None
             }
             MainPushButton::Previous => {
-                if self.app_state.playlist.previous() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Previous);
                 UiAction::None
             }
             MainPushButton::Next => {
-                if self.app_state.playlist.next() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Next);
                 UiAction::None
             }
             MainPushButton::Eject => UiAction::OpenFileDialog,
@@ -8978,8 +9117,8 @@ mod tests {
         state.playlist_eof_reached();
         assert_eq!(state.app_state.playlist.position(), Some(0));
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 2_000
             }
         );
@@ -8988,8 +9127,8 @@ mod tests {
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(0));
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 1_000
             }
         );
@@ -8997,7 +9136,7 @@ mod tests {
 
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(1));
-        assert_eq!(state.seek_state, SeekState::Idle);
+        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
     }
 
     #[test]
@@ -9016,8 +9155,8 @@ mod tests {
         state.playlist_eof_reached();
         assert!(state.update_timer_tick(1_000));
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 1_000
             }
         );
@@ -9025,7 +9164,7 @@ mod tests {
 
         state.start_current_playlist_playback();
 
-        assert_eq!(state.seek_state, SeekState::Idle);
+        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
@@ -9047,8 +9186,8 @@ mod tests {
         state.playlist_eof_reached();
 
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 2_000
             }
         );
@@ -9067,14 +9206,93 @@ mod tests {
         state.app_state.player.mark_playing();
 
         state.activate_push(MainPushButton::Stop);
-        assert!(state.stop_fade_remaining_ms > 0);
+        assert_eq!(
+            state.playback_transition,
+            PlaybackTransitionState::FadingOut {
+                remaining_ms: STOP_FADE_DURATION_MS,
+                start_volume: 80,
+            }
+        );
 
         assert!(state.update_timer_tick(500));
         assert_eq!(state.volume(), 40);
         assert!(state.update_timer_tick(500));
         assert_eq!(state.app_state.player.state(), PlayerState::Stopped);
         assert_eq!(state.volume(), 80);
-        assert_eq!(state.stop_fade_remaining_ms, 0);
+        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
+    }
+
+    #[test]
+    fn playback_control_event_handles_play_pause_transitions() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+
+        assert!(state.handle_playback_control_event(PlaybackControlEvent::Play));
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+
+        assert!(state.handle_playback_control_event(PlaybackControlEvent::Pause));
+        assert_eq!(state.app_state.player.state(), PlayerState::Paused);
+
+        assert!(!state.handle_playback_control_event(PlaybackControlEvent::Pause));
+        assert_eq!(state.app_state.player.state(), PlayerState::Paused);
+
+        assert!(state.handle_playback_control_event(PlaybackControlEvent::Play));
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+
+        assert!(!state.handle_playback_control_event(PlaybackControlEvent::Play));
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+    }
+
+    #[test]
+    fn panel_state_maps_visibility_detach_and_shade_flags() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            equalizer_visible: true,
+            equalizer_detached: false,
+            playlist_visible: true,
+            playlist_detached: true,
+            ..Config::default()
+        }));
+        state.equalizer_shaded = true;
+        state.playlist_shaded = false;
+
+        assert_eq!(
+            state.panel_state(PanelKind::Equalizer),
+            PanelState::Docked { shaded: true }
+        );
+        assert_eq!(
+            state.panel_state(PanelKind::Playlist),
+            PanelState::Detached { shaded: false }
+        );
+
+        state.app_state.config.playlist_visible = false;
+        assert_eq!(state.panel_state(PanelKind::Playlist), PanelState::Hidden);
+    }
+
+    #[test]
+    fn playlist_menu_command_maps_menu_indices() {
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 0),
+            Some(PlaylistMenuCommand::OpenLocationWindow)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 2),
+            Some(PlaylistMenuCommand::OpenFileDialog)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Remove, 3),
+            Some(PlaylistMenuCommand::RemoveSelectedOrCurrent)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::List, 1),
+            Some(PlaylistMenuCommand::SavePlaylist)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Misc, 99),
+            None
+        );
     }
 
     #[test]
