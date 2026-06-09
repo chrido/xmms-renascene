@@ -68,6 +68,7 @@ pub struct StreamInfo {
 pub enum PlaybackEvent {
     EndOfStream,
     Error(String),
+    AsyncDone,
     DurationChanged(Option<i64>),
     Tags(PlaybackTags),
     StreamInfo(StreamInfo),
@@ -610,6 +611,7 @@ impl Player {
             PlaybackEvent::DurationChanged(duration) => {
                 self.duration_ms = *duration;
             }
+            PlaybackEvent::AsyncDone => {}
         }
     }
 }
@@ -733,6 +735,7 @@ fn event_from_message(
     match message.view() {
         gst::MessageView::Eos(_) => Some(PlaybackEvent::EndOfStream),
         gst::MessageView::Error(error) => Some(PlaybackEvent::Error(error.error().to_string())),
+        gst::MessageView::AsyncDone(_) => Some(PlaybackEvent::AsyncDone),
         gst::MessageView::DurationChanged(_) => {
             Some(PlaybackEvent::DurationChanged(duration_query()))
         }
@@ -1177,6 +1180,10 @@ mod tests {
         assert_eq!(
             event_from_message(&gst::message::DurationChanged::new(), || Some(12_345)),
             Some(PlaybackEvent::DurationChanged(Some(12_345)))
+        );
+        assert_eq!(
+            event_from_message(&gst::message::AsyncDone::new(gst::ClockTime::NONE), || None),
+            Some(PlaybackEvent::AsyncDone)
         );
     }
 

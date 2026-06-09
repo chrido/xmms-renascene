@@ -24,7 +24,8 @@ use crate::mpris::{
 };
 use crate::player::{
     equalizer_position_to_db, group_output_devices, list_gstreamer_output_devices,
-    GStreamerBackend, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlayerState,
+    GStreamerBackend, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
+    PlayerState,
 };
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
@@ -57,6 +58,7 @@ use crate::skin::{
 use crate::spotify::{SpotifyPlaylist, SpotifyTrack};
 
 const DEFAULT_SCALE: i32 = 2;
+const STOP_FADE_DURATION_MS: i64 = 1_000;
 type PreferencesChanged = Rc<dyn Fn()>;
 const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
 const PREFERENCES_BALANCE_WIDGET: &str = "xmms-preferences-balance";
@@ -459,13 +461,16 @@ fn build_preview_window(
 
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let main_hover_base = Rc::new(Cell::new(None::<(i32, i32)>));
     {
         let drawing_area = drawing_area.clone();
         let window = window.clone();
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
+        let main_hover_base = Rc::clone(&main_hover_base);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
+            main_hover_base.set(Some((x, y)));
             if main_state.borrow().is_docked_playlist_resizing() {
                 if main_state.borrow_mut().docked_playlist_resize_motion(y) {
                     sync_panel_windows(&panel_windows, &main_state.borrow());
@@ -501,6 +506,40 @@ fn build_preview_window(
         });
     }
     window.add_controller(motion);
+
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let drawing_area = drawing_area.clone();
+        let window = window.clone();
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        let main_hover_base = Rc::clone(&main_hover_base);
+        scroll.connect_scroll(move |scroll, _dx, dy| {
+            let hover = main_hover_base.get().or_else(|| {
+                scroll
+                    .current_event()
+                    .and_then(|event| event.position())
+                    .map(|(event_x, event_y)| {
+                        event_to_base_coords(&drawing_area, &main_state.borrow(), event_x, event_y)
+                    })
+            });
+            let Some((x, y)) = hover else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            if main_state.borrow_mut().scroll_main(x, y, dy) {
+                sync_panel_windows(&panel_windows, &main_state.borrow());
+                resize_main_window(&window, &drawing_area, &main_state.borrow());
+                drawing_area.queue_draw();
+                panel_windows.playlist_area.queue_draw();
+                panel_windows.equalizer_area.queue_draw();
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+    }
+    window.add_controller(scroll);
 
     add_file_drop_controller(&drawing_area, Rc::clone(&main_state), true, true);
 
@@ -773,6 +812,9 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Repeat",
             "Shuffle",
             "No playlist advance",
+            "Pause between songs",
+            "Pause between songs time (seconds):",
+            "Mouse Wheel adjusts Volume by (%):",
             "Time remaining",
             "Dock playlist",
             "Dock equalizer",
@@ -1229,6 +1271,21 @@ fn build_main_menu_popover(
         });
     }
     menu_box.append(&spotify);
+
+    let stop_with_fade = xmms_menu_button("Stop with Fadeout");
+    {
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        stop_with_fade.connect_clicked(move |_| {
+            {
+                let mut state = main_state.borrow_mut();
+                state.set_menu_visible(false);
+                state.stop_with_fade();
+            }
+            popover.popdown();
+        });
+    }
+    menu_box.append(&stop_with_fade);
 
     let quit = xmms_menu_button("Quit");
     {
@@ -2428,6 +2485,38 @@ fn build_preferences_options_page(
     }
     prefs_attach_label(&grid, "Podcast refresh interval (minutes):", &refresh, 5);
 
+    let pause_time = gtk::SpinButton::with_range(0.0, 1000.0, 1.0);
+    pause_time.set_value(main_state.borrow().preference_pause_between_songs_time() as f64);
+    {
+        let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
+        pause_time.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_pause_between_songs_time(spin.value_as_int());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
+        });
+    }
+    prefs_attach_label(&grid, "Pause between songs time (seconds):", &pause_time, 6);
+
+    let mouse_wheel = gtk::SpinButton::with_range(1.0, 100.0, 1.0);
+    mouse_wheel.set_value(main_state.borrow().preference_mouse_wheel_change() as f64);
+    {
+        let main_state = Rc::clone(main_state);
+        let on_change = on_change.clone();
+        mouse_wheel.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_mouse_wheel_change(spin.value_as_int());
+            if let Some(on_change) = &on_change {
+                on_change();
+            }
+        });
+    }
+    prefs_attach_label(&grid, "Mouse Wheel adjusts Volume by (%):", &mouse_wheel, 7);
+
     let checks = {
         let state = main_state.borrow();
         [
@@ -2437,6 +2526,11 @@ fn build_preferences_options_page(
                 "No playlist advance",
                 state.preference_no_playlist_advance(),
                 PreferenceCheck::NoAdvance,
+            ),
+            (
+                "Pause between songs",
+                state.preference_pause_between_songs(),
+                PreferenceCheck::PauseBetweenSongs,
             ),
             (
                 "Time remaining",
@@ -2488,6 +2582,9 @@ fn build_preferences_options_page(
                     PreferenceCheck::NoAdvance => {
                         state.set_preference_no_playlist_advance(check.is_active())
                     }
+                    PreferenceCheck::PauseBetweenSongs => {
+                        state.set_preference_pause_between_songs(check.is_active())
+                    }
                     PreferenceCheck::TimerRemaining => {
                         state.set_preference_timer_remaining(check.is_active())
                     }
@@ -2516,7 +2613,7 @@ fn build_preferences_options_page(
                 }
             });
         }
-        grid.attach(&check, (index % 2) as i32, 6 + (index / 2) as i32, 1, 1);
+        grid.attach(&check, (index % 2) as i32, 8 + (index / 2) as i32, 1, 1);
     }
     page
 }
@@ -2526,6 +2623,7 @@ enum PreferenceCheck {
     Repeat,
     Shuffle,
     NoAdvance,
+    PauseBetweenSongs,
     TimerRemaining,
     DockPlaylist,
     DockEqualizer,
@@ -3689,11 +3787,14 @@ fn add_panel_click_controller(
 
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let panel_hover_base = Rc::new(Cell::new(None::<(i32, i32)>));
     {
         let area = area.clone();
         let main_state = Rc::clone(&main_state);
+        let panel_hover_base = Rc::clone(&panel_hover_base);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            panel_hover_base.set(Some((x, y)));
             match kind {
                 PanelKind::Equalizer => {
                     if main_state.borrow_mut().equalizer_motion(x, y) {
@@ -3717,18 +3818,30 @@ fn add_panel_click_controller(
     {
         let area = area.clone();
         let main_state = Rc::clone(&main_state);
+        let panel_hover_base = Rc::clone(&panel_hover_base);
         scroll.connect_scroll(move |scroll, _dx, dy| {
-            if kind != PanelKind::Equalizer {
-                return gtk::glib::Propagation::Proceed;
-            }
-            let Some((event_x, event_y)) =
-                scroll.current_event().and_then(|event| event.position())
-            else {
+            let hover = panel_hover_base.get().or_else(|| {
+                scroll
+                    .current_event()
+                    .and_then(|event| event.position())
+                    .map(|(event_x, event_y)| {
+                        panel_event_to_base_coords(
+                            kind,
+                            &area,
+                            &main_state.borrow(),
+                            event_x,
+                            event_y,
+                        )
+                    })
+            });
+            let Some((x, y)) = hover else {
                 return gtk::glib::Propagation::Proceed;
             };
-            let (x, y) =
-                panel_event_to_base_coords(kind, &area, &main_state.borrow(), event_x, event_y);
-            if main_state.borrow_mut().equalizer_scroll(x, y, dy) {
+            let changed = match kind {
+                PanelKind::Equalizer => main_state.borrow_mut().equalizer_scroll(x, y, dy),
+                PanelKind::Playlist => main_state.borrow_mut().playlist_scroll(dy),
+            };
+            if changed {
                 area.queue_draw();
                 gtk::glib::Propagation::Stop
             } else {
@@ -4196,10 +4309,7 @@ fn panel_event_to_base_coords(
     };
     let width = area.allocated_width().max(1) as f64;
     let height = area.allocated_height().max(1) as f64;
-    (
-        (x / (width / f64::from(base_width))) as i32,
-        (y / (height / f64::from(base_height))) as i32,
-    )
+    scale_event_coords(width, height, base_width, base_height, x, y)
 }
 
 fn handle_panel_action_for_main_window(
@@ -4480,6 +4590,10 @@ pub(crate) struct MainWindowUiState {
     spotify_playback_poll_requests: u32,
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
+    pending_eof_advance_ms: Option<i64>,
+    pending_backend_seek_ms: Option<i64>,
+    stop_fade_remaining_ms: i64,
+    stop_fade_start_volume: i32,
     file_dialog_visible: bool,
     directory_dialog_visible: bool,
     last_open_location: Option<String>,
@@ -4593,6 +4707,10 @@ impl MainWindowUiState {
             spotify_playback_poll_requests: 0,
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
+            pending_eof_advance_ms: None,
+            pending_backend_seek_ms: None,
+            stop_fade_remaining_ms: 0,
+            stop_fade_start_volume: 100,
             file_dialog_visible: false,
             directory_dialog_visible: false,
             last_open_location: None,
@@ -4991,6 +5109,12 @@ impl MainWindowUiState {
                 .and_then(|position| self.playlist_entry_length_ms(position))
                 .filter(|duration| *duration > 0)
         })
+    }
+
+    fn ensure_current_playlist_position_for_seek(&mut self) {
+        if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
+            self.app_state.playlist.set_position(0);
+        }
     }
 
     fn position_slider_position(&self) -> i32 {
@@ -5873,6 +5997,18 @@ impl MainWindowUiState {
     }
 
     fn start_current_playlist_playback(&mut self) {
+        self.start_current_playlist_playback_at(self.playback_position_ms);
+    }
+
+    fn start_current_playlist_playback_from_beginning(&mut self) {
+        self.start_current_playlist_playback_at(0);
+    }
+
+    fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
+        self.pending_eof_advance_ms = None;
+        self.pending_backend_seek_ms = None;
+        self.stop_fade_remaining_ms = 0;
+        self.set_runtime_volume(self.app_state.config.volume);
         if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
             self.app_state.playlist.set_position(0);
         }
@@ -5884,11 +6020,18 @@ impl MainWindowUiState {
             self.stop_playback();
             return;
         };
-        self.playback_position_ms = 0;
-        self.position_position = 0;
+        self.playback_position_ms = position_ms.max(0);
+        self.position_position = self.position_slider_position();
         if uri.starts_with("spotify:") {
             let duration_ms = self.playlist_entry_length_ms(position).unwrap_or(0);
             self.app_state.player.play_spotify_uri(uri, duration_ms);
+            if self.playback_position_ms > 0 {
+                self.app_state.player.apply_spotify_playback_state(
+                    true,
+                    self.playback_position_ms,
+                    duration_ms,
+                );
+            }
         } else {
             self.load_equalizer_auto_preset_for_uri(&uri);
             self.playback_requests.push(uri.clone());
@@ -5897,6 +6040,9 @@ impl MainWindowUiState {
                     eprintln!("xmms-rs: failed to play {uri}: {err}");
                     self.app_state.player.stop();
                     return;
+                }
+                if self.playback_position_ms > 0 {
+                    self.pending_backend_seek_ms = Some(self.playback_position_ms);
                 }
             }
             self.app_state.player.mark_playing();
@@ -5977,6 +6123,9 @@ impl MainWindowUiState {
     }
 
     fn stop_playback(&mut self) {
+        self.pending_eof_advance_ms = None;
+        self.pending_backend_seek_ms = None;
+        self.stop_fade_remaining_ms = 0;
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().stop() {
                 eprintln!("xmms-rs: failed to stop playback: {err}");
@@ -5987,6 +6136,29 @@ impl MainWindowUiState {
         self.visualization.clear_data();
         self.position_position = 0;
         self.playback_position_ms = 0;
+    }
+
+    pub(crate) fn stop_with_fade(&mut self) {
+        if self.app_state.player.state() == PlayerState::Stopped {
+            self.stop_playback();
+            return;
+        }
+        self.pending_eof_advance_ms = None;
+        self.stop_fade_start_volume = self.app_state.player.volume().max(0);
+        if self.stop_fade_start_volume == 0 {
+            self.stop_playback();
+            self.set_runtime_volume(self.app_state.config.volume);
+            return;
+        }
+        self.stop_fade_remaining_ms = STOP_FADE_DURATION_MS;
+    }
+
+    fn set_runtime_volume(&mut self, volume: i32) {
+        let volume = volume.clamp(0, 100);
+        self.app_state.player.set_volume(volume);
+        if let Some(backend) = &self.playback_backend {
+            backend.borrow().set_volume_percent(volume);
+        }
     }
 
     pub(crate) fn player_spotify_mode(&self) -> bool {
@@ -6213,7 +6385,7 @@ impl MainWindowUiState {
                     if self.app_state.playlist.position().is_none() {
                         self.app_state.playlist.set_position(0);
                     }
-                    self.start_current_playlist_playback();
+                    self.start_current_playlist_playback_from_beginning();
                 }
             }
             Err(err) => eprintln!("xmms-rs: failed to add open location {text}: {err}"),
@@ -6252,7 +6424,7 @@ impl MainWindowUiState {
             self.schedule_missing_local_playlist_durations();
         }
         if accepted && start_playback {
-            self.start_current_playlist_playback();
+            self.start_current_playlist_playback_from_beginning();
         }
         accepted
     }
@@ -6388,7 +6560,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_scroll(&mut self, x: i32, y: i32, dy: f64) -> bool {
-        let Some(slider) = equalizer_slider_at(x, y) else {
+        let slider = if self.equalizer_shaded {
+            equalizer_shaded_slider_at(x, y)
+        } else {
+            equalizer_slider_at(x, y)
+        };
+        let Some(slider) = slider else {
             return false;
         };
         let diff = if dy < 0.0 {
@@ -6420,7 +6597,8 @@ impl MainWindowUiState {
                 }
                 changed
             }
-            EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => false,
+            EqualizerSlider::ShadedVolume => self.scroll_volume(dy),
+            EqualizerSlider::ShadedBalance => self.scroll_balance(dy),
         }
     }
 
@@ -6701,6 +6879,30 @@ impl MainWindowUiState {
         was_dragging
     }
 
+    pub(crate) fn playlist_scroll(&mut self, dy: f64) -> bool {
+        let rows = if dy < 0.0 {
+            -3
+        } else if dy > 0.0 {
+            3
+        } else {
+            return false;
+        };
+        self.scroll_playlist_rows(rows)
+    }
+
+    fn scroll_playlist_rows(&mut self, rows: i32) -> bool {
+        let old = self.playlist_scroll_offset;
+        if rows < 0 {
+            self.playlist_scroll_offset = self
+                .playlist_scroll_offset
+                .saturating_sub(rows.unsigned_abs() as usize);
+        } else {
+            self.playlist_scroll_offset = self.playlist_scroll_offset.saturating_add(rows as usize);
+            self.clamp_playlist_scroll_offset();
+        }
+        old != self.playlist_scroll_offset
+    }
+
     pub(crate) fn playlist_press(&mut self, x: i32, y: i32) -> bool {
         self.playlist_press_with_ctrl(x, y, false)
     }
@@ -6762,7 +6964,7 @@ impl MainWindowUiState {
         self.playlist_drag_index = None;
         self.playlist_drag_moved = false;
         self.app_state.playlist.set_position(index);
-        self.start_current_playlist_playback();
+        self.start_current_playlist_playback_from_beginning();
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
@@ -7169,7 +7371,7 @@ impl MainWindowUiState {
         match button {
             PlaylistFooterButton::Previous => {
                 if self.app_state.playlist.previous() {
-                    self.start_current_playlist_playback();
+                    self.start_current_playlist_playback_from_beginning();
                 }
                 self.position_position = 0;
                 self.playback_position_ms = 0;
@@ -7197,7 +7399,7 @@ impl MainWindowUiState {
             }
             PlaylistFooterButton::Next => {
                 if self.app_state.playlist.next() {
-                    self.start_current_playlist_playback();
+                    self.start_current_playlist_playback_from_beginning();
                 }
                 self.position_position = 0;
                 self.playback_position_ms = 0;
@@ -7205,12 +7407,11 @@ impl MainWindowUiState {
             }
             PlaylistFooterButton::Eject => PanelAction::OpenFileDialog,
             PlaylistFooterButton::ScrollUp => {
-                self.playlist_scroll_offset = self.playlist_scroll_offset.saturating_sub(1);
+                self.scroll_playlist_rows(-1);
                 PanelAction::Changed
             }
             PlaylistFooterButton::ScrollDown => {
-                self.playlist_scroll_offset =
-                    (self.playlist_scroll_offset + 1).min(self.playlist_max_scroll());
+                self.scroll_playlist_rows(1);
                 PanelAction::Changed
             }
         }
@@ -7359,6 +7560,36 @@ impl MainWindowUiState {
 
     pub(crate) fn preference_no_playlist_advance(&self) -> bool {
         self.app_state.playlist.no_advance()
+    }
+
+    pub(crate) fn set_preference_pause_between_songs(&mut self, enabled: bool) {
+        self.app_state.config.pause_between_songs = enabled;
+        if !enabled {
+            self.pending_eof_advance_ms = None;
+        }
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_pause_between_songs(&self) -> bool {
+        self.app_state.config.pause_between_songs
+    }
+
+    pub(crate) fn set_preference_pause_between_songs_time(&mut self, seconds: i32) {
+        self.app_state.config.pause_between_songs_time = seconds.clamp(0, 1000);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_pause_between_songs_time(&self) -> i32 {
+        self.app_state.config.pause_between_songs_time
+    }
+
+    pub(crate) fn set_preference_mouse_wheel_change(&mut self, percent: i32) {
+        self.app_state.config.mouse_wheel_change = percent.clamp(1, 100);
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_mouse_wheel_change(&self) -> i32 {
+        self.app_state.config.mouse_wheel_change
     }
 
     pub(crate) fn set_preference_timer_remaining(&mut self, enabled: bool) {
@@ -7590,6 +7821,7 @@ impl MainWindowUiState {
     }
 
     fn set_playback_position_ms(&mut self, position_ms: i64) {
+        self.ensure_current_playlist_position_for_seek();
         let duration = self.current_duration_ms();
         self.playback_position_ms =
             if let Some(duration) = duration.filter(|duration| *duration > 0) {
@@ -7598,6 +7830,20 @@ impl MainWindowUiState {
                 position_ms.max(0)
             };
         self.position_position = self.position_slider_position();
+        if self.app_state.player.state() != PlayerState::Stopped {
+            if self.app_state.player.spotify_mode() {
+                let duration_ms = self.current_duration_ms().unwrap_or(0);
+                self.app_state.player.apply_spotify_playback_state(
+                    self.app_state.player.state() == PlayerState::Playing,
+                    self.playback_position_ms,
+                    duration_ms,
+                );
+                return;
+            }
+        } else {
+            self.pending_backend_seek_ms = None;
+            return;
+        }
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().seek_to_ms(self.playback_position_ms) {
                 eprintln!("xmms-rs: failed to seek playback: {err}");
@@ -7615,9 +7861,11 @@ impl MainWindowUiState {
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
         let duration_changed = self.poll_duration_index_results();
         self.poll_playback_backend();
+        let fading = self.update_stop_fade(elapsed_ms);
+        let eof_waiting = self.update_pending_eof_advance(elapsed_ms);
         if self.app_state.player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
-            return duration_changed;
+            return duration_changed || fading || eof_waiting;
         }
 
         if self
@@ -7650,38 +7898,132 @@ impl MainWindowUiState {
         true
     }
 
+    fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
+        if self.stop_fade_remaining_ms <= 0 {
+            return false;
+        }
+        self.stop_fade_remaining_ms = (self.stop_fade_remaining_ms - i64::from(elapsed_ms)).max(0);
+        if self.stop_fade_remaining_ms == 0 {
+            let restore_volume = self.app_state.config.volume;
+            self.stop_playback();
+            self.set_runtime_volume(restore_volume);
+            return true;
+        }
+        let volume = ((i64::from(self.stop_fade_start_volume) * self.stop_fade_remaining_ms)
+            / STOP_FADE_DURATION_MS)
+            .clamp(0, 100) as i32;
+        self.set_runtime_volume(volume);
+        true
+    }
+
+    fn update_pending_eof_advance(&mut self, elapsed_ms: u32) -> bool {
+        let Some(remaining) = self.pending_eof_advance_ms else {
+            return false;
+        };
+        let remaining = remaining - i64::from(elapsed_ms);
+        if remaining > 0 {
+            self.pending_eof_advance_ms = Some(remaining);
+            self.playback_position_ms = remaining;
+            return true;
+        }
+        self.pending_eof_advance_ms = None;
+        self.advance_playlist_after_eof();
+        true
+    }
+
     fn poll_playback_backend(&mut self) {
         let Some(backend) = self.playback_backend.as_ref().map(Rc::clone) else {
             return;
         };
+        let mut applied_pending_seek = false;
         match backend.borrow().poll_bus_events() {
             Ok(events) => {
+                let mut end_of_stream = false;
+                let mut backend_ready = false;
                 for event in events {
+                    if matches!(event, PlaybackEvent::EndOfStream) {
+                        end_of_stream = true;
+                    }
+                    if matches!(
+                        event,
+                        PlaybackEvent::AsyncDone | PlaybackEvent::DurationChanged(_)
+                    ) {
+                        backend_ready = true;
+                    }
                     self.app_state.player.apply_playback_event(&event);
+                }
+                if backend_ready {
+                    applied_pending_seek |= self.apply_pending_backend_seek(&backend, false);
+                }
+                if end_of_stream {
+                    self.playlist_eof_reached();
                 }
             }
             Err(err) => eprintln!("xmms-rs: failed to poll playback backend: {err}"),
         }
-        let backend = backend.borrow();
-        let stream_info = backend.audio_stream_info();
+        let (stream_info, duration_ms) = {
+            let backend = backend.borrow();
+            (backend.audio_stream_info(), backend.duration_ms())
+        };
         self.app_state
             .player
             .set_stream_info(None, stream_info.frequency, stream_info.channels);
-        if let Some(duration_ms) = backend.duration_ms() {
+        if let Some(duration_ms) = duration_ms {
             self.app_state.player.apply_playback_event(
                 &crate::player::PlaybackEvent::DurationChanged(Some(duration_ms)),
             );
+            applied_pending_seek |= self.apply_pending_backend_seek(&backend, true);
         }
-        if let Some(position_ms) = backend.position_ms() {
-            self.playback_position_ms = position_ms.max(0);
-            self.position_position = self.position_slider_position();
+        if !applied_pending_seek {
+            let position_ms = { backend.borrow().position_ms() };
+            if let Some(position_ms) = position_ms {
+                self.playback_position_ms = position_ms.max(0);
+                self.position_position = self.position_slider_position();
+            }
+        }
+    }
+
+    fn apply_pending_backend_seek(
+        &mut self,
+        backend: &Rc<RefCell<GStreamerBackend>>,
+        log_failure: bool,
+    ) -> bool {
+        let Some(position_ms) = self.pending_backend_seek_ms else {
+            return false;
+        };
+        match backend.borrow().seek_to_ms(position_ms) {
+            Ok(()) => {
+                self.pending_backend_seek_ms = None;
+                true
+            }
+            Err(err) => {
+                if log_failure {
+                    eprintln!("xmms-rs: failed to seek playback: {err}");
+                    self.pending_backend_seek_ms = None;
+                }
+                false
+            }
         }
     }
 
     pub(crate) fn playlist_eof_reached(&mut self) {
+        self.stop_fade_remaining_ms = 0;
+        self.position_position = 0;
+        if self.app_state.config.pause_between_songs
+            && self.app_state.config.pause_between_songs_time > 0
+        {
+            self.pending_eof_advance_ms =
+                Some(i64::from(self.app_state.config.pause_between_songs_time) * 1_000);
+            self.playback_position_ms = self.pending_eof_advance_ms.unwrap_or(0);
+            return;
+        }
+        self.advance_playlist_after_eof();
+    }
+
+    fn advance_playlist_after_eof(&mut self) {
         self.position_position = 0;
         if self.app_state.playlist.eof_reached() {
-            self.start_current_playlist_playback();
+            self.start_current_playlist_playback_from_beginning();
         } else {
             self.stop_playback();
         }
@@ -7752,6 +8094,87 @@ impl MainWindowUiState {
             }
             _ => UiAction::None,
         }
+    }
+
+    pub(crate) fn scroll_main(&mut self, x: i32, y: i32, dy: f64) -> bool {
+        if let Some((kind, panel_x, panel_y)) = self.docked_panel_at(x, y) {
+            return match kind {
+                PanelKind::Equalizer => self.equalizer_scroll(panel_x, panel_y, dy),
+                PanelKind::Playlist => self.playlist_scroll(dy),
+            };
+        }
+        if let Some(MainControl::Slider(slider)) = self.hit_test(x, y) {
+            return self.scroll_slider(slider, dy);
+        }
+        self.scroll_volume(dy)
+    }
+
+    fn scroll_slider(&mut self, slider: MainSlider, dy: f64) -> bool {
+        match slider {
+            MainSlider::Volume => self.scroll_volume(dy),
+            MainSlider::Balance => self.scroll_balance(dy),
+            MainSlider::Position => self.scroll_position_slider(dy),
+        }
+    }
+
+    fn scroll_volume(&mut self, dy: f64) -> bool {
+        let step = self.app_state.config.mouse_wheel_change.clamp(1, 100);
+        let diff = if dy < 0.0 {
+            step
+        } else if dy > 0.0 {
+            -step
+        } else {
+            return false;
+        };
+        let volume = (self.app_state.player.volume() + diff).clamp(0, 100);
+        if volume == self.app_state.player.volume() {
+            return false;
+        }
+        self.app_state.player.set_volume(volume);
+        self.app_state.config.volume = volume;
+        if let Some(backend) = &self.playback_backend {
+            backend.borrow().set_volume_percent(volume);
+        }
+        true
+    }
+
+    fn scroll_balance(&mut self, dy: f64) -> bool {
+        let step = self.app_state.config.mouse_wheel_change.clamp(1, 100);
+        let diff = if dy < 0.0 {
+            step
+        } else if dy > 0.0 {
+            -step
+        } else {
+            return false;
+        };
+        let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
+        if balance == self.app_state.player.balance() {
+            return false;
+        }
+        self.app_state.player.set_balance(balance);
+        self.app_state.config.balance = balance;
+        if let Some(backend) = &self.playback_backend {
+            backend.borrow().set_balance_percent(balance);
+        }
+        true
+    }
+
+    fn scroll_position_slider(&mut self, dy: f64) -> bool {
+        self.ensure_current_playlist_position_for_seek();
+        let Some(duration_ms) = self.current_duration_ms().filter(|duration| *duration > 0) else {
+            return false;
+        };
+        let step_ms = (duration_ms / 100).max(1_000);
+        let old_position = self.playback_position_ms;
+        let position_ms = if dy < 0.0 {
+            old_position - step_ms
+        } else if dy > 0.0 {
+            old_position + step_ms
+        } else {
+            return false;
+        };
+        self.set_playback_position_ms(position_ms);
+        self.playback_position_ms != old_position
     }
 
     fn hit_test(&self, x: i32, y: i32) -> Option<MainControl> {
@@ -7830,7 +8253,7 @@ impl MainWindowUiState {
             }
             MainPushButton::Previous => {
                 if self.app_state.playlist.previous() {
-                    self.start_current_playlist_playback();
+                    self.start_current_playlist_playback_from_beginning();
                 }
                 self.position_position = 0;
                 self.playback_position_ms = 0;
@@ -7838,7 +8261,7 @@ impl MainWindowUiState {
             }
             MainPushButton::Next => {
                 if self.app_state.playlist.next() {
-                    self.start_current_playlist_playback();
+                    self.start_current_playlist_playback_from_beginning();
                 }
                 self.position_position = 0;
                 self.playback_position_ms = 0;
@@ -7883,6 +8306,9 @@ impl MainWindowUiState {
     }
 
     fn set_slider_position(&mut self, slider: MainSlider, position: i32) -> bool {
+        if slider == MainSlider::Position {
+            self.ensure_current_playlist_position_for_seek();
+        }
         let position = position.clamp(self.slider_min(slider), self.slider_max(slider));
         let old_position = self.slider_position(slider);
         if old_position == position {
@@ -8220,6 +8646,17 @@ fn event_to_base_coords(
     let width = area.allocated_width().max(1) as f64;
     let height = area.allocated_height().max(1) as f64;
     let (base_width, base_height) = state.docked_panel_size();
+    scale_event_coords(width, height, base_width, base_height, x, y)
+}
+
+fn scale_event_coords(
+    width: f64,
+    height: f64,
+    base_width: i32,
+    base_height: i32,
+    x: f64,
+    y: f64,
+) -> (i32, i32) {
     (
         (x / (width / f64::from(base_width))) as i32,
         (y / (height / f64::from(base_height))) as i32,
@@ -8569,6 +9006,215 @@ mod tests {
             index += 1;
         }
         labels
+    }
+
+    #[test]
+    fn mouse_wheel_uses_configured_volume_step() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            volume: 50,
+            mouse_wheel_change: 12,
+            ..Config::default()
+        }));
+
+        assert!(state.scroll_main(1, 1, -1.0));
+        assert_eq!(state.volume(), 62);
+        assert!(state.scroll_main(1, 1, 1.0));
+        assert_eq!(state.volume(), 50);
+    }
+
+    #[test]
+    fn mouse_wheel_over_main_sliders_changes_each_slider() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            volume: 50,
+            mouse_wheel_change: 12,
+            ..Config::default()
+        }));
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:test", "Test", 120_000);
+        state.app_state.playlist.set_position(0);
+
+        assert!(state.scroll_main(108, 58, -1.0));
+        assert_eq!(state.volume(), 62);
+        assert!(state.scroll_main(178, 58, -1.0));
+        assert_eq!(state.app_state.player.balance(), 12);
+        assert!(state.scroll_main(140, 73, 1.0));
+        let forward_position = state.playback_position_ms;
+        assert!(forward_position > 0);
+        assert!(state.scroll_main(140, 73, -1.0));
+        assert!(state.playback_position_ms < forward_position);
+    }
+
+    #[test]
+    fn mouse_wheel_seeking_selects_first_entry_before_initial_playback() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:test", "Test", 120_000);
+
+        assert_eq!(state.app_state.playlist.position(), None);
+        assert!(state.scroll_main(140, 73, 1.0));
+
+        assert_eq!(state.app_state.playlist.position(), Some(0));
+        assert!(state.playback_position_ms > 0);
+        assert_eq!(state.app_state.player.state(), PlayerState::Stopped);
+    }
+
+    #[test]
+    fn mouse_wheel_over_shaded_sliders_changes_each_slider() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            volume: 50,
+            mouse_wheel_change: 12,
+            ..Config::default()
+        }));
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:test", "Test", 120_000);
+        state.app_state.playlist.set_position(0);
+        state.app_state.player.mark_playing();
+        state.shaded = true;
+        state.equalizer_shaded = true;
+
+        assert!(state.scroll_main(227, 5, 1.0));
+        let forward_position = state.playback_position_ms;
+        assert!(forward_position > 0);
+        assert!(state.scroll_main(227, 5, -1.0));
+        assert!(state.playback_position_ms < forward_position);
+        assert!(state.equalizer_scroll(62, 5, -1.0));
+        assert_eq!(state.volume(), 62);
+        assert!(state.equalizer_scroll(165, 5, -1.0));
+        assert_eq!(state.app_state.player.balance(), 12);
+    }
+
+    #[test]
+    fn wheel_event_coordinates_are_scaled_to_skin_space() {
+        assert_eq!(
+            scale_event_coords(
+                f64::from(MAIN_WINDOW_WIDTH * 2),
+                f64::from(MAIN_WINDOW_HEIGHT * 2),
+                MAIN_WINDOW_WIDTH,
+                MAIN_WINDOW_HEIGHT,
+                216.0,
+                116.0,
+            ),
+            (108, 58)
+        );
+        assert_eq!(
+            scale_event_coords(
+                f64::from(MAIN_WINDOW_WIDTH * 3),
+                f64::from(MAIN_WINDOW_HEIGHT * 3),
+                MAIN_WINDOW_WIDTH,
+                MAIN_WINDOW_HEIGHT,
+                534.0,
+                174.0,
+            ),
+            (178, 58)
+        );
+    }
+
+    #[test]
+    fn playlist_mouse_wheel_scrolls_three_rows() {
+        let mut state = MainWindowUiState::default();
+        for index in 0..20 {
+            state
+                .app_state
+                .playlist
+                .add_uri(format!("file:///tmp/song{index}.mp3"));
+        }
+
+        assert!(state.playlist_scroll(1.0));
+        assert_eq!(state.playlist_scroll_offset(), 3);
+        assert!(state.playlist_scroll(-1.0));
+        assert_eq!(state.playlist_scroll_offset(), 0);
+
+        state.playlist_shaded = true;
+        assert!(state.playlist_scroll(1.0));
+        assert_eq!(state.playlist_scroll_offset(), 3);
+    }
+
+    #[test]
+    fn pause_between_songs_delays_eof_advance() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            pause_between_songs: true,
+            pause_between_songs_time: 2,
+            ..Config::default()
+        }));
+        state.app_state.playlist.add_uri("file:///tmp/one.mp3");
+        state.app_state.playlist.add_uri("file:///tmp/two.mp3");
+        state.app_state.playlist.set_position(0);
+
+        state.playlist_eof_reached();
+        assert_eq!(state.app_state.playlist.position(), Some(0));
+        assert_eq!(state.pending_eof_advance_ms, Some(2_000));
+
+        assert!(state.update_timer_tick(1_000));
+        assert_eq!(state.app_state.playlist.position(), Some(0));
+        assert_eq!(state.pending_eof_advance_ms, Some(1_000));
+
+        assert!(state.update_timer_tick(1_000));
+        assert_eq!(state.app_state.playlist.position(), Some(1));
+        assert_eq!(state.pending_eof_advance_ms, None);
+    }
+
+    #[test]
+    fn stop_with_fade_ramps_down_then_restores_volume() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            volume: 80,
+            ..Config::default()
+        }));
+        state.app_state.player.mark_playing();
+
+        state.stop_with_fade();
+        assert!(state.stop_fade_remaining_ms > 0);
+
+        assert!(state.update_timer_tick(500));
+        assert_eq!(state.volume(), 40);
+        assert!(state.update_timer_tick(500));
+        assert_eq!(state.app_state.player.state(), PlayerState::Stopped);
+        assert_eq!(state.volume(), 80);
+        assert_eq!(state.stop_fade_remaining_ms, 0);
+    }
+
+    #[test]
+    fn play_from_stopped_preserves_selected_position() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:test", "Test", 120_000);
+        state.set_playback_position_ms(42_000);
+
+        state.press(40, 90);
+        assert_eq!(state.release(40, 90), UiAction::None);
+
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+        assert_eq!(state.playback_position_ms, 42_000);
+        assert_eq!(state.app_state.player.spotify_position_ms(), 42_000);
+    }
+
+    #[test]
+    fn changing_to_next_track_starts_from_beginning() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:one", "One", 120_000);
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:two", "Two", 120_000);
+        state.app_state.playlist.set_position(0);
+        state.set_playback_position_ms(42_000);
+
+        state.press(109, 90);
+        assert_eq!(state.release(109, 90), UiAction::None);
+
+        assert_eq!(state.app_state.playlist.position(), Some(1));
+        assert_eq!(state.playback_position_ms, 0);
+        assert_eq!(state.app_state.player.spotify_position_ms(), 0);
     }
 
     #[test]
