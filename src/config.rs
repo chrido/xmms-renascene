@@ -22,6 +22,7 @@ pub struct Config {
     pub pause_between_songs: bool,
     pub pause_between_songs_time: i32,
     pub mouse_wheel_change: i32,
+    pub stop_with_fadeout: bool,
     pub sticky: bool,
     pub doublesize: bool,
     pub easy_move: bool,
@@ -94,6 +95,7 @@ impl Default for Config {
             pause_between_songs: false,
             pause_between_songs_time: 2,
             mouse_wheel_change: 8,
+            stop_with_fadeout: false,
             sticky: false,
             doublesize: true,
             easy_move: false,
@@ -183,6 +185,8 @@ impl Config {
         cfg.mouse_wheel_change = get_i32(&keys, "mouse_wheel_change")
             .unwrap_or(cfg.mouse_wheel_change)
             .clamp(1, 100);
+        cfg.stop_with_fadeout =
+            get_bool(&keys, "stop_with_fadeout").unwrap_or(cfg.stop_with_fadeout);
         cfg.sticky = get_bool(&keys, "sticky").unwrap_or(cfg.sticky);
         cfg.easy_move = get_bool(&keys, "easy_move").unwrap_or(cfg.easy_move);
         cfg.main_shaded = get_bool(&keys, "main_shaded").unwrap_or(cfg.main_shaded);
@@ -315,6 +319,7 @@ impl Config {
             self.pause_between_songs_time,
         );
         push_i32(&mut out, "mouse_wheel_change", self.mouse_wheel_change);
+        push_bool(&mut out, "stop_with_fadeout", self.stop_with_fadeout);
         push_bool(&mut out, "sticky", self.sticky);
         push_bool(&mut out, "doublesize", self.scale_factor > 1.0);
         push_bool(&mut out, "easy_move", self.easy_move);
@@ -523,6 +528,7 @@ mod tests {
         assert!(!cfg.pause_between_songs);
         assert_eq!(cfg.pause_between_songs_time, 2);
         assert_eq!(cfg.mouse_wheel_change, 8);
+        assert!(!cfg.stop_with_fadeout);
         assert!(!cfg.main_shaded);
         assert!(!cfg.playlist_shaded);
         assert!(!cfg.equalizer_shaded);
@@ -545,6 +551,7 @@ mod tests {
              pause_between_songs=true\n\
              pause_between_songs_time=1001\n\
              mouse_wheel_change=0\n\
+             stop_with_fadeout=true\n\
              equalizer_band_3_pos=75\n\
              main_shaded=true\n\
              playlist_shaded=true\n\
@@ -564,6 +571,7 @@ mod tests {
         assert!(cfg.pause_between_songs);
         assert_eq!(cfg.pause_between_songs_time, 1000);
         assert_eq!(cfg.mouse_wheel_change, 1);
+        assert!(cfg.stop_with_fadeout);
         assert_eq!(cfg.equalizer_band_pos[3], 75);
         assert!(cfg.main_shaded);
         assert!(cfg.playlist_shaded);
@@ -621,6 +629,7 @@ mod tests {
             pause_between_songs: true,
             pause_between_songs_time: 7,
             mouse_wheel_change: 12,
+            stop_with_fadeout: true,
             ..Config::default()
         };
         cfg.vis_mode = VisMode::Off;
@@ -633,6 +642,7 @@ mod tests {
         assert!(serialized.contains("pause_between_songs=true\n"));
         assert!(serialized.contains("pause_between_songs_time=7\n"));
         assert!(serialized.contains("mouse_wheel_change=12\n"));
+        assert!(serialized.contains("stop_with_fadeout=true\n"));
         assert!(serialized.contains("equalizer_band_9_pos=10\n"));
 
         let reparsed = Config::from_key_file_str(&serialized);
@@ -653,6 +663,7 @@ mod tests {
         assert!(reparsed.pause_between_songs);
         assert_eq!(reparsed.pause_between_songs_time, 7);
         assert_eq!(reparsed.mouse_wheel_change, 12);
+        assert!(reparsed.stop_with_fadeout);
         assert_eq!(reparsed.vis_mode, VisMode::Off);
     }
 }

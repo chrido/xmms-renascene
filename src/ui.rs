@@ -808,6 +808,7 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Pause between songs",
             "Pause between songs time (seconds):",
             "Mouse Wheel adjusts Volume by (%):",
+            "Stop with fadeout",
             "Time remaining",
             "Dock playlist",
             "Dock equalizer",
@@ -1249,21 +1250,6 @@ fn build_main_menu_popover(
         });
     }
     menu_box.append(&skin_browser);
-
-    let stop_with_fade = xmms_menu_button("Stop with Fadeout");
-    {
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        stop_with_fade.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.stop_with_fade();
-            }
-            popover.popdown();
-        });
-    }
-    menu_box.append(&stop_with_fade);
 
     let quit = xmms_menu_button("Quit");
     {
@@ -2511,6 +2497,11 @@ fn build_preferences_options_page(
                 PreferenceCheck::PauseBetweenSongs,
             ),
             (
+                "Stop with fadeout",
+                state.preference_stop_with_fadeout(),
+                PreferenceCheck::StopWithFadeout,
+            ),
+            (
                 "Time remaining",
                 state.preference_timer_remaining(),
                 PreferenceCheck::TimerRemaining,
@@ -2563,6 +2554,9 @@ fn build_preferences_options_page(
                     PreferenceCheck::PauseBetweenSongs => {
                         state.set_preference_pause_between_songs(check.is_active())
                     }
+                    PreferenceCheck::StopWithFadeout => {
+                        state.set_preference_stop_with_fadeout(check.is_active())
+                    }
                     PreferenceCheck::TimerRemaining => {
                         state.set_preference_timer_remaining(check.is_active())
                     }
@@ -2602,6 +2596,7 @@ enum PreferenceCheck {
     Shuffle,
     NoAdvance,
     PauseBetweenSongs,
+    StopWithFadeout,
     TimerRemaining,
     DockPlaylist,
     DockEqualizer,
@@ -5983,7 +5978,15 @@ impl MainWindowUiState {
         self.playback_position_ms = 0;
     }
 
-    pub(crate) fn stop_with_fade(&mut self) {
+    fn request_stop_playback(&mut self) {
+        if self.app_state.config.stop_with_fadeout {
+            self.stop_with_fade();
+        } else {
+            self.stop_playback();
+        }
+    }
+
+    fn stop_with_fade(&mut self) {
         if self.app_state.player.state() == PlayerState::Stopped {
             self.stop_playback();
             return;
@@ -7225,7 +7228,7 @@ impl MainWindowUiState {
                 PanelAction::Changed
             }
             PlaylistFooterButton::Stop => {
-                self.stop_playback();
+                self.request_stop_playback();
                 PanelAction::Changed
             }
             PlaylistFooterButton::Next => {
@@ -7403,6 +7406,15 @@ impl MainWindowUiState {
 
     pub(crate) fn preference_pause_between_songs(&self) -> bool {
         self.app_state.config.pause_between_songs
+    }
+
+    pub(crate) fn set_preference_stop_with_fadeout(&mut self, enabled: bool) {
+        self.app_state.config.stop_with_fadeout = enabled;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn preference_stop_with_fadeout(&self) -> bool {
+        self.app_state.config.stop_with_fadeout
     }
 
     pub(crate) fn set_preference_pause_between_songs_time(&mut self, seconds: i32) {
@@ -8065,7 +8077,7 @@ impl MainWindowUiState {
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.stop_playback();
+                self.request_stop_playback();
                 UiAction::None
             }
             MainPushButton::Previous => {
@@ -9046,14 +9058,15 @@ mod tests {
     }
 
     #[test]
-    fn stop_with_fade_ramps_down_then_restores_volume() {
+    fn stop_preference_with_fadeout_ramps_down_then_restores_volume() {
         let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
             volume: 80,
+            stop_with_fadeout: true,
             ..Config::default()
         }));
         state.app_state.player.mark_playing();
 
-        state.stop_with_fade();
+        state.activate_push(MainPushButton::Stop);
         assert!(state.stop_fade_remaining_ms > 0);
 
         assert!(state.update_timer_tick(500));

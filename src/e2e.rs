@@ -1363,6 +1363,16 @@ impl UiE2e {
         self
     }
 
+    pub fn set_preference_stop_with_fadeout(&mut self, enabled: bool) -> &mut Self {
+        self.state.set_preference_stop_with_fadeout(enabled);
+        self
+    }
+
+    pub fn assert_preference_stop_with_fadeout(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(self.state.preference_stop_with_fadeout(), expected);
+        self
+    }
+
     pub fn set_preference_timer_remaining(&mut self, enabled: bool) -> &mut Self {
         self.state.set_preference_timer_remaining(enabled);
         self

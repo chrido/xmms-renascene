@@ -1957,6 +1957,8 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .assert_shuffle(true)
         .set_preference_no_playlist_advance(true)
         .assert_no_playlist_advance(true)
+        .set_preference_stop_with_fadeout(true)
+        .assert_preference_stop_with_fadeout(true)
         .set_preference_timer_remaining(true)
         .assert_preference_timer_remaining(true)
         .set_preference_playlist_docked(false)
