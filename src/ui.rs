@@ -5142,6 +5142,9 @@ impl MainWindowUiState {
     }
 
     fn display_time_ms(&self) -> i64 {
+        if let Some(remaining) = self.pending_eof_advance_ms {
+            return remaining.max(0);
+        }
         let elapsed = self.playback_position_ms.max(0);
         if self.app_state.config.timer_mode == TimerMode::Remaining {
             if let Some(duration) = self.current_duration_ms().filter(|duration| *duration > 0) {
@@ -5152,7 +5155,9 @@ impl MainWindowUiState {
     }
 
     fn time_digits(&self) -> [i32; 5] {
-        if self.app_state.player.state() == PlayerState::Stopped {
+        if self.app_state.player.state() == PlayerState::Stopped
+            && self.pending_eof_advance_ms.is_none()
+        {
             return [NumberDisplay::BLANK; 5];
         }
         let display_ms = self.display_time_ms();
@@ -7923,7 +7928,6 @@ impl MainWindowUiState {
         let remaining = remaining - i64::from(elapsed_ms);
         if remaining > 0 {
             self.pending_eof_advance_ms = Some(remaining);
-            self.playback_position_ms = remaining;
             return true;
         }
         self.pending_eof_advance_ms = None;
@@ -8014,7 +8018,7 @@ impl MainWindowUiState {
         {
             self.pending_eof_advance_ms =
                 Some(i64::from(self.app_state.config.pause_between_songs_time) * 1_000);
-            self.playback_position_ms = self.pending_eof_advance_ms.unwrap_or(0);
+            self.playback_position_ms = 0;
             return;
         }
         self.advance_playlist_after_eof();
@@ -9149,14 +9153,42 @@ mod tests {
         state.playlist_eof_reached();
         assert_eq!(state.app_state.playlist.position(), Some(0));
         assert_eq!(state.pending_eof_advance_ms, Some(2_000));
+        assert_eq!(state.playback_position_ms, 0);
 
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(0));
         assert_eq!(state.pending_eof_advance_ms, Some(1_000));
+        assert_eq!(state.playback_position_ms, 0);
 
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(1));
         assert_eq!(state.pending_eof_advance_ms, None);
+    }
+
+    #[test]
+    fn play_during_pause_between_songs_wait_starts_from_beginning() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            pause_between_songs: true,
+            pause_between_songs_time: 2,
+            ..Config::default()
+        }));
+        state
+            .app_state
+            .playlist
+            .add_spotify("spotify:track:test", "Test", 120_000);
+        state.app_state.playlist.set_position(0);
+
+        state.playlist_eof_reached();
+        assert!(state.update_timer_tick(1_000));
+        assert_eq!(state.pending_eof_advance_ms, Some(1_000));
+        assert_eq!(state.playback_position_ms, 0);
+
+        state.start_current_playlist_playback();
+
+        assert_eq!(state.pending_eof_advance_ms, None);
+        assert_eq!(state.playback_position_ms, 0);
+        assert_eq!(state.app_state.player.spotify_position_ms(), 0);
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
     }
 
     #[test]
