@@ -4510,6 +4510,38 @@ enum MainControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeekState {
+    Idle,
+    StoppedAt(i64),
+    PendingBackendSeek(i64),
+    WaitingBetweenSongs { remaining_ms: i64 },
+}
+
+impl SeekState {
+    fn eof_pause_remaining_ms(self) -> Option<i64> {
+        match self {
+            SeekState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
+            _ => None,
+        }
+    }
+
+    fn pending_backend_seek_ms(self) -> Option<i64> {
+        match self {
+            SeekState::PendingBackendSeek(position_ms) => Some(position_ms),
+            _ => None,
+        }
+    }
+
+    fn play_start_position_ms(self, fallback_ms: i64) -> i64 {
+        match self {
+            SeekState::StoppedAt(position_ms) => position_ms,
+            SeekState::WaitingBetweenSongs { .. } => 0,
+            SeekState::Idle | SeekState::PendingBackendSeek(_) => fallback_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiAction {
     None,
     Quit,
@@ -4590,8 +4622,7 @@ pub(crate) struct MainWindowUiState {
     spotify_playback_poll_requests: u32,
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
-    pending_eof_advance_ms: Option<i64>,
-    pending_backend_seek_ms: Option<i64>,
+    seek_state: SeekState,
     stop_fade_remaining_ms: i64,
     stop_fade_start_volume: i32,
     file_dialog_visible: bool,
@@ -4707,8 +4738,7 @@ impl MainWindowUiState {
             spotify_playback_poll_requests: 0,
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
-            pending_eof_advance_ms: None,
-            pending_backend_seek_ms: None,
+            seek_state: SeekState::Idle,
             stop_fade_remaining_ms: 0,
             stop_fade_start_volume: 100,
             file_dialog_visible: false,
@@ -5142,7 +5172,7 @@ impl MainWindowUiState {
     }
 
     fn display_time_ms(&self) -> i64 {
-        if let Some(remaining) = self.pending_eof_advance_ms {
+        if let Some(remaining) = self.seek_state.eof_pause_remaining_ms() {
             return remaining.max(0);
         }
         let elapsed = self.playback_position_ms.max(0);
@@ -5156,7 +5186,7 @@ impl MainWindowUiState {
 
     fn time_digits(&self) -> [i32; 5] {
         if self.app_state.player.state() == PlayerState::Stopped
-            && self.pending_eof_advance_ms.is_none()
+            && self.seek_state.eof_pause_remaining_ms().is_none()
         {
             return [NumberDisplay::BLANK; 5];
         }
@@ -5408,6 +5438,11 @@ impl MainWindowUiState {
         self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
         self.equalizer_band_positions = self.app_state.config.equalizer_band_pos;
         self.playback_position_ms = self.app_state.config.playback_position_ms.max(0);
+        self.seek_state = if self.playback_position_ms > 0 {
+            SeekState::StoppedAt(self.playback_position_ms)
+        } else {
+            SeekState::Idle
+        };
         self.position_position = self.position_slider_position();
         self.apply_visualization_preferences();
     }
@@ -6002,7 +6037,10 @@ impl MainWindowUiState {
     }
 
     fn start_current_playlist_playback(&mut self) {
-        self.start_current_playlist_playback_at(self.playback_position_ms);
+        self.start_current_playlist_playback_at(
+            self.seek_state
+                .play_start_position_ms(self.playback_position_ms),
+        );
     }
 
     fn start_current_playlist_playback_from_beginning(&mut self) {
@@ -6010,8 +6048,7 @@ impl MainWindowUiState {
     }
 
     fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
-        self.pending_eof_advance_ms = None;
-        self.pending_backend_seek_ms = None;
+        self.seek_state = SeekState::Idle;
         self.stop_fade_remaining_ms = 0;
         self.set_runtime_volume(self.app_state.config.volume);
         if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
@@ -6047,7 +6084,7 @@ impl MainWindowUiState {
                     return;
                 }
                 if self.playback_position_ms > 0 {
-                    self.pending_backend_seek_ms = Some(self.playback_position_ms);
+                    self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
                 }
             }
             self.app_state.player.mark_playing();
@@ -6128,8 +6165,7 @@ impl MainWindowUiState {
     }
 
     fn stop_playback(&mut self) {
-        self.pending_eof_advance_ms = None;
-        self.pending_backend_seek_ms = None;
+        self.seek_state = SeekState::Idle;
         self.stop_fade_remaining_ms = 0;
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().stop() {
@@ -6148,7 +6184,7 @@ impl MainWindowUiState {
             self.stop_playback();
             return;
         }
-        self.pending_eof_advance_ms = None;
+        self.seek_state = SeekState::Idle;
         self.stop_fade_start_volume = self.app_state.player.volume().max(0);
         if self.stop_fade_start_volume == 0 {
             self.stop_playback();
@@ -7570,7 +7606,7 @@ impl MainWindowUiState {
     pub(crate) fn set_preference_pause_between_songs(&mut self, enabled: bool) {
         self.app_state.config.pause_between_songs = enabled;
         if !enabled {
-            self.pending_eof_advance_ms = None;
+            self.seek_state = SeekState::Idle;
         }
         self.mark_preferences_saved();
     }
@@ -7846,7 +7882,15 @@ impl MainWindowUiState {
                 return;
             }
         } else {
-            self.pending_backend_seek_ms = None;
+            self.seek_state = if self.playback_position_ms > 0 {
+                SeekState::StoppedAt(self.playback_position_ms)
+            } else {
+                SeekState::Idle
+            };
+            return;
+        }
+        if self.seek_state.pending_backend_seek_ms().is_some() {
+            self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
             return;
         }
         if let Some(backend) = &self.playback_backend {
@@ -7922,15 +7966,17 @@ impl MainWindowUiState {
     }
 
     fn update_pending_eof_advance(&mut self, elapsed_ms: u32) -> bool {
-        let Some(remaining) = self.pending_eof_advance_ms else {
+        let Some(remaining) = self.seek_state.eof_pause_remaining_ms() else {
             return false;
         };
         let remaining = remaining - i64::from(elapsed_ms);
         if remaining > 0 {
-            self.pending_eof_advance_ms = Some(remaining);
+            self.seek_state = SeekState::WaitingBetweenSongs {
+                remaining_ms: remaining,
+            };
             return true;
         }
-        self.pending_eof_advance_ms = None;
+        self.seek_state = SeekState::Idle;
         self.advance_playlist_after_eof();
         true
     }
@@ -7988,7 +8034,7 @@ impl MainWindowUiState {
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
-        !applied_pending_seek && self.pending_eof_advance_ms.is_none()
+        !applied_pending_seek && self.seek_state.eof_pause_remaining_ms().is_none()
     }
 
     fn apply_pending_backend_seek(
@@ -7996,18 +8042,18 @@ impl MainWindowUiState {
         backend: &Rc<RefCell<GStreamerBackend>>,
         log_failure: bool,
     ) -> bool {
-        let Some(position_ms) = self.pending_backend_seek_ms else {
+        let Some(position_ms) = self.seek_state.pending_backend_seek_ms() else {
             return false;
         };
         match backend.borrow().seek_to_ms(position_ms) {
             Ok(()) => {
-                self.pending_backend_seek_ms = None;
+                self.seek_state = SeekState::Idle;
                 true
             }
             Err(err) => {
                 if log_failure {
                     eprintln!("xmms-rs: failed to seek playback: {err}");
-                    self.pending_backend_seek_ms = None;
+                    self.seek_state = SeekState::Idle;
                 }
                 false
             }
@@ -8020,8 +8066,9 @@ impl MainWindowUiState {
         if self.app_state.config.pause_between_songs
             && self.app_state.config.pause_between_songs_time > 0
         {
-            self.pending_eof_advance_ms =
-                Some(i64::from(self.app_state.config.pause_between_songs_time) * 1_000);
+            self.seek_state = SeekState::WaitingBetweenSongs {
+                remaining_ms: i64::from(self.app_state.config.pause_between_songs_time) * 1_000,
+            };
             self.playback_position_ms = 0;
             return;
         }
@@ -9156,17 +9203,27 @@ mod tests {
 
         state.playlist_eof_reached();
         assert_eq!(state.app_state.playlist.position(), Some(0));
-        assert_eq!(state.pending_eof_advance_ms, Some(2_000));
+        assert_eq!(
+            state.seek_state,
+            SeekState::WaitingBetweenSongs {
+                remaining_ms: 2_000
+            }
+        );
         assert_eq!(state.playback_position_ms, 0);
 
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(0));
-        assert_eq!(state.pending_eof_advance_ms, Some(1_000));
+        assert_eq!(
+            state.seek_state,
+            SeekState::WaitingBetweenSongs {
+                remaining_ms: 1_000
+            }
+        );
         assert_eq!(state.playback_position_ms, 0);
 
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(1));
-        assert_eq!(state.pending_eof_advance_ms, None);
+        assert_eq!(state.seek_state, SeekState::Idle);
     }
 
     #[test]
@@ -9184,12 +9241,17 @@ mod tests {
 
         state.playlist_eof_reached();
         assert!(state.update_timer_tick(1_000));
-        assert_eq!(state.pending_eof_advance_ms, Some(1_000));
+        assert_eq!(
+            state.seek_state,
+            SeekState::WaitingBetweenSongs {
+                remaining_ms: 1_000
+            }
+        );
         assert_eq!(state.playback_position_ms, 0);
 
         state.start_current_playlist_playback();
 
-        assert_eq!(state.pending_eof_advance_ms, None);
+        assert_eq!(state.seek_state, SeekState::Idle);
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.app_state.player.spotify_position_ms(), 0);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
@@ -9210,7 +9272,12 @@ mod tests {
 
         state.playlist_eof_reached();
 
-        assert_eq!(state.pending_eof_advance_ms, Some(2_000));
+        assert_eq!(
+            state.seek_state,
+            SeekState::WaitingBetweenSongs {
+                remaining_ms: 2_000
+            }
+        );
         assert_eq!(state.playback_position_ms, 0);
         assert!(!state.should_sync_backend_position(false));
         assert!(!state.should_sync_backend_position(true));
