@@ -1139,9 +1139,7 @@ fn render_docked_ui_state(
                 entries: rows,
                 scroll_offset: state.playlist_scroll_offset,
                 scrollbar_dragging: state.playlist_scrollbar_dragging,
-                search_query: state
-                    .playlist_search_active
-                    .then(|| state.playlist_search_query.clone()),
+                search_query: state.playlist_search.active_query().map(str::to_owned),
                 show_numbers: state.app_state.config.show_numbers_in_pl,
                 font_family: state.app_state.config.playlist_font.clone(),
                 width: state.playlist_width,
@@ -1442,9 +1440,7 @@ fn build_playlist_window(
                 entries: rows,
                 scroll_offset: state.playlist_scroll_offset,
                 scrollbar_dragging: state.playlist_scrollbar_dragging,
-                search_query: state
-                    .playlist_search_active
-                    .then(|| state.playlist_search_query.clone()),
+                search_query: state.playlist_search.active_query().map(str::to_owned),
                 show_numbers: state.app_state.config.show_numbers_in_pl,
                 font_family: state.app_state.config.playlist_font.clone(),
                 width: playlist_width,
@@ -1611,7 +1607,7 @@ fn handle_active_playlist_search_key_pressed(
     key: gtk::gdk::Key,
     state: gtk::gdk::ModifierType,
 ) -> Option<bool> {
-    if !ui_state.playlist_search_active {
+    if !ui_state.playlist_search_active() {
         return None;
     }
     if key == gtk::gdk::Key::Escape {
@@ -4540,6 +4536,67 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlaylistSearch {
+    Inactive,
+    Active { query: String },
+}
+
+impl Default for PlaylistSearch {
+    fn default() -> Self {
+        Self::Inactive
+    }
+}
+
+impl PlaylistSearch {
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Active { .. })
+    }
+
+    fn query(&self) -> &str {
+        match self {
+            Self::Inactive => "",
+            Self::Active { query } => query,
+        }
+    }
+
+    fn active_query(&self) -> Option<&str> {
+        match self {
+            Self::Inactive => None,
+            Self::Active { query } => Some(query),
+        }
+    }
+
+    fn start(&mut self) {
+        *self = Self::Active {
+            query: String::new(),
+        };
+    }
+
+    fn stop(&mut self) {
+        *self = Self::Inactive;
+    }
+
+    fn push_char(&mut self, ch: char) -> bool {
+        let Self::Active { query } = self else {
+            return false;
+        };
+        if ch.is_control() {
+            return false;
+        }
+        query.push(ch);
+        true
+    }
+
+    fn pop_char(&mut self) -> bool {
+        let Self::Active { query } = self else {
+            return false;
+        };
+        query.pop();
+        true
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MainControl {
     Push(MainPushButton),
@@ -4656,8 +4713,7 @@ pub(crate) struct MainWindowUiState {
     playlist_drag_moved: bool,
     playlist_last_click: Option<(usize, Instant)>,
     playlist_pending_double_click: Option<usize>,
-    playlist_search_active: bool,
-    playlist_search_query: String,
+    playlist_search: PlaylistSearch,
     playlist_load_dialog_visible: bool,
     playlist_save_dialog_visible: bool,
     last_playlist_file_info: Option<String>,
@@ -4759,8 +4815,7 @@ impl MainWindowUiState {
             playlist_drag_moved: false,
             playlist_last_click: None,
             playlist_pending_double_click: None,
-            playlist_search_active: false,
-            playlist_search_query: String::new(),
+            playlist_search: PlaylistSearch::default(),
             playlist_load_dialog_visible: false,
             playlist_save_dialog_visible: false,
             last_playlist_file_info: None,
@@ -5464,11 +5519,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_search_active(&self) -> bool {
-        self.playlist_search_active
+        self.playlist_search.is_active()
     }
 
     pub(crate) fn playlist_search_query(&self) -> &str {
-        &self.playlist_search_query
+        self.playlist_search.query()
     }
 
     pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
@@ -5864,8 +5919,7 @@ impl MainWindowUiState {
     pub(crate) fn load_playlist_file(&mut self, path: &Path) -> std::io::Result<()> {
         self.app_state.playlist = Playlist::load_m3u_file(path)?;
         self.playlist_scroll_offset = 0;
-        self.playlist_search_active = false;
-        self.playlist_search_query.clear();
+        self.playlist_search.stop();
         self.schedule_missing_local_playlist_durations();
         Ok(())
     }
@@ -6224,30 +6278,24 @@ impl MainWindowUiState {
         self.playlist_menu = None;
         self.playlist_menu_hover = None;
         self.playlist_menu_pressed = false;
-        self.playlist_search_active = true;
-        self.playlist_search_query.clear();
+        self.playlist_search.start();
         true
     }
 
     pub(crate) fn stop_playlist_search(&mut self) {
-        self.playlist_search_active = false;
-        self.playlist_search_query.clear();
+        self.playlist_search.stop();
     }
 
     pub(crate) fn push_playlist_search_char(&mut self, ch: char) {
-        if !self.playlist_search_active || ch.is_control() {
-            return;
+        if self.playlist_search.push_char(ch) {
+            self.update_playlist_search_match();
         }
-        self.playlist_search_query.push(ch);
-        self.update_playlist_search_match();
     }
 
     pub(crate) fn pop_playlist_search_char(&mut self) {
-        if !self.playlist_search_active {
-            return;
+        if self.playlist_search.pop_char() {
+            self.update_playlist_search_match();
         }
-        self.playlist_search_query.pop();
-        self.update_playlist_search_match();
     }
 
     pub(crate) fn sort_playlist_by(&mut self, key: PlaylistSortKey) {
@@ -7147,14 +7195,15 @@ impl MainWindowUiState {
     }
 
     fn update_playlist_search_match(&mut self) {
-        if self.playlist_search_query.is_empty() {
+        let query = self.playlist_search.query();
+        if query.is_empty() {
             return;
         }
         let total = self.app_state.playlist.len();
         if total == 0 {
             return;
         }
-        let query = self.playlist_search_query.to_lowercase();
+        let query = query.to_lowercase();
         let start = self
             .selected_playlist_index()
             .or_else(|| self.app_state.playlist.position())
