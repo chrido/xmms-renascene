@@ -89,13 +89,16 @@ without changing behaviour or breaking parity with the original C XMMS
   after the enums above shrink each group. Higher risk: borrow-checker churn
   where methods read `app_state` and a sub-state together. Big risk if done first.
 
-- [ ] **T8 — (Stretch / optional) Reducer-style event handling.**
+- [x] **T8 — (Stretch / optional) Reducer-style event handling.**
   Consider `state.handle(UiEvent) -> Vec<UiEffect>` (`Redraw`, `ResizeMain`,
   `SyncPanels`, `OpenFileDialog`, …) to replace the borrow-call-then-sync pattern
   in the GTK callbacks. Note this is *partly already present* via `UiAction`/
   `PanelAction`, and GTK-native effects (`begin_move`, `begin_resize`, window
   `present`) still need glue. Only pursue if T1–T7 land cleanly; high risk, mostly
   architectural payoff.
+  **Evaluated after T1–T7 and not implemented:** the existing `UiAction` and
+  `PanelAction` already provide the useful reducer seam, while the remaining
+  callbacks mostly perform GTK-native effects that must stay in GTK glue.
 
 ## Dropped / demoted from the original idea list
 
