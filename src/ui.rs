@@ -4625,6 +4625,90 @@ impl PlaylistSearch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainPointer {
+    Idle,
+    PressedButton { control: MainControl, inside: bool },
+    DraggingSlider { slider: MainSlider, offset: i32 },
+}
+
+impl Default for MainPointer {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl MainPointer {
+    fn pressed_control(self) -> Option<MainControl> {
+        match self {
+            Self::PressedButton {
+                control,
+                inside: true,
+            } => Some(control),
+            _ => None,
+        }
+    }
+
+    fn pressed_slider(self) -> Option<MainSlider> {
+        match self {
+            Self::DraggingSlider { slider, .. } => Some(slider),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EqualizerPointer {
+    Idle,
+    PressedControl {
+        control: EqualizerControl,
+        inside: bool,
+    },
+    DraggingSlider {
+        slider: EqualizerSlider,
+        offset: i32,
+    },
+}
+
+impl Default for EqualizerPointer {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl EqualizerPointer {
+    fn pressed_control(self) -> Option<EqualizerControl> {
+        match self {
+            Self::PressedControl {
+                control,
+                inside: true,
+            } => Some(control),
+            _ => None,
+        }
+    }
+
+    fn dragging_slider(self) -> Option<EqualizerSlider> {
+        match self {
+            Self::DraggingSlider { slider, .. } => Some(slider),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistPointer {
+    Idle,
+    DraggingEntry { index: usize, moved: bool },
+    DraggingScrollbar { offset: i32 },
+    Resizing { offset_y: i32 },
+}
+
+impl Default for PlaylistPointer {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MainControl {
     Push(MainPushButton),
     Toggle(MainToggleButton),
@@ -4714,10 +4798,7 @@ pub(crate) struct MainWindowUiState {
     equalizer_dragging_title: bool,
     equalizer_active: bool,
     equalizer_automatic: bool,
-    equalizer_pressed_control: Option<EqualizerControl>,
-    equalizer_pressed_inside: bool,
-    equalizer_dragging: Option<EqualizerSlider>,
-    equalizer_slider_press_offset: i32,
+    equalizer_pointer: EqualizerPointer,
     equalizer_preamp_position: i32,
     equalizer_band_positions: [i32; 10],
     equalizer_preset_dir: PathBuf,
@@ -4730,12 +4811,7 @@ pub(crate) struct MainWindowUiState {
     playlist_height: i32,
     playlist_menu: PlaylistMenu,
     playlist_scroll_offset: usize,
-    playlist_scrollbar_dragging: bool,
-    playlist_scrollbar_drag_offset: i32,
-    playlist_docked_resizing: bool,
-    playlist_resize_drag_offset_y: i32,
-    playlist_drag_index: Option<usize>,
-    playlist_drag_moved: bool,
+    playlist_pointer: PlaylistPointer,
     playlist_last_click: Option<(usize, Instant)>,
     playlist_pending_double_click: Option<usize>,
     playlist_search: PlaylistSearch,
@@ -4767,9 +4843,7 @@ pub(crate) struct MainWindowUiState {
     playback_position_ms: i64,
     visualization: Visualization,
     visualization_tick_counter: i32,
-    active: Option<MainControl>,
-    active_inside: bool,
-    slider_press_offset: i32,
+    main_pointer: MainPointer,
 }
 
 impl fmt::Debug for MainWindowUiState {
@@ -4814,10 +4888,7 @@ impl MainWindowUiState {
             equalizer_dragging_title: false,
             equalizer_active: true,
             equalizer_automatic: false,
-            equalizer_pressed_control: None,
-            equalizer_pressed_inside: false,
-            equalizer_dragging: None,
-            equalizer_slider_press_offset: 0,
+            equalizer_pointer: EqualizerPointer::default(),
             equalizer_preamp_position: 50,
             equalizer_band_positions: [50; 10],
             equalizer_preset_dir: default_config_dir().join("xmms-renascene"),
@@ -4830,12 +4901,7 @@ impl MainWindowUiState {
             playlist_height: PLAYLIST_DEFAULT_HEIGHT,
             playlist_menu: PlaylistMenu::default(),
             playlist_scroll_offset: 0,
-            playlist_scrollbar_dragging: false,
-            playlist_scrollbar_drag_offset: 0,
-            playlist_docked_resizing: false,
-            playlist_resize_drag_offset_y: 0,
-            playlist_drag_index: None,
-            playlist_drag_moved: false,
+            playlist_pointer: PlaylistPointer::default(),
             playlist_last_click: None,
             playlist_pending_double_click: None,
             playlist_search: PlaylistSearch::default(),
@@ -4867,9 +4933,7 @@ impl MainWindowUiState {
             playback_position_ms: 0,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
-            active: None,
-            active_inside: false,
-            slider_press_offset: 0,
+            main_pointer: MainPointer::default(),
         };
         state.apply_config_to_ui_state();
         state
@@ -5111,7 +5175,10 @@ impl MainWindowUiState {
         PlaylistRowsRenderState {
             entries,
             scroll_offset: self.playlist_scroll_offset,
-            scrollbar_dragging: self.playlist_scrollbar_dragging,
+            scrollbar_dragging: matches!(
+                self.playlist_pointer,
+                PlaylistPointer::DraggingScrollbar { .. }
+            ),
             search_query: self.playlist_search.active_query().map(str::to_owned),
             show_numbers: self.app_state.config.show_numbers_in_pl,
             font_family: self.app_state.config.playlist_font.clone(),
@@ -5156,7 +5223,7 @@ impl MainWindowUiState {
     }
 
     fn equalizer_drag_info_text(&self) -> Option<String> {
-        let slider = self.equalizer_dragging?;
+        let slider = self.equalizer_pointer.dragging_slider()?;
         let (label, position) = match slider {
             EqualizerSlider::Preamp => ("PREAMP", self.equalizer_preamp_position),
             EqualizerSlider::Band(0) => ("60HZ", self.equalizer_band_positions[0]),
@@ -5412,10 +5479,8 @@ impl MainWindowUiState {
             shaded: self.equalizer_shaded,
             active: self.equalizer_active,
             automatic: self.equalizer_automatic,
-            pressed_control: self
-                .equalizer_pressed_control
-                .filter(|_| self.equalizer_pressed_inside),
-            pressed_slider: self.equalizer_dragging,
+            pressed_control: self.equalizer_pointer.pressed_control(),
+            pressed_slider: self.equalizer_pointer.dragging_slider(),
             preamp_position: self.equalizer_preamp_position,
             band_positions: self.equalizer_band_positions,
             volume_position: volume_to_eq_shaded_position(self.app_state.player.volume()),
@@ -6605,29 +6670,34 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_presets_pressed(&self) -> bool {
-        self.equalizer_pressed_control == Some(EqualizerControl::Presets)
-            && self.equalizer_pressed_inside
+        self.equalizer_pointer.pressed_control() == Some(EqualizerControl::Presets)
     }
 
     pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
         if self.equalizer_shaded {
             if let Some(slider) = equalizer_shaded_slider_at(x, y) {
-                self.equalizer_dragging = Some(slider);
-                self.begin_equalizer_slider_drag(slider, x, y);
+                self.equalizer_pointer = EqualizerPointer::DraggingSlider {
+                    slider,
+                    offset: self.begin_equalizer_slider_drag(slider, x, y),
+                };
                 return true;
             }
             return false;
         }
 
         if let Some(control) = equalizer_control_at(x, y) {
-            self.equalizer_pressed_control = Some(control);
-            self.equalizer_pressed_inside = true;
+            self.equalizer_pointer = EqualizerPointer::PressedControl {
+                control,
+                inside: true,
+            };
             return true;
         }
 
         if let Some(slider) = equalizer_slider_at(x, y) {
-            self.equalizer_dragging = Some(slider);
-            self.begin_equalizer_slider_drag(slider, x, y);
+            self.equalizer_pointer = EqualizerPointer::DraggingSlider {
+                slider,
+                offset: self.begin_equalizer_slider_drag(slider, x, y),
+            };
             return true;
         }
 
@@ -6635,21 +6705,25 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_motion(&mut self, x: i32, y: i32) -> bool {
-        if let Some(control) = self.equalizer_pressed_control {
-            let inside = equalizer_control_at(x, y) == Some(control);
-            let changed = self.equalizer_pressed_inside != inside;
-            self.equalizer_pressed_inside = inside;
-            return changed;
+        match self.equalizer_pointer {
+            EqualizerPointer::Idle => false,
+            EqualizerPointer::PressedControl { control, inside } => {
+                let next_inside = equalizer_control_at(x, y) == Some(control);
+                let changed = inside != next_inside;
+                self.equalizer_pointer = EqualizerPointer::PressedControl {
+                    control,
+                    inside: next_inside,
+                };
+                changed
+            }
+            EqualizerPointer::DraggingSlider { slider, offset } => {
+                let coordinate = match slider {
+                    EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => x,
+                    EqualizerSlider::Preamp | EqualizerSlider::Band(_) => y,
+                };
+                self.set_equalizer_slider_position(slider, coordinate, offset)
+            }
         }
-
-        let Some(slider) = self.equalizer_dragging else {
-            return false;
-        };
-        let coordinate = match slider {
-            EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => x,
-            EqualizerSlider::Preamp | EqualizerSlider::Band(_) => y,
-        };
-        self.set_equalizer_slider_position(slider, coordinate)
     }
 
     pub(crate) fn equalizer_scroll(&mut self, x: i32, y: i32, dy: f64) -> bool {
@@ -6711,28 +6785,26 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
-        if let Some(control) = self.equalizer_pressed_control.take() {
-            let activated =
-                self.equalizer_pressed_inside && equalizer_control_at(x, y) == Some(control);
-            self.equalizer_pressed_inside = false;
-            if activated {
-                match control {
-                    EqualizerControl::On => {
-                        self.equalizer_active = !self.equalizer_active;
-                        self.sync_equalizer_to_backend();
+        match std::mem::take(&mut self.equalizer_pointer) {
+            EqualizerPointer::PressedControl { control, inside } => {
+                let activated = inside && equalizer_control_at(x, y) == Some(control);
+                if activated {
+                    match control {
+                        EqualizerControl::On => {
+                            self.equalizer_active = !self.equalizer_active;
+                            self.sync_equalizer_to_backend();
+                        }
+                        EqualizerControl::Auto => {
+                            self.equalizer_automatic = !self.equalizer_automatic
+                        }
+                        EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
                     }
-                    EqualizerControl::Auto => self.equalizer_automatic = !self.equalizer_automatic,
-                    EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
                 }
+                PanelAction::Changed
             }
-            return PanelAction::Changed;
+            EqualizerPointer::DraggingSlider { .. } => PanelAction::Changed,
+            EqualizerPointer::Idle => PanelAction::None,
         }
-
-        if self.equalizer_dragging.take().is_some() {
-            return PanelAction::Changed;
-        }
-
-        PanelAction::None
     }
 
     pub(crate) fn apply_equalizer_preset(&mut self, preset: i32) {
@@ -6762,13 +6834,16 @@ impl MainWindowUiState {
         self.sync_equalizer_to_backend();
     }
 
-    fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, coordinate: i32) -> bool {
+    fn set_equalizer_slider_position(
+        &mut self,
+        slider: EqualizerSlider,
+        coordinate: i32,
+        offset: i32,
+    ) -> bool {
         let changed = match slider {
             EqualizerSlider::Preamp => {
                 let position = eq_slider_pixel_to_position(
-                    coordinate
-                        - equalizer_slider_layout(slider).rect.y
-                        - self.equalizer_slider_press_offset,
+                    coordinate - equalizer_slider_layout(slider).rect.y - offset,
                 );
                 let changed = self.equalizer_preamp_position != position;
                 self.equalizer_preamp_position = position;
@@ -6776,9 +6851,7 @@ impl MainWindowUiState {
             }
             EqualizerSlider::Band(band) => {
                 let position = eq_slider_pixel_to_position(
-                    coordinate
-                        - equalizer_slider_layout(slider).rect.y
-                        - self.equalizer_slider_press_offset,
+                    coordinate - equalizer_slider_layout(slider).rect.y - offset,
                 );
                 let Some(value) = self.equalizer_band_positions.get_mut(band) else {
                     return false;
@@ -6788,20 +6861,16 @@ impl MainWindowUiState {
                 changed
             }
             EqualizerSlider::ShadedVolume => {
-                let position = (coordinate
-                    - equalizer_slider_layout(slider).rect.x
-                    - self.equalizer_slider_press_offset)
-                    .clamp(0, 94);
+                let position =
+                    (coordinate - equalizer_slider_layout(slider).rect.x - offset).clamp(0, 94);
                 let volume = eq_shaded_position_to_volume(position);
                 let changed = self.app_state.player.volume() != volume;
                 self.app_state.player.set_volume(volume);
                 changed
             }
             EqualizerSlider::ShadedBalance => {
-                let position = (coordinate
-                    - equalizer_slider_layout(slider).rect.x
-                    - self.equalizer_slider_press_offset)
-                    .clamp(0, 39);
+                let position =
+                    (coordinate - equalizer_slider_layout(slider).rect.x - offset).clamp(0, 39);
                 let balance = eq_shaded_position_to_balance(position);
                 let changed = self.app_state.player.balance() != balance;
                 self.app_state.player.set_balance(balance);
@@ -6832,27 +6901,29 @@ impl MainWindowUiState {
         changed
     }
 
-    fn begin_equalizer_slider_drag(&mut self, slider: EqualizerSlider, x: i32, y: i32) {
+    fn begin_equalizer_slider_drag(&mut self, slider: EqualizerSlider, x: i32, y: i32) -> i32 {
         let layout = equalizer_slider_layout(slider);
         match slider {
             EqualizerSlider::Preamp | EqualizerSlider::Band(_) => {
                 let position = self.equalizer_slider_pixel_position(slider);
                 let local_y = y - layout.rect.y;
                 if local_y >= position && local_y < position + 11 {
-                    self.equalizer_slider_press_offset = local_y - position;
+                    local_y - position
                 } else {
-                    self.equalizer_slider_press_offset = 5;
-                    self.set_equalizer_slider_position(slider, y);
+                    let offset = 5;
+                    self.set_equalizer_slider_position(slider, y, offset);
+                    offset
                 }
             }
             EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => {
                 let position = self.equalizer_slider_pixel_position(slider);
                 let local_x = x - layout.rect.x;
                 if local_x >= position && local_x < position + layout.knob_size.width {
-                    self.equalizer_slider_press_offset = local_x - position;
+                    local_x - position
                 } else {
-                    self.equalizer_slider_press_offset = layout.knob_size.width / 2;
-                    self.set_equalizer_slider_position(slider, x);
+                    let offset = layout.knob_size.width / 2;
+                    self.set_equalizer_slider_position(slider, x, offset);
+                    offset
                 }
             }
         }
@@ -6911,31 +6982,34 @@ impl MainWindowUiState {
         if !self.playlist_resize_region(self.playlist_width - 1, local_y) {
             return false;
         }
-        self.playlist_docked_resizing = true;
-        self.playlist_resize_drag_offset_y = self.playlist_height - local_y;
+        self.playlist_pointer = PlaylistPointer::Resizing {
+            offset_y: self.playlist_height - local_y,
+        };
         true
     }
 
     pub(crate) fn docked_playlist_resize_motion(&mut self, main_y: i32) -> bool {
-        if !self.playlist_docked_resizing {
+        let PlaylistPointer::Resizing { offset_y } = self.playlist_pointer else {
             return false;
-        }
+        };
         let Some(local_y) = self.docked_playlist_local_y(main_y) else {
             return false;
         };
-        let height = local_y + self.playlist_resize_drag_offset_y;
+        let height = local_y + offset_y;
         self.set_playlist_size(PLAYLIST_MIN_WIDTH, height)
     }
 
     pub(crate) fn end_docked_playlist_resize(&mut self) -> bool {
-        let was_resizing = self.playlist_docked_resizing;
-        self.playlist_docked_resizing = false;
-        self.playlist_resize_drag_offset_y = 0;
-        was_resizing
+        if matches!(self.playlist_pointer, PlaylistPointer::Resizing { .. }) {
+            self.playlist_pointer = PlaylistPointer::Idle;
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn is_docked_playlist_resizing(&self) -> bool {
-        self.playlist_docked_resizing
+        matches!(self.playlist_pointer, PlaylistPointer::Resizing { .. })
     }
 
     pub(crate) fn playlist_scrollbar_press(&mut self, x: i32, y: i32) -> bool {
@@ -6945,31 +7019,36 @@ impl MainWindowUiState {
         if !self.playlist_scrollbar_region(x, y) {
             return false;
         }
-        self.playlist_scrollbar_dragging = true;
-        self.playlist_scrollbar_drag_offset = if y >= thumb_y && y < thumb_y + thumb_h {
+        let offset = if y >= thumb_y && y < thumb_y + thumb_h {
             y - thumb_y
         } else {
             thumb_h / 2
         };
-        self.update_playlist_scroll_from_thumb_y(y - self.playlist_scrollbar_drag_offset);
+        self.playlist_pointer = PlaylistPointer::DraggingScrollbar { offset };
+        self.update_playlist_scroll_from_thumb_y(y - offset);
         true
     }
 
     pub(crate) fn playlist_scrollbar_motion(&mut self, x: i32, y: i32) -> bool {
-        if !self.playlist_scrollbar_dragging {
+        let PlaylistPointer::DraggingScrollbar { offset } = self.playlist_pointer else {
             return false;
-        }
+        };
         let old = self.playlist_scroll_offset;
         let _ = x;
-        self.update_playlist_scroll_from_thumb_y(y - self.playlist_scrollbar_drag_offset);
+        self.update_playlist_scroll_from_thumb_y(y - offset);
         old != self.playlist_scroll_offset
     }
 
     pub(crate) fn playlist_scrollbar_release(&mut self) -> bool {
-        let was_dragging = self.playlist_scrollbar_dragging;
-        self.playlist_scrollbar_dragging = false;
-        self.playlist_scrollbar_drag_offset = 0;
-        was_dragging
+        if matches!(
+            self.playlist_pointer,
+            PlaylistPointer::DraggingScrollbar { .. }
+        ) {
+            self.playlist_pointer = PlaylistPointer::Idle;
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn playlist_scroll(&mut self, dy: f64) -> bool {
@@ -7017,8 +7096,7 @@ impl MainWindowUiState {
             }
             self.playlist_last_click = None;
             self.playlist_pending_double_click = None;
-            self.playlist_drag_index = None;
-            self.playlist_drag_moved = false;
+            self.playlist_pointer = PlaylistPointer::Idle;
             return true;
         }
 
@@ -7031,9 +7109,11 @@ impl MainWindowUiState {
 
         self.playlist_last_click = Some((index, now));
         self.playlist_pending_double_click = is_double_click.then_some(index);
-        self.playlist_drag_moved = false;
         self.select_single_playlist_entry(index);
-        self.playlist_drag_index = Some(index);
+        self.playlist_pointer = PlaylistPointer::DraggingEntry {
+            index,
+            moved: false,
+        };
         true
     }
 
@@ -7052,21 +7132,22 @@ impl MainWindowUiState {
         self.select_single_playlist_entry(index);
         self.playlist_last_click = None;
         self.playlist_pending_double_click = None;
-        self.playlist_drag_index = None;
-        self.playlist_drag_moved = false;
+        self.playlist_pointer = PlaylistPointer::Idle;
         self.app_state.playlist.set_position(index);
         self.start_current_playlist_playback_from_beginning();
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
-        if let Some(from) = self.playlist_drag_index {
+        if let PlaylistPointer::DraggingEntry { index: from, .. } = self.playlist_pointer {
             let Some(to) = self.playlist_entry_at(x, y) else {
                 return false;
             };
             if self.app_state.playlist.move_entry(from, to) {
-                self.playlist_drag_moved = true;
                 self.playlist_pending_double_click = None;
-                self.playlist_drag_index = Some(to);
+                self.playlist_pointer = PlaylistPointer::DraggingEntry {
+                    index: to,
+                    moved: true,
+                };
                 self.scroll_playlist_entry_into_view(to);
                 return true;
             }
@@ -7081,16 +7162,16 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_entry_release(&mut self) -> bool {
-        let was_pressed = self.playlist_drag_index.take().is_some();
-        if was_pressed {
-            if let Some(index) = self.playlist_pending_double_click.take() {
-                if !self.playlist_drag_moved {
-                    self.activate_playlist_entry(index);
-                }
+        let PlaylistPointer::DraggingEntry { moved, .. } = self.playlist_pointer else {
+            return false;
+        };
+        self.playlist_pointer = PlaylistPointer::Idle;
+        if let Some(index) = self.playlist_pending_double_click.take() {
+            if !moved {
+                self.activate_playlist_entry(index);
             }
         }
-        self.playlist_drag_moved = false;
-        was_pressed
+        true
     }
 
     pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
@@ -7418,7 +7499,9 @@ impl MainWindowUiState {
     pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> PanelAction {
         if kind == PanelKind::Playlist {
             self.playlist_menu.close();
-            self.playlist_drag_index = None;
+            if matches!(self.playlist_pointer, PlaylistPointer::DraggingEntry { .. }) {
+                self.playlist_pointer = PlaylistPointer::Idle;
+            }
         }
 
         if self.panel_title_button_hit(kind, x, y) {
@@ -8105,63 +8188,59 @@ impl MainWindowUiState {
 
     pub(crate) fn press(&mut self, x: i32, y: i32) {
         let Some(control) = self.hit_test(x, y) else {
-            self.active = None;
-            self.active_inside = false;
+            self.main_pointer = MainPointer::Idle;
             return;
         };
-        self.active = Some(control);
-        self.active_inside = true;
 
-        if let MainControl::Slider(slider) = control {
-            self.begin_slider_drag(slider, x);
-        }
+        self.main_pointer = if let MainControl::Slider(slider) = control {
+            MainPointer::DraggingSlider {
+                slider,
+                offset: self.begin_slider_drag(slider, x),
+            }
+        } else {
+            MainPointer::PressedButton {
+                control,
+                inside: true,
+            }
+        };
     }
 
     pub(crate) fn motion(&mut self, x: i32, y: i32) -> bool {
-        let Some(active) = self.active else {
-            return false;
-        };
-
-        match active {
-            MainControl::Push(_) | MainControl::Toggle(_) => {
-                let inside = self.control_rect(active).contains(x, y);
-                let changed = self.active_inside != inside;
-                self.active_inside = inside;
+        match self.main_pointer {
+            MainPointer::Idle => false,
+            MainPointer::PressedButton { control, inside } => {
+                let next_inside = self.control_rect(control).contains(x, y);
+                let changed = inside != next_inside;
+                self.main_pointer = MainPointer::PressedButton {
+                    control,
+                    inside: next_inside,
+                };
                 changed
             }
-            MainControl::Slider(slider) => {
-                self.active_inside = self.control_rect(active).contains(x, y);
-                self.set_slider_position(
-                    slider,
-                    x - self.slider_rect(slider).x - self.slider_press_offset,
-                )
+            MainPointer::DraggingSlider { slider, offset } => {
+                self.set_slider_position(slider, x - self.slider_rect(slider).x - offset)
             }
         }
     }
 
     pub(crate) fn release(&mut self, x: i32, y: i32) -> UiAction {
-        let Some(active) = self.active.take() else {
-            self.active_inside = false;
-            return UiAction::None;
-        };
-
-        let activated = self.control_rect(active).contains(x, y) && self.active_inside;
-        self.active_inside = false;
-
-        match active {
-            MainControl::Push(button) if activated => self.activate_push(button),
-            MainControl::Toggle(toggle) if activated => {
-                self.activate_toggle(toggle);
+        match std::mem::take(&mut self.main_pointer) {
+            MainPointer::Idle => UiAction::None,
+            MainPointer::PressedButton { control, inside } => {
+                let activated = inside && self.control_rect(control).contains(x, y);
+                match control {
+                    MainControl::Push(button) if activated => self.activate_push(button),
+                    MainControl::Toggle(toggle) if activated => {
+                        self.activate_toggle(toggle);
+                        UiAction::None
+                    }
+                    _ => UiAction::None,
+                }
+            }
+            MainPointer::DraggingSlider { slider, offset } => {
+                self.set_slider_position(slider, x - self.slider_rect(slider).x - offset);
                 UiAction::None
             }
-            MainControl::Slider(slider) => {
-                self.set_slider_position(
-                    slider,
-                    x - self.slider_rect(slider).x - self.slider_press_offset,
-                );
-                UiAction::None
-            }
-            _ => UiAction::None,
         }
     }
 
@@ -8349,16 +8428,17 @@ impl MainWindowUiState {
         }
     }
 
-    fn begin_slider_drag(&mut self, slider: MainSlider, x: i32) {
+    fn begin_slider_drag(&mut self, slider: MainSlider, x: i32) -> i32 {
         let rect = self.slider_rect(slider);
         let knob_width = self.slider_knob_width(slider);
         let position = self.slider_position(slider);
         let knob_x = rect.x + position;
         if x >= knob_x && x < knob_x + knob_width {
-            self.slider_press_offset = x - knob_x;
+            x - knob_x
         } else {
-            self.slider_press_offset = knob_width / 2;
-            self.set_slider_position(slider, x - rect.x - self.slider_press_offset);
+            let offset = knob_width / 2;
+            self.set_slider_position(slider, x - rect.x - offset);
+            offset
         }
     }
 
@@ -8427,24 +8507,21 @@ impl MainWindowUiState {
     }
 
     fn pressed_push(&self) -> Option<MainPushButton> {
-        match (self.active, self.active_inside) {
-            (Some(MainControl::Push(button)), true) => Some(button),
+        match self.main_pointer.pressed_control() {
+            Some(MainControl::Push(button)) => Some(button),
             _ => None,
         }
     }
 
     fn pressed_toggle(&self) -> Option<MainToggleButton> {
-        match (self.active, self.active_inside) {
-            (Some(MainControl::Toggle(toggle)), true) => Some(toggle),
+        match self.main_pointer.pressed_control() {
+            Some(MainControl::Toggle(toggle)) => Some(toggle),
             _ => None,
         }
     }
 
     fn pressed_slider(&self) -> Option<MainSlider> {
-        match self.active {
-            Some(MainControl::Slider(slider)) => Some(slider),
-            _ => None,
-        }
+        self.main_pointer.pressed_slider()
     }
 
     fn control_rect(&self, control: MainControl) -> ControlRect {

@@ -43,7 +43,7 @@ without changing behaviour or breaking parity with the original C XMMS
   `PlaylistUiState::rows_render_state()` (+ frame helper) and call it from both.
   Pure dedup, no behaviour change. Low risk.
 
-- [ ] **T4 — Pointer interaction state machines.**
+- [x] **T4 — Pointer interaction state machines.**
   Replace boolean/offset bags with explicit, mutually-exclusive enums:
   - Main: `active: Option<MainControl>` + `active_inside` + `slider_press_offset`
     → `MainPointer::{Idle, PressedButton { control, inside },
