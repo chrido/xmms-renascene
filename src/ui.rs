@@ -4777,6 +4777,65 @@ enum PlaybackTransitionState {
 }
 
 impl PlaybackTransitionState {
+    fn stopped_at_or_idle(position_ms: i64) -> Self {
+        if position_ms > 0 {
+            Self::StoppedAt(position_ms)
+        } else {
+            Self::Idle
+        }
+    }
+
+    fn start_playback() -> Self {
+        Self::Idle
+    }
+
+    fn stop_playback() -> Self {
+        Self::Idle
+    }
+
+    fn request_backend_seek(position_ms: i64) -> Self {
+        Self::PendingBackendSeek(position_ms)
+    }
+
+    fn start_fadeout(start_volume: i32) -> Self {
+        Self::FadingOut {
+            remaining_ms: STOP_FADE_DURATION_MS,
+            start_volume,
+        }
+    }
+
+    fn tick_fadeout(self, elapsed_ms: u32) -> Option<(Self, i32)> {
+        let (remaining_ms, start_volume) = self.fadeout()?;
+        let remaining_ms = (remaining_ms - i64::from(elapsed_ms)).max(0);
+        let volume =
+            ((i64::from(start_volume) * remaining_ms) / STOP_FADE_DURATION_MS).clamp(0, 100) as i32;
+        Some((
+            Self::FadingOut {
+                remaining_ms,
+                start_volume,
+            },
+            volume,
+        ))
+    }
+
+    fn wait_between_songs(remaining_ms: i64) -> Self {
+        Self::WaitingBetweenSongs { remaining_ms }
+    }
+
+    fn tick_eof_pause(self, elapsed_ms: u32) -> Option<(Self, bool)> {
+        let remaining = self.eof_pause_remaining_ms()? - i64::from(elapsed_ms);
+        if remaining > 0 {
+            Some((
+                Self::WaitingBetweenSongs {
+                    remaining_ms: remaining,
+                },
+                false,
+            ))
+        } else {
+            Some((Self::Idle, true))
+        }
+    }
+
     fn eof_pause_remaining_ms(self) -> Option<i64> {
         match self {
             PlaybackTransitionState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
@@ -5717,11 +5776,8 @@ impl MainWindowUiState {
         self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
         self.equalizer_band_positions = self.app_state.config.equalizer_band_pos;
         self.playback_position_ms = self.app_state.config.playback_position_ms.max(0);
-        self.playback_transition = if self.playback_position_ms > 0 {
-            PlaybackTransitionState::StoppedAt(self.playback_position_ms)
-        } else {
-            PlaybackTransitionState::Idle
-        };
+        self.playback_transition =
+            PlaybackTransitionState::stopped_at_or_idle(self.playback_position_ms);
         self.position_position = self.position_slider_position();
         self.apply_visualization_preferences();
     }
@@ -6175,7 +6231,7 @@ impl MainWindowUiState {
     }
 
     fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
-        self.playback_transition = PlaybackTransitionState::Idle;
+        self.playback_transition = PlaybackTransitionState::start_playback();
         self.set_runtime_volume(self.app_state.config.volume);
         if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
             self.app_state.playlist.set_position(0);
@@ -6200,7 +6256,7 @@ impl MainWindowUiState {
             }
             if self.playback_position_ms > 0 {
                 self.playback_transition =
-                    PlaybackTransitionState::PendingBackendSeek(self.playback_position_ms);
+                    PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
             }
         }
         self.app_state.player.mark_playing();
@@ -6335,7 +6391,7 @@ impl MainWindowUiState {
     }
 
     fn stop_playback(&mut self) {
-        self.playback_transition = PlaybackTransitionState::Idle;
+        self.playback_transition = PlaybackTransitionState::stop_playback();
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().stop() {
                 eprintln!("xmms-rs: failed to stop playback: {err}");
@@ -6367,10 +6423,7 @@ impl MainWindowUiState {
             self.set_runtime_volume(self.app_state.config.volume);
             return;
         }
-        self.playback_transition = PlaybackTransitionState::FadingOut {
-            remaining_ms: STOP_FADE_DURATION_MS,
-            start_volume,
-        };
+        self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
     }
 
     fn set_runtime_volume(&mut self, volume: i32) {
@@ -7751,7 +7804,7 @@ impl MainWindowUiState {
     pub(crate) fn set_preference_pause_between_songs(&mut self, enabled: bool) {
         self.app_state.config.pause_between_songs = enabled;
         if !enabled {
-            self.playback_transition = PlaybackTransitionState::Idle;
+            self.playback_transition = PlaybackTransitionState::stop_playback();
         }
         self.mark_preferences_saved();
     }
@@ -8028,16 +8081,13 @@ impl MainWindowUiState {
             };
         self.position_position = self.position_slider_position();
         if self.app_state.player.state() == PlayerState::Stopped {
-            self.playback_transition = if self.playback_position_ms > 0 {
-                PlaybackTransitionState::StoppedAt(self.playback_position_ms)
-            } else {
-                PlaybackTransitionState::Idle
-            };
+            self.playback_transition =
+                PlaybackTransitionState::stopped_at_or_idle(self.playback_position_ms);
             return;
         }
         if self.playback_transition.pending_backend_seek_ms().is_some() {
             self.playback_transition =
-                PlaybackTransitionState::PendingBackendSeek(self.playback_position_ms);
+                PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
             return;
         }
         if let Some(backend) = &self.playback_backend {
@@ -8077,38 +8127,34 @@ impl MainWindowUiState {
     }
 
     fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
-        let Some((remaining_ms, start_volume)) = self.playback_transition.fadeout() else {
+        let Some((next_transition, volume)) = self.playback_transition.tick_fadeout(elapsed_ms)
+        else {
             return false;
         };
-        let remaining_ms = (remaining_ms - i64::from(elapsed_ms)).max(0);
-        if remaining_ms == 0 {
+        if next_transition
+            .fadeout()
+            .is_some_and(|(remaining_ms, _)| remaining_ms == 0)
+        {
             let restore_volume = self.app_state.config.volume;
             self.stop_playback();
             self.set_runtime_volume(restore_volume);
             return true;
         }
-        self.playback_transition = PlaybackTransitionState::FadingOut {
-            remaining_ms,
-            start_volume,
-        };
-        let volume =
-            ((i64::from(start_volume) * remaining_ms) / STOP_FADE_DURATION_MS).clamp(0, 100) as i32;
+        self.playback_transition = next_transition;
         self.set_runtime_volume(volume);
         true
     }
 
     fn update_pending_eof_advance(&mut self, elapsed_ms: u32) -> bool {
-        let Some(remaining) = self.playback_transition.eof_pause_remaining_ms() else {
+        let Some((next_transition, should_advance)) =
+            self.playback_transition.tick_eof_pause(elapsed_ms)
+        else {
             return false;
         };
-        let remaining = remaining - i64::from(elapsed_ms);
-        if remaining > 0 {
-            self.playback_transition = PlaybackTransitionState::WaitingBetweenSongs {
-                remaining_ms: remaining,
-            };
+        self.playback_transition = next_transition;
+        if !should_advance {
             return true;
         }
-        self.playback_transition = PlaybackTransitionState::Idle;
         self.advance_playlist_after_eof();
         true
     }
@@ -8197,9 +8243,9 @@ impl MainWindowUiState {
         if self.app_state.config.pause_between_songs
             && self.app_state.config.pause_between_songs_time > 0
         {
-            self.playback_transition = PlaybackTransitionState::WaitingBetweenSongs {
-                remaining_ms: i64::from(self.app_state.config.pause_between_songs_time) * 1_000,
-            };
+            self.playback_transition = PlaybackTransitionState::wait_between_songs(
+                i64::from(self.app_state.config.pause_between_songs_time) * 1_000,
+            );
             self.playback_position_ms = 0;
             return;
         }

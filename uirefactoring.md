@@ -71,7 +71,7 @@ without changing behaviour or breaking parity with the original C XMMS
   mirroring. Reuse the existing good `PanelState::{Hidden,Docked,Detached}` enum
   for queries. Medium risk: touches config round-trip + several tests.
 
-- [ ] **T6 — Encapsulate playback transitions as methods.**
+- [x] **T6 — Encapsulate playback transitions as methods.**
   `PlaybackTransitionState` is already an enum but is assigned in ~14 scattered
   sites (ui.rs 5508/5968/5992/6128/6160/7550/7825/7833/7884/7900/7905/7976/
   7982/7994). Give it transition methods (`on_play`, `on_stop`, `on_tick`,
