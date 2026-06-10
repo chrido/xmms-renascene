@@ -144,7 +144,14 @@ mod tests {
 
             let mut scaled = ImageSurface::create(Format::ARgb32, dev_w, dev_h).unwrap();
             let cr = Context::new(&scaled).unwrap();
-            render_scaled(&cr, dev_w, dev_h, base_w, base_h, render).unwrap();
+            render_scaled(&cr, dev_w, dev_h, base_w, base_h, |c, pass| {
+                if pass.is_bitmap() {
+                    render(c)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
             drop(cr);
             scaled.flush();
 

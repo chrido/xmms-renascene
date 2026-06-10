@@ -1,6 +1,8 @@
 use cairo::Context;
 
-use super::core::{blit_surface_rect, render_text, set_rgb, surface_from_xpm, RenderError};
+use super::core::{
+    blit_surface_rect, render_text, set_rgb, surface_from_xpm, RenderError, RenderPass,
+};
 use crate::skin::layout::{
     playlist_window_height, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
     PLAYLIST_WIDTH_STEP,
@@ -188,6 +190,7 @@ pub fn render_playlist_rows(
     cr: &Context,
     skin: &DefaultSkin,
     state: &PlaylistRowsRenderState,
+    pass: RenderPass,
 ) -> Result<bool, RenderError> {
     let width = state.width.max(PLAYLIST_MIN_WIDTH);
     let height = state.height.max(PLAYLIST_MIN_HEIGHT);
@@ -198,32 +201,41 @@ pub fn render_playlist_rows(
     let entry_h = 11;
     let colors = skin.playlist_colors();
 
-    set_rgb(cr, colors.normal_bg);
-    cr.rectangle(
-        f64::from(list_x),
-        f64::from(list_y),
-        f64::from(list_w),
-        f64::from(list_h),
-    );
-    cr.fill()?;
+    if pass.is_bitmap() {
+        set_rgb(cr, colors.normal_bg);
+        cr.rectangle(
+            f64::from(list_x),
+            f64::from(list_y),
+            f64::from(list_w),
+            f64::from(list_h),
+        );
+        cr.fill()?;
+    }
 
-    set_playlist_font(cr, &state.font_family);
-    let baseline = cr.font_extents()?.ascent().ceil() as i32;
     let visible = (list_h / entry_h).max(0) as usize;
+    let baseline = if pass.is_text() {
+        set_playlist_font(cr, &state.font_family);
+        cr.font_extents()?.ascent().ceil() as i32
+    } else {
+        0
+    };
     for row in 0..visible {
         let Some(entry) = state.entries.get(row + state.scroll_offset) else {
             break;
         };
         let y = list_y + row as i32 * entry_h;
-        if entry.selected {
-            set_rgb(cr, colors.selected_bg);
-            cr.rectangle(
-                f64::from(list_x),
-                f64::from(y),
-                f64::from(list_w),
-                f64::from(entry_h),
-            );
-            cr.fill()?;
+        if pass.is_bitmap() {
+            if entry.selected {
+                set_rgb(cr, colors.selected_bg);
+                cr.rectangle(
+                    f64::from(list_x),
+                    f64::from(y),
+                    f64::from(list_w),
+                    f64::from(entry_h),
+                );
+                cr.fill()?;
+            }
+            continue;
         }
 
         if entry.current {
@@ -253,26 +265,28 @@ pub fn render_playlist_rows(
         cr.show_text(&title)?;
     }
 
-    if let Some((thumb_y, thumb_h)) =
-        playlist_scrollbar_geometry(state.entries.len(), visible, state.scroll_offset, height)
-    {
-        if let Some(pledit) = skin.get(SkinPixmapKind::PlEdit) {
-            let pledit = surface_from_xpm(pledit)?;
-            blit_surface_rect(
-                cr,
-                &pledit,
-                if state.scrollbar_dragging { 52 } else { 61 },
-                53,
-                width - 15,
-                thumb_y,
-                8,
-                thumb_h,
-            )?;
+    if pass.is_bitmap() {
+        if let Some((thumb_y, thumb_h)) =
+            playlist_scrollbar_geometry(state.entries.len(), visible, state.scroll_offset, height)
+        {
+            if let Some(pledit) = skin.get(SkinPixmapKind::PlEdit) {
+                let pledit = surface_from_xpm(pledit)?;
+                blit_surface_rect(
+                    cr,
+                    &pledit,
+                    if state.scrollbar_dragging { 52 } else { 61 },
+                    53,
+                    width - 15,
+                    thumb_y,
+                    8,
+                    thumb_h,
+                )?;
+            }
         }
     }
 
     if let Some(query) = state.search_query.as_ref() {
-        draw_playlist_search(cr, colors, query, width, height)?;
+        draw_playlist_search(cr, colors, query, width, height, pass)?;
     }
 
     Ok(true)
@@ -284,24 +298,28 @@ fn draw_playlist_search(
     query: &str,
     width: i32,
     height: i32,
+    pass: RenderPass,
 ) -> Result<(), RenderError> {
     let x = 12;
     let y = height - 48;
     let w = width - 31;
     let h = 14;
 
-    set_rgb(cr, colors.normal_bg);
-    cr.rectangle(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
-    cr.fill()?;
+    if pass.is_bitmap() {
+        set_rgb(cr, colors.normal_bg);
+        cr.rectangle(f64::from(x), f64::from(y), f64::from(w), f64::from(h));
+        cr.fill()?;
 
-    set_rgb(cr, colors.selected_bg);
-    cr.rectangle(
-        f64::from(x) + 0.5,
-        f64::from(y) + 0.5,
-        f64::from(w - 1),
-        f64::from(h - 1),
-    );
-    cr.stroke()?;
+        set_rgb(cr, colors.selected_bg);
+        cr.rectangle(
+            f64::from(x) + 0.5,
+            f64::from(y) + 0.5,
+            f64::from(w - 1),
+            f64::from(h - 1),
+        );
+        cr.stroke()?;
+        return Ok(());
+    }
 
     set_playlist_font(cr, "Helvetica");
     set_rgb(cr, colors.normal);

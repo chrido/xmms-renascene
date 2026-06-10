@@ -29,14 +29,15 @@ use crate::player::{
 };
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    docked_panel_size, equalizer_window_height, main_window_height, playlist_window_height,
-    render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
-    render_playlist_rows, render_scaled, scale_dim, DockedPanelState, EqualizerControl,
-    EqualizerRenderState, MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState,
-    PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    docked_panel_size, equalizer_window_height, main_window_height, paint_scaled,
+    playlist_window_height, render_equalizer_state, render_main_player_state,
+    render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
+    DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
+    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
+    PlaylistRowRenderEntry, PlaylistRowsRenderState, RenderPass, VisualizationRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
@@ -143,7 +144,9 @@ pub fn write_player_screenshot(options: PreviewOptions, path: &Path) -> Result<(
         .map_err(|err| format!("failed to create screenshot surface: {err}"))?;
     let cr = cairo::Context::new(&surface)
         .map_err(|err| format!("failed to create screenshot context: {err}"))?;
-    render_docked_ui_state(&cr, state.active_skin(), &state)
+    render_docked_ui_state(&cr, state.active_skin(), &state, RenderPass::Bitmap)
+        .map_err(|err| format!("failed to render screenshot: {err}"))?;
+    render_docked_ui_state(&cr, state.active_skin(), &state, RenderPass::Text)
         .map_err(|err| format!("failed to render screenshot: {err}"))?;
     drop(cr);
     write_surface_png(&mut surface, path)
@@ -282,9 +285,11 @@ fn build_preview_window(
             let state = main_state.borrow();
             let docked_state = state.docked_panel_state();
             let (base_width, base_height) = docked_panel_size(docked_state);
-            if let Err(err) = render_scaled(cr, width, height, base_width, base_height, |cr| {
-                render_docked_ui_state(cr, state.active_skin(), &state).map(|_| ())
-            }) {
+            if let Err(err) =
+                render_scaled(cr, width, height, base_width, base_height, |cr, pass| {
+                    render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
+                })
+            {
                 eprintln!("xmms-rs: failed to render main-window preview: {err}");
             }
         });
@@ -1090,52 +1095,63 @@ fn render_docked_ui_state(
     cr: &gtk::cairo::Context,
     skin: &DefaultSkin,
     state: &MainWindowUiState,
+    pass: RenderPass,
 ) -> Result<bool, crate::render::RenderError> {
     let mut y = 0;
-    let mut rendered = render_main_player_state(cr, skin, &state.render_state())?;
+    let mut rendered = false;
+    if pass.is_bitmap() {
+        rendered |= render_main_player_state(cr, skin, &state.render_state())?;
+    }
     y += main_window_height(state.shaded);
 
     if state.panel_state(PanelKind::Equalizer).is_docked_visible() {
-        cr.save()?;
-        cr.translate(0.0, f64::from(y));
-        rendered |= render_equalizer_state(cr, skin, &state.equalizer_render_state())?;
-        cr.restore()?;
+        if pass.is_bitmap() {
+            cr.save()?;
+            cr.translate(0.0, f64::from(y));
+            rendered |= render_equalizer_state(cr, skin, &state.equalizer_render_state())?;
+            cr.restore()?;
+        }
         y += equalizer_window_height(state.equalizer.panel.shaded);
     }
 
     if state.panel_state(PanelKind::Playlist).is_docked_visible() {
         cr.save()?;
         cr.translate(0.0, f64::from(y));
-        rendered |= render_playlist_frame(
-            cr,
-            skin,
-            state.playlist_ui.panel.focused(),
-            state.playlist_ui.panel.shaded,
-            state.playlist_ui.width,
-            state.playlist_ui.height,
-            Some(&state.shaded_playlist_info()),
-            Some(&state.playlist_footer_info()),
-            Some(&state.playlist_footer_time_min_text()),
-            Some(&state.playlist_footer_time_sec_text()),
-        )?;
-        if !state.playlist_ui.panel.shaded {
-            let row_state = state.playlist_rows_render_state();
-            rendered |= render_playlist_rows(cr, skin, &row_state)?;
-        }
-        if let Some(menu) = state.playlist_menu() {
-            let (x, y, _, _) =
-                playlist_menu_rect(menu, state.playlist_ui.width, state.playlist_ui.height);
-            cr.save()?;
-            cr.translate(f64::from(x), f64::from(y));
-            rendered |= render_playlist_menu(
+        if pass.is_bitmap() {
+            rendered |= render_playlist_frame(
                 cr,
                 skin,
-                PlaylistMenuRenderState {
-                    kind: menu.render_kind(),
-                    hover: state.playlist_menu_hover(),
-                },
+                state.playlist_ui.panel.focused(),
+                state.playlist_ui.panel.shaded,
+                state.playlist_ui.width,
+                state.playlist_ui.height,
+                Some(&state.shaded_playlist_info()),
+                Some(&state.playlist_footer_info()),
+                Some(&state.playlist_footer_time_min_text()),
+                Some(&state.playlist_footer_time_sec_text()),
             )?;
-            cr.restore()?;
+        }
+        if !state.playlist_ui.panel.shaded {
+            let row_state = state.playlist_rows_render_state();
+            rendered |= render_playlist_rows(cr, skin, &row_state, pass)?;
+        }
+        if pass.is_text() {
+            if let Some(menu) = state.playlist_menu() {
+                let (x, y, w, h) =
+                    playlist_menu_rect(menu, state.playlist_ui.width, state.playlist_ui.height);
+                paint_scaled(cr, x, y, w, h, |menu_cr| {
+                    render_playlist_menu(
+                        menu_cr,
+                        skin,
+                        PlaylistMenuRenderState {
+                            kind: menu.render_kind(),
+                            hover: state.playlist_menu_hover(),
+                        },
+                    )
+                    .map(|_| ())
+                })?;
+                rendered = true;
+            }
         }
         cr.restore()?;
     }
@@ -1327,7 +1343,13 @@ fn build_equalizer_window(
             height,
             EQUALIZER_WINDOW_WIDTH,
             base_height,
-            |cr| render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ()),
+            |cr, pass| {
+                if pass.is_bitmap() {
+                    render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
+                } else {
+                    Ok(())
+                }
+            },
         ) {
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
@@ -1381,36 +1403,47 @@ fn build_playlist_window(
         } else {
             playlist_height
         };
-        if let Err(err) = render_scaled(cr, width, height, playlist_width, base_height, |cr| {
-            render_playlist_frame(
-                cr,
-                skin,
-                focused,
-                shaded,
-                playlist_width,
-                playlist_height,
-                Some(&state.shaded_playlist_info()),
-                Some(&state.playlist_footer_info()),
-                Some(&state.playlist_footer_time_min_text()),
-                Some(&state.playlist_footer_time_sec_text()),
-            )?;
-            if !shaded {
-                let row_state = state.playlist_rows_render_state();
-                render_playlist_rows(cr, skin, &row_state)?;
-            }
-            if let Some(menu) = state.playlist_menu() {
-                let (x, y, _, _) = playlist_menu_rect(menu, playlist_width, playlist_height);
-                cr.save()?;
-                cr.translate(f64::from(x), f64::from(y));
-                let render_state = PlaylistMenuRenderState {
-                    kind: menu.render_kind(),
-                    hover: state.playlist_menu_hover(),
-                };
-                render_playlist_menu(cr, skin, render_state)?;
-                cr.restore()?;
-            }
-            Ok(())
-        }) {
+        if let Err(err) = render_scaled(
+            cr,
+            width,
+            height,
+            playlist_width,
+            base_height,
+            |cr, pass| {
+                if pass.is_bitmap() {
+                    render_playlist_frame(
+                        cr,
+                        skin,
+                        focused,
+                        shaded,
+                        playlist_width,
+                        playlist_height,
+                        Some(&state.shaded_playlist_info()),
+                        Some(&state.playlist_footer_info()),
+                        Some(&state.playlist_footer_time_min_text()),
+                        Some(&state.playlist_footer_time_sec_text()),
+                    )?;
+                }
+                if !shaded {
+                    let row_state = state.playlist_rows_render_state();
+                    render_playlist_rows(cr, skin, &row_state, pass)?;
+                }
+                if pass.is_text() {
+                    if let Some(menu) = state.playlist_menu() {
+                        let (x, y, w, h) =
+                            playlist_menu_rect(menu, playlist_width, playlist_height);
+                        let render_state = PlaylistMenuRenderState {
+                            kind: menu.render_kind(),
+                            hover: state.playlist_menu_hover(),
+                        };
+                        paint_scaled(cr, x, y, w, h, |menu_cr| {
+                            render_playlist_menu(menu_cr, skin, render_state).map(|_| ())
+                        })?;
+                    }
+                }
+                Ok(())
+            },
+        ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
     });
