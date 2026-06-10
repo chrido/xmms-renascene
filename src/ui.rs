@@ -3515,6 +3515,79 @@ pub enum PlaylistMenuKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistMenu {
+    Closed,
+    Open {
+        kind: PlaylistMenuKind,
+        hover: Option<usize>,
+        pressed: bool,
+    },
+}
+
+impl Default for PlaylistMenu {
+    fn default() -> Self {
+        Self::Closed
+    }
+}
+
+impl PlaylistMenu {
+    fn kind(self) -> Option<PlaylistMenuKind> {
+        match self {
+            Self::Closed => None,
+            Self::Open { kind, .. } => Some(kind),
+        }
+    }
+
+    fn hover(self) -> Option<usize> {
+        match self {
+            Self::Closed => None,
+            Self::Open { hover, .. } => hover,
+        }
+    }
+
+    fn pressed(self) -> bool {
+        match self {
+            Self::Closed => false,
+            Self::Open { pressed, .. } => pressed,
+        }
+    }
+
+    fn is_open(self) -> bool {
+        matches!(self, Self::Open { .. })
+    }
+
+    fn open(&mut self, kind: PlaylistMenuKind) {
+        *self = Self::Open {
+            kind,
+            hover: Some(kind.item_count().saturating_sub(1)),
+            pressed: false,
+        };
+    }
+
+    fn close(&mut self) {
+        *self = Self::Closed;
+    }
+
+    fn set_hover(&mut self, hover: Option<usize>) -> bool {
+        let Self::Open { hover: current, .. } = self else {
+            return false;
+        };
+        let changed = *current != hover;
+        *current = hover;
+        changed
+    }
+
+    fn press_item(&mut self, item: usize) -> bool {
+        let Self::Open { hover, pressed, .. } = self else {
+            return false;
+        };
+        *hover = Some(item);
+        *pressed = true;
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlaylistMenuCommand {
     OpenLocationWindow,
     OpenDirectoryDialog,
@@ -4701,9 +4774,7 @@ pub(crate) struct MainWindowUiState {
     playlist_dragging_title: bool,
     playlist_width: i32,
     playlist_height: i32,
-    playlist_menu: Option<PlaylistMenuKind>,
-    playlist_menu_hover: Option<usize>,
-    playlist_menu_pressed: bool,
+    playlist_menu: PlaylistMenu,
     playlist_scroll_offset: usize,
     playlist_scrollbar_dragging: bool,
     playlist_scrollbar_drag_offset: i32,
@@ -4803,9 +4874,7 @@ impl MainWindowUiState {
             playlist_dragging_title: false,
             playlist_width: PLAYLIST_DEFAULT_WIDTH,
             playlist_height: PLAYLIST_DEFAULT_HEIGHT,
-            playlist_menu: None,
-            playlist_menu_hover: None,
-            playlist_menu_pressed: false,
+            playlist_menu: PlaylistMenu::default(),
             playlist_scroll_offset: 0,
             playlist_scrollbar_dragging: false,
             playlist_scrollbar_drag_offset: 0,
@@ -5495,15 +5564,15 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_menu(&self) -> Option<PlaylistMenuKind> {
-        self.playlist_menu
+        self.playlist_menu.kind()
     }
 
     pub(crate) fn playlist_menu_hover(&self) -> Option<usize> {
-        self.playlist_menu_hover
+        self.playlist_menu.hover()
     }
 
     pub(crate) fn playlist_menu_pressed(&self) -> bool {
-        self.playlist_menu_pressed
+        self.playlist_menu.pressed()
     }
 
     pub(crate) fn playlist_size(&self) -> (i32, i32) {
@@ -6275,9 +6344,7 @@ impl MainWindowUiState {
         if !self.app_state.config.vim_playlist_navigation {
             return false;
         }
-        self.playlist_menu = None;
-        self.playlist_menu_hover = None;
-        self.playlist_menu_pressed = false;
+        self.playlist_menu.close();
         self.playlist_search.start();
         true
     }
@@ -6953,11 +7020,9 @@ impl MainWindowUiState {
 
     pub(crate) fn playlist_press_with_ctrl(&mut self, x: i32, y: i32, ctrl_pressed: bool) -> bool {
         if let Some(item) = self.playlist_menu_item_at(x, y) {
-            self.playlist_menu_hover = Some(item);
-            self.playlist_menu_pressed = true;
-            return true;
+            return self.playlist_menu.press_item(item);
         }
-        if self.playlist_menu.is_some() {
+        if self.playlist_menu.is_open() {
             return false;
         }
 
@@ -6991,7 +7056,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn activate_playlist_entry_at(&mut self, x: i32, y: i32) -> bool {
-        if self.playlist_menu.is_some() {
+        if self.playlist_menu.is_open() {
             return false;
         }
         let Some(index) = self.playlist_entry_at(x, y) else {
@@ -7026,13 +7091,11 @@ impl MainWindowUiState {
             return false;
         }
 
-        if self.playlist_menu.is_none() {
+        if !self.playlist_menu.is_open() {
             return false;
         }
         let item = self.playlist_menu_item_at(x, y);
-        let changed = self.playlist_menu_hover != item;
-        self.playlist_menu_hover = item;
-        changed
+        self.playlist_menu.set_hover(item)
     }
 
     pub(crate) fn playlist_entry_release(&mut self) -> bool {
@@ -7049,12 +7112,10 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
-        let menu = self.playlist_menu;
+        let menu = self.playlist_menu.kind();
         let item = self.playlist_menu_item_at(x, y);
-        let activated = item == self.playlist_menu_hover;
-        self.playlist_menu = None;
-        self.playlist_menu_hover = None;
-        self.playlist_menu_pressed = false;
+        let activated = item == self.playlist_menu.hover();
+        self.playlist_menu.close();
         if activated {
             if let (Some(menu), Some(item)) = (menu, item) {
                 self.activate_playlist_menu_item(menu, item)
@@ -7363,7 +7424,7 @@ impl MainWindowUiState {
     }
 
     fn playlist_menu_item_at(&self, x: i32, y: i32) -> Option<usize> {
-        let menu = self.playlist_menu?;
+        let menu = self.playlist_menu.kind()?;
         let (menu_x, menu_y, menu_width, menu_height) =
             playlist_menu_rect(menu, self.playlist_width, self.playlist_height);
         if x < menu_x || x >= menu_x + menu_width || y < menu_y || y >= menu_y + menu_height {
@@ -7374,9 +7435,7 @@ impl MainWindowUiState {
 
     pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> PanelAction {
         if kind == PanelKind::Playlist {
-            self.playlist_menu = None;
-            self.playlist_menu_hover = None;
-            self.playlist_menu_pressed = false;
+            self.playlist_menu.close();
             self.playlist_drag_index = None;
         }
 
@@ -7400,8 +7459,7 @@ impl MainWindowUiState {
 
         if kind == PanelKind::Playlist && !self.playlist_shaded {
             if let Some(menu) = playlist_menu_at(x, y, self.playlist_width, self.playlist_height) {
-                self.playlist_menu = Some(menu);
-                self.playlist_menu_hover = Some(menu.item_count().saturating_sub(1));
+                self.playlist_menu.open(menu);
                 return PanelAction::ShowPlaylistMenu(menu);
             }
             if let Some(button) =

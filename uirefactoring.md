@@ -30,7 +30,7 @@ without changing behaviour or breaking parity with the original C XMMS
   stale query" invalid state. Leaf change; only search helpers and the two
   render call-sites (ui.rs 1142/1445) touch it. Low risk.
 
-- [ ] **T2 — Playlist menu as one atomic enum.**
+- [x] **T2 — Playlist menu as one atomic enum.**
   Fold `playlist_menu`, `playlist_menu_hover`, `playlist_menu_pressed` into
   `PlaylistMenu::{Closed, Open { kind, hover, pressed }}`. Preserve current
   behaviour where opening selects the last item
