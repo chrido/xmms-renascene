@@ -37,7 +37,7 @@ without changing behaviour or breaking parity with the original C XMMS
   (`item_count().saturating_sub(1)`). Removes states where the three fields
   disagree. Low risk.
 
-- [ ] **T3 — De-duplicate playlist render-state construction.**
+- [x] **T3 — De-duplicate playlist render-state construction.**
   The docked path (ui.rs ~1123–1150) and detached path (~1426–1453) build the
   same `PlaylistRowsRenderState`/frame args. Extract one
   `PlaylistUiState::rows_render_state()` (+ frame helper) and call it from both.

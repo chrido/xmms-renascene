@@ -1121,30 +1121,7 @@ fn render_docked_ui_state(
             Some(&state.playlist_footer_time_sec_text()),
         )?;
         if !state.playlist_shaded {
-            let current = state.app_state.playlist.position();
-            let rows = state
-                .app_state
-                .playlist
-                .entries()
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| PlaylistRowRenderEntry {
-                    title: state.formatted_playlist_entry_title(entry),
-                    length_ms: entry.length_ms,
-                    selected: entry.selected,
-                    current: current == Some(index),
-                })
-                .collect();
-            let row_state = PlaylistRowsRenderState {
-                entries: rows,
-                scroll_offset: state.playlist_scroll_offset,
-                scrollbar_dragging: state.playlist_scrollbar_dragging,
-                search_query: state.playlist_search.active_query().map(str::to_owned),
-                show_numbers: state.app_state.config.show_numbers_in_pl,
-                font_family: state.app_state.config.playlist_font.clone(),
-                width: state.playlist_width,
-                height: state.playlist_height,
-            };
+            let row_state = state.playlist_rows_render_state();
             rendered |= render_playlist_rows(cr, skin, &row_state)?;
         }
         if let Some(menu) = state.playlist_menu() {
@@ -1422,30 +1399,7 @@ fn build_playlist_window(
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
         }
         if !shaded {
-            let current = state.app_state.playlist.position();
-            let rows = state
-                .app_state
-                .playlist
-                .entries()
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| PlaylistRowRenderEntry {
-                    title: state.formatted_playlist_entry_title(entry),
-                    length_ms: entry.length_ms,
-                    selected: entry.selected,
-                    current: current == Some(index),
-                })
-                .collect();
-            let row_state = PlaylistRowsRenderState {
-                entries: rows,
-                scroll_offset: state.playlist_scroll_offset,
-                scrollbar_dragging: state.playlist_scrollbar_dragging,
-                search_query: state.playlist_search.active_query().map(str::to_owned),
-                show_numbers: state.app_state.config.show_numbers_in_pl,
-                font_family: state.app_state.config.playlist_font.clone(),
-                width: playlist_width,
-                height: playlist_height,
-            };
+            let row_state = state.playlist_rows_render_state();
             if let Err(err) = render_playlist_rows(cr, skin, &row_state) {
                 eprintln!("xmms-rs: failed to render playlist rows: {err}");
             }
@@ -5135,6 +5089,34 @@ impl MainWindowUiState {
             channels: self.app_state.player.channels(),
             visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
+        }
+    }
+
+    fn playlist_rows_render_state(&self) -> PlaylistRowsRenderState {
+        let current = self.app_state.playlist.position();
+        let entries = self
+            .app_state
+            .playlist
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| PlaylistRowRenderEntry {
+                title: self.formatted_playlist_entry_title(entry),
+                length_ms: entry.length_ms,
+                selected: entry.selected,
+                current: current == Some(index),
+            })
+            .collect();
+
+        PlaylistRowsRenderState {
+            entries,
+            scroll_offset: self.playlist_scroll_offset,
+            scrollbar_dragging: self.playlist_scrollbar_dragging,
+            search_query: self.playlist_search.active_query().map(str::to_owned),
+            show_numbers: self.app_state.config.show_numbers_in_pl,
+            font_family: self.app_state.config.playlist_font.clone(),
+            width: self.playlist_width,
+            height: self.playlist_height,
         }
     }
 
