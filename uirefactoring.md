@@ -61,7 +61,7 @@ without changing behaviour or breaking parity with the original C XMMS
     `playlist_last_click`/`pending_double_click` as separate double-click
     tracking (orthogonal). Medium risk; covered by e2e drag/scroll tests.
 
-- [ ] **T5 — Consolidate panel placement; remove shaded/visible/detached duplication.**
+- [x] **T5 — Consolidate panel placement; remove shaded/visible/detached duplication.**
   `shaded`/`playlist_shaded`/`equalizer_shaded` live in both `Config`
   (persisted) and `MainWindowUiState` (runtime), synced manually
   (ui.rs 4716–4718 in, 5519–5521 out). `visible`/`detached` live only in config

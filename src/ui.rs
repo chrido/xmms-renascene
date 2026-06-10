@@ -908,7 +908,7 @@ fn handle_main_playlist_key_pressed(
         return false;
     }
     let mut ui_state = main_state.borrow_mut();
-    if !ui_state.app_state.config.playlist_visible {
+    if !ui_state.playlist_panel.visible {
         return false;
     }
     if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
@@ -1012,7 +1012,7 @@ fn handle_keyboard_shortcut(
         MainKeyboardShortcut::ShadePlaylist => {
             {
                 let mut state = main_state.borrow_mut();
-                state.playlist_shaded = !state.playlist_shaded;
+                state.toggle_playlist_shaded();
             }
             sync_single_panel_window_from_state(
                 PanelKind::Playlist,
@@ -1024,7 +1024,7 @@ fn handle_keyboard_shortcut(
         MainKeyboardShortcut::ShadeEqualizer => {
             {
                 let mut state = main_state.borrow_mut();
-                state.equalizer_shaded = !state.equalizer_shaded;
+                state.toggle_equalizer_shaded();
             }
             sync_single_panel_window_from_state(
                 PanelKind::Equalizer,
@@ -1097,22 +1097,22 @@ fn render_docked_ui_state(
     let mut rendered = render_main_player_state(cr, skin, &state.render_state())?;
     y += main_window_height(state.shaded);
 
-    if state.app_state.config.equalizer_visible && !state.app_state.config.equalizer_detached {
+    if state.panel_state(PanelKind::Equalizer).is_docked_visible() {
         cr.save()?;
         cr.translate(0.0, f64::from(y));
         rendered |= render_equalizer_state(cr, skin, &state.equalizer_render_state())?;
         cr.restore()?;
-        y += equalizer_window_height(state.equalizer_shaded);
+        y += equalizer_window_height(state.equalizer_panel.shaded);
     }
 
-    if state.app_state.config.playlist_visible && !state.app_state.config.playlist_detached {
+    if state.panel_state(PanelKind::Playlist).is_docked_visible() {
         cr.save()?;
         cr.translate(0.0, f64::from(y));
         rendered |= render_playlist_frame(
             cr,
             skin,
-            state.playlist_focused || state.playlist_dragging_title,
-            state.playlist_shaded,
+            state.playlist_panel.focused(),
+            state.playlist_panel.shaded,
             state.playlist_width,
             state.playlist_height,
             Some(&state.shaded_playlist_info()),
@@ -1120,7 +1120,7 @@ fn render_docked_ui_state(
             Some(&state.playlist_footer_time_min_text()),
             Some(&state.playlist_footer_time_sec_text()),
         )?;
-        if !state.playlist_shaded {
+        if !state.playlist_panel.shaded {
             let row_state = state.playlist_rows_render_state();
             rendered |= render_playlist_rows(cr, skin, &row_state)?;
         }
@@ -1371,8 +1371,8 @@ fn build_playlist_window(
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
         let skin = state.active_skin();
-        let shaded = state.playlist_shaded;
-        let focused = state.playlist_focused || state.playlist_dragging_title;
+        let shaded = state.playlist_panel.shaded;
+        let focused = state.playlist_panel.focused();
         let playlist_width = state.playlist_width;
         let playlist_height = state.playlist_height;
         let base_height = if shaded {
@@ -1432,11 +1432,11 @@ fn build_playlist_window(
         let main_state = Rc::clone(main_state);
         drawing_area.connect_resize(move |area, width, height| {
             let mut state = main_state.borrow_mut();
-            if !state.app_state.config.playlist_detached {
+            if !state.is_panel_detached(PanelKind::Playlist) {
                 return;
             }
             let scale = state.scale_factor();
-            let base_height = if state.playlist_shaded {
+            let base_height = if state.playlist_panel.shaded {
                 state.playlist_height
             } else {
                 unscale_dim(height, scale).max(PLAYLIST_MIN_HEIGHT)
@@ -2458,12 +2458,12 @@ fn build_preferences_options_page(
             ),
             (
                 "Dock playlist",
-                !state.app_state.config.playlist_detached,
+                !state.is_panel_detached(PanelKind::Playlist),
                 PreferenceCheck::DockPlaylist,
             ),
             (
                 "Dock equalizer",
-                !state.app_state.config.equalizer_detached,
+                !state.is_panel_detached(PanelKind::Equalizer),
                 PreferenceCheck::DockEqualizer,
             ),
             (
@@ -3460,6 +3460,43 @@ impl PanelState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PanelPlacement {
+    visible: bool,
+    detached: bool,
+    shaded: bool,
+    focused: bool,
+    dragging_title: bool,
+}
+
+impl PanelPlacement {
+    fn from_config(visible: bool, detached: bool, shaded: bool) -> Self {
+        Self {
+            visible,
+            detached,
+            shaded,
+            focused: false,
+            dragging_title: false,
+        }
+    }
+
+    fn state(self) -> PanelState {
+        match (self.visible, self.detached) {
+            (false, _) => PanelState::Hidden,
+            (true, true) => PanelState::Detached {
+                shaded: self.shaded,
+            },
+            (true, false) => PanelState::Docked {
+                shaded: self.shaded,
+            },
+        }
+    }
+
+    fn focused(self) -> bool {
+        self.focused || self.dragging_title
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistMenuKind {
     Add,
     Remove,
@@ -4353,7 +4390,7 @@ fn panel_event_to_base_coords(
     let (base_width, base_height) = match kind {
         PanelKind::Equalizer => (
             EQUALIZER_WINDOW_WIDTH,
-            if state.equalizer_shaded {
+            if state.equalizer_panel.shaded {
                 MAIN_TITLEBAR_HEIGHT
             } else {
                 EQUALIZER_WINDOW_HEIGHT
@@ -4361,7 +4398,7 @@ fn panel_event_to_base_coords(
         ),
         PanelKind::Playlist => (
             state.playlist_width,
-            if state.playlist_shaded {
+            if state.playlist_panel.shaded {
                 MAIN_TITLEBAR_HEIGHT
             } else {
                 state.playlist_height
@@ -4515,7 +4552,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     let visibility = state.panel_visibility();
     let scale = state.scale_factor();
     if visibility.equalizer {
-        let height = if state.equalizer_shaded {
+        let height = if state.equalizer_panel.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
             EQUALIZER_WINDOW_HEIGHT
@@ -4538,7 +4575,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     }
 
     if visibility.playlist {
-        let height = if state.playlist_shaded {
+        let height = if state.playlist_panel.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
             state.playlist_height
@@ -4549,7 +4586,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
         windows
             .playlist_area
             .set_content_height(scale_dim(height, scale));
-        windows.playlist.set_resizable(!state.playlist_shaded);
+        windows.playlist.set_resizable(!state.playlist_panel.shaded);
         windows.playlist.set_default_size(
             scale_dim(state.playlist_width, scale),
             scale_dim(height, scale),
@@ -4793,9 +4830,7 @@ pub(crate) struct MainWindowUiState {
     playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
-    equalizer_shaded: bool,
-    equalizer_focused: bool,
-    equalizer_dragging_title: bool,
+    equalizer_panel: PanelPlacement,
     equalizer_active: bool,
     equalizer_automatic: bool,
     equalizer_pointer: EqualizerPointer,
@@ -4804,9 +4839,7 @@ pub(crate) struct MainWindowUiState {
     equalizer_preset_dir: PathBuf,
     equalizer_presets: Vec<EqualizerPreset>,
     equalizer_auto_presets: Vec<EqualizerPreset>,
-    playlist_shaded: bool,
-    playlist_focused: bool,
-    playlist_dragging_title: bool,
+    playlist_panel: PanelPlacement,
     playlist_width: i32,
     playlist_height: i32,
     playlist_menu: PlaylistMenu,
@@ -4851,7 +4884,7 @@ impl fmt::Debug for MainWindowUiState {
         f.debug_struct("MainWindowUiState")
             .field("app_state", &self.app_state)
             .field("shaded", &self.shaded)
-            .field("playlist_shaded", &self.playlist_shaded)
+            .field("playlist_shaded", &self.playlist_panel.shaded)
             .field("preferences_visible", &self.preferences_visible)
             .field("preferences_page", &self.preferences_page)
             .field("player_state", &self.app_state.player.state())
@@ -4869,8 +4902,16 @@ impl MainWindowUiState {
     pub(crate) fn from_app_state(app_state: AppState) -> Self {
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let main_shaded = app_state.config.main_shaded;
-        let equalizer_shaded = app_state.config.equalizer_shaded;
-        let playlist_shaded = app_state.config.playlist_shaded;
+        let equalizer_panel = PanelPlacement::from_config(
+            app_state.config.equalizer_visible,
+            app_state.config.equalizer_detached,
+            app_state.config.equalizer_shaded,
+        );
+        let playlist_panel = PanelPlacement::from_config(
+            app_state.config.playlist_visible,
+            app_state.config.playlist_detached,
+            app_state.config.playlist_shaded,
+        );
         let active_skin = load_skin_from_config(&app_state.config).unwrap_or_else(|err| {
             eprintln!("xmms-rs: failed to load configured skin: {err}");
             DefaultSkin::load_bundled().expect("bundled default skin should load")
@@ -4883,9 +4924,7 @@ impl MainWindowUiState {
             playback_requests: Vec::new(),
             shaded: main_shaded,
             menu_visible: false,
-            equalizer_shaded,
-            equalizer_focused: false,
-            equalizer_dragging_title: false,
+            equalizer_panel,
             equalizer_active: true,
             equalizer_automatic: false,
             equalizer_pointer: EqualizerPointer::default(),
@@ -4894,9 +4933,7 @@ impl MainWindowUiState {
             equalizer_preset_dir: default_config_dir().join("xmms-renascene"),
             equalizer_presets: Vec::new(),
             equalizer_auto_presets: Vec::new(),
-            playlist_shaded,
-            playlist_focused: false,
-            playlist_dragging_title: false,
+            playlist_panel,
             playlist_width: PLAYLIST_DEFAULT_WIDTH,
             playlist_height: PLAYLIST_DEFAULT_HEIGHT,
             playlist_menu: PlaylistMenu::default(),
@@ -5140,8 +5177,8 @@ impl MainWindowUiState {
             frequency_text: self.frequency_text(),
             shuffle_selected: self.app_state.playlist.shuffle(),
             repeat_selected: self.app_state.playlist.repeat(),
-            equalizer_selected: self.app_state.config.equalizer_visible,
-            playlist_selected: self.app_state.config.playlist_visible,
+            equalizer_selected: self.equalizer_panel.visible,
+            playlist_selected: self.playlist_panel.visible,
             pressed_push: self.pressed_push(),
             pressed_toggle: self.pressed_toggle(),
             pressed_slider: self.pressed_slider(),
@@ -5475,8 +5512,8 @@ impl MainWindowUiState {
 
     fn equalizer_render_state(&self) -> EqualizerRenderState {
         EqualizerRenderState {
-            focused: self.equalizer_focused || self.equalizer_dragging_title,
-            shaded: self.equalizer_shaded,
+            focused: self.equalizer_panel.focused(),
+            shaded: self.equalizer_panel.shaded,
             active: self.equalizer_active,
             automatic: self.equalizer_automatic,
             pressed_control: self.equalizer_pointer.pressed_control(),
@@ -5489,32 +5526,30 @@ impl MainWindowUiState {
     }
 
     fn panel_state(&self, kind: PanelKind) -> PanelState {
+        self.panel_placement(kind).state()
+    }
+
+    fn panel_placement(&self, kind: PanelKind) -> PanelPlacement {
         match kind {
-            PanelKind::Equalizer => match (
-                self.app_state.config.equalizer_visible,
-                self.app_state.config.equalizer_detached,
-            ) {
-                (false, _) => PanelState::Hidden,
-                (true, true) => PanelState::Detached {
-                    shaded: self.equalizer_shaded,
-                },
-                (true, false) => PanelState::Docked {
-                    shaded: self.equalizer_shaded,
-                },
-            },
-            PanelKind::Playlist => match (
-                self.app_state.config.playlist_visible,
-                self.app_state.config.playlist_detached,
-            ) {
-                (false, _) => PanelState::Hidden,
-                (true, true) => PanelState::Detached {
-                    shaded: self.playlist_shaded,
-                },
-                (true, false) => PanelState::Docked {
-                    shaded: self.playlist_shaded,
-                },
-            },
+            PanelKind::Equalizer => self.equalizer_panel,
+            PanelKind::Playlist => self.playlist_panel,
         }
+    }
+
+    fn panel_placement_mut(&mut self, kind: PanelKind) -> &mut PanelPlacement {
+        match kind {
+            PanelKind::Equalizer => &mut self.equalizer_panel,
+            PanelKind::Playlist => &mut self.playlist_panel,
+        }
+    }
+
+    fn sync_panel_config_from_placement(&mut self) {
+        self.app_state.config.equalizer_visible = self.equalizer_panel.visible;
+        self.app_state.config.equalizer_detached = self.equalizer_panel.detached;
+        self.app_state.config.equalizer_shaded = self.equalizer_panel.shaded;
+        self.app_state.config.playlist_visible = self.playlist_panel.visible;
+        self.app_state.config.playlist_detached = self.playlist_panel.detached;
+        self.app_state.config.playlist_shaded = self.playlist_panel.shaded;
     }
 
     pub(crate) fn panel_visibility(&self) -> PanelVisibility {
@@ -5528,14 +5563,14 @@ impl MainWindowUiState {
         DockedPanelState {
             main_focused: true,
             main_shaded: self.shaded,
-            equalizer_visible: self.app_state.config.equalizer_visible,
-            equalizer_detached: self.app_state.config.equalizer_detached,
-            equalizer_focused: self.equalizer_focused || self.equalizer_dragging_title,
-            equalizer_shaded: self.equalizer_shaded,
-            playlist_visible: self.app_state.config.playlist_visible,
-            playlist_detached: self.app_state.config.playlist_detached,
-            playlist_focused: self.playlist_focused || self.playlist_dragging_title,
-            playlist_shaded: self.playlist_shaded,
+            equalizer_visible: self.equalizer_panel.visible,
+            equalizer_detached: self.equalizer_panel.detached,
+            equalizer_focused: self.equalizer_panel.focused(),
+            equalizer_shaded: self.equalizer_panel.shaded,
+            playlist_visible: self.playlist_panel.visible,
+            playlist_detached: self.playlist_panel.detached,
+            playlist_focused: self.playlist_panel.focused(),
+            playlist_shaded: self.playlist_panel.shaded,
             playlist_width: self.playlist_width,
             playlist_height: self.playlist_height,
         }
@@ -5548,7 +5583,7 @@ impl MainWindowUiState {
     pub(crate) fn docked_panel_at(&self, x: i32, y: i32) -> Option<(PanelKind, i32, i32)> {
         let mut offset_y = main_window_height(self.shaded);
         if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
-            let height = equalizer_window_height(self.equalizer_shaded);
+            let height = equalizer_window_height(self.equalizer_panel.shaded);
             if x >= 0 && x < EQUALIZER_WINDOW_WIDTH && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Equalizer, x, y - offset_y));
             }
@@ -5556,7 +5591,7 @@ impl MainWindowUiState {
         }
 
         if self.panel_state(PanelKind::Playlist).is_docked_visible() {
-            let height = playlist_window_height(self.playlist_shaded, self.playlist_height);
+            let height = playlist_window_height(self.playlist_panel.shaded, self.playlist_height);
             if x >= 0 && x < self.playlist_width && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Playlist, x, y - offset_y));
             }
@@ -5571,23 +5606,18 @@ impl MainWindowUiState {
         }
         let mut offset_y = main_window_height(self.shaded);
         if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
-            offset_y += equalizer_window_height(self.equalizer_shaded);
+            offset_y += equalizer_window_height(self.equalizer_panel.shaded);
         }
         Some(y - offset_y)
     }
 
     pub(crate) fn set_panel_detached(&mut self, kind: PanelKind, detached: bool) {
-        match kind {
-            PanelKind::Equalizer => self.app_state.config.equalizer_detached = detached,
-            PanelKind::Playlist => self.app_state.config.playlist_detached = detached,
-        }
+        self.panel_placement_mut(kind).detached = detached;
+        self.sync_panel_config_from_placement();
     }
 
     pub(crate) fn is_panel_detached(&self, kind: PanelKind) -> bool {
-        match kind {
-            PanelKind::Equalizer => self.app_state.config.equalizer_detached,
-            PanelKind::Playlist => self.app_state.config.playlist_detached,
-        }
+        self.panel_placement(kind).detached
     }
 
     pub(crate) fn is_shaded(&self) -> bool {
@@ -5603,11 +5633,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn is_equalizer_shaded(&self) -> bool {
-        self.equalizer_shaded
+        self.equalizer_panel.shaded
     }
 
     pub(crate) fn is_playlist_shaded(&self) -> bool {
-        self.playlist_shaded
+        self.playlist_panel.shaded
     }
 
     pub(crate) fn playlist_menu(&self) -> Option<PlaylistMenuKind> {
@@ -5643,7 +5673,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
-        self.app_state.config.playlist_visible = visible;
+        self.playlist_panel.visible = visible;
+        self.sync_panel_config_from_placement();
     }
 
     pub(crate) fn is_preferences_visible(&self) -> bool {
@@ -5671,6 +5702,16 @@ impl MainWindowUiState {
     }
 
     fn apply_config_to_ui_state(&mut self) {
+        self.equalizer_panel = PanelPlacement::from_config(
+            self.app_state.config.equalizer_visible,
+            self.app_state.config.equalizer_detached,
+            self.app_state.config.equalizer_shaded,
+        );
+        self.playlist_panel = PanelPlacement::from_config(
+            self.app_state.config.playlist_visible,
+            self.app_state.config.playlist_detached,
+            self.app_state.config.playlist_shaded,
+        );
         self.equalizer_active = self.app_state.config.equalizer_active;
         self.equalizer_automatic = self.app_state.config.equalizer_auto;
         self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
@@ -5688,8 +5729,7 @@ impl MainWindowUiState {
     fn sync_config_from_ui_state(&mut self) {
         self.app_state.config.playback_position_ms = self.playback_position_ms.max(0);
         self.app_state.config.main_shaded = self.shaded;
-        self.app_state.config.playlist_shaded = self.playlist_shaded;
-        self.app_state.config.equalizer_shaded = self.equalizer_shaded;
+        self.sync_panel_config_from_placement();
         self.app_state.config.equalizer_active = self.equalizer_active;
         self.app_state.config.equalizer_auto = self.equalizer_automatic;
         self.app_state.config.equalizer_preamp_pos = self.equalizer_preamp_position;
@@ -6615,24 +6655,15 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_panel_dragging(&mut self, kind: PanelKind, dragging: bool) {
-        match kind {
-            PanelKind::Equalizer => self.equalizer_dragging_title = dragging,
-            PanelKind::Playlist => self.playlist_dragging_title = dragging,
-        }
+        self.panel_placement_mut(kind).dragging_title = dragging;
     }
 
     pub(crate) fn set_panel_focused(&mut self, kind: PanelKind, focused: bool) {
-        match kind {
-            PanelKind::Equalizer => self.equalizer_focused = focused,
-            PanelKind::Playlist => self.playlist_focused = focused,
-        }
+        self.panel_placement_mut(kind).focused = focused;
     }
 
     pub(crate) fn is_panel_focused(&self, kind: PanelKind) -> bool {
-        match kind {
-            PanelKind::Equalizer => self.equalizer_focused,
-            PanelKind::Playlist => self.playlist_focused,
-        }
+        self.panel_placement(kind).focused
     }
 
     pub(crate) fn equalizer_active(&self) -> bool {
@@ -6674,7 +6705,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
-        if self.equalizer_shaded {
+        if self.equalizer_panel.shaded {
             if let Some(slider) = equalizer_shaded_slider_at(x, y) {
                 self.equalizer_pointer = EqualizerPointer::DraggingSlider {
                     slider,
@@ -6727,7 +6758,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_scroll(&mut self, x: i32, y: i32, dy: f64) -> bool {
-        let slider = if self.equalizer_shaded {
+        let slider = if self.equalizer_panel.shaded {
             equalizer_shaded_slider_at(x, y)
         } else {
             equalizer_slider_at(x, y)
@@ -6770,7 +6801,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn adjust_shaded_equalizer_balance(&mut self, diff: i32) -> bool {
-        if !self.equalizer_shaded {
+        if !self.equalizer_panel.shaded {
             return false;
         }
         let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
@@ -6966,7 +6997,7 @@ impl MainWindowUiState {
             && y < title_height
             && !self.panel_title_button_hit(kind, x, y)
             && !(kind == PanelKind::Equalizer
-                && self.equalizer_shaded
+                && self.equalizer_panel.shaded
                 && equalizer_shaded_slider_at(x, y).is_some())
     }
 
@@ -6975,7 +7006,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {
-        !self.playlist_shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
+        !self.playlist_panel.shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
     }
 
     pub(crate) fn begin_docked_playlist_resize(&mut self, local_y: i32) -> bool {
@@ -7416,7 +7447,7 @@ impl MainWindowUiState {
     }
 
     fn playlist_entry_at(&self, x: i32, y: i32) -> Option<usize> {
-        if self.playlist_shaded || !(12..self.playlist_width - 19).contains(&x) {
+        if self.playlist_panel.shaded || !(12..self.playlist_width - 19).contains(&x) {
             return None;
         }
         if !(20..self.playlist_height - 38).contains(&y) {
@@ -7442,7 +7473,7 @@ impl MainWindowUiState {
     }
 
     fn playlist_scrollbar_region(&self, x: i32, y: i32) -> bool {
-        !self.playlist_shaded
+        !self.playlist_panel.shaded
             && x >= self.playlist_width - 15
             && x < self.playlist_width - 7
             && y >= 20
@@ -7506,23 +7537,18 @@ impl MainWindowUiState {
 
         if self.panel_title_button_hit(kind, x, y) {
             if self.panel_close_button_hit(kind, x) {
-                match kind {
-                    PanelKind::Equalizer => self.app_state.config.equalizer_visible = false,
-                    PanelKind::Playlist => self.app_state.config.playlist_visible = false,
-                }
+                self.panel_placement_mut(kind).visible = false;
+                self.sync_panel_config_from_placement();
                 return PanelAction::Changed;
             }
 
             if self.panel_shade_button_hit(kind, x) {
-                match kind {
-                    PanelKind::Equalizer => self.equalizer_shaded = !self.equalizer_shaded,
-                    PanelKind::Playlist => self.playlist_shaded = !self.playlist_shaded,
-                }
+                self.toggle_panel_shaded(kind);
                 return PanelAction::Changed;
             }
         }
 
-        if kind == PanelKind::Playlist && !self.playlist_shaded {
+        if kind == PanelKind::Playlist && !self.playlist_panel.shaded {
             if let Some(menu) = playlist_menu_at(x, y, self.playlist_width, self.playlist_height) {
                 self.playlist_menu.open(menu);
                 return PanelAction::ShowPlaylistMenu(menu);
@@ -7610,11 +7636,17 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn toggle_playlist_shaded(&mut self) {
-        self.playlist_shaded = !self.playlist_shaded;
+        self.toggle_panel_shaded(PanelKind::Playlist);
     }
 
     pub(crate) fn toggle_equalizer_shaded(&mut self) {
-        self.equalizer_shaded = !self.equalizer_shaded;
+        self.toggle_panel_shaded(PanelKind::Equalizer);
+    }
+
+    fn toggle_panel_shaded(&mut self, kind: PanelKind) {
+        let placement = self.panel_placement_mut(kind);
+        placement.shaded = !placement.shaded;
+        self.sync_panel_config_from_placement();
     }
 
     pub(crate) fn volume(&self) -> i32 {
@@ -7769,7 +7801,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_playlist_docked(&mut self, docked: bool) {
-        self.app_state.config.playlist_detached = !docked;
+        self.playlist_panel.detached = !docked;
+        self.sync_panel_config_from_placement();
         if docked {
             self.playlist_width = PLAYLIST_MIN_WIDTH;
             self.clamp_playlist_scroll_offset();
@@ -7778,7 +7811,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_equalizer_docked(&mut self, docked: bool) {
-        self.app_state.config.equalizer_detached = !docked;
+        self.equalizer_panel.detached = !docked;
+        self.sync_panel_config_from_placement();
         self.mark_preferences_saved();
     }
 
@@ -8420,10 +8454,12 @@ impl MainWindowUiState {
                 self.app_state.config.repeat = selected;
             }
             MainToggleButton::Equalizer => {
-                self.app_state.config.equalizer_visible = !self.app_state.config.equalizer_visible;
+                self.equalizer_panel.visible = !self.equalizer_panel.visible;
+                self.sync_panel_config_from_placement();
             }
             MainToggleButton::Playlist => {
-                self.app_state.config.playlist_visible = !self.app_state.config.playlist_visible;
+                self.playlist_panel.visible = !self.playlist_panel.visible;
+                self.sync_panel_config_from_placement();
             }
         }
     }
@@ -9210,7 +9246,7 @@ mod tests {
         state.app_state.playlist.set_position(0);
         state.app_state.player.mark_playing();
         state.shaded = true;
-        state.equalizer_shaded = true;
+        state.toggle_equalizer_shaded();
 
         assert!(state.scroll_main(227, 5, 1.0));
         let forward_position = state.playback_position_ms;
@@ -9264,7 +9300,7 @@ mod tests {
         assert!(state.playlist_scroll(-1.0));
         assert_eq!(state.playlist_scroll_offset(), 0);
 
-        state.playlist_shaded = true;
+        state.toggle_playlist_shaded();
         assert!(state.playlist_scroll(1.0));
         assert_eq!(state.playlist_scroll_offset(), 3);
     }
@@ -9421,8 +9457,7 @@ mod tests {
             playlist_detached: true,
             ..Config::default()
         }));
-        state.equalizer_shaded = true;
-        state.playlist_shaded = false;
+        state.toggle_equalizer_shaded();
 
         assert_eq!(
             state.panel_state(PanelKind::Equalizer),
@@ -9433,7 +9468,7 @@ mod tests {
             PanelState::Detached { shaded: false }
         );
 
-        state.app_state.config.playlist_visible = false;
+        state.set_playlist_visible(false);
         assert_eq!(state.panel_state(PanelKind::Playlist), PanelState::Hidden);
     }
 
@@ -9807,7 +9842,7 @@ static char * main_xpm[] = {
     #[test]
     fn shaded_equalizer_sliders_are_not_titlebar_drag_regions() {
         let mut state = MainWindowUiState::default();
-        state.equalizer_shaded = true;
+        state.toggle_equalizer_shaded();
 
         assert!(!state.panel_title_drag_region(PanelKind::Equalizer, 61, 7));
         assert!(!state.panel_title_drag_region(PanelKind::Equalizer, 164, 7));
