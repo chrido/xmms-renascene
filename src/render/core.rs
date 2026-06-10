@@ -130,6 +130,53 @@ pub fn blit_surface_rect(
     Ok(true)
 }
 
+/// Render skin content at its native (1x) resolution into an offscreen buffer,
+/// then scale that single image onto `cr` with nearest-neighbour filtering.
+///
+/// Skins are drawn as many adjacent slices. Scaling the cairo context and then
+/// blitting each slice separately makes every slice round its own edges and
+/// reset its own sampling phase, so at fractional scale factors adjacent slices
+/// no longer reconstruct one continuous image: thin seams and texture
+/// discontinuities appear where slices meet. Compositing every slice at integer
+/// 1x coordinates first (pixel-perfect, seam-free) and scaling the finished
+/// image exactly once removes those artifacts at every scale factor.
+pub fn render_scaled<F>(
+    cr: &Context,
+    device_width: i32,
+    device_height: i32,
+    base_width: i32,
+    base_height: i32,
+    draw: F,
+) -> Result<(), RenderError>
+where
+    F: FnOnce(&Context) -> Result<(), RenderError>,
+{
+    if device_width <= 0 || device_height <= 0 || base_width <= 0 || base_height <= 0 {
+        return Ok(());
+    }
+
+    let base = ImageSurface::create(Format::ARgb32, base_width, base_height)?;
+    {
+        let base_cr = Context::new(&base)?;
+        draw(&base_cr)?;
+    }
+    base.flush();
+
+    cr.save()?;
+    cr.scale(
+        f64::from(device_width) / f64::from(base_width),
+        f64::from(device_height) / f64::from(base_height),
+    );
+    cr.set_source_surface(&base, 0.0, 0.0)?;
+    let pattern = cr.source();
+    pattern.set_extend(Extend::Pad);
+    pattern.set_filter(Filter::Nearest);
+    cr.paint()?;
+    cr.restore()?;
+
+    Ok(())
+}
+
 pub fn clamp_scale_factor(scale: f64) -> f64 {
     scale.clamp(1.0, 5.0)
 }
