@@ -80,7 +80,7 @@ without changing behaviour or breaking parity with the original C XMMS
   must either return an effect/decision or take the player as a collaborator;
   do not pretend it is fully self-contained. Medium risk.
 
-- [ ] **T7 — Group fields into cohesive sub-structs (behind a stable facade).**
+- [x] **T7 — Group fields into cohesive sub-structs (behind a stable facade).**
   Extract `EqualizerUiState` (active/automatic/preamp/bands/presets/preset_dir +
   EqPointer), `PlaylistUiState` (geometry/scroll + PlaylistMenu/Search/Pointer),
   `DialogVisibility` (file/dir/open-location/jump-time/skin-browser/output-picker
