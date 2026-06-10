@@ -6,7 +6,7 @@ use xmms_renascene::render::{
     render_equalizer_state, render_main_player_reset, render_main_player_state,
     render_playlist_frame, render_playlist_rows, render_visualization, surface_from_xpm,
     EqualizerRenderState, MainWindowRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
-    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    RenderPass, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
     MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH,
 };
@@ -274,7 +274,8 @@ fn renders_playlist_rows_with_selected_background() {
             font_family: "Helvetica".to_string(),
             width: PLAYLIST_DEFAULT_WIDTH,
             height: PLAYLIST_DEFAULT_HEIGHT,
-        }
+        },
+        RenderPass::Bitmap
     )
     .unwrap());
     drop(cr);
@@ -324,7 +325,8 @@ fn playlist_search_overlay_stays_inside_row_area() {
             font_family: "Helvetica".to_string(),
             width: PLAYLIST_DEFAULT_WIDTH,
             height: PLAYLIST_DEFAULT_HEIGHT,
-        }
+        },
+        RenderPass::Bitmap
     )
     .unwrap());
     drop(cr);
