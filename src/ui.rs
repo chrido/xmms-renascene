@@ -82,7 +82,8 @@ const XMMS_MENU_CSS_TEMPLATE: &str = r#"
     border-radius: 0;
     box-shadow: none;
     color: MENU_NORMAL;
-    padding: 4px 12px;
+    padding: 1px 12px;
+    min-height: 0;
     text-shadow: none;
 }
 
@@ -103,7 +104,8 @@ const XMMS_MENU_CSS_TEMPLATE: &str = r#"
     border-radius: 0;
     box-shadow: none;
     color: MENU_NORMAL;
-    padding: 4px 12px;
+    padding: 1px 12px;
+    min-height: 0;
     text-shadow: none;
 }
 
