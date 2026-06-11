@@ -29,14 +29,15 @@ use crate::player::{
 };
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    docked_panel_size, equalizer_window_height, main_window_height, playlist_window_height,
-    render_equalizer_state, render_main_player_state, render_playlist_frame, render_playlist_menu,
-    render_playlist_rows, scale_dim, DockedPanelState, EqualizerControl, EqualizerRenderState,
-    MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
-    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
-    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    docked_panel_size, equalizer_window_height, main_window_height, paint_scaled,
+    playlist_window_height, render_equalizer_state, render_main_player_state,
+    render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
+    DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
+    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
+    PlaylistRowRenderEntry, PlaylistRowsRenderState, RenderPass, VisualizationRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
@@ -81,7 +82,8 @@ const XMMS_MENU_CSS_TEMPLATE: &str = r#"
     border-radius: 0;
     box-shadow: none;
     color: MENU_NORMAL;
-    padding: 4px 12px;
+    padding: 1px 12px;
+    min-height: 0;
     text-shadow: none;
 }
 
@@ -102,7 +104,8 @@ const XMMS_MENU_CSS_TEMPLATE: &str = r#"
     border-radius: 0;
     box-shadow: none;
     color: MENU_NORMAL;
-    padding: 4px 12px;
+    padding: 1px 12px;
+    min-height: 0;
     text-shadow: none;
 }
 
@@ -143,7 +146,9 @@ pub fn write_player_screenshot(options: PreviewOptions, path: &Path) -> Result<(
         .map_err(|err| format!("failed to create screenshot surface: {err}"))?;
     let cr = cairo::Context::new(&surface)
         .map_err(|err| format!("failed to create screenshot context: {err}"))?;
-    render_docked_ui_state(&cr, state.active_skin(), &state)
+    render_docked_ui_state(&cr, state.active_skin(), &state, RenderPass::Bitmap)
+        .map_err(|err| format!("failed to render screenshot: {err}"))?;
+    render_docked_ui_state(&cr, state.active_skin(), &state, RenderPass::Text)
         .map_err(|err| format!("failed to render screenshot: {err}"))?;
     drop(cr);
     write_surface_png(&mut surface, path)
@@ -282,11 +287,11 @@ fn build_preview_window(
             let state = main_state.borrow();
             let docked_state = state.docked_panel_state();
             let (base_width, base_height) = docked_panel_size(docked_state);
-            cr.scale(
-                width as f64 / base_width as f64,
-                height as f64 / base_height as f64,
-            );
-            if let Err(err) = render_docked_ui_state(cr, state.active_skin(), &state) {
+            if let Err(err) =
+                render_scaled(cr, width, height, base_width, base_height, |cr, pass| {
+                    render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
+                })
+            {
                 eprintln!("xmms-rs: failed to render main-window preview: {err}");
             }
         });
@@ -908,7 +913,7 @@ fn handle_main_playlist_key_pressed(
         return false;
     }
     let mut ui_state = main_state.borrow_mut();
-    if !ui_state.app_state.config.playlist_visible {
+    if !ui_state.playlist_ui.panel.visible {
         return false;
     }
     if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
@@ -1012,7 +1017,7 @@ fn handle_keyboard_shortcut(
         MainKeyboardShortcut::ShadePlaylist => {
             {
                 let mut state = main_state.borrow_mut();
-                state.playlist_shaded = !state.playlist_shaded;
+                state.toggle_playlist_shaded();
             }
             sync_single_panel_window_from_state(
                 PanelKind::Playlist,
@@ -1024,7 +1029,7 @@ fn handle_keyboard_shortcut(
         MainKeyboardShortcut::ShadeEqualizer => {
             {
                 let mut state = main_state.borrow_mut();
-                state.equalizer_shaded = !state.equalizer_shaded;
+                state.toggle_equalizer_shaded();
             }
             sync_single_panel_window_from_state(
                 PanelKind::Equalizer,
@@ -1092,77 +1097,63 @@ fn render_docked_ui_state(
     cr: &gtk::cairo::Context,
     skin: &DefaultSkin,
     state: &MainWindowUiState,
+    pass: RenderPass,
 ) -> Result<bool, crate::render::RenderError> {
     let mut y = 0;
-    let mut rendered = render_main_player_state(cr, skin, &state.render_state())?;
+    let mut rendered = false;
+    if pass.is_bitmap() {
+        rendered |= render_main_player_state(cr, skin, &state.render_state())?;
+    }
     y += main_window_height(state.shaded);
 
-    if state.app_state.config.equalizer_visible && !state.app_state.config.equalizer_detached {
-        cr.save()?;
-        cr.translate(0.0, f64::from(y));
-        rendered |= render_equalizer_state(cr, skin, &state.equalizer_render_state())?;
-        cr.restore()?;
-        y += equalizer_window_height(state.equalizer_shaded);
+    if state.panel_state(PanelKind::Equalizer).is_docked_visible() {
+        if pass.is_bitmap() {
+            cr.save()?;
+            cr.translate(0.0, f64::from(y));
+            rendered |= render_equalizer_state(cr, skin, &state.equalizer_render_state())?;
+            cr.restore()?;
+        }
+        y += equalizer_window_height(state.equalizer.panel.shaded);
     }
 
-    if state.app_state.config.playlist_visible && !state.app_state.config.playlist_detached {
+    if state.panel_state(PanelKind::Playlist).is_docked_visible() {
         cr.save()?;
         cr.translate(0.0, f64::from(y));
-        rendered |= render_playlist_frame(
-            cr,
-            skin,
-            state.playlist_focused || state.playlist_dragging_title,
-            state.playlist_shaded,
-            state.playlist_width,
-            state.playlist_height,
-            Some(&state.shaded_playlist_info()),
-            Some(&state.playlist_footer_info()),
-            Some(&state.playlist_footer_time_min_text()),
-            Some(&state.playlist_footer_time_sec_text()),
-        )?;
-        if !state.playlist_shaded {
-            let current = state.app_state.playlist.position();
-            let rows = state
-                .app_state
-                .playlist
-                .entries()
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| PlaylistRowRenderEntry {
-                    title: state.formatted_playlist_entry_title(entry),
-                    length_ms: entry.length_ms,
-                    selected: entry.selected,
-                    current: current == Some(index),
-                })
-                .collect();
-            let row_state = PlaylistRowsRenderState {
-                entries: rows,
-                scroll_offset: state.playlist_scroll_offset,
-                scrollbar_dragging: state.playlist_scrollbar_dragging,
-                search_query: state
-                    .playlist_search_active
-                    .then(|| state.playlist_search_query.clone()),
-                show_numbers: state.app_state.config.show_numbers_in_pl,
-                font_family: state.app_state.config.playlist_font.clone(),
-                width: state.playlist_width,
-                height: state.playlist_height,
-            };
-            rendered |= render_playlist_rows(cr, skin, &row_state)?;
-        }
-        if let Some(menu) = state.playlist_menu() {
-            let (x, y, _, _) =
-                playlist_menu_rect(menu, state.playlist_width, state.playlist_height);
-            cr.save()?;
-            cr.translate(f64::from(x), f64::from(y));
-            rendered |= render_playlist_menu(
+        if pass.is_bitmap() {
+            rendered |= render_playlist_frame(
                 cr,
                 skin,
-                PlaylistMenuRenderState {
-                    kind: menu.render_kind(),
-                    hover: state.playlist_menu_hover(),
-                },
+                state.playlist_ui.panel.focused(),
+                state.playlist_ui.panel.shaded,
+                state.playlist_ui.width,
+                state.playlist_ui.height,
+                Some(&state.shaded_playlist_info()),
+                Some(&state.playlist_footer_info()),
+                Some(&state.playlist_footer_time_min_text()),
+                Some(&state.playlist_footer_time_sec_text()),
             )?;
-            cr.restore()?;
+        }
+        if !state.playlist_ui.panel.shaded {
+            let row_state = state.playlist_rows_render_state();
+            rendered |= render_playlist_rows(cr, skin, &row_state, pass)?;
+        }
+        if pass.is_text() {
+            if let Some(menu) = state.playlist_menu() {
+                let (x, y, w, h) =
+                    playlist_menu_rect(menu, state.playlist_ui.width, state.playlist_ui.height);
+                paint_scaled(cr, x, y, w, h, |menu_cr| {
+                    render_playlist_menu(
+                        menu_cr,
+                        skin,
+                        PlaylistMenuRenderState {
+                            kind: menu.render_kind(),
+                            hover: state.playlist_menu_hover(),
+                        },
+                    )
+                    .map(|_| ())
+                })?;
+                rendered = true;
+            }
         }
         cr.restore()?;
     }
@@ -1348,11 +1339,20 @@ fn build_equalizer_window(
         } else {
             EQUALIZER_WINDOW_HEIGHT
         };
-        cr.scale(
-            width as f64 / EQUALIZER_WINDOW_WIDTH as f64,
-            height as f64 / base_height as f64,
-        );
-        if let Err(err) = render_equalizer_state(cr, state.active_skin(), &render_state) {
+        if let Err(err) = render_scaled(
+            cr,
+            width,
+            height,
+            EQUALIZER_WINDOW_WIDTH,
+            base_height,
+            |cr, pass| {
+                if pass.is_bitmap() {
+                    render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
             eprintln!("xmms-rs: failed to render equalizer preview: {err}");
         }
     });
@@ -1396,81 +1396,57 @@ fn build_playlist_window(
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
         let skin = state.active_skin();
-        let shaded = state.playlist_shaded;
-        let focused = state.playlist_focused || state.playlist_dragging_title;
-        let playlist_width = state.playlist_width;
-        let playlist_height = state.playlist_height;
+        let shaded = state.playlist_ui.panel.shaded;
+        let focused = state.playlist_ui.panel.focused();
+        let playlist_width = state.playlist_ui.width;
+        let playlist_height = state.playlist_ui.height;
         let base_height = if shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
             playlist_height
         };
-        cr.scale(
-            width as f64 / playlist_width as f64,
-            height as f64 / base_height as f64,
-        );
-        if let Err(err) = render_playlist_frame(
+        if let Err(err) = render_scaled(
             cr,
-            skin,
-            focused,
-            shaded,
+            width,
+            height,
             playlist_width,
-            playlist_height,
-            Some(&state.shaded_playlist_info()),
-            Some(&state.playlist_footer_info()),
-            Some(&state.playlist_footer_time_min_text()),
-            Some(&state.playlist_footer_time_sec_text()),
+            base_height,
+            |cr, pass| {
+                if pass.is_bitmap() {
+                    render_playlist_frame(
+                        cr,
+                        skin,
+                        focused,
+                        shaded,
+                        playlist_width,
+                        playlist_height,
+                        Some(&state.shaded_playlist_info()),
+                        Some(&state.playlist_footer_info()),
+                        Some(&state.playlist_footer_time_min_text()),
+                        Some(&state.playlist_footer_time_sec_text()),
+                    )?;
+                }
+                if !shaded {
+                    let row_state = state.playlist_rows_render_state();
+                    render_playlist_rows(cr, skin, &row_state, pass)?;
+                }
+                if pass.is_text() {
+                    if let Some(menu) = state.playlist_menu() {
+                        let (x, y, w, h) =
+                            playlist_menu_rect(menu, playlist_width, playlist_height);
+                        let render_state = PlaylistMenuRenderState {
+                            kind: menu.render_kind(),
+                            hover: state.playlist_menu_hover(),
+                        };
+                        paint_scaled(cr, x, y, w, h, |menu_cr| {
+                            render_playlist_menu(menu_cr, skin, render_state).map(|_| ())
+                        })?;
+                    }
+                }
+                Ok(())
+            },
         ) {
             eprintln!("xmms-rs: failed to render playlist preview: {err}");
-        }
-        if !shaded {
-            let current = state.app_state.playlist.position();
-            let rows = state
-                .app_state
-                .playlist
-                .entries()
-                .iter()
-                .enumerate()
-                .map(|(index, entry)| PlaylistRowRenderEntry {
-                    title: state.formatted_playlist_entry_title(entry),
-                    length_ms: entry.length_ms,
-                    selected: entry.selected,
-                    current: current == Some(index),
-                })
-                .collect();
-            let row_state = PlaylistRowsRenderState {
-                entries: rows,
-                scroll_offset: state.playlist_scroll_offset,
-                scrollbar_dragging: state.playlist_scrollbar_dragging,
-                search_query: state
-                    .playlist_search_active
-                    .then(|| state.playlist_search_query.clone()),
-                show_numbers: state.app_state.config.show_numbers_in_pl,
-                font_family: state.app_state.config.playlist_font.clone(),
-                width: playlist_width,
-                height: playlist_height,
-            };
-            if let Err(err) = render_playlist_rows(cr, skin, &row_state) {
-                eprintln!("xmms-rs: failed to render playlist rows: {err}");
-            }
-        }
-        if let Some(menu) = state.playlist_menu() {
-            let (x, y, _, _) = playlist_menu_rect(menu, playlist_width, playlist_height);
-            if let Err(err) = cr.save() {
-                eprintln!("xmms-rs: failed to save playlist menu render state: {err}");
-                return;
-            }
-            cr.translate(f64::from(x), f64::from(y));
-            let render_state = PlaylistMenuRenderState {
-                kind: menu.render_kind(),
-                hover: state.playlist_menu_hover(),
-            };
-            if let Err(err) = render_playlist_menu(cr, skin, render_state) {
-                eprintln!("xmms-rs: failed to render playlist menu: {err}");
-            }
-            if let Err(err) = cr.restore() {
-                eprintln!("xmms-rs: failed to restore playlist menu render state: {err}");
-            }
         }
     });
 
@@ -1482,12 +1458,12 @@ fn build_playlist_window(
         let main_state = Rc::clone(main_state);
         drawing_area.connect_resize(move |area, width, height| {
             let mut state = main_state.borrow_mut();
-            if !state.app_state.config.playlist_detached {
+            if !state.is_panel_detached(PanelKind::Playlist) {
                 return;
             }
             let scale = state.scale_factor();
-            let base_height = if state.playlist_shaded {
-                state.playlist_height
+            let base_height = if state.playlist_ui.panel.shaded {
+                state.playlist_ui.height
             } else {
                 unscale_dim(height, scale).max(PLAYLIST_MIN_HEIGHT)
             };
@@ -1611,7 +1587,7 @@ fn handle_active_playlist_search_key_pressed(
     key: gtk::gdk::Key,
     state: gtk::gdk::ModifierType,
 ) -> Option<bool> {
-    if !ui_state.playlist_search_active {
+    if !ui_state.playlist_search_active() {
         return None;
     }
     if key == gtk::gdk::Key::Escape {
@@ -2508,12 +2484,12 @@ fn build_preferences_options_page(
             ),
             (
                 "Dock playlist",
-                !state.app_state.config.playlist_detached,
+                !state.is_panel_detached(PanelKind::Playlist),
                 PreferenceCheck::DockPlaylist,
             ),
             (
                 "Dock equalizer",
-                !state.app_state.config.equalizer_detached,
+                !state.is_panel_detached(PanelKind::Equalizer),
                 PreferenceCheck::DockEqualizer,
             ),
             (
@@ -3486,12 +3462,187 @@ pub enum PanelKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PanelState {
+    Hidden,
+    Docked { shaded: bool },
+    Detached { shaded: bool },
+}
+
+impl PanelState {
+    fn is_detached_visible(self) -> bool {
+        matches!(self, PanelState::Detached { .. })
+    }
+
+    fn is_docked_visible(self) -> bool {
+        matches!(self, PanelState::Docked { .. })
+    }
+
+    fn shaded(self) -> bool {
+        match self {
+            PanelState::Hidden => false,
+            PanelState::Docked { shaded } | PanelState::Detached { shaded } => shaded,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PanelPlacement {
+    visible: bool,
+    detached: bool,
+    shaded: bool,
+    focused: bool,
+    dragging_title: bool,
+}
+
+impl PanelPlacement {
+    fn from_config(visible: bool, detached: bool, shaded: bool) -> Self {
+        Self {
+            visible,
+            detached,
+            shaded,
+            focused: false,
+            dragging_title: false,
+        }
+    }
+
+    fn state(self) -> PanelState {
+        match (self.visible, self.detached) {
+            (false, _) => PanelState::Hidden,
+            (true, true) => PanelState::Detached {
+                shaded: self.shaded,
+            },
+            (true, false) => PanelState::Docked {
+                shaded: self.shaded,
+            },
+        }
+    }
+
+    fn focused(self) -> bool {
+        self.focused || self.dragging_title
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistMenuKind {
     Add,
     Remove,
     Select,
     Misc,
     List,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistMenu {
+    Closed,
+    Open {
+        kind: PlaylistMenuKind,
+        hover: Option<usize>,
+        pressed: bool,
+    },
+}
+
+impl Default for PlaylistMenu {
+    fn default() -> Self {
+        Self::Closed
+    }
+}
+
+impl PlaylistMenu {
+    fn kind(self) -> Option<PlaylistMenuKind> {
+        match self {
+            Self::Closed => None,
+            Self::Open { kind, .. } => Some(kind),
+        }
+    }
+
+    fn hover(self) -> Option<usize> {
+        match self {
+            Self::Closed => None,
+            Self::Open { hover, .. } => hover,
+        }
+    }
+
+    fn pressed(self) -> bool {
+        match self {
+            Self::Closed => false,
+            Self::Open { pressed, .. } => pressed,
+        }
+    }
+
+    fn is_open(self) -> bool {
+        matches!(self, Self::Open { .. })
+    }
+
+    fn open(&mut self, kind: PlaylistMenuKind) {
+        *self = Self::Open {
+            kind,
+            hover: Some(kind.item_count().saturating_sub(1)),
+            pressed: false,
+        };
+    }
+
+    fn close(&mut self) {
+        *self = Self::Closed;
+    }
+
+    fn set_hover(&mut self, hover: Option<usize>) -> bool {
+        let Self::Open { hover: current, .. } = self else {
+            return false;
+        };
+        let changed = *current != hover;
+        *current = hover;
+        changed
+    }
+
+    fn press_item(&mut self, item: usize) -> bool {
+        let Self::Open { hover, pressed, .. } = self else {
+            return false;
+        };
+        *hover = Some(item);
+        *pressed = true;
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistMenuCommand {
+    OpenLocationWindow,
+    OpenDirectoryDialog,
+    OpenFileDialog,
+    ShowSortMenu,
+    ShowFileInfo,
+    OpenOptions,
+    ClearList,
+    CropToSelection,
+    RemoveSelectedOrCurrent,
+    InvertSelection,
+    SelectNone,
+    SelectAll,
+    SavePlaylist,
+    LoadPlaylist,
+}
+
+impl PlaylistMenuCommand {
+    fn from_menu_item(menu: PlaylistMenuKind, item: usize) -> Option<Self> {
+        match (menu, item) {
+            (PlaylistMenuKind::Add, 0) => Some(Self::OpenLocationWindow),
+            (PlaylistMenuKind::Add, 1) => Some(Self::OpenDirectoryDialog),
+            (PlaylistMenuKind::Add, 2) => Some(Self::OpenFileDialog),
+            (PlaylistMenuKind::Misc, 0) => Some(Self::ShowSortMenu),
+            (PlaylistMenuKind::Misc, 1) => Some(Self::ShowFileInfo),
+            (PlaylistMenuKind::Misc, 2) => Some(Self::OpenOptions),
+            (PlaylistMenuKind::Remove, 1) => Some(Self::ClearList),
+            (PlaylistMenuKind::Remove, 2) => Some(Self::CropToSelection),
+            (PlaylistMenuKind::Remove, 3) => Some(Self::RemoveSelectedOrCurrent),
+            (PlaylistMenuKind::Select, 0) => Some(Self::InvertSelection),
+            (PlaylistMenuKind::Select, 1) => Some(Self::SelectNone),
+            (PlaylistMenuKind::Select, 2) => Some(Self::SelectAll),
+            (PlaylistMenuKind::List, 0) => Some(Self::ClearList),
+            (PlaylistMenuKind::List, 1) => Some(Self::SavePlaylist),
+            (PlaylistMenuKind::List, 2) => Some(Self::LoadPlaylist),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4265,18 +4416,18 @@ fn panel_event_to_base_coords(
     let (base_width, base_height) = match kind {
         PanelKind::Equalizer => (
             EQUALIZER_WINDOW_WIDTH,
-            if state.equalizer_shaded {
+            if state.equalizer.panel.shaded {
                 MAIN_TITLEBAR_HEIGHT
             } else {
                 EQUALIZER_WINDOW_HEIGHT
             },
         ),
         PanelKind::Playlist => (
-            state.playlist_width,
-            if state.playlist_shaded {
+            state.playlist_ui.width,
+            if state.playlist_ui.panel.shaded {
                 MAIN_TITLEBAR_HEIGHT
             } else {
-                state.playlist_height
+                state.playlist_ui.height
             },
         ),
     };
@@ -4364,16 +4515,16 @@ fn sync_single_panel_window_from_state(
 fn panel_window_values(kind: PanelKind, state: &MainWindowUiState) -> (bool, bool, i32, i32) {
     match kind {
         PanelKind::Equalizer => (
-            state.app_state.config.equalizer_visible && state.app_state.config.equalizer_detached,
-            state.equalizer_shaded,
+            state.panel_state(kind).is_detached_visible(),
+            state.panel_state(kind).shaded(),
             EQUALIZER_WINDOW_WIDTH,
             EQUALIZER_WINDOW_HEIGHT,
         ),
         PanelKind::Playlist => (
-            state.app_state.config.playlist_visible && state.app_state.config.playlist_detached,
-            state.playlist_shaded,
-            state.playlist_width,
-            state.playlist_height,
+            state.panel_state(kind).is_detached_visible(),
+            state.panel_state(kind).shaded(),
+            state.playlist_ui.width,
+            state.playlist_ui.height,
         ),
     }
 }
@@ -4427,7 +4578,7 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     let visibility = state.panel_visibility();
     let scale = state.scale_factor();
     if visibility.equalizer {
-        let height = if state.equalizer_shaded {
+        let height = if state.equalizer.panel.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
             EQUALIZER_WINDOW_HEIGHT
@@ -4450,20 +4601,22 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     }
 
     if visibility.playlist {
-        let height = if state.playlist_shaded {
+        let height = if state.playlist_ui.panel.shaded {
             MAIN_TITLEBAR_HEIGHT
         } else {
-            state.playlist_height
+            state.playlist_ui.height
         };
         windows
             .playlist_area
-            .set_content_width(scale_dim(state.playlist_width, scale));
+            .set_content_width(scale_dim(state.playlist_ui.width, scale));
         windows
             .playlist_area
             .set_content_height(scale_dim(height, scale));
-        windows.playlist.set_resizable(!state.playlist_shaded);
+        windows
+            .playlist
+            .set_resizable(!state.playlist_ui.panel.shaded);
         windows.playlist.set_default_size(
-            scale_dim(state.playlist_width, scale),
+            scale_dim(state.playlist_ui.width, scale),
             scale_dim(height, scale),
         );
         windows.playlist_area.queue_resize();
@@ -4475,6 +4628,151 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PlaylistSearch {
+    Inactive,
+    Active { query: String },
+}
+
+impl Default for PlaylistSearch {
+    fn default() -> Self {
+        Self::Inactive
+    }
+}
+
+impl PlaylistSearch {
+    fn is_active(&self) -> bool {
+        matches!(self, Self::Active { .. })
+    }
+
+    fn query(&self) -> &str {
+        match self {
+            Self::Inactive => "",
+            Self::Active { query } => query,
+        }
+    }
+
+    fn active_query(&self) -> Option<&str> {
+        match self {
+            Self::Inactive => None,
+            Self::Active { query } => Some(query),
+        }
+    }
+
+    fn start(&mut self) {
+        *self = Self::Active {
+            query: String::new(),
+        };
+    }
+
+    fn stop(&mut self) {
+        *self = Self::Inactive;
+    }
+
+    fn push_char(&mut self, ch: char) -> bool {
+        let Self::Active { query } = self else {
+            return false;
+        };
+        if ch.is_control() {
+            return false;
+        }
+        query.push(ch);
+        true
+    }
+
+    fn pop_char(&mut self) -> bool {
+        let Self::Active { query } = self else {
+            return false;
+        };
+        query.pop();
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MainPointer {
+    Idle,
+    PressedButton { control: MainControl, inside: bool },
+    DraggingSlider { slider: MainSlider, offset: i32 },
+}
+
+impl Default for MainPointer {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl MainPointer {
+    fn pressed_control(self) -> Option<MainControl> {
+        match self {
+            Self::PressedButton {
+                control,
+                inside: true,
+            } => Some(control),
+            _ => None,
+        }
+    }
+
+    fn pressed_slider(self) -> Option<MainSlider> {
+        match self {
+            Self::DraggingSlider { slider, .. } => Some(slider),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EqualizerPointer {
+    Idle,
+    PressedControl {
+        control: EqualizerControl,
+        inside: bool,
+    },
+    DraggingSlider {
+        slider: EqualizerSlider,
+        offset: i32,
+    },
+}
+
+impl Default for EqualizerPointer {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+impl EqualizerPointer {
+    fn pressed_control(self) -> Option<EqualizerControl> {
+        match self {
+            Self::PressedControl {
+                control,
+                inside: true,
+            } => Some(control),
+            _ => None,
+        }
+    }
+
+    fn dragging_slider(self) -> Option<EqualizerSlider> {
+        match self {
+            Self::DraggingSlider { slider, .. } => Some(slider),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaylistPointer {
+    Idle,
+    DraggingEntry { index: usize, moved: bool },
+    DraggingScrollbar { offset: i32 },
+    Resizing { offset_y: i32 },
+}
+
+impl Default for PlaylistPointer {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MainControl {
     Push(MainPushButton),
@@ -4483,33 +4781,120 @@ enum MainControl {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SeekState {
+enum PlaybackControlEvent {
+    Play,
+    Pause,
+    PauseToggle,
+    Stop,
+    Previous,
+    Next,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlaybackTransitionState {
     Idle,
     StoppedAt(i64),
     PendingBackendSeek(i64),
-    WaitingBetweenSongs { remaining_ms: i64 },
+    WaitingBetweenSongs {
+        remaining_ms: i64,
+    },
+    FadingOut {
+        remaining_ms: i64,
+        start_volume: i32,
+    },
 }
 
-impl SeekState {
+impl PlaybackTransitionState {
+    fn stopped_at_or_idle(position_ms: i64) -> Self {
+        if position_ms > 0 {
+            Self::StoppedAt(position_ms)
+        } else {
+            Self::Idle
+        }
+    }
+
+    fn start_playback() -> Self {
+        Self::Idle
+    }
+
+    fn stop_playback() -> Self {
+        Self::Idle
+    }
+
+    fn request_backend_seek(position_ms: i64) -> Self {
+        Self::PendingBackendSeek(position_ms)
+    }
+
+    fn start_fadeout(start_volume: i32) -> Self {
+        Self::FadingOut {
+            remaining_ms: STOP_FADE_DURATION_MS,
+            start_volume,
+        }
+    }
+
+    fn tick_fadeout(self, elapsed_ms: u32) -> Option<(Self, i32)> {
+        let (remaining_ms, start_volume) = self.fadeout()?;
+        let remaining_ms = (remaining_ms - i64::from(elapsed_ms)).max(0);
+        let volume =
+            ((i64::from(start_volume) * remaining_ms) / STOP_FADE_DURATION_MS).clamp(0, 100) as i32;
+        Some((
+            Self::FadingOut {
+                remaining_ms,
+                start_volume,
+            },
+            volume,
+        ))
+    }
+
+    fn wait_between_songs(remaining_ms: i64) -> Self {
+        Self::WaitingBetweenSongs { remaining_ms }
+    }
+
+    fn tick_eof_pause(self, elapsed_ms: u32) -> Option<(Self, bool)> {
+        let remaining = self.eof_pause_remaining_ms()? - i64::from(elapsed_ms);
+        if remaining > 0 {
+            Some((
+                Self::WaitingBetweenSongs {
+                    remaining_ms: remaining,
+                },
+                false,
+            ))
+        } else {
+            Some((Self::Idle, true))
+        }
+    }
+
     fn eof_pause_remaining_ms(self) -> Option<i64> {
         match self {
-            SeekState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
+            PlaybackTransitionState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
             _ => None,
         }
     }
 
     fn pending_backend_seek_ms(self) -> Option<i64> {
         match self {
-            SeekState::PendingBackendSeek(position_ms) => Some(position_ms),
+            PlaybackTransitionState::PendingBackendSeek(position_ms) => Some(position_ms),
+            _ => None,
+        }
+    }
+
+    fn fadeout(self) -> Option<(i64, i32)> {
+        match self {
+            PlaybackTransitionState::FadingOut {
+                remaining_ms,
+                start_volume,
+            } => Some((remaining_ms, start_volume)),
             _ => None,
         }
     }
 
     fn play_start_position_ms(self, fallback_ms: i64) -> i64 {
         match self {
-            SeekState::StoppedAt(position_ms) => position_ms,
-            SeekState::WaitingBetweenSongs { .. } => 0,
-            SeekState::Idle | SeekState::PendingBackendSeek(_) => fallback_ms,
+            PlaybackTransitionState::StoppedAt(position_ms) => position_ms,
+            PlaybackTransitionState::WaitingBetweenSongs { .. } => 0,
+            PlaybackTransitionState::Idle
+            | PlaybackTransitionState::PendingBackendSeek(_)
+            | PlaybackTransitionState::FadingOut { .. } => fallback_ms,
         }
     }
 }
@@ -4524,6 +4909,90 @@ pub(crate) enum UiAction {
     OpenFileDialog,
 }
 
+struct EqualizerUiState {
+    panel: PanelPlacement,
+    active: bool,
+    automatic: bool,
+    pointer: EqualizerPointer,
+    preamp_position: i32,
+    band_positions: [i32; 10],
+    preset_dir: PathBuf,
+    presets: Vec<EqualizerPreset>,
+    auto_presets: Vec<EqualizerPreset>,
+}
+
+impl EqualizerUiState {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            panel: PanelPlacement::from_config(
+                config.equalizer_visible,
+                config.equalizer_detached,
+                config.equalizer_shaded,
+            ),
+            active: true,
+            automatic: false,
+            pointer: EqualizerPointer::default(),
+            preamp_position: 50,
+            band_positions: [50; 10],
+            preset_dir: default_config_dir().join("xmms-renascene"),
+            presets: Vec::new(),
+            auto_presets: Vec::new(),
+        }
+    }
+}
+
+struct PlaylistUiState {
+    panel: PanelPlacement,
+    width: i32,
+    height: i32,
+    menu: PlaylistMenu,
+    scroll_offset: usize,
+    pointer: PlaylistPointer,
+    last_click: Option<(usize, Instant)>,
+    pending_double_click: Option<usize>,
+    search: PlaylistSearch,
+}
+
+impl PlaylistUiState {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            panel: PanelPlacement::from_config(
+                config.playlist_visible,
+                config.playlist_detached,
+                config.playlist_shaded,
+            ),
+            width: PLAYLIST_DEFAULT_WIDTH,
+            height: PLAYLIST_DEFAULT_HEIGHT,
+            menu: PlaylistMenu::default(),
+            scroll_offset: 0,
+            pointer: PlaylistPointer::default(),
+            last_click: None,
+            pending_double_click: None,
+            search: PlaylistSearch::default(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct DialogVisibility {
+    playlist_load: bool,
+    playlist_save: bool,
+    preferences: bool,
+    open_location: bool,
+    jump_time: bool,
+    skin_browser: bool,
+    output_device_picker: bool,
+    file: bool,
+    directory: bool,
+}
+
+#[derive(Default)]
+struct SkinBrowserState {
+    entries: Vec<SkinEntry>,
+    selected_index: usize,
+    reload_count: u32,
+}
+
 pub(crate) struct MainWindowUiState {
     app_state: AppState,
     playback_backend: Option<Rc<RefCell<GStreamerBackend>>>,
@@ -4532,72 +5001,27 @@ pub(crate) struct MainWindowUiState {
     playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
-    equalizer_shaded: bool,
-    equalizer_focused: bool,
-    equalizer_dragging_title: bool,
-    equalizer_active: bool,
-    equalizer_automatic: bool,
-    equalizer_pressed_control: Option<EqualizerControl>,
-    equalizer_pressed_inside: bool,
-    equalizer_dragging: Option<EqualizerSlider>,
-    equalizer_slider_press_offset: i32,
-    equalizer_preamp_position: i32,
-    equalizer_band_positions: [i32; 10],
-    equalizer_preset_dir: PathBuf,
-    equalizer_presets: Vec<EqualizerPreset>,
-    equalizer_auto_presets: Vec<EqualizerPreset>,
-    playlist_shaded: bool,
-    playlist_focused: bool,
-    playlist_dragging_title: bool,
-    playlist_width: i32,
-    playlist_height: i32,
-    playlist_menu: Option<PlaylistMenuKind>,
-    playlist_menu_hover: Option<usize>,
-    playlist_menu_pressed: bool,
-    playlist_scroll_offset: usize,
-    playlist_scrollbar_dragging: bool,
-    playlist_scrollbar_drag_offset: i32,
-    playlist_docked_resizing: bool,
-    playlist_resize_drag_offset_y: i32,
-    playlist_drag_index: Option<usize>,
-    playlist_drag_moved: bool,
-    playlist_last_click: Option<(usize, Instant)>,
-    playlist_pending_double_click: Option<usize>,
-    playlist_search_active: bool,
-    playlist_search_query: String,
-    playlist_load_dialog_visible: bool,
-    playlist_save_dialog_visible: bool,
+    equalizer: EqualizerUiState,
+    playlist_ui: PlaylistUiState,
+    dialogs: DialogVisibility,
     last_playlist_file_info: Option<String>,
     active_skin: DefaultSkin,
     playlist_options_opened: bool,
-    preferences_visible: bool,
     preferences_page: PreferencesPage,
     preferences_saved: bool,
-    open_location_visible: bool,
-    jump_time_visible: bool,
-    skin_browser_visible: bool,
-    skin_browser_entries: Vec<SkinEntry>,
-    selected_skin_index: usize,
-    skin_reload_count: u32,
-    output_device_picker_visible: bool,
+    skin_browser: SkinBrowserState,
     output_device_groups: OutputDeviceGroups,
     output_switch_count: u32,
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
-    seek_state: SeekState,
-    stop_fade_remaining_ms: i64,
-    stop_fade_start_volume: i32,
-    file_dialog_visible: bool,
-    directory_dialog_visible: bool,
+    playback_transition: PlaybackTransitionState,
     last_open_location: Option<String>,
     last_jump_time_ms: Option<i64>,
     position_position: i32,
     playback_position_ms: i64,
     visualization: Visualization,
     visualization_tick_counter: i32,
-    active: Option<MainControl>,
-    active_inside: bool,
-    slider_press_offset: i32,
+    main_pointer: MainPointer,
 }
 
 impl fmt::Debug for MainWindowUiState {
@@ -4605,8 +5029,8 @@ impl fmt::Debug for MainWindowUiState {
         f.debug_struct("MainWindowUiState")
             .field("app_state", &self.app_state)
             .field("shaded", &self.shaded)
-            .field("playlist_shaded", &self.playlist_shaded)
-            .field("preferences_visible", &self.preferences_visible)
+            .field("playlist_shaded", &self.playlist_ui.panel.shaded)
+            .field("preferences_visible", &self.dialogs.preferences)
             .field("preferences_page", &self.preferences_page)
             .field("player_state", &self.app_state.player.state())
             .finish_non_exhaustive()
@@ -4623,8 +5047,8 @@ impl MainWindowUiState {
     pub(crate) fn from_app_state(app_state: AppState) -> Self {
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let main_shaded = app_state.config.main_shaded;
-        let equalizer_shaded = app_state.config.equalizer_shaded;
-        let playlist_shaded = app_state.config.playlist_shaded;
+        let equalizer = EqualizerUiState::from_config(&app_state.config);
+        let playlist_ui = PlaylistUiState::from_config(&app_state.config);
         let active_skin = load_skin_from_config(&app_state.config).unwrap_or_else(|err| {
             eprintln!("xmms-rs: failed to load configured skin: {err}");
             DefaultSkin::load_bundled().expect("bundled default skin should load")
@@ -4637,72 +5061,27 @@ impl MainWindowUiState {
             playback_requests: Vec::new(),
             shaded: main_shaded,
             menu_visible: false,
-            equalizer_shaded,
-            equalizer_focused: false,
-            equalizer_dragging_title: false,
-            equalizer_active: true,
-            equalizer_automatic: false,
-            equalizer_pressed_control: None,
-            equalizer_pressed_inside: false,
-            equalizer_dragging: None,
-            equalizer_slider_press_offset: 0,
-            equalizer_preamp_position: 50,
-            equalizer_band_positions: [50; 10],
-            equalizer_preset_dir: default_config_dir().join("xmms-renascene"),
-            equalizer_presets: Vec::new(),
-            equalizer_auto_presets: Vec::new(),
-            playlist_shaded,
-            playlist_focused: false,
-            playlist_dragging_title: false,
-            playlist_width: PLAYLIST_DEFAULT_WIDTH,
-            playlist_height: PLAYLIST_DEFAULT_HEIGHT,
-            playlist_menu: None,
-            playlist_menu_hover: None,
-            playlist_menu_pressed: false,
-            playlist_scroll_offset: 0,
-            playlist_scrollbar_dragging: false,
-            playlist_scrollbar_drag_offset: 0,
-            playlist_docked_resizing: false,
-            playlist_resize_drag_offset_y: 0,
-            playlist_drag_index: None,
-            playlist_drag_moved: false,
-            playlist_last_click: None,
-            playlist_pending_double_click: None,
-            playlist_search_active: false,
-            playlist_search_query: String::new(),
-            playlist_load_dialog_visible: false,
-            playlist_save_dialog_visible: false,
+            equalizer,
+            playlist_ui,
+            dialogs: DialogVisibility::default(),
             last_playlist_file_info: None,
             active_skin,
             playlist_options_opened: false,
-            preferences_visible: false,
             preferences_page: PreferencesPage::Options,
             preferences_saved: false,
-            open_location_visible: false,
-            jump_time_visible: false,
-            skin_browser_visible: false,
-            skin_browser_entries: Vec::new(),
-            selected_skin_index: 0,
-            skin_reload_count: 0,
-            output_device_picker_visible: false,
+            skin_browser: SkinBrowserState::default(),
             output_device_groups: OutputDeviceGroups::default(),
             output_switch_count: 0,
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
-            seek_state: SeekState::Idle,
-            stop_fade_remaining_ms: 0,
-            stop_fade_start_volume: 100,
-            file_dialog_visible: false,
-            directory_dialog_visible: false,
+            playback_transition: PlaybackTransitionState::Idle,
             last_open_location: None,
             last_jump_time_ms: None,
             position_position: 0,
             playback_position_ms: 0,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
-            active: None,
-            active_inside: false,
-            slider_press_offset: 0,
+            main_pointer: MainPointer::default(),
         };
         state.apply_config_to_ui_state();
         state
@@ -4722,20 +5101,20 @@ impl MainWindowUiState {
     }
 
     fn set_equalizer_preset_dir(&mut self, dir: PathBuf) {
-        self.equalizer_preset_dir = dir;
+        self.equalizer.preset_dir = dir;
         if let Err(err) = self.load_equalizer_preset_stores() {
             eprintln!("xmms-rs: failed to load equalizer presets: {err}");
         }
     }
 
     fn load_equalizer_preset_stores(&mut self) -> io::Result<()> {
-        self.equalizer_presets =
-            load_preset_store(&preset_store_path(&self.equalizer_preset_dir, "eq.preset"))?;
-        if self.equalizer_presets.is_empty() {
-            self.equalizer_presets = default_equalizer_presets();
+        self.equalizer.presets =
+            load_preset_store(&preset_store_path(&self.equalizer.preset_dir, "eq.preset"))?;
+        if self.equalizer.presets.is_empty() {
+            self.equalizer.presets = default_equalizer_presets();
         }
-        self.equalizer_auto_presets = load_preset_store(&preset_store_path(
-            &self.equalizer_preset_dir,
+        self.equalizer.auto_presets = load_preset_store(&preset_store_path(
+            &self.equalizer.preset_dir,
             "eq.auto_preset",
         ))?;
         Ok(())
@@ -4743,37 +5122,37 @@ impl MainWindowUiState {
 
     fn save_equalizer_presets(&self) -> io::Result<()> {
         save_preset_store(
-            &preset_store_path(&self.equalizer_preset_dir, "eq.preset"),
-            &self.equalizer_presets,
+            &preset_store_path(&self.equalizer.preset_dir, "eq.preset"),
+            &self.equalizer.presets,
         )
     }
 
     fn save_equalizer_auto_presets(&self) -> io::Result<()> {
         save_preset_store(
-            &preset_store_path(&self.equalizer_preset_dir, "eq.auto_preset"),
-            &self.equalizer_auto_presets,
+            &preset_store_path(&self.equalizer.preset_dir, "eq.auto_preset"),
+            &self.equalizer.auto_presets,
         )
     }
 
     fn current_equalizer_preset(&self, name: impl Into<String>) -> EqualizerPreset {
         EqualizerPreset::from_positions(
             name,
-            self.equalizer_preamp_position,
-            self.equalizer_band_positions,
+            self.equalizer.preamp_position,
+            self.equalizer.band_positions,
         )
     }
 
     fn apply_equalizer_preset_values(&mut self, preset: &EqualizerPreset) {
-        self.equalizer_preamp_position = preset.preamp_position();
-        self.equalizer_band_positions = preset.band_positions();
+        self.equalizer.preamp_position = preset.preamp_position();
+        self.equalizer.band_positions = preset.band_positions();
         self.sync_equalizer_to_backend();
     }
 
     fn load_named_equalizer_preset(&mut self, name: &str, automatic: bool) -> bool {
         let preset = if automatic {
-            find_preset(&self.equalizer_auto_presets, name)
+            find_preset(&self.equalizer.auto_presets, name)
         } else {
-            find_preset(&self.equalizer_presets, name)
+            find_preset(&self.equalizer.presets, name)
         }
         .cloned();
         if let Some(preset) = preset {
@@ -4787,10 +5166,10 @@ impl MainWindowUiState {
     fn save_named_equalizer_preset(&mut self, name: String, automatic: bool) -> io::Result<()> {
         let preset = self.current_equalizer_preset(name);
         if automatic {
-            upsert_preset(&mut self.equalizer_auto_presets, preset);
+            upsert_preset(&mut self.equalizer.auto_presets, preset);
             self.save_equalizer_auto_presets()
         } else {
-            upsert_preset(&mut self.equalizer_presets, preset);
+            upsert_preset(&mut self.equalizer.presets, preset);
             self.save_equalizer_presets()
         }
     }
@@ -4801,10 +5180,10 @@ impl MainWindowUiState {
         automatic: bool,
     ) -> io::Result<()> {
         if automatic {
-            remove_presets(&mut self.equalizer_auto_presets, &names);
+            remove_presets(&mut self.equalizer.auto_presets, &names);
             self.save_equalizer_auto_presets()
         } else {
-            remove_presets(&mut self.equalizer_presets, &names);
+            remove_presets(&mut self.equalizer.presets, &names);
             self.save_equalizer_presets()
         }
     }
@@ -4843,7 +5222,7 @@ impl MainWindowUiState {
         let imported = import_winamp_eqf(path)?;
         let count = imported.len();
         for preset in imported {
-            upsert_preset(&mut self.equalizer_presets, preset);
+            upsert_preset(&mut self.equalizer.presets, preset);
         }
         self.save_equalizer_presets()?;
         Ok(count)
@@ -4855,9 +5234,9 @@ impl MainWindowUiState {
 
     fn sorted_equalizer_presets(&self, automatic: bool) -> Vec<EqualizerPreset> {
         let mut presets = if automatic {
-            self.equalizer_auto_presets.clone()
+            self.equalizer.auto_presets.clone()
         } else {
-            self.equalizer_presets.clone()
+            self.equalizer.presets.clone()
         };
         sort_presets(&mut presets);
         presets
@@ -4883,9 +5262,9 @@ impl MainWindowUiState {
             backend.set_volume_percent(player.volume());
             backend.set_balance_percent(player.balance());
             backend.set_equalizer_from_positions(
-                self.equalizer_active,
-                self.equalizer_preamp_position,
-                self.equalizer_band_positions,
+                self.equalizer.active,
+                self.equalizer.preamp_position,
+                self.equalizer.band_positions,
             );
         }
         self.playback_backend = Some(backend);
@@ -4909,8 +5288,8 @@ impl MainWindowUiState {
             frequency_text: self.frequency_text(),
             shuffle_selected: self.app_state.playlist.shuffle(),
             repeat_selected: self.app_state.playlist.repeat(),
-            equalizer_selected: self.app_state.config.equalizer_visible,
-            playlist_selected: self.app_state.config.playlist_visible,
+            equalizer_selected: self.equalizer.panel.visible,
+            playlist_selected: self.playlist_ui.panel.visible,
             pressed_push: self.pressed_push(),
             pressed_toggle: self.pressed_toggle(),
             pressed_slider: self.pressed_slider(),
@@ -4922,6 +5301,37 @@ impl MainWindowUiState {
             channels: self.app_state.player.channels(),
             visualization: self.make_visualization_render_state(),
             ..MainWindowRenderState::default()
+        }
+    }
+
+    fn playlist_rows_render_state(&self) -> PlaylistRowsRenderState {
+        let current = self.app_state.playlist.position();
+        let entries = self
+            .app_state
+            .playlist
+            .entries()
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| PlaylistRowRenderEntry {
+                title: self.formatted_playlist_entry_title(entry),
+                length_ms: entry.length_ms,
+                selected: entry.selected,
+                current: current == Some(index),
+            })
+            .collect();
+
+        PlaylistRowsRenderState {
+            entries,
+            scroll_offset: self.playlist_ui.scroll_offset,
+            scrollbar_dragging: matches!(
+                self.playlist_ui.pointer,
+                PlaylistPointer::DraggingScrollbar { .. }
+            ),
+            search_query: self.playlist_ui.search.active_query().map(str::to_owned),
+            show_numbers: self.app_state.config.show_numbers_in_pl,
+            font_family: self.app_state.config.playlist_font.clone(),
+            width: self.playlist_ui.width,
+            height: self.playlist_ui.height,
         }
     }
 
@@ -4961,19 +5371,19 @@ impl MainWindowUiState {
     }
 
     fn equalizer_drag_info_text(&self) -> Option<String> {
-        let slider = self.equalizer_dragging?;
+        let slider = self.equalizer.pointer.dragging_slider()?;
         let (label, position) = match slider {
-            EqualizerSlider::Preamp => ("PREAMP", self.equalizer_preamp_position),
-            EqualizerSlider::Band(0) => ("60HZ", self.equalizer_band_positions[0]),
-            EqualizerSlider::Band(1) => ("170HZ", self.equalizer_band_positions[1]),
-            EqualizerSlider::Band(2) => ("310HZ", self.equalizer_band_positions[2]),
-            EqualizerSlider::Band(3) => ("600HZ", self.equalizer_band_positions[3]),
-            EqualizerSlider::Band(4) => ("1KHZ", self.equalizer_band_positions[4]),
-            EqualizerSlider::Band(5) => ("3KHZ", self.equalizer_band_positions[5]),
-            EqualizerSlider::Band(6) => ("6KHZ", self.equalizer_band_positions[6]),
-            EqualizerSlider::Band(7) => ("12KHZ", self.equalizer_band_positions[7]),
-            EqualizerSlider::Band(8) => ("14KHZ", self.equalizer_band_positions[8]),
-            EqualizerSlider::Band(9) => ("16KHZ", self.equalizer_band_positions[9]),
+            EqualizerSlider::Preamp => ("PREAMP", self.equalizer.preamp_position),
+            EqualizerSlider::Band(0) => ("60HZ", self.equalizer.band_positions[0]),
+            EqualizerSlider::Band(1) => ("170HZ", self.equalizer.band_positions[1]),
+            EqualizerSlider::Band(2) => ("310HZ", self.equalizer.band_positions[2]),
+            EqualizerSlider::Band(3) => ("600HZ", self.equalizer.band_positions[3]),
+            EqualizerSlider::Band(4) => ("1KHZ", self.equalizer.band_positions[4]),
+            EqualizerSlider::Band(5) => ("3KHZ", self.equalizer.band_positions[5]),
+            EqualizerSlider::Band(6) => ("6KHZ", self.equalizer.band_positions[6]),
+            EqualizerSlider::Band(7) => ("12KHZ", self.equalizer.band_positions[7]),
+            EqualizerSlider::Band(8) => ("14KHZ", self.equalizer.band_positions[8]),
+            EqualizerSlider::Band(9) => ("16KHZ", self.equalizer.band_positions[9]),
             EqualizerSlider::Band(_)
             | EqualizerSlider::ShadedVolume
             | EqualizerSlider::ShadedBalance => return None,
@@ -5012,7 +5422,7 @@ impl MainWindowUiState {
         } else {
             String::new()
         };
-        let max_len = ((self.playlist_width - 35) / 5)
+        let max_len = ((self.playlist_ui.width - 35) / 5)
             .saturating_sub(prefix.len() as i32)
             .saturating_sub(suffix.len() as i32)
             .max(0) as usize;
@@ -5123,7 +5533,7 @@ impl MainWindowUiState {
     }
 
     fn display_time_ms(&self) -> i64 {
-        if let Some(remaining) = self.seek_state.eof_pause_remaining_ms() {
+        if let Some(remaining) = self.playback_transition.eof_pause_remaining_ms() {
             return remaining.max(0);
         }
         let elapsed = self.playback_position_ms.max(0);
@@ -5137,7 +5547,7 @@ impl MainWindowUiState {
 
     fn time_digits(&self) -> [i32; 5] {
         if self.app_state.player.state() == PlayerState::Stopped
-            && self.seek_state.eof_pause_remaining_ms().is_none()
+            && self.playback_transition.eof_pause_remaining_ms().is_none()
         {
             return [NumberDisplay::BLANK; 5];
         }
@@ -5213,27 +5623,50 @@ impl MainWindowUiState {
 
     fn equalizer_render_state(&self) -> EqualizerRenderState {
         EqualizerRenderState {
-            focused: self.equalizer_focused || self.equalizer_dragging_title,
-            shaded: self.equalizer_shaded,
-            active: self.equalizer_active,
-            automatic: self.equalizer_automatic,
-            pressed_control: self
-                .equalizer_pressed_control
-                .filter(|_| self.equalizer_pressed_inside),
-            pressed_slider: self.equalizer_dragging,
-            preamp_position: self.equalizer_preamp_position,
-            band_positions: self.equalizer_band_positions,
+            focused: self.equalizer.panel.focused(),
+            shaded: self.equalizer.panel.shaded,
+            active: self.equalizer.active,
+            automatic: self.equalizer.automatic,
+            pressed_control: self.equalizer.pointer.pressed_control(),
+            pressed_slider: self.equalizer.pointer.dragging_slider(),
+            preamp_position: self.equalizer.preamp_position,
+            band_positions: self.equalizer.band_positions,
             volume_position: volume_to_eq_shaded_position(self.app_state.player.volume()),
             balance_position: balance_to_eq_shaded_position(self.app_state.player.balance()),
         }
     }
 
+    fn panel_state(&self, kind: PanelKind) -> PanelState {
+        self.panel_placement(kind).state()
+    }
+
+    fn panel_placement(&self, kind: PanelKind) -> PanelPlacement {
+        match kind {
+            PanelKind::Equalizer => self.equalizer.panel,
+            PanelKind::Playlist => self.playlist_ui.panel,
+        }
+    }
+
+    fn panel_placement_mut(&mut self, kind: PanelKind) -> &mut PanelPlacement {
+        match kind {
+            PanelKind::Equalizer => &mut self.equalizer.panel,
+            PanelKind::Playlist => &mut self.playlist_ui.panel,
+        }
+    }
+
+    fn sync_panel_config_from_placement(&mut self) {
+        self.app_state.config.equalizer_visible = self.equalizer.panel.visible;
+        self.app_state.config.equalizer_detached = self.equalizer.panel.detached;
+        self.app_state.config.equalizer_shaded = self.equalizer.panel.shaded;
+        self.app_state.config.playlist_visible = self.playlist_ui.panel.visible;
+        self.app_state.config.playlist_detached = self.playlist_ui.panel.detached;
+        self.app_state.config.playlist_shaded = self.playlist_ui.panel.shaded;
+    }
+
     pub(crate) fn panel_visibility(&self) -> PanelVisibility {
         PanelVisibility {
-            equalizer: self.app_state.config.equalizer_visible
-                && self.app_state.config.equalizer_detached,
-            playlist: self.app_state.config.playlist_visible
-                && self.app_state.config.playlist_detached,
+            equalizer: self.panel_state(PanelKind::Equalizer).is_detached_visible(),
+            playlist: self.panel_state(PanelKind::Playlist).is_detached_visible(),
         }
     }
 
@@ -5241,16 +5674,16 @@ impl MainWindowUiState {
         DockedPanelState {
             main_focused: true,
             main_shaded: self.shaded,
-            equalizer_visible: self.app_state.config.equalizer_visible,
-            equalizer_detached: self.app_state.config.equalizer_detached,
-            equalizer_focused: self.equalizer_focused || self.equalizer_dragging_title,
-            equalizer_shaded: self.equalizer_shaded,
-            playlist_visible: self.app_state.config.playlist_visible,
-            playlist_detached: self.app_state.config.playlist_detached,
-            playlist_focused: self.playlist_focused || self.playlist_dragging_title,
-            playlist_shaded: self.playlist_shaded,
-            playlist_width: self.playlist_width,
-            playlist_height: self.playlist_height,
+            equalizer_visible: self.equalizer.panel.visible,
+            equalizer_detached: self.equalizer.panel.detached,
+            equalizer_focused: self.equalizer.panel.focused(),
+            equalizer_shaded: self.equalizer.panel.shaded,
+            playlist_visible: self.playlist_ui.panel.visible,
+            playlist_detached: self.playlist_ui.panel.detached,
+            playlist_focused: self.playlist_ui.panel.focused(),
+            playlist_shaded: self.playlist_ui.panel.shaded,
+            playlist_width: self.playlist_ui.width,
+            playlist_height: self.playlist_ui.height,
         }
     }
 
@@ -5260,17 +5693,18 @@ impl MainWindowUiState {
 
     pub(crate) fn docked_panel_at(&self, x: i32, y: i32) -> Option<(PanelKind, i32, i32)> {
         let mut offset_y = main_window_height(self.shaded);
-        if self.app_state.config.equalizer_visible && !self.app_state.config.equalizer_detached {
-            let height = equalizer_window_height(self.equalizer_shaded);
+        if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
+            let height = equalizer_window_height(self.equalizer.panel.shaded);
             if x >= 0 && x < EQUALIZER_WINDOW_WIDTH && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Equalizer, x, y - offset_y));
             }
             offset_y += height;
         }
 
-        if self.app_state.config.playlist_visible && !self.app_state.config.playlist_detached {
-            let height = playlist_window_height(self.playlist_shaded, self.playlist_height);
-            if x >= 0 && x < self.playlist_width && y >= offset_y && y < offset_y + height {
+        if self.panel_state(PanelKind::Playlist).is_docked_visible() {
+            let height =
+                playlist_window_height(self.playlist_ui.panel.shaded, self.playlist_ui.height);
+            if x >= 0 && x < self.playlist_ui.width && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Playlist, x, y - offset_y));
             }
         }
@@ -5279,28 +5713,23 @@ impl MainWindowUiState {
     }
 
     fn docked_playlist_local_y(&self, y: i32) -> Option<i32> {
-        if !self.app_state.config.playlist_visible || self.app_state.config.playlist_detached {
+        if !self.panel_state(PanelKind::Playlist).is_docked_visible() {
             return None;
         }
         let mut offset_y = main_window_height(self.shaded);
-        if self.app_state.config.equalizer_visible && !self.app_state.config.equalizer_detached {
-            offset_y += equalizer_window_height(self.equalizer_shaded);
+        if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
+            offset_y += equalizer_window_height(self.equalizer.panel.shaded);
         }
         Some(y - offset_y)
     }
 
     pub(crate) fn set_panel_detached(&mut self, kind: PanelKind, detached: bool) {
-        match kind {
-            PanelKind::Equalizer => self.app_state.config.equalizer_detached = detached,
-            PanelKind::Playlist => self.app_state.config.playlist_detached = detached,
-        }
+        self.panel_placement_mut(kind).detached = detached;
+        self.sync_panel_config_from_placement();
     }
 
     pub(crate) fn is_panel_detached(&self, kind: PanelKind) -> bool {
-        match kind {
-            PanelKind::Equalizer => self.app_state.config.equalizer_detached,
-            PanelKind::Playlist => self.app_state.config.playlist_detached,
-        }
+        self.panel_placement(kind).detached
     }
 
     pub(crate) fn is_shaded(&self) -> bool {
@@ -5316,31 +5745,31 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn is_equalizer_shaded(&self) -> bool {
-        self.equalizer_shaded
+        self.equalizer.panel.shaded
     }
 
     pub(crate) fn is_playlist_shaded(&self) -> bool {
-        self.playlist_shaded
+        self.playlist_ui.panel.shaded
     }
 
     pub(crate) fn playlist_menu(&self) -> Option<PlaylistMenuKind> {
-        self.playlist_menu
+        self.playlist_ui.menu.kind()
     }
 
     pub(crate) fn playlist_menu_hover(&self) -> Option<usize> {
-        self.playlist_menu_hover
+        self.playlist_ui.menu.hover()
     }
 
     pub(crate) fn playlist_menu_pressed(&self) -> bool {
-        self.playlist_menu_pressed
+        self.playlist_ui.menu.pressed()
     }
 
     pub(crate) fn playlist_size(&self) -> (i32, i32) {
-        (self.playlist_width, self.playlist_height)
+        (self.playlist_ui.width, self.playlist_ui.height)
     }
 
     pub(crate) fn playlist_scroll_offset(&self) -> usize {
-        self.playlist_scroll_offset
+        self.playlist_ui.scroll_offset
     }
 
     pub(crate) fn playlist_scrollbar_visible(&self) -> bool {
@@ -5348,23 +5777,24 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_search_active(&self) -> bool {
-        self.playlist_search_active
+        self.playlist_ui.search.is_active()
     }
 
     pub(crate) fn playlist_search_query(&self) -> &str {
-        &self.playlist_search_query
+        self.playlist_ui.search.query()
     }
 
     pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
-        self.app_state.config.playlist_visible = visible;
+        self.playlist_ui.panel.visible = visible;
+        self.sync_panel_config_from_placement();
     }
 
     pub(crate) fn is_preferences_visible(&self) -> bool {
-        self.preferences_visible
+        self.dialogs.preferences
     }
 
     pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
-        self.preferences_visible = visible;
+        self.dialogs.preferences = visible;
     }
 
     pub(crate) fn preferences_page(&self) -> PreferencesPage {
@@ -5384,16 +5814,23 @@ impl MainWindowUiState {
     }
 
     fn apply_config_to_ui_state(&mut self) {
-        self.equalizer_active = self.app_state.config.equalizer_active;
-        self.equalizer_automatic = self.app_state.config.equalizer_auto;
-        self.equalizer_preamp_position = self.app_state.config.equalizer_preamp_pos;
-        self.equalizer_band_positions = self.app_state.config.equalizer_band_pos;
+        self.equalizer.panel = PanelPlacement::from_config(
+            self.app_state.config.equalizer_visible,
+            self.app_state.config.equalizer_detached,
+            self.app_state.config.equalizer_shaded,
+        );
+        self.playlist_ui.panel = PanelPlacement::from_config(
+            self.app_state.config.playlist_visible,
+            self.app_state.config.playlist_detached,
+            self.app_state.config.playlist_shaded,
+        );
+        self.equalizer.active = self.app_state.config.equalizer_active;
+        self.equalizer.automatic = self.app_state.config.equalizer_auto;
+        self.equalizer.preamp_position = self.app_state.config.equalizer_preamp_pos;
+        self.equalizer.band_positions = self.app_state.config.equalizer_band_pos;
         self.playback_position_ms = self.app_state.config.playback_position_ms.max(0);
-        self.seek_state = if self.playback_position_ms > 0 {
-            SeekState::StoppedAt(self.playback_position_ms)
-        } else {
-            SeekState::Idle
-        };
+        self.playback_transition =
+            PlaybackTransitionState::stopped_at_or_idle(self.playback_position_ms);
         self.position_position = self.position_slider_position();
         self.apply_visualization_preferences();
     }
@@ -5401,12 +5838,11 @@ impl MainWindowUiState {
     fn sync_config_from_ui_state(&mut self) {
         self.app_state.config.playback_position_ms = self.playback_position_ms.max(0);
         self.app_state.config.main_shaded = self.shaded;
-        self.app_state.config.playlist_shaded = self.playlist_shaded;
-        self.app_state.config.equalizer_shaded = self.equalizer_shaded;
-        self.app_state.config.equalizer_active = self.equalizer_active;
-        self.app_state.config.equalizer_auto = self.equalizer_automatic;
-        self.app_state.config.equalizer_preamp_pos = self.equalizer_preamp_position;
-        self.app_state.config.equalizer_band_pos = self.equalizer_band_positions;
+        self.sync_panel_config_from_placement();
+        self.app_state.config.equalizer_active = self.equalizer.active;
+        self.app_state.config.equalizer_auto = self.equalizer.automatic;
+        self.app_state.config.equalizer_preamp_pos = self.equalizer.preamp_position;
+        self.app_state.config.equalizer_band_pos = self.equalizer.band_positions;
     }
 
     pub(crate) fn reset_preferences_to_defaults(&mut self) {
@@ -5417,35 +5853,35 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn is_open_location_visible(&self) -> bool {
-        self.open_location_visible
+        self.dialogs.open_location
     }
 
     pub(crate) fn set_open_location_visible(&mut self, visible: bool) {
-        self.open_location_visible = visible;
+        self.dialogs.open_location = visible;
     }
 
     pub(crate) fn is_jump_time_visible(&self) -> bool {
-        self.jump_time_visible
+        self.dialogs.jump_time
     }
 
     pub(crate) fn set_jump_time_visible(&mut self, visible: bool) {
-        self.jump_time_visible = visible;
+        self.dialogs.jump_time = visible;
     }
 
     pub(crate) fn is_skin_browser_visible(&self) -> bool {
-        self.skin_browser_visible
+        self.dialogs.skin_browser
     }
 
     pub(crate) fn set_skin_browser_visible(&mut self, visible: bool) {
-        self.skin_browser_visible = visible;
+        self.dialogs.skin_browser = visible;
     }
 
     pub(crate) fn is_output_device_picker_visible(&self) -> bool {
-        self.output_device_picker_visible
+        self.dialogs.output_device_picker
     }
 
     pub(crate) fn set_output_device_picker_visible(&mut self, visible: bool) {
-        self.output_device_picker_visible = visible;
+        self.dialogs.output_device_picker = visible;
     }
 
     pub(crate) fn set_output_devices(&mut self, system_devices: Vec<OutputDevice>) {
@@ -5555,8 +5991,7 @@ impl MainWindowUiState {
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Pause => {
-                if self.app_state.player.state() == PlayerState::Playing {
-                    self.app_state.player.pause();
+                if self.handle_playback_control_event(PlaybackControlEvent::Pause) {
                     self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
                 }
             }
@@ -5569,16 +6004,7 @@ impl MainWindowUiState {
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Play => {
-                if self.app_state.player.state() == PlayerState::Paused {
-                    self.app_state.player.unpause();
-                } else {
-                    if self.app_state.playlist.position().is_none()
-                        && self.app_state.playlist.len() > 0
-                    {
-                        self.app_state.playlist.set_position(0);
-                    }
-                    self.start_current_playlist_playback();
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::Play);
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
             }
             MprisCommand::Seek { offset_us } => {
@@ -5604,14 +6030,15 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn scan_skin_browser_dirs<P: AsRef<Path>>(&mut self, dirs: &[P]) -> io::Result<()> {
-        self.skin_browser_entries = discover_skins_in_dirs(dirs)?;
-        self.selected_skin_index = self
+        self.skin_browser.entries = discover_skins_in_dirs(dirs)?;
+        self.skin_browser.selected_index = self
             .app_state
             .config
             .skin
             .as_deref()
             .and_then(|current| {
-                self.skin_browser_entries
+                self.skin_browser
+                    .entries
                     .iter()
                     .position(|entry| entry.path == Path::new(current))
                     .map(|index| index + 1)
@@ -5621,11 +6048,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn skin_browser_entries(&self) -> &[SkinEntry] {
-        &self.skin_browser_entries
+        &self.skin_browser.entries
     }
 
     pub(crate) fn selected_skin_index(&self) -> usize {
-        self.selected_skin_index
+        self.skin_browser.selected_index
     }
 
     pub(crate) fn selected_skin(&self) -> Option<&str> {
@@ -5634,22 +6061,22 @@ impl MainWindowUiState {
 
     pub(crate) fn select_skin_browser_index(&mut self, index: usize) -> bool {
         let previous_skin = self.app_state.config.skin.clone();
-        let previous_index = self.selected_skin_index;
+        let previous_index = self.skin_browser.selected_index;
         if index == 0 {
             self.app_state.config.skin = None;
-            self.selected_skin_index = 0;
+            self.skin_browser.selected_index = 0;
         } else {
-            let Some(entry) = self.skin_browser_entries.get(index - 1) else {
+            let Some(entry) = self.skin_browser.entries.get(index - 1) else {
                 return false;
             };
             self.app_state.config.skin = Some(entry.path.display().to_string());
-            self.selected_skin_index = index;
+            self.skin_browser.selected_index = index;
         }
 
         if let Err(err) = self.reload_skin() {
             eprintln!("xmms-rs: failed to load selected skin: {err}");
             self.app_state.config.skin = previous_skin;
-            self.selected_skin_index = previous_index;
+            self.skin_browser.selected_index = previous_index;
             return false;
         }
         true
@@ -5657,12 +6084,12 @@ impl MainWindowUiState {
 
     pub(crate) fn reload_skin(&mut self) -> io::Result<()> {
         self.load_configured_skin()?;
-        self.skin_reload_count = self.skin_reload_count.saturating_add(1);
+        self.skin_browser.reload_count = self.skin_browser.reload_count.saturating_add(1);
         Ok(())
     }
 
     pub(crate) fn skin_reload_count(&self) -> u32 {
-        self.skin_reload_count
+        self.skin_browser.reload_count
     }
 
     pub(crate) fn active_skin_pixel_argb(
@@ -5716,35 +6143,35 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn is_file_dialog_visible(&self) -> bool {
-        self.file_dialog_visible
+        self.dialogs.file
     }
 
     pub(crate) fn set_file_dialog_visible(&mut self, visible: bool) {
-        self.file_dialog_visible = visible;
+        self.dialogs.file = visible;
     }
 
     pub(crate) fn is_directory_dialog_visible(&self) -> bool {
-        self.directory_dialog_visible
+        self.dialogs.directory
     }
 
     pub(crate) fn set_directory_dialog_visible(&mut self, visible: bool) {
-        self.directory_dialog_visible = visible;
+        self.dialogs.directory = visible;
     }
 
     pub(crate) fn is_playlist_load_dialog_visible(&self) -> bool {
-        self.playlist_load_dialog_visible
+        self.dialogs.playlist_load
     }
 
     pub(crate) fn set_playlist_load_dialog_visible(&mut self, visible: bool) {
-        self.playlist_load_dialog_visible = visible;
+        self.dialogs.playlist_load = visible;
     }
 
     pub(crate) fn is_playlist_save_dialog_visible(&self) -> bool {
-        self.playlist_save_dialog_visible
+        self.dialogs.playlist_save
     }
 
     pub(crate) fn set_playlist_save_dialog_visible(&mut self, visible: bool) {
-        self.playlist_save_dialog_visible = visible;
+        self.dialogs.playlist_save = visible;
     }
 
     pub(crate) fn last_playlist_file_info(&self) -> Option<&str> {
@@ -5757,9 +6184,8 @@ impl MainWindowUiState {
 
     pub(crate) fn load_playlist_file(&mut self, path: &Path) -> std::io::Result<()> {
         self.app_state.playlist = Playlist::load_m3u_file(path)?;
-        self.playlist_scroll_offset = 0;
-        self.playlist_search_active = false;
-        self.playlist_search_query.clear();
+        self.playlist_ui.scroll_offset = 0;
+        self.playlist_ui.search.stop();
         self.schedule_missing_local_playlist_durations();
         Ok(())
     }
@@ -5813,13 +6239,15 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visible_playlist_entry_uri(&self, row: usize) -> Option<&str> {
-        self.playlist_scroll_offset
+        self.playlist_ui
+            .scroll_offset
             .checked_add(row)
             .and_then(|index| self.playlist_entry_uri(index))
     }
 
     pub(crate) fn visible_playlist_entry_title(&self, row: usize) -> Option<String> {
-        self.playlist_scroll_offset
+        self.playlist_ui
+            .scroll_offset
             .checked_add(row)
             .and_then(|index| self.app_state.playlist.entries().get(index))
             .map(|entry| self.formatted_playlist_entry_title(entry))
@@ -5849,7 +6277,7 @@ impl MainWindowUiState {
 
     fn start_current_playlist_playback(&mut self) {
         self.start_current_playlist_playback_at(
-            self.seek_state
+            self.playback_transition
                 .play_start_position_ms(self.playback_position_ms),
         );
     }
@@ -5859,8 +6287,7 @@ impl MainWindowUiState {
     }
 
     fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
-        self.seek_state = SeekState::Idle;
-        self.stop_fade_remaining_ms = 0;
+        self.playback_transition = PlaybackTransitionState::start_playback();
         self.set_runtime_volume(self.app_state.config.volume);
         if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
             self.app_state.playlist.set_position(0);
@@ -5884,14 +6311,15 @@ impl MainWindowUiState {
                 return;
             }
             if self.playback_position_ms > 0 {
-                self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
+                self.playback_transition =
+                    PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
             }
         }
         self.app_state.player.mark_playing();
     }
 
     fn load_equalizer_auto_preset_for_uri(&mut self, uri: &str) {
-        if !self.equalizer_automatic {
+        if !self.equalizer.automatic {
             return;
         }
         let Some(path) = file_uri_to_path(uri) else {
@@ -5963,9 +6391,63 @@ impl MainWindowUiState {
         self.app_state.player.unpause();
     }
 
+    fn handle_playback_control_event(&mut self, event: PlaybackControlEvent) -> bool {
+        match event {
+            PlaybackControlEvent::Play => match self.app_state.player.state() {
+                PlayerState::Paused => {
+                    self.unpause_playback();
+                    true
+                }
+                PlayerState::Stopped => {
+                    self.start_current_playlist_playback();
+                    true
+                }
+                PlayerState::Playing => false,
+            },
+            PlaybackControlEvent::Pause => {
+                if self.app_state.player.state() == PlayerState::Playing {
+                    self.pause_playback();
+                    true
+                } else {
+                    false
+                }
+            }
+            PlaybackControlEvent::PauseToggle => match self.app_state.player.state() {
+                PlayerState::Playing => {
+                    self.pause_playback();
+                    true
+                }
+                PlayerState::Paused => {
+                    self.unpause_playback();
+                    true
+                }
+                PlayerState::Stopped => false,
+            },
+            PlaybackControlEvent::Stop => {
+                self.request_stop_playback();
+                true
+            }
+            PlaybackControlEvent::Previous => {
+                if self.app_state.playlist.previous() {
+                    self.start_current_playlist_playback_from_beginning();
+                }
+                self.position_position = 0;
+                self.playback_position_ms = 0;
+                true
+            }
+            PlaybackControlEvent::Next => {
+                if self.app_state.playlist.next() {
+                    self.start_current_playlist_playback_from_beginning();
+                }
+                self.position_position = 0;
+                self.playback_position_ms = 0;
+                true
+            }
+        }
+    }
+
     fn stop_playback(&mut self) {
-        self.seek_state = SeekState::Idle;
-        self.stop_fade_remaining_ms = 0;
+        self.playback_transition = PlaybackTransitionState::stop_playback();
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().stop() {
                 eprintln!("xmms-rs: failed to stop playback: {err}");
@@ -5991,14 +6473,13 @@ impl MainWindowUiState {
             self.stop_playback();
             return;
         }
-        self.seek_state = SeekState::Idle;
-        self.stop_fade_start_volume = self.app_state.player.volume().max(0);
-        if self.stop_fade_start_volume == 0 {
+        let start_volume = self.app_state.player.volume().max(0);
+        if start_volume == 0 {
             self.stop_playback();
             self.set_runtime_volume(self.app_state.config.volume);
             return;
         }
-        self.stop_fade_remaining_ms = STOP_FADE_DURATION_MS;
+        self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
     }
 
     fn set_runtime_volume(&mut self, volume: i32) {
@@ -6059,33 +6540,25 @@ impl MainWindowUiState {
         if !self.app_state.config.vim_playlist_navigation {
             return false;
         }
-        self.playlist_menu = None;
-        self.playlist_menu_hover = None;
-        self.playlist_menu_pressed = false;
-        self.playlist_search_active = true;
-        self.playlist_search_query.clear();
+        self.playlist_ui.menu.close();
+        self.playlist_ui.search.start();
         true
     }
 
     pub(crate) fn stop_playlist_search(&mut self) {
-        self.playlist_search_active = false;
-        self.playlist_search_query.clear();
+        self.playlist_ui.search.stop();
     }
 
     pub(crate) fn push_playlist_search_char(&mut self, ch: char) {
-        if !self.playlist_search_active || ch.is_control() {
-            return;
+        if self.playlist_ui.search.push_char(ch) {
+            self.update_playlist_search_match();
         }
-        self.playlist_search_query.push(ch);
-        self.update_playlist_search_match();
     }
 
     pub(crate) fn pop_playlist_search_char(&mut self) {
-        if !self.playlist_search_active {
-            return;
+        if self.playlist_ui.search.pop_char() {
+            self.update_playlist_search_match();
         }
-        self.playlist_search_query.pop();
-        self.update_playlist_search_match();
     }
 
     pub(crate) fn sort_playlist_by(&mut self, key: PlaylistSortKey) {
@@ -6224,7 +6697,7 @@ impl MainWindowUiState {
             }
             Err(err) => eprintln!("xmms-rs: failed to add open location {text}: {err}"),
         }
-        self.open_location_visible = false;
+        self.dialogs.open_location = false;
     }
 
     pub(crate) fn accept_dropped_uris<I, S>(
@@ -6277,98 +6750,95 @@ impl MainWindowUiState {
         };
         self.last_jump_time_ms = Some(ms);
         self.set_playback_position_ms(ms);
-        self.jump_time_visible = false;
+        self.dialogs.jump_time = false;
     }
 
     pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
         let size = snap_playlist_size(width, height);
         let (width, height) = (size.width, size.height);
-        let changed = self.playlist_width != width || self.playlist_height != height;
-        self.playlist_width = width;
-        self.playlist_height = height;
+        let changed = self.playlist_ui.width != width || self.playlist_ui.height != height;
+        self.playlist_ui.width = width;
+        self.playlist_ui.height = height;
         self.clamp_playlist_scroll_offset();
         changed
     }
 
     pub(crate) fn set_panel_dragging(&mut self, kind: PanelKind, dragging: bool) {
-        match kind {
-            PanelKind::Equalizer => self.equalizer_dragging_title = dragging,
-            PanelKind::Playlist => self.playlist_dragging_title = dragging,
-        }
+        self.panel_placement_mut(kind).dragging_title = dragging;
     }
 
     pub(crate) fn set_panel_focused(&mut self, kind: PanelKind, focused: bool) {
-        match kind {
-            PanelKind::Equalizer => self.equalizer_focused = focused,
-            PanelKind::Playlist => self.playlist_focused = focused,
-        }
+        self.panel_placement_mut(kind).focused = focused;
     }
 
     pub(crate) fn is_panel_focused(&self, kind: PanelKind) -> bool {
-        match kind {
-            PanelKind::Equalizer => self.equalizer_focused,
-            PanelKind::Playlist => self.playlist_focused,
-        }
+        self.panel_placement(kind).focused
     }
 
     pub(crate) fn equalizer_active(&self) -> bool {
-        self.equalizer_active
+        self.equalizer.active
     }
 
     pub(crate) fn equalizer_automatic(&self) -> bool {
-        self.equalizer_automatic
+        self.equalizer.automatic
     }
 
     pub(crate) fn equalizer_preamp_position(&self) -> i32 {
-        self.equalizer_preamp_position
+        self.equalizer.preamp_position
     }
 
     pub(crate) fn equalizer_band_position(&self, band: usize) -> Option<i32> {
-        self.equalizer_band_positions.get(band).copied()
+        self.equalizer.band_positions.get(band).copied()
     }
 
     pub(crate) fn equalizer_preamp_db(&self) -> f64 {
-        equalizer_position_to_db(self.equalizer_preamp_position)
+        equalizer_position_to_db(self.equalizer.preamp_position)
     }
 
     pub(crate) fn equalizer_band_db(&self, band: usize) -> Option<f64> {
-        self.equalizer_band_positions
+        self.equalizer
+            .band_positions
             .get(band)
             .map(|position| equalizer_position_to_db(*position))
     }
 
     pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> [f64; 10] {
-        if self.equalizer_active {
-            self.equalizer_band_positions.map(equalizer_position_to_db)
+        if self.equalizer.active {
+            self.equalizer.band_positions.map(equalizer_position_to_db)
         } else {
             [0.0; 10]
         }
     }
 
     pub(crate) fn equalizer_presets_pressed(&self) -> bool {
-        self.equalizer_pressed_control == Some(EqualizerControl::Presets)
-            && self.equalizer_pressed_inside
+        self.equalizer.pointer.pressed_control() == Some(EqualizerControl::Presets)
     }
 
     pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
-        if self.equalizer_shaded {
+        if self.equalizer.panel.shaded {
             if let Some(slider) = equalizer_shaded_slider_at(x, y) {
-                self.equalizer_dragging = Some(slider);
-                self.begin_equalizer_slider_drag(slider, x, y);
+                self.equalizer.pointer = EqualizerPointer::DraggingSlider {
+                    slider,
+                    offset: self.begin_equalizer_slider_drag(slider, x, y),
+                };
                 return true;
             }
             return false;
         }
 
         if let Some(control) = equalizer_control_at(x, y) {
-            self.equalizer_pressed_control = Some(control);
-            self.equalizer_pressed_inside = true;
+            self.equalizer.pointer = EqualizerPointer::PressedControl {
+                control,
+                inside: true,
+            };
             return true;
         }
 
         if let Some(slider) = equalizer_slider_at(x, y) {
-            self.equalizer_dragging = Some(slider);
-            self.begin_equalizer_slider_drag(slider, x, y);
+            self.equalizer.pointer = EqualizerPointer::DraggingSlider {
+                slider,
+                offset: self.begin_equalizer_slider_drag(slider, x, y),
+            };
             return true;
         }
 
@@ -6376,25 +6846,29 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_motion(&mut self, x: i32, y: i32) -> bool {
-        if let Some(control) = self.equalizer_pressed_control {
-            let inside = equalizer_control_at(x, y) == Some(control);
-            let changed = self.equalizer_pressed_inside != inside;
-            self.equalizer_pressed_inside = inside;
-            return changed;
+        match self.equalizer.pointer {
+            EqualizerPointer::Idle => false,
+            EqualizerPointer::PressedControl { control, inside } => {
+                let next_inside = equalizer_control_at(x, y) == Some(control);
+                let changed = inside != next_inside;
+                self.equalizer.pointer = EqualizerPointer::PressedControl {
+                    control,
+                    inside: next_inside,
+                };
+                changed
+            }
+            EqualizerPointer::DraggingSlider { slider, offset } => {
+                let coordinate = match slider {
+                    EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => x,
+                    EqualizerSlider::Preamp | EqualizerSlider::Band(_) => y,
+                };
+                self.set_equalizer_slider_position(slider, coordinate, offset)
+            }
         }
-
-        let Some(slider) = self.equalizer_dragging else {
-            return false;
-        };
-        let coordinate = match slider {
-            EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => x,
-            EqualizerSlider::Preamp | EqualizerSlider::Band(_) => y,
-        };
-        self.set_equalizer_slider_position(slider, coordinate)
     }
 
     pub(crate) fn equalizer_scroll(&mut self, x: i32, y: i32, dy: f64) -> bool {
-        let slider = if self.equalizer_shaded {
+        let slider = if self.equalizer.panel.shaded {
             equalizer_shaded_slider_at(x, y)
         } else {
             equalizer_slider_at(x, y)
@@ -6411,16 +6885,16 @@ impl MainWindowUiState {
         };
         match slider {
             EqualizerSlider::Preamp => {
-                let next = (self.equalizer_preamp_position + diff).clamp(0, 100);
-                let changed = self.equalizer_preamp_position != next;
-                self.equalizer_preamp_position = next;
+                let next = (self.equalizer.preamp_position + diff).clamp(0, 100);
+                let changed = self.equalizer.preamp_position != next;
+                self.equalizer.preamp_position = next;
                 if changed {
                     self.sync_equalizer_to_backend();
                 }
                 changed
             }
             EqualizerSlider::Band(band) => {
-                let Some(value) = self.equalizer_band_positions.get_mut(band) else {
+                let Some(value) = self.equalizer.band_positions.get_mut(band) else {
                     return false;
                 };
                 let next = (*value + diff).clamp(0, 100);
@@ -6437,7 +6911,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn adjust_shaded_equalizer_balance(&mut self, diff: i32) -> bool {
-        if !self.equalizer_shaded {
+        if !self.equalizer.panel.shaded {
             return false;
         }
         let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
@@ -6452,76 +6926,75 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
-        if let Some(control) = self.equalizer_pressed_control.take() {
-            let activated =
-                self.equalizer_pressed_inside && equalizer_control_at(x, y) == Some(control);
-            self.equalizer_pressed_inside = false;
-            if activated {
-                match control {
-                    EqualizerControl::On => {
-                        self.equalizer_active = !self.equalizer_active;
-                        self.sync_equalizer_to_backend();
+        match std::mem::take(&mut self.equalizer.pointer) {
+            EqualizerPointer::PressedControl { control, inside } => {
+                let activated = inside && equalizer_control_at(x, y) == Some(control);
+                if activated {
+                    match control {
+                        EqualizerControl::On => {
+                            self.equalizer.active = !self.equalizer.active;
+                            self.sync_equalizer_to_backend();
+                        }
+                        EqualizerControl::Auto => {
+                            self.equalizer.automatic = !self.equalizer.automatic
+                        }
+                        EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
                     }
-                    EqualizerControl::Auto => self.equalizer_automatic = !self.equalizer_automatic,
-                    EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
                 }
+                PanelAction::Changed
             }
-            return PanelAction::Changed;
+            EqualizerPointer::DraggingSlider { .. } => PanelAction::Changed,
+            EqualizerPointer::Idle => PanelAction::None,
         }
-
-        if self.equalizer_dragging.take().is_some() {
-            return PanelAction::Changed;
-        }
-
-        PanelAction::None
     }
 
     pub(crate) fn apply_equalizer_preset(&mut self, preset: i32) {
-        self.equalizer_preamp_position = 50;
-        self.equalizer_band_positions = [50; 10];
+        self.equalizer.preamp_position = 50;
+        self.equalizer.band_positions = [50; 10];
         match preset {
             1 => {
-                self.equalizer_band_positions[0] = 25;
-                self.equalizer_band_positions[1] = 30;
-                self.equalizer_band_positions[2] = 40;
+                self.equalizer.band_positions[0] = 25;
+                self.equalizer.band_positions[1] = 30;
+                self.equalizer.band_positions[2] = 40;
             }
             2 => {
-                self.equalizer_band_positions[7] = 40;
-                self.equalizer_band_positions[8] = 30;
-                self.equalizer_band_positions[9] = 25;
+                self.equalizer.band_positions[7] = 40;
+                self.equalizer.band_positions[8] = 30;
+                self.equalizer.band_positions[9] = 25;
             }
             3 => {
-                self.equalizer_band_positions[0] = 30;
-                self.equalizer_band_positions[1] = 35;
-                self.equalizer_band_positions[4] = 60;
-                self.equalizer_band_positions[5] = 60;
-                self.equalizer_band_positions[8] = 35;
-                self.equalizer_band_positions[9] = 30;
+                self.equalizer.band_positions[0] = 30;
+                self.equalizer.band_positions[1] = 35;
+                self.equalizer.band_positions[4] = 60;
+                self.equalizer.band_positions[5] = 60;
+                self.equalizer.band_positions[8] = 35;
+                self.equalizer.band_positions[9] = 30;
             }
             _ => {}
         }
         self.sync_equalizer_to_backend();
     }
 
-    fn set_equalizer_slider_position(&mut self, slider: EqualizerSlider, coordinate: i32) -> bool {
+    fn set_equalizer_slider_position(
+        &mut self,
+        slider: EqualizerSlider,
+        coordinate: i32,
+        offset: i32,
+    ) -> bool {
         let changed = match slider {
             EqualizerSlider::Preamp => {
                 let position = eq_slider_pixel_to_position(
-                    coordinate
-                        - equalizer_slider_layout(slider).rect.y
-                        - self.equalizer_slider_press_offset,
+                    coordinate - equalizer_slider_layout(slider).rect.y - offset,
                 );
-                let changed = self.equalizer_preamp_position != position;
-                self.equalizer_preamp_position = position;
+                let changed = self.equalizer.preamp_position != position;
+                self.equalizer.preamp_position = position;
                 changed
             }
             EqualizerSlider::Band(band) => {
                 let position = eq_slider_pixel_to_position(
-                    coordinate
-                        - equalizer_slider_layout(slider).rect.y
-                        - self.equalizer_slider_press_offset,
+                    coordinate - equalizer_slider_layout(slider).rect.y - offset,
                 );
-                let Some(value) = self.equalizer_band_positions.get_mut(band) else {
+                let Some(value) = self.equalizer.band_positions.get_mut(band) else {
                     return false;
                 };
                 let changed = *value != position;
@@ -6529,20 +7002,16 @@ impl MainWindowUiState {
                 changed
             }
             EqualizerSlider::ShadedVolume => {
-                let position = (coordinate
-                    - equalizer_slider_layout(slider).rect.x
-                    - self.equalizer_slider_press_offset)
-                    .clamp(0, 94);
+                let position =
+                    (coordinate - equalizer_slider_layout(slider).rect.x - offset).clamp(0, 94);
                 let volume = eq_shaded_position_to_volume(position);
                 let changed = self.app_state.player.volume() != volume;
                 self.app_state.player.set_volume(volume);
                 changed
             }
             EqualizerSlider::ShadedBalance => {
-                let position = (coordinate
-                    - equalizer_slider_layout(slider).rect.x
-                    - self.equalizer_slider_press_offset)
-                    .clamp(0, 39);
+                let position =
+                    (coordinate - equalizer_slider_layout(slider).rect.x - offset).clamp(0, 39);
                 let balance = eq_shaded_position_to_balance(position);
                 let changed = self.app_state.player.balance() != balance;
                 self.app_state.player.set_balance(balance);
@@ -6573,27 +7042,29 @@ impl MainWindowUiState {
         changed
     }
 
-    fn begin_equalizer_slider_drag(&mut self, slider: EqualizerSlider, x: i32, y: i32) {
+    fn begin_equalizer_slider_drag(&mut self, slider: EqualizerSlider, x: i32, y: i32) -> i32 {
         let layout = equalizer_slider_layout(slider);
         match slider {
             EqualizerSlider::Preamp | EqualizerSlider::Band(_) => {
                 let position = self.equalizer_slider_pixel_position(slider);
                 let local_y = y - layout.rect.y;
                 if local_y >= position && local_y < position + 11 {
-                    self.equalizer_slider_press_offset = local_y - position;
+                    local_y - position
                 } else {
-                    self.equalizer_slider_press_offset = 5;
-                    self.set_equalizer_slider_position(slider, y);
+                    let offset = 5;
+                    self.set_equalizer_slider_position(slider, y, offset);
+                    offset
                 }
             }
             EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => {
                 let position = self.equalizer_slider_pixel_position(slider);
                 let local_x = x - layout.rect.x;
                 if local_x >= position && local_x < position + layout.knob_size.width {
-                    self.equalizer_slider_press_offset = local_x - position;
+                    local_x - position
                 } else {
-                    self.equalizer_slider_press_offset = layout.knob_size.width / 2;
-                    self.set_equalizer_slider_position(slider, x);
+                    let offset = layout.knob_size.width / 2;
+                    self.set_equalizer_slider_position(slider, x, offset);
+                    offset
                 }
             }
         }
@@ -6601,9 +7072,10 @@ impl MainWindowUiState {
 
     fn equalizer_slider_pixel_position(&self, slider: EqualizerSlider) -> i32 {
         match slider {
-            EqualizerSlider::Preamp => eq_slider_position_to_pixel(self.equalizer_preamp_position),
+            EqualizerSlider::Preamp => eq_slider_position_to_pixel(self.equalizer.preamp_position),
             EqualizerSlider::Band(band) => self
-                .equalizer_band_positions
+                .equalizer
+                .band_positions
                 .get(band)
                 .copied()
                 .map(eq_slider_position_to_pixel)
@@ -6620,9 +7092,9 @@ impl MainWindowUiState {
     fn sync_equalizer_to_backend(&self) {
         if let Some(backend) = &self.playback_backend {
             backend.borrow().set_equalizer_from_positions(
-                self.equalizer_active,
-                self.equalizer_preamp_position,
-                self.equalizer_band_positions,
+                self.equalizer.active,
+                self.equalizer.preamp_position,
+                self.equalizer.band_positions,
             );
         }
     }
@@ -6636,7 +7108,7 @@ impl MainWindowUiState {
             && y < title_height
             && !self.panel_title_button_hit(kind, x, y)
             && !(kind == PanelKind::Equalizer
-                && self.equalizer_shaded
+                && self.equalizer.panel.shaded
                 && equalizer_shaded_slider_at(x, y).is_some())
     }
 
@@ -6645,38 +7117,43 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {
-        !self.playlist_shaded && x > self.playlist_width - 20 && y > self.playlist_height - 20
+        !self.playlist_ui.panel.shaded
+            && x > self.playlist_ui.width - 20
+            && y > self.playlist_ui.height - 20
     }
 
     pub(crate) fn begin_docked_playlist_resize(&mut self, local_y: i32) -> bool {
-        if !self.playlist_resize_region(self.playlist_width - 1, local_y) {
+        if !self.playlist_resize_region(self.playlist_ui.width - 1, local_y) {
             return false;
         }
-        self.playlist_docked_resizing = true;
-        self.playlist_resize_drag_offset_y = self.playlist_height - local_y;
+        self.playlist_ui.pointer = PlaylistPointer::Resizing {
+            offset_y: self.playlist_ui.height - local_y,
+        };
         true
     }
 
     pub(crate) fn docked_playlist_resize_motion(&mut self, main_y: i32) -> bool {
-        if !self.playlist_docked_resizing {
+        let PlaylistPointer::Resizing { offset_y } = self.playlist_ui.pointer else {
             return false;
-        }
+        };
         let Some(local_y) = self.docked_playlist_local_y(main_y) else {
             return false;
         };
-        let height = local_y + self.playlist_resize_drag_offset_y;
+        let height = local_y + offset_y;
         self.set_playlist_size(PLAYLIST_MIN_WIDTH, height)
     }
 
     pub(crate) fn end_docked_playlist_resize(&mut self) -> bool {
-        let was_resizing = self.playlist_docked_resizing;
-        self.playlist_docked_resizing = false;
-        self.playlist_resize_drag_offset_y = 0;
-        was_resizing
+        if matches!(self.playlist_ui.pointer, PlaylistPointer::Resizing { .. }) {
+            self.playlist_ui.pointer = PlaylistPointer::Idle;
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn is_docked_playlist_resizing(&self) -> bool {
-        self.playlist_docked_resizing
+        matches!(self.playlist_ui.pointer, PlaylistPointer::Resizing { .. })
     }
 
     pub(crate) fn playlist_scrollbar_press(&mut self, x: i32, y: i32) -> bool {
@@ -6686,31 +7163,36 @@ impl MainWindowUiState {
         if !self.playlist_scrollbar_region(x, y) {
             return false;
         }
-        self.playlist_scrollbar_dragging = true;
-        self.playlist_scrollbar_drag_offset = if y >= thumb_y && y < thumb_y + thumb_h {
+        let offset = if y >= thumb_y && y < thumb_y + thumb_h {
             y - thumb_y
         } else {
             thumb_h / 2
         };
-        self.update_playlist_scroll_from_thumb_y(y - self.playlist_scrollbar_drag_offset);
+        self.playlist_ui.pointer = PlaylistPointer::DraggingScrollbar { offset };
+        self.update_playlist_scroll_from_thumb_y(y - offset);
         true
     }
 
     pub(crate) fn playlist_scrollbar_motion(&mut self, x: i32, y: i32) -> bool {
-        if !self.playlist_scrollbar_dragging {
+        let PlaylistPointer::DraggingScrollbar { offset } = self.playlist_ui.pointer else {
             return false;
-        }
-        let old = self.playlist_scroll_offset;
+        };
+        let old = self.playlist_ui.scroll_offset;
         let _ = x;
-        self.update_playlist_scroll_from_thumb_y(y - self.playlist_scrollbar_drag_offset);
-        old != self.playlist_scroll_offset
+        self.update_playlist_scroll_from_thumb_y(y - offset);
+        old != self.playlist_ui.scroll_offset
     }
 
     pub(crate) fn playlist_scrollbar_release(&mut self) -> bool {
-        let was_dragging = self.playlist_scrollbar_dragging;
-        self.playlist_scrollbar_dragging = false;
-        self.playlist_scrollbar_drag_offset = 0;
-        was_dragging
+        if matches!(
+            self.playlist_ui.pointer,
+            PlaylistPointer::DraggingScrollbar { .. }
+        ) {
+            self.playlist_ui.pointer = PlaylistPointer::Idle;
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn playlist_scroll(&mut self, dy: f64) -> bool {
@@ -6725,16 +7207,18 @@ impl MainWindowUiState {
     }
 
     fn scroll_playlist_rows(&mut self, rows: i32) -> bool {
-        let old = self.playlist_scroll_offset;
+        let old = self.playlist_ui.scroll_offset;
         if rows < 0 {
-            self.playlist_scroll_offset = self
-                .playlist_scroll_offset
+            self.playlist_ui.scroll_offset = self
+                .playlist_ui
+                .scroll_offset
                 .saturating_sub(rows.unsigned_abs() as usize);
         } else {
-            self.playlist_scroll_offset = self.playlist_scroll_offset.saturating_add(rows as usize);
+            self.playlist_ui.scroll_offset =
+                self.playlist_ui.scroll_offset.saturating_add(rows as usize);
             self.clamp_playlist_scroll_offset();
         }
-        old != self.playlist_scroll_offset
+        old != self.playlist_ui.scroll_offset
     }
 
     pub(crate) fn playlist_press(&mut self, x: i32, y: i32) -> bool {
@@ -6743,11 +7227,9 @@ impl MainWindowUiState {
 
     pub(crate) fn playlist_press_with_ctrl(&mut self, x: i32, y: i32, ctrl_pressed: bool) -> bool {
         if let Some(item) = self.playlist_menu_item_at(x, y) {
-            self.playlist_menu_hover = Some(item);
-            self.playlist_menu_pressed = true;
-            return true;
+            return self.playlist_ui.menu.press_item(item);
         }
-        if self.playlist_menu.is_some() {
+        if self.playlist_ui.menu.is_open() {
             return false;
         }
 
@@ -6758,30 +7240,32 @@ impl MainWindowUiState {
             if let Some(entry) = self.app_state.playlist.entries_mut().get_mut(index) {
                 entry.selected = !entry.selected;
             }
-            self.playlist_last_click = None;
-            self.playlist_pending_double_click = None;
-            self.playlist_drag_index = None;
-            self.playlist_drag_moved = false;
+            self.playlist_ui.last_click = None;
+            self.playlist_ui.pending_double_click = None;
+            self.playlist_ui.pointer = PlaylistPointer::Idle;
             return true;
         }
 
         let now = Instant::now();
         let is_double_click = self
-            .playlist_last_click
+            .playlist_ui
+            .last_click
             .is_some_and(|(last_index, last_time)| {
                 last_index == index && now.duration_since(last_time) <= Duration::from_millis(500)
             });
 
-        self.playlist_last_click = Some((index, now));
-        self.playlist_pending_double_click = is_double_click.then_some(index);
-        self.playlist_drag_moved = false;
+        self.playlist_ui.last_click = Some((index, now));
+        self.playlist_ui.pending_double_click = is_double_click.then_some(index);
         self.select_single_playlist_entry(index);
-        self.playlist_drag_index = Some(index);
+        self.playlist_ui.pointer = PlaylistPointer::DraggingEntry {
+            index,
+            moved: false,
+        };
         true
     }
 
     pub(crate) fn activate_playlist_entry_at(&mut self, x: i32, y: i32) -> bool {
-        if self.playlist_menu.is_some() {
+        if self.playlist_ui.menu.is_open() {
             return false;
         }
         let Some(index) = self.playlist_entry_at(x, y) else {
@@ -6793,58 +7277,55 @@ impl MainWindowUiState {
 
     fn activate_playlist_entry(&mut self, index: usize) {
         self.select_single_playlist_entry(index);
-        self.playlist_last_click = None;
-        self.playlist_pending_double_click = None;
-        self.playlist_drag_index = None;
-        self.playlist_drag_moved = false;
+        self.playlist_ui.last_click = None;
+        self.playlist_ui.pending_double_click = None;
+        self.playlist_ui.pointer = PlaylistPointer::Idle;
         self.app_state.playlist.set_position(index);
         self.start_current_playlist_playback_from_beginning();
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
-        if let Some(from) = self.playlist_drag_index {
+        if let PlaylistPointer::DraggingEntry { index: from, .. } = self.playlist_ui.pointer {
             let Some(to) = self.playlist_entry_at(x, y) else {
                 return false;
             };
             if self.app_state.playlist.move_entry(from, to) {
-                self.playlist_drag_moved = true;
-                self.playlist_pending_double_click = None;
-                self.playlist_drag_index = Some(to);
+                self.playlist_ui.pending_double_click = None;
+                self.playlist_ui.pointer = PlaylistPointer::DraggingEntry {
+                    index: to,
+                    moved: true,
+                };
                 self.scroll_playlist_entry_into_view(to);
                 return true;
             }
             return false;
         }
 
-        if self.playlist_menu.is_none() {
+        if !self.playlist_ui.menu.is_open() {
             return false;
         }
         let item = self.playlist_menu_item_at(x, y);
-        let changed = self.playlist_menu_hover != item;
-        self.playlist_menu_hover = item;
-        changed
+        self.playlist_ui.menu.set_hover(item)
     }
 
     pub(crate) fn playlist_entry_release(&mut self) -> bool {
-        let was_pressed = self.playlist_drag_index.take().is_some();
-        if was_pressed {
-            if let Some(index) = self.playlist_pending_double_click.take() {
-                if !self.playlist_drag_moved {
-                    self.activate_playlist_entry(index);
-                }
+        let PlaylistPointer::DraggingEntry { moved, .. } = self.playlist_ui.pointer else {
+            return false;
+        };
+        self.playlist_ui.pointer = PlaylistPointer::Idle;
+        if let Some(index) = self.playlist_ui.pending_double_click.take() {
+            if !moved {
+                self.activate_playlist_entry(index);
             }
         }
-        self.playlist_drag_moved = false;
-        was_pressed
+        true
     }
 
     pub(crate) fn playlist_release(&mut self, x: i32, y: i32) -> PanelAction {
-        let menu = self.playlist_menu;
+        let menu = self.playlist_ui.menu.kind();
         let item = self.playlist_menu_item_at(x, y);
-        let activated = item == self.playlist_menu_hover;
-        self.playlist_menu = None;
-        self.playlist_menu_hover = None;
-        self.playlist_menu_pressed = false;
+        let activated = item == self.playlist_ui.menu.hover();
+        self.playlist_ui.menu.close();
         if activated {
             if let (Some(menu), Some(item)) = (menu, item) {
                 self.activate_playlist_menu_item(menu, item)
@@ -6857,12 +7338,15 @@ impl MainWindowUiState {
     }
 
     fn activate_playlist_menu_item(&mut self, menu: PlaylistMenuKind, item: usize) -> PanelAction {
-        let changed = match (menu, item) {
-            (PlaylistMenuKind::Add, 0) => return PanelAction::OpenLocationWindow,
-            (PlaylistMenuKind::Add, 1) => return PanelAction::OpenDirectoryDialog,
-            (PlaylistMenuKind::Add, 2) => return PanelAction::OpenFileDialog,
-            (PlaylistMenuKind::Misc, 0) => return PanelAction::ShowPlaylistSortMenu,
-            (PlaylistMenuKind::Misc, 1) => {
+        let Some(command) = PlaylistMenuCommand::from_menu_item(menu, item) else {
+            return PanelAction::None;
+        };
+        let changed = match command {
+            PlaylistMenuCommand::OpenLocationWindow => return PanelAction::OpenLocationWindow,
+            PlaylistMenuCommand::OpenDirectoryDialog => return PanelAction::OpenDirectoryDialog,
+            PlaylistMenuCommand::OpenFileDialog => return PanelAction::OpenFileDialog,
+            PlaylistMenuCommand::ShowSortMenu => return PanelAction::ShowPlaylistSortMenu,
+            PlaylistMenuCommand::ShowFileInfo => {
                 self.last_playlist_file_info = self
                     .selected_playlist_index()
                     .or_else(|| self.app_state.playlist.position())
@@ -6870,35 +7354,34 @@ impl MainWindowUiState {
                     .map(|entry| entry.title.clone());
                 true
             }
-            (PlaylistMenuKind::Misc, 2) => {
+            PlaylistMenuCommand::OpenOptions => {
                 self.playlist_options_opened = true;
                 true
             }
-            (PlaylistMenuKind::Remove, 1) => {
+            PlaylistMenuCommand::ClearList => {
                 self.app_state.playlist.clear();
                 true
             }
-            (PlaylistMenuKind::Remove, 2) => self.app_state.playlist.crop_to_selected_or_current(),
-            (PlaylistMenuKind::Remove, 3) => self.app_state.playlist.remove_selected_or_current(),
-            (PlaylistMenuKind::Select, 0) => {
+            PlaylistMenuCommand::CropToSelection => {
+                self.app_state.playlist.crop_to_selected_or_current()
+            }
+            PlaylistMenuCommand::RemoveSelectedOrCurrent => {
+                self.app_state.playlist.remove_selected_or_current()
+            }
+            PlaylistMenuCommand::InvertSelection => {
                 self.app_state.playlist.invert_selection();
                 true
             }
-            (PlaylistMenuKind::Select, 1) => {
+            PlaylistMenuCommand::SelectNone => {
                 self.app_state.playlist.select_all(false);
                 true
             }
-            (PlaylistMenuKind::Select, 2) => {
+            PlaylistMenuCommand::SelectAll => {
                 self.app_state.playlist.select_all(true);
                 true
             }
-            (PlaylistMenuKind::List, 0) => {
-                self.app_state.playlist.clear();
-                true
-            }
-            (PlaylistMenuKind::List, 1) => return PanelAction::OpenPlaylistSaveDialog,
-            (PlaylistMenuKind::List, 2) => return PanelAction::OpenPlaylistLoadDialog,
-            _ => false,
+            PlaylistMenuCommand::SavePlaylist => return PanelAction::OpenPlaylistSaveDialog,
+            PlaylistMenuCommand::LoadPlaylist => return PanelAction::OpenPlaylistLoadDialog,
         };
         if changed {
             self.clamp_playlist_scroll_offset();
@@ -6983,14 +7466,15 @@ impl MainWindowUiState {
     }
 
     fn update_playlist_search_match(&mut self) {
-        if self.playlist_search_query.is_empty() {
+        let query = self.playlist_ui.search.query();
+        if query.is_empty() {
             return;
         }
         let total = self.app_state.playlist.len();
         if total == 0 {
             return;
         }
-        let query = self.playlist_search_query.to_lowercase();
+        let query = query.to_lowercase();
         let start = self
             .selected_playlist_index()
             .or_else(|| self.app_state.playlist.position())
@@ -7066,30 +7550,30 @@ impl MainWindowUiState {
         if visible == 0 {
             return;
         }
-        if index < self.playlist_scroll_offset {
-            self.playlist_scroll_offset = index;
-        } else if index >= self.playlist_scroll_offset + visible {
-            self.playlist_scroll_offset = index + 1 - visible;
+        if index < self.playlist_ui.scroll_offset {
+            self.playlist_ui.scroll_offset = index;
+        } else if index >= self.playlist_ui.scroll_offset + visible {
+            self.playlist_ui.scroll_offset = index + 1 - visible;
         }
         self.clamp_playlist_scroll_offset();
     }
 
     fn playlist_visible_entries(&self) -> usize {
-        ((self.playlist_height - 58).max(0) / 11) as usize
+        ((self.playlist_ui.height - 58).max(0) / 11) as usize
     }
 
     fn playlist_entry_at(&self, x: i32, y: i32) -> Option<usize> {
-        if self.playlist_shaded || !(12..self.playlist_width - 19).contains(&x) {
+        if self.playlist_ui.panel.shaded || !(12..self.playlist_ui.width - 19).contains(&x) {
             return None;
         }
-        if !(20..self.playlist_height - 38).contains(&y) {
+        if !(20..self.playlist_ui.height - 38).contains(&y) {
             return None;
         }
         let row = ((y - 20) / 11) as usize;
         if row >= self.playlist_visible_entries() {
             return None;
         }
-        let index = self.playlist_scroll_offset + row;
+        let index = self.playlist_ui.scroll_offset + row;
         (index < self.app_state.playlist.len()).then_some(index)
     }
 
@@ -7101,15 +7585,18 @@ impl MainWindowUiState {
     }
 
     fn clamp_playlist_scroll_offset(&mut self) {
-        self.playlist_scroll_offset = self.playlist_scroll_offset.min(self.playlist_max_scroll());
+        self.playlist_ui.scroll_offset = self
+            .playlist_ui
+            .scroll_offset
+            .min(self.playlist_max_scroll());
     }
 
     fn playlist_scrollbar_region(&self, x: i32, y: i32) -> bool {
-        !self.playlist_shaded
-            && x >= self.playlist_width - 15
-            && x < self.playlist_width - 7
+        !self.playlist_ui.panel.shaded
+            && x >= self.playlist_ui.width - 15
+            && x < self.playlist_ui.width - 7
             && y >= 20
-            && y < self.playlist_height - 38
+            && y < self.playlist_ui.height - 38
     }
 
     fn playlist_scrollbar_geometry(&self) -> Option<(i32, i32)> {
@@ -7118,12 +7605,12 @@ impl MainWindowUiState {
         if total <= visible || visible == 0 {
             return None;
         }
-        let list_h = self.playlist_height - 58;
+        let list_h = self.playlist_ui.height - 58;
         let thumb_h = 18;
         let max_scroll = total - visible;
         let max_thumb_pos = (list_h - thumb_h).max(0);
         let thumb_y = 20
-            + ((self.playlist_scroll_offset.min(max_scroll) as i32 * max_thumb_pos)
+            + ((self.playlist_ui.scroll_offset.min(max_scroll) as i32 * max_thumb_pos)
                 / max_scroll.max(1) as i32);
         Some((thumb_y, thumb_h))
     }
@@ -7132,27 +7619,27 @@ impl MainWindowUiState {
         let visible = self.playlist_visible_entries();
         let total = self.app_state.playlist.len();
         if total <= visible || visible == 0 {
-            self.playlist_scroll_offset = 0;
+            self.playlist_ui.scroll_offset = 0;
             return;
         }
-        let list_h = self.playlist_height - 58;
+        let list_h = self.playlist_ui.height - 58;
         let thumb_h = 18;
         let max_scroll = total - visible;
         let max_thumb_pos = (list_h - thumb_h).max(0);
         if max_thumb_pos <= 0 {
-            self.playlist_scroll_offset = 0;
+            self.playlist_ui.scroll_offset = 0;
             return;
         }
         let thumb_pos = (thumb_y - 20).clamp(0, max_thumb_pos);
-        self.playlist_scroll_offset = ((thumb_pos as usize * max_scroll)
+        self.playlist_ui.scroll_offset = ((thumb_pos as usize * max_scroll)
             + (max_thumb_pos as usize / 2))
             / max_thumb_pos as usize;
     }
 
     fn playlist_menu_item_at(&self, x: i32, y: i32) -> Option<usize> {
-        let menu = self.playlist_menu?;
+        let menu = self.playlist_ui.menu.kind()?;
         let (menu_x, menu_y, menu_width, menu_height) =
-            playlist_menu_rect(menu, self.playlist_width, self.playlist_height);
+            playlist_menu_rect(menu, self.playlist_ui.width, self.playlist_ui.height);
         if x < menu_x || x >= menu_x + menu_width || y < menu_y || y >= menu_y + menu_height {
             return None;
         }
@@ -7161,38 +7648,37 @@ impl MainWindowUiState {
 
     pub(crate) fn panel_click(&mut self, kind: PanelKind, x: i32, y: i32) -> PanelAction {
         if kind == PanelKind::Playlist {
-            self.playlist_menu = None;
-            self.playlist_menu_hover = None;
-            self.playlist_menu_pressed = false;
-            self.playlist_drag_index = None;
+            self.playlist_ui.menu.close();
+            if matches!(
+                self.playlist_ui.pointer,
+                PlaylistPointer::DraggingEntry { .. }
+            ) {
+                self.playlist_ui.pointer = PlaylistPointer::Idle;
+            }
         }
 
         if self.panel_title_button_hit(kind, x, y) {
             if self.panel_close_button_hit(kind, x) {
-                match kind {
-                    PanelKind::Equalizer => self.app_state.config.equalizer_visible = false,
-                    PanelKind::Playlist => self.app_state.config.playlist_visible = false,
-                }
+                self.panel_placement_mut(kind).visible = false;
+                self.sync_panel_config_from_placement();
                 return PanelAction::Changed;
             }
 
             if self.panel_shade_button_hit(kind, x) {
-                match kind {
-                    PanelKind::Equalizer => self.equalizer_shaded = !self.equalizer_shaded,
-                    PanelKind::Playlist => self.playlist_shaded = !self.playlist_shaded,
-                }
+                self.toggle_panel_shaded(kind);
                 return PanelAction::Changed;
             }
         }
 
-        if kind == PanelKind::Playlist && !self.playlist_shaded {
-            if let Some(menu) = playlist_menu_at(x, y, self.playlist_width, self.playlist_height) {
-                self.playlist_menu = Some(menu);
-                self.playlist_menu_hover = Some(menu.item_count().saturating_sub(1));
+        if kind == PanelKind::Playlist && !self.playlist_ui.panel.shaded {
+            if let Some(menu) =
+                playlist_menu_at(x, y, self.playlist_ui.width, self.playlist_ui.height)
+            {
+                self.playlist_ui.menu.open(menu);
                 return PanelAction::ShowPlaylistMenu(menu);
             }
             if let Some(button) =
-                playlist_footer_button_at(x, y, self.playlist_width, self.playlist_height)
+                playlist_footer_button_at(x, y, self.playlist_ui.width, self.playlist_ui.height)
             {
                 return self.activate_playlist_footer_button(button);
             }
@@ -7204,39 +7690,23 @@ impl MainWindowUiState {
     fn activate_playlist_footer_button(&mut self, button: PlaylistFooterButton) -> PanelAction {
         match button {
             PlaylistFooterButton::Previous => {
-                if self.app_state.playlist.previous() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Previous);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Play => {
-                match self.app_state.player.state() {
-                    PlayerState::Paused => self.unpause_playback(),
-                    PlayerState::Stopped => self.start_current_playlist_playback(),
-                    PlayerState::Playing => {}
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::Play);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Pause => {
-                match self.app_state.player.state() {
-                    PlayerState::Playing => self.pause_playback(),
-                    PlayerState::Paused => self.unpause_playback(),
-                    PlayerState::Stopped => {}
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::PauseToggle);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Stop => {
-                self.request_stop_playback();
+                self.handle_playback_control_event(PlaybackControlEvent::Stop);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Next => {
-                if self.app_state.playlist.next() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Next);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Eject => PanelAction::OpenFileDialog,
@@ -7252,16 +7722,16 @@ impl MainWindowUiState {
     }
 
     fn panel_title_button_hit(&self, kind: PanelKind, x: i32, y: i32) -> bool {
-        panel_title_button_at(panel_layout_kind(kind), x, y, self.playlist_width).is_some()
+        panel_title_button_at(panel_layout_kind(kind), x, y, self.playlist_ui.width).is_some()
     }
 
     fn panel_shade_button_hit(&self, kind: PanelKind, x: i32) -> bool {
-        panel_title_button_at(panel_layout_kind(kind), x, 7, self.playlist_width)
+        panel_title_button_at(panel_layout_kind(kind), x, 7, self.playlist_ui.width)
             == Some(PanelTitleButton::Shade)
     }
 
     fn panel_close_button_hit(&self, kind: PanelKind, x: i32) -> bool {
-        panel_title_button_at(panel_layout_kind(kind), x, 7, self.playlist_width)
+        panel_title_button_at(panel_layout_kind(kind), x, 7, self.playlist_ui.width)
             == Some(PanelTitleButton::Close)
     }
 
@@ -7290,11 +7760,17 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn toggle_playlist_shaded(&mut self) {
-        self.playlist_shaded = !self.playlist_shaded;
+        self.toggle_panel_shaded(PanelKind::Playlist);
     }
 
     pub(crate) fn toggle_equalizer_shaded(&mut self) {
-        self.equalizer_shaded = !self.equalizer_shaded;
+        self.toggle_panel_shaded(PanelKind::Equalizer);
+    }
+
+    fn toggle_panel_shaded(&mut self, kind: PanelKind) {
+        let placement = self.panel_placement_mut(kind);
+        placement.shaded = !placement.shaded;
+        self.sync_panel_config_from_placement();
     }
 
     pub(crate) fn volume(&self) -> i32 {
@@ -7399,7 +7875,7 @@ impl MainWindowUiState {
     pub(crate) fn set_preference_pause_between_songs(&mut self, enabled: bool) {
         self.app_state.config.pause_between_songs = enabled;
         if !enabled {
-            self.seek_state = SeekState::Idle;
+            self.playback_transition = PlaybackTransitionState::stop_playback();
         }
         self.mark_preferences_saved();
     }
@@ -7449,16 +7925,18 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_playlist_docked(&mut self, docked: bool) {
-        self.app_state.config.playlist_detached = !docked;
+        self.playlist_ui.panel.detached = !docked;
+        self.sync_panel_config_from_placement();
         if docked {
-            self.playlist_width = PLAYLIST_MIN_WIDTH;
+            self.playlist_ui.width = PLAYLIST_MIN_WIDTH;
             self.clamp_playlist_scroll_offset();
         }
         self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_equalizer_docked(&mut self, docked: bool) {
-        self.app_state.config.equalizer_detached = !docked;
+        self.equalizer.panel.detached = !docked;
+        self.sync_panel_config_from_placement();
         self.mark_preferences_saved();
     }
 
@@ -7674,15 +8152,13 @@ impl MainWindowUiState {
             };
         self.position_position = self.position_slider_position();
         if self.app_state.player.state() == PlayerState::Stopped {
-            self.seek_state = if self.playback_position_ms > 0 {
-                SeekState::StoppedAt(self.playback_position_ms)
-            } else {
-                SeekState::Idle
-            };
+            self.playback_transition =
+                PlaybackTransitionState::stopped_at_or_idle(self.playback_position_ms);
             return;
         }
-        if self.seek_state.pending_backend_seek_ms().is_some() {
-            self.seek_state = SeekState::PendingBackendSeek(self.playback_position_ms);
+        if self.playback_transition.pending_backend_seek_ms().is_some() {
+            self.playback_transition =
+                PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
             return;
         }
         if let Some(backend) = &self.playback_backend {
@@ -7722,35 +8198,34 @@ impl MainWindowUiState {
     }
 
     fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
-        if self.stop_fade_remaining_ms <= 0 {
+        let Some((next_transition, volume)) = self.playback_transition.tick_fadeout(elapsed_ms)
+        else {
             return false;
-        }
-        self.stop_fade_remaining_ms = (self.stop_fade_remaining_ms - i64::from(elapsed_ms)).max(0);
-        if self.stop_fade_remaining_ms == 0 {
+        };
+        if next_transition
+            .fadeout()
+            .is_some_and(|(remaining_ms, _)| remaining_ms == 0)
+        {
             let restore_volume = self.app_state.config.volume;
             self.stop_playback();
             self.set_runtime_volume(restore_volume);
             return true;
         }
-        let volume = ((i64::from(self.stop_fade_start_volume) * self.stop_fade_remaining_ms)
-            / STOP_FADE_DURATION_MS)
-            .clamp(0, 100) as i32;
+        self.playback_transition = next_transition;
         self.set_runtime_volume(volume);
         true
     }
 
     fn update_pending_eof_advance(&mut self, elapsed_ms: u32) -> bool {
-        let Some(remaining) = self.seek_state.eof_pause_remaining_ms() else {
+        let Some((next_transition, should_advance)) =
+            self.playback_transition.tick_eof_pause(elapsed_ms)
+        else {
             return false;
         };
-        let remaining = remaining - i64::from(elapsed_ms);
-        if remaining > 0 {
-            self.seek_state = SeekState::WaitingBetweenSongs {
-                remaining_ms: remaining,
-            };
+        self.playback_transition = next_transition;
+        if !should_advance {
             return true;
         }
-        self.seek_state = SeekState::Idle;
         self.advance_playlist_after_eof();
         true
     }
@@ -7808,7 +8283,7 @@ impl MainWindowUiState {
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
-        !applied_pending_seek && self.seek_state.eof_pause_remaining_ms().is_none()
+        !applied_pending_seek && self.playback_transition.eof_pause_remaining_ms().is_none()
     }
 
     fn apply_pending_backend_seek(
@@ -7816,18 +8291,18 @@ impl MainWindowUiState {
         backend: &Rc<RefCell<GStreamerBackend>>,
         log_failure: bool,
     ) -> bool {
-        let Some(position_ms) = self.seek_state.pending_backend_seek_ms() else {
+        let Some(position_ms) = self.playback_transition.pending_backend_seek_ms() else {
             return false;
         };
         match backend.borrow().seek_to_ms(position_ms) {
             Ok(()) => {
-                self.seek_state = SeekState::Idle;
+                self.playback_transition = PlaybackTransitionState::Idle;
                 true
             }
             Err(err) => {
                 if log_failure {
                     eprintln!("xmms-rs: failed to seek playback: {err}");
-                    self.seek_state = SeekState::Idle;
+                    self.playback_transition = PlaybackTransitionState::Idle;
                 }
                 false
             }
@@ -7835,14 +8310,13 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_eof_reached(&mut self) {
-        self.stop_fade_remaining_ms = 0;
         self.position_position = 0;
         if self.app_state.config.pause_between_songs
             && self.app_state.config.pause_between_songs_time > 0
         {
-            self.seek_state = SeekState::WaitingBetweenSongs {
-                remaining_ms: i64::from(self.app_state.config.pause_between_songs_time) * 1_000,
-            };
+            self.playback_transition = PlaybackTransitionState::wait_between_songs(
+                i64::from(self.app_state.config.pause_between_songs_time) * 1_000,
+            );
             self.playback_position_ms = 0;
             return;
         }
@@ -7865,63 +8339,59 @@ impl MainWindowUiState {
 
     pub(crate) fn press(&mut self, x: i32, y: i32) {
         let Some(control) = self.hit_test(x, y) else {
-            self.active = None;
-            self.active_inside = false;
+            self.main_pointer = MainPointer::Idle;
             return;
         };
-        self.active = Some(control);
-        self.active_inside = true;
 
-        if let MainControl::Slider(slider) = control {
-            self.begin_slider_drag(slider, x);
-        }
+        self.main_pointer = if let MainControl::Slider(slider) = control {
+            MainPointer::DraggingSlider {
+                slider,
+                offset: self.begin_slider_drag(slider, x),
+            }
+        } else {
+            MainPointer::PressedButton {
+                control,
+                inside: true,
+            }
+        };
     }
 
     pub(crate) fn motion(&mut self, x: i32, y: i32) -> bool {
-        let Some(active) = self.active else {
-            return false;
-        };
-
-        match active {
-            MainControl::Push(_) | MainControl::Toggle(_) => {
-                let inside = self.control_rect(active).contains(x, y);
-                let changed = self.active_inside != inside;
-                self.active_inside = inside;
+        match self.main_pointer {
+            MainPointer::Idle => false,
+            MainPointer::PressedButton { control, inside } => {
+                let next_inside = self.control_rect(control).contains(x, y);
+                let changed = inside != next_inside;
+                self.main_pointer = MainPointer::PressedButton {
+                    control,
+                    inside: next_inside,
+                };
                 changed
             }
-            MainControl::Slider(slider) => {
-                self.active_inside = self.control_rect(active).contains(x, y);
-                self.set_slider_position(
-                    slider,
-                    x - self.slider_rect(slider).x - self.slider_press_offset,
-                )
+            MainPointer::DraggingSlider { slider, offset } => {
+                self.set_slider_position(slider, x - self.slider_rect(slider).x - offset)
             }
         }
     }
 
     pub(crate) fn release(&mut self, x: i32, y: i32) -> UiAction {
-        let Some(active) = self.active.take() else {
-            self.active_inside = false;
-            return UiAction::None;
-        };
-
-        let activated = self.control_rect(active).contains(x, y) && self.active_inside;
-        self.active_inside = false;
-
-        match active {
-            MainControl::Push(button) if activated => self.activate_push(button),
-            MainControl::Toggle(toggle) if activated => {
-                self.activate_toggle(toggle);
+        match std::mem::take(&mut self.main_pointer) {
+            MainPointer::Idle => UiAction::None,
+            MainPointer::PressedButton { control, inside } => {
+                let activated = inside && self.control_rect(control).contains(x, y);
+                match control {
+                    MainControl::Push(button) if activated => self.activate_push(button),
+                    MainControl::Toggle(toggle) if activated => {
+                        self.activate_toggle(toggle);
+                        UiAction::None
+                    }
+                    _ => UiAction::None,
+                }
+            }
+            MainPointer::DraggingSlider { slider, offset } => {
+                self.set_slider_position(slider, x - self.slider_rect(slider).x - offset);
                 UiAction::None
             }
-            MainControl::Slider(slider) => {
-                self.set_slider_position(
-                    slider,
-                    x - self.slider_rect(slider).x - self.slider_press_offset,
-                );
-                UiAction::None
-            }
-            _ => UiAction::None,
         }
     }
 
@@ -8065,35 +8535,23 @@ impl MainWindowUiState {
                 UiAction::Resize
             }
             MainPushButton::Play => {
-                self.start_current_playlist_playback();
+                self.handle_playback_control_event(PlaybackControlEvent::Play);
                 UiAction::None
             }
             MainPushButton::Pause => {
-                match self.app_state.player.state() {
-                    PlayerState::Playing => self.pause_playback(),
-                    PlayerState::Paused => self.unpause_playback(),
-                    PlayerState::Stopped => {}
-                }
+                self.handle_playback_control_event(PlaybackControlEvent::PauseToggle);
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.request_stop_playback();
+                self.handle_playback_control_event(PlaybackControlEvent::Stop);
                 UiAction::None
             }
             MainPushButton::Previous => {
-                if self.app_state.playlist.previous() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Previous);
                 UiAction::None
             }
             MainPushButton::Next => {
-                if self.app_state.playlist.next() {
-                    self.start_current_playlist_playback_from_beginning();
-                }
-                self.position_position = 0;
-                self.playback_position_ms = 0;
+                self.handle_playback_control_event(PlaybackControlEvent::Next);
                 UiAction::None
             }
             MainPushButton::Eject => UiAction::OpenFileDialog,
@@ -8113,24 +8571,27 @@ impl MainWindowUiState {
                 self.app_state.config.repeat = selected;
             }
             MainToggleButton::Equalizer => {
-                self.app_state.config.equalizer_visible = !self.app_state.config.equalizer_visible;
+                self.equalizer.panel.visible = !self.equalizer.panel.visible;
+                self.sync_panel_config_from_placement();
             }
             MainToggleButton::Playlist => {
-                self.app_state.config.playlist_visible = !self.app_state.config.playlist_visible;
+                self.playlist_ui.panel.visible = !self.playlist_ui.panel.visible;
+                self.sync_panel_config_from_placement();
             }
         }
     }
 
-    fn begin_slider_drag(&mut self, slider: MainSlider, x: i32) {
+    fn begin_slider_drag(&mut self, slider: MainSlider, x: i32) -> i32 {
         let rect = self.slider_rect(slider);
         let knob_width = self.slider_knob_width(slider);
         let position = self.slider_position(slider);
         let knob_x = rect.x + position;
         if x >= knob_x && x < knob_x + knob_width {
-            self.slider_press_offset = x - knob_x;
+            x - knob_x
         } else {
-            self.slider_press_offset = knob_width / 2;
-            self.set_slider_position(slider, x - rect.x - self.slider_press_offset);
+            let offset = knob_width / 2;
+            self.set_slider_position(slider, x - rect.x - offset);
+            offset
         }
     }
 
@@ -8199,24 +8660,21 @@ impl MainWindowUiState {
     }
 
     fn pressed_push(&self) -> Option<MainPushButton> {
-        match (self.active, self.active_inside) {
-            (Some(MainControl::Push(button)), true) => Some(button),
+        match self.main_pointer.pressed_control() {
+            Some(MainControl::Push(button)) => Some(button),
             _ => None,
         }
     }
 
     fn pressed_toggle(&self) -> Option<MainToggleButton> {
-        match (self.active, self.active_inside) {
-            (Some(MainControl::Toggle(toggle)), true) => Some(toggle),
+        match self.main_pointer.pressed_control() {
+            Some(MainControl::Toggle(toggle)) => Some(toggle),
             _ => None,
         }
     }
 
     fn pressed_slider(&self) -> Option<MainSlider> {
-        match self.active {
-            Some(MainControl::Slider(slider)) => Some(slider),
-            _ => None,
-        }
+        self.main_pointer.pressed_slider()
     }
 
     fn control_rect(&self, control: MainControl) -> ControlRect {
@@ -8905,7 +9363,7 @@ mod tests {
         state.app_state.playlist.set_position(0);
         state.app_state.player.mark_playing();
         state.shaded = true;
-        state.equalizer_shaded = true;
+        state.toggle_equalizer_shaded();
 
         assert!(state.scroll_main(227, 5, 1.0));
         let forward_position = state.playback_position_ms;
@@ -8959,7 +9417,7 @@ mod tests {
         assert!(state.playlist_scroll(-1.0));
         assert_eq!(state.playlist_scroll_offset(), 0);
 
-        state.playlist_shaded = true;
+        state.toggle_playlist_shaded();
         assert!(state.playlist_scroll(1.0));
         assert_eq!(state.playlist_scroll_offset(), 3);
     }
@@ -8978,8 +9436,8 @@ mod tests {
         state.playlist_eof_reached();
         assert_eq!(state.app_state.playlist.position(), Some(0));
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 2_000
             }
         );
@@ -8988,8 +9446,8 @@ mod tests {
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(0));
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 1_000
             }
         );
@@ -8997,7 +9455,7 @@ mod tests {
 
         assert!(state.update_timer_tick(1_000));
         assert_eq!(state.app_state.playlist.position(), Some(1));
-        assert_eq!(state.seek_state, SeekState::Idle);
+        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
     }
 
     #[test]
@@ -9016,8 +9474,8 @@ mod tests {
         state.playlist_eof_reached();
         assert!(state.update_timer_tick(1_000));
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 1_000
             }
         );
@@ -9025,7 +9483,7 @@ mod tests {
 
         state.start_current_playlist_playback();
 
-        assert_eq!(state.seek_state, SeekState::Idle);
+        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
@@ -9047,8 +9505,8 @@ mod tests {
         state.playlist_eof_reached();
 
         assert_eq!(
-            state.seek_state,
-            SeekState::WaitingBetweenSongs {
+            state.playback_transition,
+            PlaybackTransitionState::WaitingBetweenSongs {
                 remaining_ms: 2_000
             }
         );
@@ -9067,14 +9525,92 @@ mod tests {
         state.app_state.player.mark_playing();
 
         state.activate_push(MainPushButton::Stop);
-        assert!(state.stop_fade_remaining_ms > 0);
+        assert_eq!(
+            state.playback_transition,
+            PlaybackTransitionState::FadingOut {
+                remaining_ms: STOP_FADE_DURATION_MS,
+                start_volume: 80,
+            }
+        );
 
         assert!(state.update_timer_tick(500));
         assert_eq!(state.volume(), 40);
         assert!(state.update_timer_tick(500));
         assert_eq!(state.app_state.player.state(), PlayerState::Stopped);
         assert_eq!(state.volume(), 80);
-        assert_eq!(state.stop_fade_remaining_ms, 0);
+        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
+    }
+
+    #[test]
+    fn playback_control_event_handles_play_pause_transitions() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+
+        assert!(state.handle_playback_control_event(PlaybackControlEvent::Play));
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+
+        assert!(state.handle_playback_control_event(PlaybackControlEvent::Pause));
+        assert_eq!(state.app_state.player.state(), PlayerState::Paused);
+
+        assert!(!state.handle_playback_control_event(PlaybackControlEvent::Pause));
+        assert_eq!(state.app_state.player.state(), PlayerState::Paused);
+
+        assert!(state.handle_playback_control_event(PlaybackControlEvent::Play));
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+
+        assert!(!state.handle_playback_control_event(PlaybackControlEvent::Play));
+        assert_eq!(state.app_state.player.state(), PlayerState::Playing);
+    }
+
+    #[test]
+    fn panel_state_maps_visibility_detach_and_shade_flags() {
+        let mut state = MainWindowUiState::from_app_state(AppState::from_config(Config {
+            equalizer_visible: true,
+            equalizer_detached: false,
+            playlist_visible: true,
+            playlist_detached: true,
+            ..Config::default()
+        }));
+        state.toggle_equalizer_shaded();
+
+        assert_eq!(
+            state.panel_state(PanelKind::Equalizer),
+            PanelState::Docked { shaded: true }
+        );
+        assert_eq!(
+            state.panel_state(PanelKind::Playlist),
+            PanelState::Detached { shaded: false }
+        );
+
+        state.set_playlist_visible(false);
+        assert_eq!(state.panel_state(PanelKind::Playlist), PanelState::Hidden);
+    }
+
+    #[test]
+    fn playlist_menu_command_maps_menu_indices() {
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 0),
+            Some(PlaylistMenuCommand::OpenLocationWindow)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 2),
+            Some(PlaylistMenuCommand::OpenFileDialog)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Remove, 3),
+            Some(PlaylistMenuCommand::RemoveSelectedOrCurrent)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::List, 1),
+            Some(PlaylistMenuCommand::SavePlaylist)
+        );
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Misc, 99),
+            None
+        );
     }
 
     #[test]
@@ -9423,7 +9959,7 @@ static char * main_xpm[] = {
     #[test]
     fn shaded_equalizer_sliders_are_not_titlebar_drag_regions() {
         let mut state = MainWindowUiState::default();
-        state.equalizer_shaded = true;
+        state.toggle_equalizer_shaded();
 
         assert!(!state.panel_title_drag_region(PanelKind::Equalizer, 61, 7));
         assert!(!state.panel_title_drag_region(PanelKind::Equalizer, 164, 7));

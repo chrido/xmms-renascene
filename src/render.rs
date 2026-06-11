@@ -109,6 +109,95 @@ mod tests {
     }
 
     #[test]
+    fn render_scaled_has_no_seams_at_fractional_scales() {
+        // A texture made of two adjacent slices sampling the same source. At
+        // fractional scales, scaling per slice leaves seams; render_scaled
+        // composites at 1x and scales the finished image once, so the result is
+        // identical to scaling the whole image a single time and never seams.
+        let image = XpmImage::parse(
+            r#"/* XPM */
+            static char *x[] = {
+            "10 4 2 1",
+            "a c #ff0000",
+            "b c #00ff00",
+            "ababababab",
+            "ababababab",
+            "ababababab",
+            "ababababab"
+            };"#,
+        )
+        .unwrap();
+        let source = surface_from_xpm(&image).unwrap();
+        let base_w = 10;
+        let base_h = 4;
+        let render = |cr: &Context| -> Result<(), RenderError> {
+            let mut x = 0;
+            while x < base_w {
+                blit_surface_rect(cr, &source, x, 0, x, 0, 2, base_h)?;
+                x += 2;
+            }
+            Ok(())
+        };
+
+        for dev_w in 11..=80 {
+            let dev_h = (base_h as f64 * dev_w as f64 / base_w as f64).round() as i32;
+
+            let mut scaled = ImageSurface::create(Format::ARgb32, dev_w, dev_h).unwrap();
+            let cr = Context::new(&scaled).unwrap();
+            render_scaled(&cr, dev_w, dev_h, base_w, base_h, |c, pass| {
+                if pass.is_bitmap() {
+                    render(c)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+            drop(cr);
+            scaled.flush();
+
+            // Reference: composite once at 1x, then scale the whole image once.
+            let base = ImageSurface::create(Format::ARgb32, base_w, base_h).unwrap();
+            let cr = Context::new(&base).unwrap();
+            render(&cr).unwrap();
+            drop(cr);
+            base.flush();
+            let mut reference = ImageSurface::create(Format::ARgb32, dev_w, dev_h).unwrap();
+            let cr = Context::new(&reference).unwrap();
+            cr.scale(
+                f64::from(dev_w) / f64::from(base_w),
+                f64::from(dev_h) / f64::from(base_h),
+            );
+            cr.set_source_surface(&base, 0.0, 0.0).unwrap();
+            cr.source().set_filter(cairo::Filter::Nearest);
+            cr.paint().unwrap();
+            drop(cr);
+            reference.flush();
+
+            let stride = scaled.stride() as usize;
+            let a = scaled.data().unwrap();
+            let b = reference.data().unwrap();
+            for y in 0..dev_h as usize {
+                for x in 0..dev_w as usize {
+                    let off = y * stride + x * 4;
+                    let pa = u32::from_ne_bytes(a[off..off + 4].try_into().unwrap());
+                    // Every pixel is fully opaque: no seam shows the background.
+                    assert_eq!(
+                        pa >> 24,
+                        0xff,
+                        "transparent seam at dev_w={dev_w} x={x} y={y}: {pa:08x}"
+                    );
+                    // And it matches scaling the whole image exactly once.
+                    let pb = u32::from_ne_bytes(b[off..off + 4].try_into().unwrap());
+                    assert_eq!(
+                        pa, pb,
+                        "diverges from single-scale at dev_w={dev_w} x={x} y={y}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scaling_helpers_match_c_rounding_and_clamping() {
         assert_eq!(clamp_scale_factor(0.5), 1.0);
         assert_eq!(clamp_scale_factor(6.0), 5.0);

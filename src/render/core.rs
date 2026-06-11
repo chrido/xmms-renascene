@@ -130,6 +130,131 @@ pub fn blit_surface_rect(
     Ok(true)
 }
 
+/// Identifies which kind of content a render pass should emit.
+///
+/// Skin bitmaps must be composited at native 1x and scaled once to stay
+/// seamless, but vector text must be rasterised at the final device resolution
+/// or it looks blurry. `render_scaled` therefore runs the render closure twice:
+/// once for [`RenderPass::Bitmap`] into the offscreen 1x buffer, and once for
+/// [`RenderPass::Text`] directly on the (scaled) device context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderPass {
+    Bitmap,
+    Text,
+}
+
+impl RenderPass {
+    pub fn is_bitmap(self) -> bool {
+        matches!(self, RenderPass::Bitmap)
+    }
+
+    pub fn is_text(self) -> bool {
+        matches!(self, RenderPass::Text)
+    }
+}
+
+/// Render skin content at its native (1x) resolution into an offscreen buffer,
+/// then scale that single image onto `cr` with nearest-neighbour filtering.
+///
+/// Skins are drawn as many adjacent slices. Scaling the cairo context and then
+/// blitting each slice separately makes every slice round its own edges and
+/// reset its own sampling phase, so at fractional scale factors adjacent slices
+/// no longer reconstruct one continuous image: thin seams and texture
+/// discontinuities appear where slices meet. Compositing every slice at integer
+/// 1x coordinates first (pixel-perfect, seam-free) and scaling the finished
+/// image exactly once removes those artifacts at every scale factor.
+///
+/// `draw` is invoked twice: with [`RenderPass::Bitmap`] while rendering the
+/// offscreen buffer, and with [`RenderPass::Text`] on the scaled device context
+/// so vector text is rasterised crisply at the real device resolution instead
+/// of being scaled up as a bitmap.
+pub fn render_scaled<F>(
+    cr: &Context,
+    device_width: i32,
+    device_height: i32,
+    base_width: i32,
+    base_height: i32,
+    draw: F,
+) -> Result<(), RenderError>
+where
+    F: Fn(&Context, RenderPass) -> Result<(), RenderError>,
+{
+    if device_width <= 0 || device_height <= 0 || base_width <= 0 || base_height <= 0 {
+        return Ok(());
+    }
+
+    let base = ImageSurface::create(Format::ARgb32, base_width, base_height)?;
+    {
+        let base_cr = Context::new(&base)?;
+        draw(&base_cr, RenderPass::Bitmap)?;
+    }
+    base.flush();
+
+    cr.save()?;
+    cr.scale(
+        f64::from(device_width) / f64::from(base_width),
+        f64::from(device_height) / f64::from(base_height),
+    );
+    cr.set_source_surface(&base, 0.0, 0.0)?;
+    {
+        let pattern = cr.source();
+        pattern.set_extend(Extend::Pad);
+        pattern.set_filter(Filter::Nearest);
+    }
+    cr.paint()?;
+    // The CTM is still the base->device scale, so text drawn here uses base
+    // coordinates but is rasterised at the device resolution.
+    draw(cr, RenderPass::Text)?;
+    cr.restore()?;
+
+    Ok(())
+}
+
+/// Composite `draw` into a `base_width` x `base_height` offscreen buffer at 1x,
+/// then paint it at base coordinates `(base_x, base_y)` under `cr`'s current
+/// transform with nearest-neighbour filtering.
+///
+/// This keeps a self-contained bitmap element (such as a popup menu) seam-free
+/// while letting the caller place it above content that was drawn at device
+/// resolution, e.g. on top of the crisp text emitted during a text pass.
+pub fn paint_scaled<F>(
+    cr: &Context,
+    base_x: i32,
+    base_y: i32,
+    base_width: i32,
+    base_height: i32,
+    draw: F,
+) -> Result<(), RenderError>
+where
+    F: FnOnce(&Context) -> Result<(), RenderError>,
+{
+    if base_width <= 0 || base_height <= 0 {
+        return Ok(());
+    }
+
+    let surface = ImageSurface::create(Format::ARgb32, base_width, base_height)?;
+    {
+        let surface_cr = Context::new(&surface)?;
+        draw(&surface_cr)?;
+    }
+    surface.flush();
+
+    cr.save()?;
+    cr.translate(f64::from(base_x), f64::from(base_y));
+    cr.set_source_surface(&surface, 0.0, 0.0)?;
+    {
+        let pattern = cr.source();
+        pattern.set_extend(Extend::Pad);
+        pattern.set_filter(Filter::Nearest);
+    }
+    cr.rectangle(0.0, 0.0, f64::from(base_width), f64::from(base_height));
+    cr.clip();
+    cr.paint()?;
+    cr.restore()?;
+
+    Ok(())
+}
+
 pub fn clamp_scale_factor(scale: f64) -> f64 {
     scale.clamp(1.0, 5.0)
 }
