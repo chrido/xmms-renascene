@@ -3291,7 +3291,7 @@ fn build_skin_editor_window(
         click.connect_pressed(move |_gesture, _n_press, x, y| {
             let changed = {
                 let mut state = main_state.borrow_mut();
-                let slots = state.skin_editor.layout();
+                let slots = state.skin_editor.layout(state.active_skin());
                 let mut editor = std::mem::take(&mut state.skin_editor);
                 let changed = editor.press(state.active_skin_mut(), &slots, x, y);
                 state.skin_editor = editor;
@@ -3315,7 +3315,7 @@ fn build_skin_editor_window(
         click.connect_released(move |_gesture, _n_press, x, y| {
             let changed = {
                 let mut state = main_state.borrow_mut();
-                let slots = state.skin_editor.layout();
+                let slots = state.skin_editor.layout(state.active_skin());
                 let mut editor = std::mem::take(&mut state.skin_editor);
                 let changed = editor.release(state.active_skin_mut(), &slots, x, y);
                 state.skin_editor = editor;
@@ -3342,7 +3342,7 @@ fn build_skin_editor_window(
         motion.connect_motion(move |_motion, x, y| {
             let changed = {
                 let mut state = main_state.borrow_mut();
-                let slots = state.skin_editor.layout();
+                let slots = state.skin_editor.layout(state.active_skin());
                 let mut editor = std::mem::take(&mut state.skin_editor);
                 let changed = editor.drag(state.active_skin_mut(), &slots, x, y);
                 state.skin_editor = editor;
@@ -3993,7 +3993,7 @@ fn draw_skin_editor_canvas(cr: &cairo::Context, state: &MainWindowUiState) -> Re
     cr.paint().map_err(|err| err.to_string())?;
     let editor = state.skin_editor();
     let zoom = f64::from(editor.zoom.max(1));
-    let slots = editor.layout();
+    let slots = editor.layout(state.active_skin());
 
     cr.save().map_err(|err| err.to_string())?;
     cr.scale(zoom, zoom);
@@ -4125,7 +4125,7 @@ fn draw_skin_editor_selection_preview(
 }
 
 fn update_skin_editor_canvas_size(canvas: &gtk::DrawingArea, state: &MainWindowUiState) {
-    let slots = state.skin_editor().layout();
+    let slots = state.skin_editor().layout(state.active_skin());
     let (width, height) = state.skin_editor().canvas_size(&slots);
     canvas.set_content_width(width);
     canvas.set_content_height(height);

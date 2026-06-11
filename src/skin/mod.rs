@@ -1024,7 +1024,7 @@ static char * main_xpm[] = {
             SkinPixmapKind::Main.info().width,
             layout::MAIN_WINDOW_WIDTH as usize
         );
-        assert_eq!(SkinPixmapKind::EqEx.info().height, 50);
+        assert_eq!(SkinPixmapKind::EqEx.info().height, 82);
         assert_eq!(SkinPixmapKind::Numbers.info().file_stem, "nums_ex");
     }
 

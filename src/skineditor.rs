@@ -4,7 +4,7 @@ use crate::skin::{DefaultSkin, SkinPixmapKind};
 const CANVAS_MARGIN: i32 = 8;
 const ELEMENT_GAP: i32 = 10;
 const LABEL_HEIGHT: i32 = 12;
-const MAX_ROW_WIDTH: i32 = 720;
+const MAX_ATLAS_WIDTH: i32 = 720;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
@@ -73,36 +73,254 @@ impl Default for SkinEditorState {
 }
 
 impl SkinEditorState {
-    pub fn layout(&self) -> Vec<ElementSlot> {
-        let mut slots = Vec::with_capacity(SkinPixmapKind::ALL.len());
-        let mut x = CANVAS_MARGIN;
-        let mut y = CANVAS_MARGIN + LABEL_HEIGHT;
-        let mut row_height = 0;
+    pub fn layout(&self, skin: &DefaultSkin) -> Vec<ElementSlot> {
+        pack_compact_pixmaps(skin)
+    }
+}
 
-        for kind in SkinPixmapKind::ALL {
-            let info = kind.info();
-            let width = info.width as i32;
-            let height = info.height as i32;
-            if x > CANVAS_MARGIN && x + width > MAX_ROW_WIDTH {
-                x = CANVAS_MARGIN;
-                y += row_height + ELEMENT_GAP + LABEL_HEIGHT;
-                row_height = 0;
-            }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PackedItem {
+    kind: SkinPixmapKind,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
 
-            slots.push(ElementSlot {
-                kind,
-                x,
-                y,
-                width,
-                height,
-            });
-            x += width + ELEMENT_GAP;
-            row_height = row_height.max(height);
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PackRect {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+}
 
-        slots
+impl PackRect {
+    fn right(self) -> i32 {
+        self.x + self.width
     }
 
+    fn bottom(self) -> i32 {
+        self.y + self.height
+    }
+
+    fn intersects(self, other: Self) -> bool {
+        self.x < other.right()
+            && self.right() > other.x
+            && self.y < other.bottom()
+            && self.bottom() > other.y
+    }
+
+    fn contains(self, other: Self) -> bool {
+        self.x <= other.x
+            && self.y <= other.y
+            && self.right() >= other.right()
+            && self.bottom() >= other.bottom()
+    }
+}
+
+fn pack_compact_pixmaps(skin: &DefaultSkin) -> Vec<ElementSlot> {
+    let items = skin_pack_items(skin);
+    let min_width = items.iter().map(|item| item.width).max().unwrap_or(1);
+    let content_area: i32 = items.iter().map(|item| item.width * item.height).sum();
+    let total_height: i32 = items.iter().map(|item| item.height).sum();
+    let mut best: Option<(i32, i32, i32, Vec<PackedItem>)> = None;
+
+    for width in (min_width..=MAX_ATLAS_WIDTH).step_by(25) {
+        if let Some(packed) = pack_items_at_width(&items, width, total_height) {
+            let height = packed
+                .iter()
+                .map(|item| item.y + item.height)
+                .max()
+                .unwrap_or(0);
+            let area = width * height;
+            let square_error = (width - height).abs();
+            let waste = area.saturating_sub(content_area);
+            let replace =
+                best.as_ref()
+                    .is_none_or(|(best_square_error, best_waste, best_area, _)| {
+                        square_error < *best_square_error
+                            || (square_error == *best_square_error && waste < *best_waste)
+                            || (square_error == *best_square_error
+                                && waste == *best_waste
+                                && area < *best_area)
+                    });
+            if replace {
+                best = Some((square_error, waste, area, packed));
+            }
+        }
+    }
+
+    let mut packed = best
+        .map(|(_, _, _, packed)| packed)
+        .unwrap_or_else(|| fallback_vertical_pack(&items));
+    packed.sort_by_key(|item| {
+        SkinPixmapKind::ALL
+            .iter()
+            .position(|kind| *kind == item.kind)
+            .unwrap_or(usize::MAX)
+    });
+
+    packed
+        .into_iter()
+        .map(|item| ElementSlot {
+            kind: item.kind,
+            x: item.x + CANVAS_MARGIN,
+            y: item.y + CANVAS_MARGIN + LABEL_HEIGHT,
+            width: item.width,
+            height: item.height - LABEL_HEIGHT,
+        })
+        .collect()
+}
+
+fn skin_pack_items(skin: &DefaultSkin) -> Vec<PackedItem> {
+    let mut items: Vec<_> = SkinPixmapKind::ALL
+        .iter()
+        .map(|kind| {
+            let info = kind.info();
+            let (width, height) = skin
+                .get(*kind)
+                .map(|image| (image.width() as i32, image.height() as i32))
+                .unwrap_or((info.width as i32, info.height as i32));
+            PackedItem {
+                kind: *kind,
+                x: 0,
+                y: 0,
+                width,
+                height: height + LABEL_HEIGHT,
+            }
+        })
+        .collect();
+    items.sort_by_key(|item| (-(item.height as isize), -(item.width as isize)));
+    items
+}
+
+fn pack_items_at_width(
+    items: &[PackedItem],
+    width: i32,
+    max_height: i32,
+) -> Option<Vec<PackedItem>> {
+    let mut free = vec![PackRect {
+        x: 0,
+        y: 0,
+        width,
+        height: max_height,
+    }];
+    let mut packed = Vec::with_capacity(items.len());
+
+    for item in items {
+        let placement = free
+            .iter()
+            .filter(|rect| item.width <= rect.width && item.height <= rect.height)
+            .map(|rect| {
+                let placed = PackRect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: item.width,
+                    height: item.height,
+                };
+                let score = (
+                    placed.bottom(),
+                    rect.width * rect.height - item.width * item.height,
+                    placed.x,
+                );
+                (placed, score)
+            })
+            .min_by_key(|(_, score)| *score)
+            .map(|(placed, _)| placed)?;
+
+        split_free_rects(&mut free, placement);
+        prune_free_rects(&mut free);
+        packed.push(PackedItem {
+            x: placement.x,
+            y: placement.y,
+            ..*item
+        });
+    }
+
+    Some(packed)
+}
+
+fn split_free_rects(free: &mut Vec<PackRect>, used: PackRect) {
+    let mut replacements = Vec::new();
+    let mut index = 0;
+    while index < free.len() {
+        let rect = free[index];
+        if !rect.intersects(used) {
+            index += 1;
+            continue;
+        }
+
+        free.remove(index);
+        if used.x > rect.x {
+            replacements.push(PackRect {
+                x: rect.x,
+                y: rect.y,
+                width: used.x - rect.x - ELEMENT_GAP,
+                height: rect.height,
+            });
+        }
+        if used.right() + ELEMENT_GAP < rect.right() {
+            replacements.push(PackRect {
+                x: used.right() + ELEMENT_GAP,
+                y: rect.y,
+                width: rect.right() - used.right() - ELEMENT_GAP,
+                height: rect.height,
+            });
+        }
+        if used.y > rect.y {
+            replacements.push(PackRect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: used.y - rect.y - ELEMENT_GAP,
+            });
+        }
+        if used.bottom() + ELEMENT_GAP < rect.bottom() {
+            replacements.push(PackRect {
+                x: rect.x,
+                y: used.bottom() + ELEMENT_GAP,
+                width: rect.width,
+                height: rect.bottom() - used.bottom() - ELEMENT_GAP,
+            });
+        }
+    }
+    free.extend(
+        replacements
+            .into_iter()
+            .filter(|rect| rect.width > 0 && rect.height > 0),
+    );
+}
+
+fn prune_free_rects(free: &mut Vec<PackRect>) {
+    let mut index = 0;
+    while index < free.len() {
+        let rect = free[index];
+        if free
+            .iter()
+            .enumerate()
+            .any(|(other_index, other)| other_index != index && other.contains(rect))
+        {
+            free.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+fn fallback_vertical_pack(items: &[PackedItem]) -> Vec<PackedItem> {
+    let mut y = 0;
+    items
+        .iter()
+        .map(|item| {
+            let packed = PackedItem { x: 0, y, ..*item };
+            y += item.height + ELEMENT_GAP;
+            packed
+        })
+        .collect()
+}
+
+impl SkinEditorState {
     pub fn canvas_size(&self, slots: &[ElementSlot]) -> (i32, i32) {
         let (width, height) = slots.iter().fold((0, 0), |(width, height), slot| {
             (
@@ -567,10 +785,32 @@ fn point_hash(point: (i32, i32), counter: u32) -> u32 {
 mod tests {
     use super::*;
 
+    fn row_flow_canvas_height(skin: &DefaultSkin, zoom: u32) -> i32 {
+        let mut x = CANVAS_MARGIN;
+        let mut y = CANVAS_MARGIN + LABEL_HEIGHT;
+        let mut row_height = 0;
+        for kind in SkinPixmapKind::ALL {
+            let info = kind.info();
+            let (width, height) = skin
+                .get(kind)
+                .map(|image| (image.width() as i32, image.height() as i32))
+                .unwrap_or((info.width as i32, info.height as i32));
+            if x > CANVAS_MARGIN && x + width > MAX_ATLAS_WIDTH {
+                x = CANVAS_MARGIN;
+                y += row_height + ELEMENT_GAP + LABEL_HEIGHT;
+                row_height = 0;
+            }
+            x += width + ELEMENT_GAP;
+            row_height = row_height.max(height);
+        }
+        (y + row_height + CANVAS_MARGIN) * zoom.max(1) as i32
+    }
+
     #[test]
     fn layout_contains_every_pixmap_and_canvas_has_size() {
         let editor = SkinEditorState::default();
-        let slots = editor.layout();
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let slots = editor.layout(&skin);
 
         assert_eq!(slots.len(), SkinPixmapKind::ALL.len());
         assert_eq!(slots[0].kind, SkinPixmapKind::Main);
@@ -579,9 +819,54 @@ mod tests {
     }
 
     #[test]
+    fn compact_layout_does_not_overlap_and_is_tighter_than_row_flow() {
+        let editor = SkinEditorState::default();
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let slots = editor.layout(&skin);
+        for (index, a) in slots.iter().enumerate() {
+            let a_rect = PackRect {
+                x: a.x,
+                y: a.y - LABEL_HEIGHT,
+                width: a.width,
+                height: a.height + LABEL_HEIGHT,
+            };
+            for b in slots.iter().skip(index + 1) {
+                let b_rect = PackRect {
+                    x: b.x,
+                    y: b.y - LABEL_HEIGHT,
+                    width: b.width,
+                    height: b.height + LABEL_HEIGHT,
+                };
+                assert!(
+                    !a_rect.intersects(b_rect),
+                    "{:?} overlaps {:?}",
+                    a.kind,
+                    b.kind
+                );
+            }
+        }
+
+        let (_, compact_height) = editor.canvas_size(&slots);
+        let old_row_flow_height = row_flow_canvas_height(&skin, editor.zoom);
+        assert!(compact_height < old_row_flow_height);
+    }
+
+    #[test]
+    fn compact_layout_is_approximately_square() {
+        let editor = SkinEditorState::default();
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let slots = editor.layout(&skin);
+        let (width, height) = editor.canvas_size(&slots);
+        let ratio = f64::from(width.max(height)) / f64::from(width.min(height));
+
+        assert!(ratio <= 1.35, "{width}x{height} ratio {ratio}");
+    }
+
+    #[test]
     fn hit_test_maps_canvas_position_to_pixmap_pixel() {
         let editor = SkinEditorState::default();
-        let slots = editor.layout();
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -623,7 +908,7 @@ mod tests {
             brush_size: 1,
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -650,7 +935,7 @@ mod tests {
             color: [5, 6, 7, 255],
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -683,7 +968,7 @@ mod tests {
             fill_rectangle: false,
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -716,7 +1001,7 @@ mod tests {
             color: [20, 21, 22, 255],
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -751,7 +1036,7 @@ mod tests {
             tool: Tool::Selection,
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -808,7 +1093,7 @@ mod tests {
             brush_size: 4,
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -841,7 +1126,7 @@ mod tests {
             brush_size: 3,
             ..SkinEditorState::default()
         };
-        let slots = editor.layout();
+        let slots = editor.layout(&skin);
         let main = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
@@ -865,7 +1150,7 @@ mod tests {
         skin.get_mut(SkinPixmapKind::Main)
             .unwrap()
             .set_pixel_rgba(6, 6, [100, 100, 100, 255]);
-        let slots = SkinEditorState::default().layout();
+        let slots = SkinEditorState::default().layout(&skin);
         let main_slot = slots
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
