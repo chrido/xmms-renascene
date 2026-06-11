@@ -29,15 +29,15 @@ use crate::player::{
 };
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    docked_panel_size, equalizer_window_height, main_window_height, paint_scaled,
-    playlist_window_height, render_equalizer_state, render_main_player_state,
+    blit_surface_rect, docked_panel_size, equalizer_window_height, main_window_height,
+    paint_scaled, playlist_window_height, render_equalizer_state, render_main_player_state,
     render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
-    DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton, MainSlider,
-    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
-    PlaylistRowRenderEntry, PlaylistRowsRenderState, RenderPass, VisualizationRenderState,
-    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
-    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
-    PLAYLIST_MIN_WIDTH,
+    surface_from_xpm, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
+    MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
+    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState, RenderPass,
+    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
@@ -56,6 +56,7 @@ use crate::skin::widget::{
 use crate::skin::{
     discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry, SkinPixmapKind,
 };
+use crate::skineditor::{ElementSlot, SkinEditorState, Tool};
 
 const DEFAULT_SCALE: i32 = 2;
 const STOP_FADE_DURATION_MS: i64 = 1_000;
@@ -268,6 +269,7 @@ fn build_preview_window(
         &panel_windows.preferences,
         &panel_windows.open_location,
         &panel_windows.skin_browser,
+        &panel_windows.skin_editor,
         &main_state,
     ));
     let playlist_sort_popover = Rc::new(build_playlist_sort_popover(
@@ -1168,6 +1170,7 @@ fn build_main_menu_popover(
     preferences_window: &gtk::ApplicationWindow,
     open_location_window: &gtk::ApplicationWindow,
     skin_browser_window: &gtk::ApplicationWindow,
+    skin_editor_window: &gtk::ApplicationWindow,
     main_state: &Rc<RefCell<MainWindowUiState>>,
 ) -> gtk::Popover {
     let popover = gtk::Popover::builder()
@@ -1242,6 +1245,23 @@ fn build_main_menu_popover(
     }
     menu_box.append(&skin_browser);
 
+    let skin_editor = xmms_menu_button("Skin Editor");
+    {
+        let skin_editor_window = skin_editor_window.clone();
+        let popover = popover.clone();
+        let main_state = Rc::clone(main_state);
+        skin_editor.connect_clicked(move |_| {
+            {
+                let mut state = main_state.borrow_mut();
+                state.set_menu_visible(false);
+                state.set_skin_editor_visible(true);
+            }
+            popover.popdown();
+            skin_editor_window.present();
+        });
+    }
+    menu_box.append(&skin_editor);
+
     let quit = xmms_menu_button("Quit");
     {
         let app = app.clone();
@@ -1272,6 +1292,7 @@ struct PanelWindows {
     open_location: gtk::ApplicationWindow,
     jump_time: gtk::ApplicationWindow,
     skin_browser: gtk::ApplicationWindow,
+    skin_editor: gtk::ApplicationWindow,
 }
 
 impl PanelWindows {
@@ -1289,6 +1310,8 @@ impl PanelWindows {
             build_playlist_window(app, main_state, main_area, &open_location);
         let skin_browser =
             build_skin_browser_window(app, main_state, main_area, &equalizer_area, &playlist_area);
+        let skin_editor =
+            build_skin_editor_window(app, main_state, main_area, &equalizer_area, &playlist_area);
         let preferences = build_preferences_window(
             app,
             main_state,
@@ -1308,6 +1331,7 @@ impl PanelWindows {
             open_location,
             jump_time,
             skin_browser,
+            skin_editor,
         }
     }
 }
@@ -3205,6 +3229,959 @@ fn build_skin_browser_window(
     window
 }
 
+fn build_skin_editor_window(
+    app: &gtk::Application,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
+) -> gtk::ApplicationWindow {
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title("Skin Editor")
+        .default_width(980)
+        .default_height(700)
+        .build();
+
+    let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    root.set_margin_top(8);
+    root.set_margin_bottom(8);
+    root.set_margin_start(8);
+    root.set_margin_end(8);
+
+    let canvas = gtk::DrawingArea::builder().focusable(true).build();
+    update_skin_editor_canvas_size(&canvas, &main_state.borrow());
+    {
+        let main_state = Rc::clone(main_state);
+        canvas.set_draw_func(move |_area, cr, _width, _height| {
+            if let Err(err) = draw_skin_editor_canvas(cr, &main_state.borrow()) {
+                eprintln!("xmms-rs: failed to draw skin editor: {err}");
+            }
+        });
+    }
+
+    let scrolled = gtk::ScrolledWindow::new();
+    scrolled.set_hexpand(true);
+    scrolled.set_vexpand(true);
+    scrolled.set_child(Some(&canvas));
+    root.append(&scrolled);
+
+    let (tools, zoom_scale) = build_skin_editor_tools(
+        &window,
+        &canvas,
+        main_state,
+        main_area,
+        equalizer_area,
+        playlist_area,
+    );
+    let tool_scroller = gtk::ScrolledWindow::new();
+    tool_scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+    tool_scroller.set_min_content_width(230);
+    tool_scroller.set_child(Some(&tools));
+    root.append(&tool_scroller);
+
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    {
+        let canvas = canvas.clone();
+        let main_state = Rc::clone(main_state);
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        click.connect_pressed(move |_gesture, _n_press, x, y| {
+            let changed = {
+                let mut state = main_state.borrow_mut();
+                let slots = state.skin_editor.layout();
+                let mut editor = std::mem::take(&mut state.skin_editor);
+                let changed = editor.press(state.active_skin_mut(), &slots, x, y);
+                state.skin_editor = editor;
+                changed
+            };
+            queue_skin_editor_areas(
+                &canvas,
+                &main_area,
+                &equalizer_area,
+                &playlist_area,
+                changed,
+            );
+        });
+    }
+    {
+        let canvas = canvas.clone();
+        let main_state = Rc::clone(main_state);
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        click.connect_released(move |_gesture, _n_press, x, y| {
+            let changed = {
+                let mut state = main_state.borrow_mut();
+                let slots = state.skin_editor.layout();
+                let mut editor = std::mem::take(&mut state.skin_editor);
+                let changed = editor.release(state.active_skin_mut(), &slots, x, y);
+                state.skin_editor = editor;
+                changed
+            };
+            queue_skin_editor_areas(
+                &canvas,
+                &main_area,
+                &equalizer_area,
+                &playlist_area,
+                changed,
+            );
+        });
+    }
+    canvas.add_controller(click);
+
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let canvas = canvas.clone();
+        let main_state = Rc::clone(main_state);
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        motion.connect_motion(move |_motion, x, y| {
+            let changed = {
+                let mut state = main_state.borrow_mut();
+                let slots = state.skin_editor.layout();
+                let mut editor = std::mem::take(&mut state.skin_editor);
+                let changed = editor.drag(state.active_skin_mut(), &slots, x, y);
+                state.skin_editor = editor;
+                changed
+            };
+            queue_skin_editor_areas(
+                &canvas,
+                &main_area,
+                &equalizer_area,
+                &playlist_area,
+                changed,
+            );
+        });
+    }
+    canvas.add_controller(motion);
+
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let canvas = canvas.clone();
+        let main_state = Rc::clone(main_state);
+        let zoom_scale = zoom_scale.clone();
+        scroll.connect_scroll(move |_scroll, _dx, dy| {
+            let zoom = {
+                let mut state = main_state.borrow_mut();
+                let current = state.skin_editor().zoom;
+                let zoom = if dy < 0.0 {
+                    current.saturating_add(1)
+                } else if dy > 0.0 {
+                    current.saturating_sub(1)
+                } else {
+                    current
+                };
+                state.skin_editor_mut().set_zoom(zoom);
+                update_skin_editor_canvas_size(&canvas, &state);
+                f64::from(state.skin_editor().zoom)
+            };
+            if (zoom_scale.value() - zoom).abs() > f64::EPSILON {
+                zoom_scale.set_value(zoom);
+            }
+            canvas.queue_draw();
+            gtk::glib::Propagation::Stop
+        });
+    }
+    canvas.add_controller(scroll);
+
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_close_request(move |window| {
+            main_state.borrow_mut().set_skin_editor_visible(false);
+            window.hide();
+            gtk::glib::Propagation::Stop
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        window.connect_hide(move |_| {
+            main_state.borrow_mut().set_skin_editor_visible(false);
+        });
+    }
+
+    window.set_child(Some(&root));
+    window
+}
+
+fn build_skin_editor_tools(
+    window: &gtk::ApplicationWindow,
+    canvas: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
+) -> (gtk::Box, gtk::Scale) {
+    let tools = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    tools.set_width_request(210);
+
+    let title = gtk::Label::new(Some("Tools"));
+    title.set_xalign(0.0);
+    tools.append(&title);
+
+    let tool_grid = gtk::Grid::new();
+    tool_grid.set_column_spacing(4);
+    tool_grid.set_row_spacing(4);
+    let mut tool_group = None;
+    for (index, tool) in [
+        Tool::Brush,
+        Tool::SprayCan,
+        Tool::Line,
+        Tool::Rectangle,
+        Tool::Selection,
+        Tool::Lighten,
+        Tool::Darken,
+        Tool::Dither,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let button = append_skin_editor_tool(
+            &tool_grid,
+            tool_group.as_ref(),
+            tool,
+            main_state,
+            canvas,
+            (index % 4) as i32,
+            (index / 4) as i32,
+        );
+        if tool_group.is_none() {
+            tool_group = Some(button);
+        }
+    }
+    tools.append(&tool_grid);
+
+    let fill_rectangle = gtk::CheckButton::with_label("Fill rectangle");
+    fill_rectangle.set_active(true);
+    {
+        let main_state = Rc::clone(main_state);
+        fill_rectangle.connect_toggled(move |button| {
+            main_state.borrow_mut().skin_editor_mut().fill_rectangle = button.is_active();
+        });
+    }
+    tools.append(&fill_rectangle);
+
+    let brush_size = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 15.0, 1.0);
+    brush_size.set_value(1.0);
+    brush_size.set_digits(0);
+    brush_size.set_draw_value(true);
+    append_labeled_control(&tools, "Brush size (1-15)", &brush_size);
+    {
+        let main_state = Rc::clone(main_state);
+        brush_size.connect_value_changed(move |scale| {
+            main_state
+                .borrow_mut()
+                .skin_editor_mut()
+                .set_brush_size(scale.value().round().clamp(1.0, 15.0) as u32);
+        });
+    }
+
+    let zoom = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 10.0, 1.0);
+    zoom.set_value(2.0);
+    zoom.set_digits(0);
+    zoom.set_draw_value(true);
+    append_labeled_control(&tools, "Zoom (1x-10x)", &zoom);
+    {
+        let main_state = Rc::clone(main_state);
+        let canvas = canvas.clone();
+        zoom.connect_value_changed(move |scale| {
+            {
+                let mut state = main_state.borrow_mut();
+                state
+                    .skin_editor_mut()
+                    .set_zoom(scale.value().round().clamp(1.0, 10.0) as u32);
+                update_skin_editor_canvas_size(&canvas, &state);
+            }
+            canvas.queue_draw();
+        });
+    }
+
+    let color = gtk::ColorChooserWidget::new();
+    color.set_rgba(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 1.0));
+    color.set_use_alpha(true);
+    color.set_size_request(190, 170);
+    append_labeled_control(&tools, "Color wheel", &color);
+    {
+        let main_state = Rc::clone(main_state);
+        color.connect_rgba_notify(move |chooser| {
+            main_state.borrow_mut().skin_editor_mut().color = rgba_to_u8(chooser.rgba());
+        });
+    }
+
+    let transparent = gtk::CheckButton::with_label("Paint transparent");
+    {
+        let main_state = Rc::clone(main_state);
+        let color = color.clone();
+        transparent.connect_toggled(move |button| {
+            let mut state = main_state.borrow_mut();
+            if button.is_active() {
+                state.skin_editor_mut().color[3] = 0;
+            } else {
+                state.skin_editor_mut().color = rgba_to_u8(color.rgba());
+            }
+        });
+    }
+    tools.append(&transparent);
+
+    let selection_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let copy = gtk::Button::with_label("Copy");
+    let cut = gtk::Button::with_label("Cut");
+    let paste = gtk::Button::with_label("Paste");
+    {
+        let main_state = Rc::clone(main_state);
+        copy.connect_clicked(move |_| {
+            let mut state = main_state.borrow_mut();
+            let mut editor = std::mem::take(&mut state.skin_editor);
+            editor.copy_selection(state.active_skin());
+            state.skin_editor = editor;
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        let canvas = canvas.clone();
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        cut.connect_clicked(move |_| {
+            let changed = {
+                let mut state = main_state.borrow_mut();
+                let mut editor = std::mem::take(&mut state.skin_editor);
+                let changed = editor.cut_selection(state.active_skin_mut());
+                state.skin_editor = editor;
+                changed
+            };
+            queue_skin_editor_areas(
+                &canvas,
+                &main_area,
+                &equalizer_area,
+                &playlist_area,
+                changed,
+            );
+        });
+    }
+    {
+        let main_state = Rc::clone(main_state);
+        let canvas = canvas.clone();
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        paste.connect_clicked(move |_| {
+            let changed = {
+                let mut state = main_state.borrow_mut();
+                let editor = std::mem::take(&mut state.skin_editor);
+                let changed = editor.paste_clipboard(state.active_skin_mut());
+                state.skin_editor = editor;
+                changed
+            };
+            queue_skin_editor_areas(
+                &canvas,
+                &main_area,
+                &equalizer_area,
+                &playlist_area,
+                changed,
+            );
+        });
+    }
+    selection_actions.append(&copy);
+    selection_actions.append(&cut);
+    selection_actions.append(&paste);
+    tools.append(&selection_actions);
+
+    tools.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let colors_title = gtk::Label::new(Some("Skin color swatches"));
+    colors_title.set_xalign(0.0);
+    tools.append(&colors_title);
+    build_skin_color_swatches(
+        &tools,
+        canvas,
+        main_state,
+        main_area,
+        equalizer_area,
+        playlist_area,
+    );
+
+    let name = gtk::Entry::new();
+    name.set_text(&main_state.borrow().skin_editor().working_name);
+    append_labeled_control(&tools, "Skin name", &name);
+    {
+        let main_state = Rc::clone(main_state);
+        name.connect_changed(move |entry| {
+            main_state.borrow_mut().skin_editor_mut().working_name = entry.text().to_string();
+        });
+    }
+
+    let clone_current = gtk::Button::with_label("Clone Current");
+    {
+        let main_state = Rc::clone(main_state);
+        let canvas = canvas.clone();
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        let name = name.clone();
+        clone_current.connect_clicked(move |_| {
+            match main_state.borrow_mut().clone_configured_skin_for_editor() {
+                Ok(()) => name.set_text(&main_state.borrow().skin_editor().working_name),
+                Err(err) => eprintln!("xmms-rs: failed to clone skin for editor: {err}"),
+            }
+            queue_skin_editor_areas(&canvas, &main_area, &equalizer_area, &playlist_area, true);
+        });
+    }
+    tools.append(&clone_current);
+
+    let save = gtk::Button::with_label("Save");
+    {
+        let main_state = Rc::clone(main_state);
+        let canvas = canvas.clone();
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        save.connect_clicked(move |_| {
+            if let Err(err) = main_state.borrow_mut().save_editor_skin_to_user_dir() {
+                eprintln!("xmms-rs: failed to save edited skin: {err}");
+            }
+            queue_skin_editor_areas(&canvas, &main_area, &equalizer_area, &playlist_area, true);
+        });
+    }
+    tools.append(&save);
+
+    let export = gtk::Button::with_label("Export .wsz");
+    {
+        let window = window.clone();
+        let main_state = Rc::clone(main_state);
+        export.connect_clicked(move |_| {
+            show_skin_editor_export_dialog(&window, Rc::clone(&main_state));
+        });
+    }
+    tools.append(&export);
+
+    (tools, zoom)
+}
+
+fn append_skin_editor_tool(
+    parent: &gtk::Grid,
+    group: Option<&gtk::ToggleButton>,
+    tool: Tool,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    canvas: &gtk::DrawingArea,
+    column: i32,
+    row: i32,
+) -> gtk::ToggleButton {
+    let button = gtk::ToggleButton::with_label(skin_editor_tool_icon(tool));
+    if let Some(group) = group {
+        button.set_group(Some(group));
+    }
+    button.set_active(tool == Tool::Brush);
+    button.set_tooltip_text(Some(skin_editor_tool_name(tool)));
+    button.set_size_request(34, 34);
+    button.set_hexpand(false);
+    button.set_vexpand(false);
+    {
+        let main_state = Rc::clone(main_state);
+        let canvas = canvas.clone();
+        button.connect_toggled(move |button| {
+            if button.is_active() {
+                main_state.borrow_mut().skin_editor_mut().tool = tool;
+                canvas.queue_draw();
+            }
+        });
+    }
+    parent.attach(&button, column, row, 1, 1);
+    button
+}
+
+fn skin_editor_tool_icon(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Brush => "🖌️",
+        Tool::SprayCan => "💨",
+        Tool::Line => "📏",
+        Tool::Rectangle => "🟦",
+        Tool::Selection => "🔲",
+        Tool::Lighten => "🔆",
+        Tool::Darken => "🌙",
+        Tool::Dither => "🏁",
+    }
+}
+
+fn skin_editor_tool_name(tool: Tool) -> &'static str {
+    match tool {
+        Tool::Brush => "Brush",
+        Tool::SprayCan => "Spraycan",
+        Tool::Line => "Line",
+        Tool::Rectangle => "Rectangle",
+        Tool::Selection => "Select rectangle",
+        Tool::Lighten => "Lighten",
+        Tool::Darken => "Darken",
+        Tool::Dither => "Dither checker brush",
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkinColorTarget {
+    PlaylistNormal,
+    PlaylistCurrent,
+    PlaylistNormalBg,
+    PlaylistSelectedBg,
+    Visualization(usize),
+    TextBackground(usize),
+    TextForeground(usize),
+}
+
+fn build_skin_color_swatches(
+    parent: &gtk::Box,
+    canvas: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
+) {
+    let playlist_grid = gtk::Grid::new();
+    playlist_grid.set_column_spacing(4);
+    playlist_grid.set_row_spacing(4);
+    for (index, (label, target)) in [
+        ("PL normal", SkinColorTarget::PlaylistNormal),
+        ("PL current", SkinColorTarget::PlaylistCurrent),
+        ("PL bg", SkinColorTarget::PlaylistNormalBg),
+        ("PL selected", SkinColorTarget::PlaylistSelectedBg),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        playlist_grid.attach(
+            &skin_color_button(
+                label,
+                target,
+                canvas,
+                main_state,
+                main_area,
+                equalizer_area,
+                playlist_area,
+            ),
+            (index % 2) as i32,
+            (index / 2) as i32,
+            1,
+            1,
+        );
+    }
+    parent.append(&playlist_grid);
+
+    let vis_label = gtk::Label::new(Some("Visualizer colors"));
+    vis_label.set_xalign(0.0);
+    parent.append(&vis_label);
+    let vis_grid = gtk::Grid::new();
+    vis_grid.set_column_spacing(2);
+    vis_grid.set_row_spacing(2);
+    for index in 0..24 {
+        vis_grid.attach(
+            &skin_color_button(
+                &(index + 1).to_string(),
+                SkinColorTarget::Visualization(index),
+                canvas,
+                main_state,
+                main_area,
+                equalizer_area,
+                playlist_area,
+            ),
+            (index % 6) as i32,
+            (index / 6) as i32,
+            1,
+            1,
+        );
+    }
+    parent.append(&vis_grid);
+
+    let text_label = gtk::Label::new(Some("Text colors"));
+    text_label.set_xalign(0.0);
+    parent.append(&text_label);
+    let text_grid = gtk::Grid::new();
+    text_grid.set_column_spacing(2);
+    text_grid.set_row_spacing(2);
+    for index in 0..6 {
+        text_grid.attach(
+            &skin_color_button(
+                &format!("BG{}", index + 1),
+                SkinColorTarget::TextBackground(index),
+                canvas,
+                main_state,
+                main_area,
+                equalizer_area,
+                playlist_area,
+            ),
+            0,
+            index as i32,
+            1,
+            1,
+        );
+        text_grid.attach(
+            &skin_color_button(
+                &format!("FG{}", index + 1),
+                SkinColorTarget::TextForeground(index),
+                canvas,
+                main_state,
+                main_area,
+                equalizer_area,
+                playlist_area,
+            ),
+            1,
+            index as i32,
+            1,
+            1,
+        );
+    }
+    parent.append(&text_grid);
+}
+
+fn skin_color_button(
+    label: &str,
+    target: SkinColorTarget,
+    canvas: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
+) -> gtk::Button {
+    let button = gtk::Button::with_label(label);
+    button.set_tooltip_text(Some("Apply the current editor color to this skin color"));
+    button.set_size_request(58, 28);
+    style_skin_color_button(
+        &button,
+        skin_color_target_rgb(main_state.borrow().active_skin(), target),
+    );
+    {
+        let canvas = canvas.clone();
+        let main_state = Rc::clone(main_state);
+        let main_area = main_area.clone();
+        let equalizer_area = equalizer_area.clone();
+        let playlist_area = playlist_area.clone();
+        let swatch_button = button.clone();
+        button.connect_clicked(move |_| {
+            let (changed, rgb) = {
+                let mut state = main_state.borrow_mut();
+                let color = state.skin_editor().color;
+                let rgb = [color[0], color[1], color[2]];
+                let changed = apply_skin_color_target(state.active_skin_mut(), target, rgb);
+                (changed, rgb)
+            };
+            style_skin_color_button(&swatch_button, rgb);
+            queue_skin_editor_areas(
+                &canvas,
+                &main_area,
+                &equalizer_area,
+                &playlist_area,
+                changed,
+            );
+        });
+    }
+    button
+}
+
+fn skin_color_target_rgb(skin: &DefaultSkin, target: SkinColorTarget) -> [u8; 3] {
+    match target {
+        SkinColorTarget::PlaylistNormal => skin.playlist_colors().normal,
+        SkinColorTarget::PlaylistCurrent => skin.playlist_colors().current,
+        SkinColorTarget::PlaylistNormalBg => skin.playlist_colors().normal_bg,
+        SkinColorTarget::PlaylistSelectedBg => skin.playlist_colors().selected_bg,
+        SkinColorTarget::Visualization(index) => {
+            skin.vis_colors().get(index).copied().unwrap_or([0, 0, 0])
+        }
+        SkinColorTarget::TextBackground(index) => skin
+            .text_colors()
+            .background
+            .get(index)
+            .copied()
+            .unwrap_or([0, 0, 0]),
+        SkinColorTarget::TextForeground(index) => skin
+            .text_colors()
+            .foreground
+            .get(index)
+            .copied()
+            .unwrap_or([255, 255, 255]),
+    }
+}
+
+fn style_skin_color_button(button: &gtk::Button, rgb: [u8; 3]) {
+    let provider = gtk::CssProvider::new();
+    let text = if color_luminance(rgb) > 140.0 {
+        "#000000"
+    } else {
+        "#ffffff"
+    };
+    provider.load_from_data(&format!(
+        "button {{
+            background: #{:02x}{:02x}{:02x};
+            background-image: none;
+            color: {text};
+            border: 1px solid #222222;
+            border-radius: 3px;
+            padding: 1px;
+            min-width: 0;
+            min-height: 0;
+            text-shadow: none;
+        }}
+        button:hover {{
+            background: #{:02x}{:02x}{:02x};
+            background-image: none;
+            color: {text};
+        }}",
+        rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]
+    ));
+    button
+        .style_context()
+        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
+fn color_luminance(rgb: [u8; 3]) -> f64 {
+    0.2126 * f64::from(rgb[0]) + 0.7152 * f64::from(rgb[1]) + 0.0722 * f64::from(rgb[2])
+}
+
+fn apply_skin_color_target(skin: &mut DefaultSkin, target: SkinColorTarget, rgb: [u8; 3]) -> bool {
+    match target {
+        SkinColorTarget::PlaylistNormal => {
+            let mut colors = skin.playlist_colors();
+            colors.normal = rgb;
+            skin.set_playlist_colors(colors)
+        }
+        SkinColorTarget::PlaylistCurrent => {
+            let mut colors = skin.playlist_colors();
+            colors.current = rgb;
+            skin.set_playlist_colors(colors)
+        }
+        SkinColorTarget::PlaylistNormalBg => {
+            let mut colors = skin.playlist_colors();
+            colors.normal_bg = rgb;
+            skin.set_playlist_colors(colors)
+        }
+        SkinColorTarget::PlaylistSelectedBg => {
+            let mut colors = skin.playlist_colors();
+            colors.selected_bg = rgb;
+            skin.set_playlist_colors(colors)
+        }
+        SkinColorTarget::Visualization(index) => skin.set_vis_color(index, rgb),
+        SkinColorTarget::TextBackground(index) => {
+            let mut colors = skin.text_colors();
+            if let Some(color) = colors.background.get_mut(index) {
+                *color = rgb;
+                skin.set_text_colors(colors)
+            } else {
+                false
+            }
+        }
+        SkinColorTarget::TextForeground(index) => {
+            let mut colors = skin.text_colors();
+            if let Some(color) = colors.foreground.get_mut(index) {
+                *color = rgb;
+                skin.set_text_colors(colors)
+            } else {
+                false
+            }
+        }
+    }
+}
+
+fn append_labeled_control<W: IsA<gtk::Widget>>(parent: &gtk::Box, label: &str, child: &W) {
+    let label = gtk::Label::new(Some(label));
+    label.set_xalign(0.0);
+    parent.append(&label);
+    parent.append(child);
+}
+
+fn draw_skin_editor_canvas(cr: &cairo::Context, state: &MainWindowUiState) -> Result<(), String> {
+    cr.set_source_rgb(0.12, 0.12, 0.12);
+    cr.paint().map_err(|err| err.to_string())?;
+    let editor = state.skin_editor();
+    let zoom = f64::from(editor.zoom.max(1));
+    let slots = editor.layout();
+
+    cr.save().map_err(|err| err.to_string())?;
+    cr.scale(zoom, zoom);
+    cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
+    cr.set_font_size(8.0);
+
+    for slot in &slots {
+        cr.set_source_rgb(0.85, 0.85, 0.85);
+        cr.move_to(f64::from(slot.x), f64::from(slot.y - 3));
+        cr.show_text(&format!(
+            "{}  {}x{}",
+            slot.kind.info().file_stem,
+            slot.width,
+            slot.height
+        ))
+        .map_err(|err| err.to_string())?;
+
+        cr.set_source_rgb(0.25, 0.25, 0.25);
+        cr.rectangle(
+            f64::from(slot.x) - 1.0,
+            f64::from(slot.y) - 1.0,
+            f64::from(slot.width) + 2.0,
+            f64::from(slot.height) + 2.0,
+        );
+        cr.stroke().map_err(|err| err.to_string())?;
+
+        if let Some(image) = state.active_skin().get(slot.kind) {
+            let surface = surface_from_xpm(image).map_err(|err| err.to_string())?;
+            blit_surface_rect(cr, &surface, 0, 0, slot.x, slot.y, slot.width, slot.height)
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    if editor.zoom >= 8 {
+        draw_skin_editor_grid(cr, &slots).map_err(|err| err.to_string())?;
+    }
+    draw_skin_editor_line_preview(cr, editor, &slots).map_err(|err| err.to_string())?;
+    draw_skin_editor_rectangle_preview(cr, editor, &slots).map_err(|err| err.to_string())?;
+    draw_skin_editor_selection_preview(cr, editor, &slots).map_err(|err| err.to_string())?;
+    cr.restore().map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn draw_skin_editor_grid(cr: &cairo::Context, slots: &[ElementSlot]) -> Result<(), cairo::Error> {
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.12);
+    cr.set_line_width(0.1);
+    for slot in slots {
+        for x in 0..=slot.width {
+            cr.move_to(f64::from(slot.x + x), f64::from(slot.y));
+            cr.line_to(f64::from(slot.x + x), f64::from(slot.y + slot.height));
+        }
+        for y in 0..=slot.height {
+            cr.move_to(f64::from(slot.x), f64::from(slot.y + y));
+            cr.line_to(f64::from(slot.x + slot.width), f64::from(slot.y + y));
+        }
+    }
+    cr.stroke()
+}
+
+fn draw_skin_editor_rectangle_preview(
+    cr: &cairo::Context,
+    editor: &SkinEditorState,
+    slots: &[ElementSlot],
+) -> Result<(), cairo::Error> {
+    let Some((kind, rect)) = editor.rectangle_preview() else {
+        return Ok(());
+    };
+    let Some(slot) = slots.iter().find(|slot| slot.kind == kind) else {
+        return Ok(());
+    };
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.8);
+    cr.set_line_width(1.0);
+    cr.rectangle(
+        f64::from(slot.x + rect.x),
+        f64::from(slot.y + rect.y),
+        f64::from(rect.width),
+        f64::from(rect.height),
+    );
+    cr.stroke()
+}
+
+fn draw_skin_editor_line_preview(
+    cr: &cairo::Context,
+    editor: &SkinEditorState,
+    slots: &[ElementSlot],
+) -> Result<(), cairo::Error> {
+    let Some((kind, start, end)) = editor.line_preview() else {
+        return Ok(());
+    };
+    let Some(slot) = slots.iter().find(|slot| slot.kind == kind) else {
+        return Ok(());
+    };
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.8);
+    cr.set_line_width(1.0);
+    cr.move_to(
+        f64::from(slot.x + start.0) + 0.5,
+        f64::from(slot.y + start.1) + 0.5,
+    );
+    cr.line_to(
+        f64::from(slot.x + end.0) + 0.5,
+        f64::from(slot.y + end.1) + 0.5,
+    );
+    cr.stroke()
+}
+
+fn draw_skin_editor_selection_preview(
+    cr: &cairo::Context,
+    editor: &SkinEditorState,
+    slots: &[ElementSlot],
+) -> Result<(), cairo::Error> {
+    let Some((kind, rect)) = editor.selection_preview() else {
+        return Ok(());
+    };
+    let Some(slot) = slots.iter().find(|slot| slot.kind == kind) else {
+        return Ok(());
+    };
+    cr.set_source_rgba(0.2, 0.7, 1.0, 0.9);
+    cr.set_line_width(1.0);
+    cr.set_dash(&[2.0, 2.0], 0.0);
+    cr.rectangle(
+        f64::from(slot.x + rect.x),
+        f64::from(slot.y + rect.y),
+        f64::from(rect.width),
+        f64::from(rect.height),
+    );
+    let result = cr.stroke();
+    cr.set_dash(&[], 0.0);
+    result
+}
+
+fn update_skin_editor_canvas_size(canvas: &gtk::DrawingArea, state: &MainWindowUiState) {
+    let slots = state.skin_editor().layout();
+    let (width, height) = state.skin_editor().canvas_size(&slots);
+    canvas.set_content_width(width);
+    canvas.set_content_height(height);
+}
+
+fn queue_skin_editor_areas(
+    canvas: &gtk::DrawingArea,
+    main_area: &gtk::DrawingArea,
+    equalizer_area: &gtk::DrawingArea,
+    playlist_area: &gtk::DrawingArea,
+    skin_changed: bool,
+) {
+    canvas.queue_draw();
+    if skin_changed {
+        main_area.queue_draw();
+        equalizer_area.queue_draw();
+        playlist_area.queue_draw();
+    }
+}
+
+fn rgba_to_u8(rgba: gtk::gdk::RGBA) -> [u8; 4] {
+    [
+        (rgba.red().clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        (rgba.green().clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        (rgba.blue().clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        (rgba.alpha().clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+    ]
+}
+
+fn show_skin_editor_export_dialog(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
+    let dialog = gtk::FileChooserNative::new(
+        Some("Export Skin"),
+        Some(parent),
+        gtk::FileChooserAction::Save,
+        Some("Export"),
+        Some("Cancel"),
+    );
+    dialog.set_current_name("skin.wsz");
+    let dialog_for_response = dialog.clone();
+    dialog.connect_response(move |dialog, response| {
+        if response == gtk::ResponseType::Accept {
+            if let Some(path) = dialog.file().and_then(|file| file.path()) {
+                let path = ensure_wsz_extension(path);
+                if let Err(err) = main_state.borrow().export_editor_skin_wsz(&path) {
+                    eprintln!("xmms-rs: failed to export skin '{}': {err}", path.display());
+                }
+            }
+        }
+        dialog_for_response.destroy();
+    });
+    dialog.show();
+}
+
 fn connect_skin_browser_selection(
     list: &gtk::ListBox,
     main_state: &Rc<RefCell<MainWindowUiState>>,
@@ -3403,6 +4380,38 @@ fn unique_import_destination(user_skin_dir: &Path, name: &std::ffi::OsStr) -> Pa
         }
     }
     unreachable!()
+}
+
+fn sanitized_skin_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches([' ', '.'])
+        .to_string();
+    if sanitized.is_empty() {
+        "Edited Skin".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn ensure_wsz_extension(mut path: PathBuf) -> PathBuf {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wsz"))
+    {
+        return path;
+    }
+    path.set_extension("wsz");
+    path
 }
 
 fn copy_dir_recursive(source: &Path, destination: &Path) -> io::Result<()> {
@@ -4981,6 +5990,7 @@ struct DialogVisibility {
     open_location: bool,
     jump_time: bool,
     skin_browser: bool,
+    skin_editor: bool,
     output_device_picker: bool,
     file: bool,
     directory: bool,
@@ -5010,6 +6020,7 @@ pub(crate) struct MainWindowUiState {
     preferences_page: PreferencesPage,
     preferences_saved: bool,
     skin_browser: SkinBrowserState,
+    skin_editor: SkinEditorState,
     output_device_groups: OutputDeviceGroups,
     output_switch_count: u32,
     mpris_events: Vec<MprisEvent>,
@@ -5070,6 +6081,7 @@ impl MainWindowUiState {
             preferences_page: PreferencesPage::Options,
             preferences_saved: false,
             skin_browser: SkinBrowserState::default(),
+            skin_editor: SkinEditorState::default(),
             output_device_groups: OutputDeviceGroups::default(),
             output_switch_count: 0,
             mpris_events: Vec::new(),
@@ -5093,6 +6105,18 @@ impl MainWindowUiState {
 
     pub(crate) fn active_skin(&self) -> &DefaultSkin {
         &self.active_skin
+    }
+
+    pub(crate) fn active_skin_mut(&mut self) -> &mut DefaultSkin {
+        &mut self.active_skin
+    }
+
+    pub(crate) fn skin_editor(&self) -> &SkinEditorState {
+        &self.skin_editor
+    }
+
+    pub(crate) fn skin_editor_mut(&mut self) -> &mut SkinEditorState {
+        &mut self.skin_editor
     }
 
     fn load_configured_skin(&mut self) -> io::Result<()> {
@@ -5876,6 +6900,10 @@ impl MainWindowUiState {
         self.dialogs.skin_browser = visible;
     }
 
+    pub(crate) fn set_skin_editor_visible(&mut self, visible: bool) {
+        self.dialogs.skin_editor = visible;
+    }
+
     pub(crate) fn is_output_device_picker_visible(&self) -> bool {
         self.dialogs.output_device_picker
     }
@@ -6090,6 +7118,37 @@ impl MainWindowUiState {
 
     pub(crate) fn skin_reload_count(&self) -> u32 {
         self.skin_browser.reload_count
+    }
+
+    pub(crate) fn clone_configured_skin_for_editor(&mut self) -> io::Result<()> {
+        self.load_configured_skin()?;
+        let name = self
+            .app_state
+            .config
+            .skin
+            .as_deref()
+            .and_then(|path| Path::new(path).file_stem())
+            .and_then(|name| name.to_str())
+            .map(|name| format!("{name} copy"))
+            .unwrap_or_else(|| "Default Skin Copy".to_string());
+        self.skin_editor.working_name = name;
+        Ok(())
+    }
+
+    pub(crate) fn save_editor_skin_to_user_dir(&mut self) -> io::Result<PathBuf> {
+        let user_skin_dir = user_skin_import_dir();
+        fs::create_dir_all(&user_skin_dir)?;
+        let name = sanitized_skin_name(&self.skin_editor.working_name);
+        let destination = unique_import_destination(&user_skin_dir, std::ffi::OsStr::new(&name));
+        self.active_skin.save_to_dir(&destination)?;
+        self.app_state.config.skin = Some(destination.display().to_string());
+        self.reload_skin()?;
+        self.scan_skin_browser_dirs(&runtime_skin_browser_dirs())?;
+        Ok(destination)
+    }
+
+    pub(crate) fn export_editor_skin_wsz(&self, path: &Path) -> io::Result<()> {
+        self.active_skin.export_wsz(path)
     }
 
     pub(crate) fn active_skin_pixel_argb(

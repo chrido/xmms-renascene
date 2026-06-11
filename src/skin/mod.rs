@@ -1,3 +1,4 @@
+pub mod edit;
 pub mod layout;
 pub mod widget;
 pub mod xpm;
