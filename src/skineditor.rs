@@ -5,6 +5,10 @@ const CANVAS_MARGIN: i32 = 8;
 const ELEMENT_GAP: i32 = 10;
 const LABEL_HEIGHT: i32 = 12;
 const MAX_ATLAS_WIDTH: i32 = 720;
+pub const COLOR_SHELF_SIZE: usize = 32;
+pub const MIN_ZOOM: f64 = 1.0;
+pub const MAX_ZOOM: f64 = 10.0;
+pub const ZOOM_STEP: f64 = 0.25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
@@ -16,6 +20,8 @@ pub enum Tool {
     Lighten,
     Darken,
     Dither,
+    ColorPicker,
+    Drag,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,12 +47,13 @@ struct DragState {
     last: (i32, i32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SkinEditorState {
     pub tool: Tool,
     pub color: [u8; 4],
+    pub color_shelf: [Option<[u8; 4]>; COLOR_SHELF_SIZE],
     pub brush_size: u32,
-    pub zoom: u32,
+    pub zoom: f64,
     pub fill_rectangle: bool,
     pub working_name: String,
     pub selection: Option<(SkinPixmapKind, SkinRect)>,
@@ -60,8 +67,9 @@ impl Default for SkinEditorState {
         Self {
             tool: Tool::Brush,
             color: [0, 0, 0, 255],
+            color_shelf: [None; COLOR_SHELF_SIZE],
             brush_size: 1,
-            zoom: 2,
+            zoom: 2.0,
             fill_rectangle: true,
             working_name: "My Skin".to_string(),
             selection: None,
@@ -329,8 +337,8 @@ impl SkinEditorState {
             )
         });
         (
-            width.max(1) * self.zoom.max(1) as i32,
-            height.max(1) * self.zoom.max(1) as i32,
+            (f64::from(width.max(1)) * self.zoom.max(MIN_ZOOM)).ceil() as i32,
+            (f64::from(height.max(1)) * self.zoom.max(MIN_ZOOM)).ceil() as i32,
         )
     }
 
@@ -340,7 +348,7 @@ impl SkinEditorState {
         canvas_x: f64,
         canvas_y: f64,
     ) -> Option<(SkinPixmapKind, u32, u32)> {
-        let zoom = f64::from(self.zoom.max(1));
+        let zoom = self.zoom.max(MIN_ZOOM);
         let x = (canvas_x / zoom).floor() as i32;
         let y = (canvas_y / zoom).floor() as i32;
         let slot = slots.iter().find(|slot| slot.contains(x, y))?;
@@ -362,6 +370,11 @@ impl SkinEditorState {
             Tool::Brush | Tool::SprayCan | Tool::Lighten | Tool::Darken | Tool::Dither => {
                 self.apply_brush_point(skin, kind, point)
             }
+            Tool::ColorPicker => {
+                self.pick_skin_color(skin, kind, point);
+                false
+            }
+            Tool::Drag => false,
             Tool::Selection => {
                 self.selection = Some((kind, SkinRect::new(point.0, point.1, 1, 1)));
                 false
@@ -383,7 +396,14 @@ impl SkinEditorState {
                 }
                 changed
             }
-            Tool::Line | Tool::Rectangle | Tool::Selection => {
+            Tool::ColorPicker => {
+                if let Some(drag) = self.drag.as_mut() {
+                    drag.last = point;
+                }
+                self.pick_skin_color(skin, drag.kind, point);
+                false
+            }
+            Tool::Line | Tool::Rectangle | Tool::Selection | Tool::Drag => {
                 if let Some(drag) = self.drag.as_mut() {
                     drag.last = point;
                 }
@@ -410,6 +430,11 @@ impl SkinEditorState {
             Tool::Brush | Tool::SprayCan | Tool::Lighten | Tool::Darken | Tool::Dither => {
                 self.apply_brush_line(skin, drag.kind, drag.last, drag.last)
             }
+            Tool::ColorPicker => {
+                self.pick_skin_color(skin, drag.kind, drag.last);
+                false
+            }
+            Tool::Drag => false,
             Tool::Line => self.apply_brush_line(skin, drag.kind, drag.start, drag.last),
             Tool::Rectangle => {
                 let rect = rect_from_points(drag.start, drag.last);
@@ -503,8 +528,21 @@ impl SkinEditorState {
         self.brush_size = size.clamp(1, 15);
     }
 
-    pub fn set_zoom(&mut self, zoom: u32) {
-        self.zoom = zoom.clamp(1, 10);
+    pub fn set_zoom(&mut self, zoom: f64) {
+        let zoom = if zoom.is_finite() { zoom } else { MIN_ZOOM };
+        self.zoom = zoom.clamp(MIN_ZOOM, MAX_ZOOM);
+    }
+
+    pub fn store_color_shelf_slot(&mut self, index: usize) -> Option<[u8; 4]> {
+        let slot = self.color_shelf.get_mut(index)?;
+        *slot = Some(self.color);
+        *slot
+    }
+
+    pub fn pick_color_shelf_slot(&mut self, index: usize) -> Option<[u8; 4]> {
+        let color = self.color_shelf.get(index).copied().flatten()?;
+        self.color = color;
+        Some(color)
     }
 
     fn point_for_slot(
@@ -517,7 +555,7 @@ impl SkinEditorState {
         let Some(slot) = slots.iter().find(|slot| slot.kind == kind) else {
             return (0, 0);
         };
-        let zoom = f64::from(self.zoom.max(1));
+        let zoom = self.zoom.max(MIN_ZOOM);
         let x = ((canvas_x / zoom).floor() as i32 - slot.x).clamp(0, slot.width - 1);
         let y = ((canvas_y / zoom).floor() as i32 - slot.y).clamp(0, slot.height - 1);
         (x, y)
@@ -549,8 +587,25 @@ impl SkinEditorState {
             Tool::Lighten => self.adjust_square_brush(skin, kind, point, 24),
             Tool::Darken => self.adjust_square_brush(skin, kind, point, -24),
             Tool::Dither => self.paint_dither_brush(skin, kind, point),
-            Tool::Rectangle | Tool::Selection => false,
+            Tool::ColorPicker | Tool::Drag | Tool::Rectangle | Tool::Selection => false,
         }
+    }
+
+    fn pick_skin_color(
+        &mut self,
+        skin: &DefaultSkin,
+        kind: SkinPixmapKind,
+        point: (i32, i32),
+    ) -> Option<[u8; 4]> {
+        if point.0 < 0 || point.1 < 0 {
+            return None;
+        }
+        let color = skin
+            .get(kind)?
+            .pixel_argb(point.0 as usize, point.1 as usize)
+            .and_then(unpremultiply_argb)?;
+        self.color = color;
+        Some(color)
     }
 
     fn paint_square_brush(
@@ -785,7 +840,7 @@ fn point_hash(point: (i32, i32), counter: u32) -> u32 {
 mod tests {
     use super::*;
 
-    fn row_flow_canvas_height(skin: &DefaultSkin, zoom: u32) -> i32 {
+    fn row_flow_canvas_height(skin: &DefaultSkin, zoom: f64) -> i32 {
         let mut x = CANVAS_MARGIN;
         let mut y = CANVAS_MARGIN + LABEL_HEIGHT;
         let mut row_height = 0;
@@ -803,7 +858,11 @@ mod tests {
             x += width + ELEMENT_GAP;
             row_height = row_height.max(height);
         }
-        (y + row_height + CANVAS_MARGIN) * zoom.max(1) as i32
+        (f64::from(y + row_height + CANVAS_MARGIN) * zoom.max(MIN_ZOOM)).ceil() as i32
+    }
+
+    fn canvas_coord(position: i32, zoom: f64) -> f64 {
+        f64::from(position) * zoom
     }
 
     #[test]
@@ -875,8 +934,8 @@ mod tests {
         assert_eq!(
             editor.hit_test(
                 &slots,
-                f64::from((main.x + 3) * editor.zoom as i32),
-                f64::from((main.y + 4) * editor.zoom as i32)
+                canvas_coord(main.x + 3, editor.zoom),
+                canvas_coord(main.y + 4, editor.zoom)
             ),
             Some((SkinPixmapKind::Main, 3, 4))
         );
@@ -888,16 +947,62 @@ mod tests {
         let mut editor = SkinEditorState::default();
 
         editor.set_brush_size(99);
-        editor.set_zoom(99);
+        editor.set_zoom(99.0);
 
         assert_eq!(editor.brush_size, 15);
-        assert_eq!(editor.zoom, 10);
+        assert_eq!(editor.zoom, MAX_ZOOM);
 
         editor.set_brush_size(0);
-        editor.set_zoom(0);
+        editor.set_zoom(0.0);
 
         assert_eq!(editor.brush_size, 1);
-        assert_eq!(editor.zoom, 1);
+        assert_eq!(editor.zoom, MIN_ZOOM);
+
+        editor.set_zoom(2.25);
+        assert_eq!(editor.zoom, 2.25);
+    }
+
+    #[test]
+    fn color_shelf_stores_and_picks_colors() {
+        let mut editor = SkinEditorState {
+            color: [12, 34, 56, 78],
+            ..SkinEditorState::default()
+        };
+
+        assert_eq!(editor.pick_color_shelf_slot(0), None);
+        assert_eq!(editor.store_color_shelf_slot(0), Some([12, 34, 56, 78]));
+        editor.color = [1, 2, 3, 4];
+
+        assert_eq!(editor.pick_color_shelf_slot(0), Some([12, 34, 56, 78]));
+        assert_eq!(editor.color, [12, 34, 56, 78]);
+        assert_eq!(editor.store_color_shelf_slot(COLOR_SHELF_SIZE), None);
+        assert_eq!(editor.pick_color_shelf_slot(COLOR_SHELF_SIZE), None);
+    }
+
+    #[test]
+    fn color_picker_picks_existing_skin_pixel() {
+        let mut skin = DefaultSkin::load_bundled().unwrap();
+        skin.get_mut(SkinPixmapKind::Main)
+            .unwrap()
+            .set_pixel_rgba(4, 5, [90, 91, 92, 255]);
+        let mut editor = SkinEditorState {
+            tool: Tool::ColorPicker,
+            color: [1, 2, 3, 255],
+            ..SkinEditorState::default()
+        };
+        let slots = editor.layout(&skin);
+        let main = slots
+            .iter()
+            .find(|slot| slot.kind == SkinPixmapKind::Main)
+            .unwrap();
+
+        assert!(!editor.press(
+            &mut skin,
+            &slots,
+            canvas_coord(main.x + 4, editor.zoom),
+            canvas_coord(main.y + 5, editor.zoom),
+        ));
+        assert_eq!(editor.color, [90, 91, 92, 255]);
     }
 
     #[test]
@@ -913,10 +1018,10 @@ mod tests {
             .iter()
             .find(|slot| slot.kind == SkinPixmapKind::Main)
             .unwrap();
-        let sx = f64::from((main.x + 0) * editor.zoom as i32);
-        let sy = f64::from((main.y + 0) * editor.zoom as i32);
-        let ex = f64::from((main.x + 3) * editor.zoom as i32);
-        let ey = f64::from((main.y + 0) * editor.zoom as i32);
+        let sx = canvas_coord(main.x, editor.zoom);
+        let sy = canvas_coord(main.y, editor.zoom);
+        let ex = canvas_coord(main.x + 3, editor.zoom);
+        let ey = canvas_coord(main.y, editor.zoom);
 
         assert!(editor.press(&mut skin, &slots, sx, sy));
         assert!(editor.drag(&mut skin, &slots, ex, ey));
@@ -944,14 +1049,14 @@ mod tests {
         editor.press(
             &mut skin,
             &slots,
-            f64::from((main.x + 1) * editor.zoom as i32),
-            f64::from((main.y + 1) * editor.zoom as i32),
+            canvas_coord(main.x + 1, editor.zoom),
+            canvas_coord(main.y + 1, editor.zoom),
         );
         assert!(editor.release(
             &mut skin,
             &slots,
-            f64::from((main.x + 2) * editor.zoom as i32),
-            f64::from((main.y + 2) * editor.zoom as i32),
+            canvas_coord(main.x + 2, editor.zoom),
+            canvas_coord(main.y + 2, editor.zoom),
         ));
 
         let main = skin.get(SkinPixmapKind::Main).unwrap();
@@ -978,14 +1083,14 @@ mod tests {
         editor.press(
             &mut skin,
             &slots,
-            f64::from((main.x + 1) * editor.zoom as i32),
-            f64::from((main.y + 1) * editor.zoom as i32),
+            canvas_coord(main.x + 1, editor.zoom),
+            canvas_coord(main.y + 1, editor.zoom),
         );
         assert!(editor.release(
             &mut skin,
             &slots,
-            f64::from((main.x + 3) * editor.zoom as i32),
-            f64::from((main.y + 3) * editor.zoom as i32),
+            canvas_coord(main.x + 3, editor.zoom),
+            canvas_coord(main.y + 3, editor.zoom),
         ));
 
         let main = skin.get(SkinPixmapKind::Main).unwrap();
@@ -1010,14 +1115,14 @@ mod tests {
         editor.press(
             &mut skin,
             &slots,
-            f64::from((main.x + 0) * editor.zoom as i32),
-            f64::from((main.y + 0) * editor.zoom as i32),
+            canvas_coord(main.x, editor.zoom),
+            canvas_coord(main.y, editor.zoom),
         );
         assert!(editor.release(
             &mut skin,
             &slots,
-            f64::from((main.x + 3) * editor.zoom as i32),
-            f64::from((main.y + 0) * editor.zoom as i32),
+            canvas_coord(main.x + 3, editor.zoom),
+            canvas_coord(main.y, editor.zoom),
         ));
 
         let main = skin.get(SkinPixmapKind::Main).unwrap();
@@ -1045,14 +1150,14 @@ mod tests {
         editor.press(
             &mut skin,
             &slots,
-            f64::from((main.x + 1) * editor.zoom as i32),
-            f64::from((main.y + 1) * editor.zoom as i32),
+            canvas_coord(main.x + 1, editor.zoom),
+            canvas_coord(main.y + 1, editor.zoom),
         );
         editor.release(
             &mut skin,
             &slots,
-            f64::from((main.x + 1) * editor.zoom as i32),
-            f64::from((main.y + 1) * editor.zoom as i32),
+            canvas_coord(main.x + 1, editor.zoom),
+            canvas_coord(main.y + 1, editor.zoom),
         );
         assert!(editor.copy_selection(&skin));
         editor.selection = Some((SkinPixmapKind::Main, SkinRect::new(3, 3, 1, 1)));
@@ -1102,8 +1207,8 @@ mod tests {
         assert!(editor.press(
             &mut skin,
             &slots,
-            f64::from((main.x + 20) * editor.zoom as i32),
-            f64::from((main.y + 20) * editor.zoom as i32),
+            canvas_coord(main.x + 20, editor.zoom),
+            canvas_coord(main.y + 20, editor.zoom),
         ));
 
         let painted = skin
@@ -1135,8 +1240,8 @@ mod tests {
         assert!(editor.press(
             &mut skin,
             &slots,
-            f64::from((main.x + 5) * editor.zoom as i32),
-            f64::from((main.y + 5) * editor.zoom as i32),
+            canvas_coord(main.x + 5, editor.zoom),
+            canvas_coord(main.y + 5, editor.zoom),
         ));
 
         let main = skin.get(SkinPixmapKind::Main).unwrap();
@@ -1164,8 +1269,8 @@ mod tests {
         assert!(lighten.press(
             &mut skin,
             &slots,
-            f64::from((main_slot.x + 6) * lighten.zoom as i32),
-            f64::from((main_slot.y + 6) * lighten.zoom as i32),
+            canvas_coord(main_slot.x + 6, lighten.zoom),
+            canvas_coord(main_slot.y + 6, lighten.zoom),
         ));
         assert_eq!(
             skin.get(SkinPixmapKind::Main).unwrap().pixel_argb(6, 6),
@@ -1180,8 +1285,8 @@ mod tests {
         assert!(darken.press(
             &mut skin,
             &slots,
-            f64::from((main_slot.x + 6) * darken.zoom as i32),
-            f64::from((main_slot.y + 6) * darken.zoom as i32),
+            canvas_coord(main_slot.x + 6, darken.zoom),
+            canvas_coord(main_slot.y + 6, darken.zoom),
         ));
         assert_eq!(
             skin.get(SkinPixmapKind::Main).unwrap().pixel_argb(6, 6),
