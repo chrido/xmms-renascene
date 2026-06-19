@@ -301,8 +301,7 @@ pub fn download_url_with_retries(
     url: &str,
 ) -> Result<PodcastDownloadOutcome, PodcastDownloadError> {
     download_with_retries(config_dir, url, |_| {
-        let response = fetch_url(url)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{err:?}")))?;
+        let response = fetch_url(url).map_err(|err| io::Error::other(format!("{err:?}")))?;
         Ok(PodcastDownloadAttempt {
             status: response.status,
             retry_after: response.retry_after,
@@ -513,7 +512,7 @@ fn parse_episode_block(block: &str, feed_url: &str) -> Option<PodcastEpisode> {
     })
 }
 
-fn next_episode_start<'a>(input: &'a str) -> Option<(&'static str, usize, &'a str)> {
+fn next_episode_start(input: &str) -> Option<(&'static str, usize, &str)> {
     ["item", "entry"]
         .into_iter()
         .filter_map(|tag| {

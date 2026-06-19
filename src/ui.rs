@@ -57,7 +57,8 @@ use crate::skin::{
     discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry, SkinPixmapKind,
 };
 use crate::skineditor::{
-    ElementSlot, SkinEditorState, Tool, COLOR_SHELF_SIZE, MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
+    ElementSlot, SkinEditorState, SkinGradient, Tool, COLOR_SHELF_SIZE, GRADIENT_SHELF_SIZE,
+    MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
 };
 
 const DEFAULT_SCALE: i32 = 2;
@@ -71,6 +72,13 @@ const SKIN_BROWSER_LIST_WIDGET: &str = "xmms-skin-browser-list";
 const SKIN_BROWSER_ADD_WIDGET: &str = "xmms-skin-browser-add";
 const SKIN_BROWSER_CLOSE_WIDGET: &str = "xmms-skin-browser-close";
 const SKIN_EDITOR_COLOR_SHELF_COLUMNS: usize = 8;
+const SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE: i32 = 34;
+const SKIN_EDITOR_COLOR_SHELF_GAP: i32 = 4;
+const SKIN_EDITOR_SIDEBAR_WIDTH: i32 = SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32
+    * SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE
+    + (SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32 - 1) * SKIN_EDITOR_COLOR_SHELF_GAP;
+const SKIN_EDITOR_GRADIENT_WIDTH: i32 = SKIN_EDITOR_SIDEBAR_WIDTH;
+const SKIN_EDITOR_GRADIENT_HEIGHT: i32 = 34;
 const XMMS_MENU_CSS_TEMPLATE: &str = r#"
 .xmms-menu-popover,
 .xmms-menu-popover contents,
@@ -130,6 +138,7 @@ pub struct PreviewOptions {
     pub equalizer_detached: Option<bool>,
     pub playlist_size: Option<(i32, i32)>,
     pub reset: bool,
+    pub open_skin_editor: bool,
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
 }
@@ -209,6 +218,7 @@ fn build_preview_window(
     } else {
         AppState::default()
     };
+    let open_skin_editor = options.open_skin_editor;
     let mut state = preview_state_from_app_state(app_state, options)?;
     if let Some(config_dir) = config_path.parent() {
         state.set_equalizer_preset_dir(config_dir.to_path_buf());
@@ -614,6 +624,10 @@ fn build_preview_window(
     window.set_child(Some(&drawing_area));
     window.present();
     present_visible_panel_windows(&panel_windows, &main_state.borrow());
+    if open_skin_editor {
+        main_state.borrow_mut().set_skin_editor_visible(true);
+        panel_windows.skin_editor.present();
+    }
     Ok(())
 }
 
@@ -3241,7 +3255,7 @@ fn build_skin_editor_window(
 ) -> gtk::ApplicationWindow {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Skin Editor")
+        .title("Skin Editor (alpha)")
         .default_width(980)
         .default_height(700)
         .build();
@@ -3279,7 +3293,12 @@ fn build_skin_editor_window(
     );
     let tool_scroller = gtk::ScrolledWindow::new();
     tool_scroller.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-    tool_scroller.set_min_content_width(230);
+    tool_scroller.set_hexpand(false);
+    tool_scroller.set_halign(gtk::Align::Start);
+    tool_scroller.set_propagate_natural_width(false);
+    tool_scroller.set_min_content_width(SKIN_EDITOR_SIDEBAR_WIDTH);
+    tool_scroller.set_max_content_width(SKIN_EDITOR_SIDEBAR_WIDTH);
+    tool_scroller.set_size_request(SKIN_EDITOR_SIDEBAR_WIDTH, -1);
     tool_scroller.set_child(Some(&tools));
     root.append(&tool_scroller);
 
@@ -3494,19 +3513,26 @@ fn build_skin_editor_tools(
     playlist_area: &gtk::DrawingArea,
 ) -> (gtk::Box, gtk::Scale, SkinEditorColorControls) {
     let tools = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    tools.set_width_request(210);
+    tools.set_hexpand(false);
+    tools.set_halign(gtk::Align::Start);
+    tools.set_size_request(SKIN_EDITOR_SIDEBAR_WIDTH, -1);
 
     let title = gtk::Label::new(Some("Tools"));
     title.set_xalign(0.0);
     tools.append(&title);
 
-    let tool_grid = gtk::Grid::new();
-    tool_grid.set_column_spacing(4);
-    tool_grid.set_row_spacing(4);
+    let tool_flow = gtk::FlowBox::new();
+    tool_flow.set_selection_mode(gtk::SelectionMode::None);
+    tool_flow.set_min_children_per_line(1);
+    tool_flow.set_max_children_per_line(SKIN_EDITOR_COLOR_SHELF_COLUMNS as u32);
+    tool_flow.set_column_spacing(SKIN_EDITOR_COLOR_SHELF_GAP as u32);
+    tool_flow.set_row_spacing(SKIN_EDITOR_COLOR_SHELF_GAP as u32);
+    tool_flow.set_hexpand(false);
     let mut tool_group = None;
-    for (index, tool) in [
+    for tool in [
         Tool::Brush,
         Tool::SprayCan,
+        Tool::Fill,
         Tool::Line,
         Tool::Rectangle,
         Tool::Selection,
@@ -3515,24 +3541,14 @@ fn build_skin_editor_tools(
         Tool::Dither,
         Tool::ColorPicker,
         Tool::Drag,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let button = append_skin_editor_tool(
-            &tool_grid,
-            tool_group.as_ref(),
-            tool,
-            main_state,
-            canvas,
-            (index % 4) as i32,
-            (index / 4) as i32,
-        );
+    ] {
+        let button =
+            append_skin_editor_tool(&tool_flow, tool_group.as_ref(), tool, main_state, canvas);
         if tool_group.is_none() {
             tool_group = Some(button);
         }
     }
-    tools.append(&tool_grid);
+    tools.append(&tool_flow);
 
     let fill_rectangle = gtk::CheckButton::with_label("Fill rectangle");
     fill_rectangle.set_active(true);
@@ -3545,6 +3561,9 @@ fn build_skin_editor_tools(
     tools.append(&fill_rectangle);
 
     let brush_size = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 15.0, 1.0);
+    brush_size.set_hexpand(false);
+    brush_size.set_halign(gtk::Align::Start);
+    brush_size.set_size_request(SKIN_EDITOR_SIDEBAR_WIDTH, -1);
     brush_size.set_value(1.0);
     brush_size.set_digits(0);
     brush_size.set_draw_value(true);
@@ -3560,6 +3579,9 @@ fn build_skin_editor_tools(
     }
 
     let zoom = gtk::Scale::with_range(gtk::Orientation::Horizontal, MIN_ZOOM, MAX_ZOOM, ZOOM_STEP);
+    zoom.set_hexpand(false);
+    zoom.set_halign(gtk::Align::Start);
+    zoom.set_size_request(SKIN_EDITOR_SIDEBAR_WIDTH, -1);
     zoom.set_value(main_state.borrow().skin_editor().zoom);
     zoom.set_digits(2);
     zoom.set_draw_value(true);
@@ -3580,6 +3602,9 @@ fn build_skin_editor_tools(
     }
 
     let color_button = gtk::Button::with_label("Custom color");
+    color_button.set_hexpand(false);
+    color_button.set_halign(gtk::Align::Start);
+    color_button.set_size_request(SKIN_EDITOR_SIDEBAR_WIDTH, -1);
     color_button.set_tooltip_text(Some("Open custom color chooser"));
     style_skin_editor_custom_color_button(&color_button, [0, 0, 0, 255]);
     append_labeled_control(&tools, "Color", &color_button);
@@ -3616,6 +3641,37 @@ fn build_skin_editor_tools(
         button: color_button.clone(),
     };
     build_skin_editor_color_shelf(&tools, &color_controls, main_state);
+    build_skin_editor_gradient_control(&tools, &color_controls, main_state);
+
+    let couple_controls = gtk::CheckButton::with_label("Couple frames");
+    couple_controls.set_tooltip_text(Some(
+        "When painting volume, balance, equalizer, or shaded equalizer snippets, apply the same edit to later value frames",
+    ));
+    {
+        let main_state = Rc::clone(main_state);
+        couple_controls.connect_toggled(move |button| {
+            main_state
+                .borrow_mut()
+                .skin_editor_mut()
+                .couple_control_edits = button.is_active();
+        });
+    }
+    tools.append(&couple_controls);
+
+    let couple_gradient = gtk::CheckButton::with_label("Gradient coupling");
+    couple_gradient.set_tooltip_text(Some(
+        "When coupled edits are enabled, color each coupled value frame from the gradient",
+    ));
+    {
+        let main_state = Rc::clone(main_state);
+        couple_gradient.connect_toggled(move |button| {
+            main_state
+                .borrow_mut()
+                .skin_editor_mut()
+                .coupled_edits_use_gradient = button.is_active();
+        });
+    }
+    tools.append(&couple_gradient);
 
     let transparent = gtk::CheckButton::with_label("Paint transparent");
     {
@@ -3782,13 +3838,11 @@ fn build_skin_editor_tools(
 }
 
 fn append_skin_editor_tool(
-    parent: &gtk::Grid,
+    parent: &gtk::FlowBox,
     group: Option<&gtk::ToggleButton>,
     tool: Tool,
     main_state: &Rc<RefCell<MainWindowUiState>>,
     canvas: &gtk::DrawingArea,
-    column: i32,
-    row: i32,
 ) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::with_label(skin_editor_tool_icon(tool));
     if let Some(group) = group {
@@ -3796,7 +3850,10 @@ fn append_skin_editor_tool(
     }
     button.set_active(tool == Tool::Brush);
     button.set_tooltip_text(Some(skin_editor_tool_name(tool)));
-    button.set_size_request(34, 34);
+    button.set_size_request(
+        SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE,
+        SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE,
+    );
     button.set_hexpand(false);
     button.set_vexpand(false);
     {
@@ -3809,7 +3866,7 @@ fn append_skin_editor_tool(
             }
         });
     }
-    parent.attach(&button, column, row, 1, 1);
+    parent.insert(&button, -1);
     button
 }
 
@@ -3817,6 +3874,7 @@ fn skin_editor_tool_icon(tool: Tool) -> &'static str {
     match tool {
         Tool::Brush => "🖌️",
         Tool::SprayCan => "💨",
+        Tool::Fill => "🪣",
         Tool::Line => "📏",
         Tool::Rectangle => "🟦",
         Tool::Selection => "🔲",
@@ -3832,6 +3890,7 @@ fn skin_editor_tool_name(tool: Tool) -> &'static str {
     match tool {
         Tool::Brush => "Brush",
         Tool::SprayCan => "Spraycan",
+        Tool::Fill => "Color fill",
         Tool::Line => "Line",
         Tool::Rectangle => "Rectangle",
         Tool::Selection => "Select rectangle",
@@ -3858,13 +3917,16 @@ fn build_skin_editor_color_shelf(
     parent.append(&label);
 
     let grid = gtk::Grid::new();
-    grid.set_column_spacing(4);
-    grid.set_row_spacing(4);
+    grid.set_column_spacing(SKIN_EDITOR_COLOR_SHELF_GAP as u32);
+    grid.set_row_spacing(SKIN_EDITOR_COLOR_SHELF_GAP as u32);
     let initial_shelf = main_state.borrow().skin_editor().color_shelf;
     for index in 0..COLOR_SHELF_SIZE {
         let color = initial_shelf[index];
         let button = gtk::Button::new();
-        button.set_size_request(34, 34);
+        button.set_size_request(
+            SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE,
+            SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE,
+        );
         button.set_tooltip_text(Some(
             "Left click picks; middle or right click stores current color",
         ));
@@ -3910,6 +3972,405 @@ fn build_skin_editor_color_shelf(
         );
     }
     parent.append(&grid);
+}
+
+fn build_skin_editor_gradient_control(
+    parent: &gtk::Box,
+    color_controls: &SkinEditorColorControls,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let label = gtk::Label::new(Some("Gradient"));
+    label.set_xalign(0.0);
+    label.set_margin_top(4);
+    parent.append(&label);
+
+    let gradient = gtk::DrawingArea::builder()
+        .content_width(SKIN_EDITOR_GRADIENT_WIDTH)
+        .content_height(SKIN_EDITOR_GRADIENT_HEIGHT)
+        .build();
+    gradient.set_size_request(SKIN_EDITOR_GRADIENT_WIDTH, SKIN_EDITOR_GRADIENT_HEIGHT);
+    gradient.set_tooltip_text(Some(
+        "Click to pick an interpolated color; use + Stop to add editable colors",
+    ));
+    {
+        let main_state = Rc::clone(main_state);
+        gradient.set_draw_func(move |_area, cr, width, height| {
+            let state = main_state.borrow();
+            if let Err(err) =
+                draw_skin_editor_gradient(cr, width, height, &state.skin_editor().gradient)
+            {
+                eprintln!("xmms-rs: failed to draw skin editor gradient: {err}");
+            }
+        });
+    }
+    {
+        let gradient_for_click = gradient.clone();
+        let main_state = Rc::clone(main_state);
+        let color_controls = color_controls.clone();
+        let click = gtk::GestureClick::new();
+        click.set_button(1);
+        click.connect_pressed(move |_gesture, _n_press, x, _y| {
+            let width = f64::from(gradient_for_click.allocated_width().max(1));
+            let fraction = (x / (width - 1.0).max(1.0)).clamp(0.0, 1.0);
+            let picked = main_state
+                .borrow_mut()
+                .skin_editor_mut()
+                .pick_gradient_color_at(fraction);
+            set_skin_editor_color_controls(&color_controls, picked);
+        });
+        gradient.add_controller(click);
+    }
+    parent.append(&gradient);
+
+    let stop_list = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    build_gradient_stop_list(&stop_list, &gradient, color_controls, main_state);
+    parent.append(&stop_list);
+
+    let actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+    let add_stop = gtk::Button::with_label("+ Stop");
+    let remove_stop = gtk::Button::with_label("Remove");
+    let reverse = gtk::Button::with_label("Reverse");
+    actions.append(&add_stop);
+    actions.append(&remove_stop);
+    actions.append(&reverse);
+    parent.append(&actions);
+
+    {
+        let stop_list = stop_list.clone();
+        let gradient = gradient.clone();
+        let main_state = Rc::clone(main_state);
+        let color_controls = color_controls.clone();
+        add_stop.connect_clicked(move |_| {
+            let color = {
+                let mut state = main_state.borrow_mut();
+                state.skin_editor_mut().add_gradient_stop(0.5);
+                state.skin_editor().color
+            };
+            set_skin_editor_color_controls(&color_controls, color);
+            gradient.queue_draw();
+            build_gradient_stop_list(&stop_list, &gradient, &color_controls, &main_state);
+        });
+    }
+    {
+        let stop_list = stop_list.clone();
+        let gradient = gradient.clone();
+        let main_state = Rc::clone(main_state);
+        let color_controls = color_controls.clone();
+        remove_stop.connect_clicked(move |_| {
+            {
+                let mut state = main_state.borrow_mut();
+                let index = state.skin_editor().selected_gradient_stop();
+                state.skin_editor_mut().remove_gradient_stop(index);
+            }
+            gradient.queue_draw();
+            build_gradient_stop_list(&stop_list, &gradient, &color_controls, &main_state);
+        });
+    }
+    {
+        let stop_list = stop_list.clone();
+        let gradient = gradient.clone();
+        let main_state = Rc::clone(main_state);
+        let color_controls = color_controls.clone();
+        reverse.connect_clicked(move |_| {
+            main_state.borrow_mut().skin_editor_mut().reverse_gradient();
+            gradient.queue_draw();
+            build_gradient_stop_list(&stop_list, &gradient, &color_controls, &main_state);
+        });
+    }
+
+    let shelf_label = gtk::Label::new(Some("Gradient shelf"));
+    shelf_label.set_xalign(0.0);
+    parent.append(&shelf_label);
+    build_gradient_shelf(parent, &gradient, &stop_list, color_controls, main_state);
+}
+
+fn build_gradient_stop_list(
+    stop_list: &gtk::Box,
+    gradient: &gtk::DrawingArea,
+    color_controls: &SkinEditorColorControls,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    while let Some(child) = stop_list.first_child() {
+        stop_list.remove(&child);
+    }
+
+    let (stops, selected) = {
+        let state = main_state.borrow();
+        (
+            state.skin_editor().gradient_stops().to_vec(),
+            state.skin_editor().selected_gradient_stop(),
+        )
+    };
+
+    let stop_count = stops.len();
+    for (index, stop) in stops.into_iter().enumerate() {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let label = gtk::Label::new(Some(if index == selected { "●" } else { "○" }));
+        row.append(&label);
+
+        let position = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 1.0, 0.01);
+        position.set_value(stop.position);
+        position.set_digits(2);
+        position.set_draw_value(true);
+        position.set_hexpand(true);
+        position.set_width_request(82);
+        position.set_sensitive(index != 0 && index + 1 != stop_count);
+        {
+            let gradient = gradient.clone();
+            let main_state = Rc::clone(main_state);
+            position.connect_value_changed(move |scale| {
+                main_state
+                    .borrow_mut()
+                    .skin_editor_mut()
+                    .set_gradient_stop_position(index, scale.value());
+                gradient.queue_draw();
+            });
+        }
+        row.append(&position);
+
+        let color_button = gtk::Button::new();
+        color_button.set_size_request(28, 24);
+        color_button.set_tooltip_text(Some(
+            "Left click selects this stop; middle/right click stores current color",
+        ));
+        style_color_shelf_button(&color_button, Some(stop.color));
+        {
+            let main_state = Rc::clone(main_state);
+            let color_controls = color_controls.clone();
+            let stop_list = stop_list.clone();
+            let gradient = gradient.clone();
+            color_button.connect_clicked(move |_| {
+                let picked = {
+                    main_state
+                        .borrow_mut()
+                        .skin_editor_mut()
+                        .select_gradient_stop(index)
+                };
+                if let Some(color) = picked {
+                    set_skin_editor_color_controls(&color_controls, color);
+                }
+                queue_gradient_stop_list_rebuild(
+                    &stop_list,
+                    &gradient,
+                    &color_controls,
+                    &main_state,
+                );
+            });
+        }
+        for button_number in [2, 3] {
+            let click = gtk::GestureClick::new();
+            click.set_button(button_number);
+            {
+                let main_state = Rc::clone(main_state);
+                let color_button = color_button.clone();
+                let gradient = gradient.clone();
+                click.connect_pressed(move |_gesture, _n_press, _x, _y| {
+                    {
+                        let mut state = main_state.borrow_mut();
+                        state.skin_editor_mut().selected_gradient_stop = index;
+                        if let Some(color) = state.skin_editor_mut().store_selected_gradient_stop()
+                        {
+                            style_color_shelf_button(&color_button, Some(color));
+                        }
+                    }
+                    gradient.queue_draw();
+                });
+            }
+            color_button.add_controller(click);
+        }
+        row.append(&color_button);
+        stop_list.append(&row);
+    }
+}
+
+fn queue_gradient_stop_list_rebuild(
+    stop_list: &gtk::Box,
+    gradient: &gtk::DrawingArea,
+    color_controls: &SkinEditorColorControls,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let stop_list = stop_list.clone();
+    let gradient = gradient.clone();
+    let color_controls = color_controls.clone();
+    let main_state = Rc::clone(main_state);
+    gtk::glib::idle_add_local_once(move || {
+        build_gradient_stop_list(&stop_list, &gradient, &color_controls, &main_state);
+    });
+}
+
+fn build_gradient_shelf(
+    parent: &gtk::Box,
+    gradient: &gtk::DrawingArea,
+    stop_list: &gtk::Box,
+    color_controls: &SkinEditorColorControls,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let shelf_grid = gtk::Grid::new();
+    shelf_grid.set_column_spacing(4);
+    shelf_grid.set_row_spacing(4);
+    let shelf_areas: Rc<RefCell<Vec<gtk::DrawingArea>>> = Rc::new(RefCell::new(Vec::new()));
+    for index in 0..GRADIENT_SHELF_SIZE {
+        let area = gtk::DrawingArea::builder()
+            .content_width(SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE)
+            .content_height(SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE)
+            .build();
+        area.set_size_request(
+            SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE,
+            SKIN_EDITOR_COLOR_SHELF_BUTTON_SIZE,
+        );
+        area.set_tooltip_text(Some(
+            "Left click loads; middle or right click stores current gradient",
+        ));
+        {
+            let main_state = Rc::clone(main_state);
+            area.set_draw_func(move |_area, cr, width, height| {
+                let state = main_state.borrow();
+                let gradient = state.skin_editor().gradient_shelf[index].as_ref();
+                if let Err(err) = draw_gradient_shelf_slot(cr, width, height, gradient) {
+                    eprintln!("xmms-rs: failed to draw gradient shelf slot: {err}");
+                }
+            });
+        }
+        {
+            let main_state = Rc::clone(main_state);
+            let gradient_area = gradient.clone();
+            let stop_list = stop_list.clone();
+            let color_controls = color_controls.clone();
+            let shelf_areas = Rc::clone(&shelf_areas);
+            let click = gtk::GestureClick::new();
+            click.set_button(1);
+            click.connect_pressed(move |_gesture, _n_press, _x, _y| {
+                let picked = main_state
+                    .borrow_mut()
+                    .skin_editor_mut()
+                    .pick_gradient_shelf_slot(index);
+                if picked.is_some() {
+                    let color = main_state.borrow().skin_editor().color;
+                    set_skin_editor_color_controls(&color_controls, color);
+                    gradient_area.queue_draw();
+                    build_gradient_stop_list(
+                        &stop_list,
+                        &gradient_area,
+                        &color_controls,
+                        &main_state,
+                    );
+                    for area in shelf_areas.borrow().iter() {
+                        area.queue_draw();
+                    }
+                }
+            });
+            area.add_controller(click);
+        }
+        for button_number in [2, 3] {
+            let click = gtk::GestureClick::new();
+            click.set_button(button_number);
+            {
+                let main_state = Rc::clone(main_state);
+                let area = area.clone();
+                click.connect_pressed(move |_gesture, _n_press, _x, _y| {
+                    main_state
+                        .borrow_mut()
+                        .skin_editor_mut()
+                        .store_gradient_shelf_slot(index);
+                    area.queue_draw();
+                });
+            }
+            area.add_controller(click);
+        }
+        shelf_grid.attach(
+            &area,
+            (index % SKIN_EDITOR_COLOR_SHELF_COLUMNS) as i32,
+            (index / SKIN_EDITOR_COLOR_SHELF_COLUMNS) as i32,
+            1,
+            1,
+        );
+        shelf_areas.borrow_mut().push(area);
+    }
+    parent.append(&shelf_grid);
+}
+
+fn draw_gradient_shelf_slot(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    gradient: Option<&SkinGradient>,
+) -> Result<(), cairo::Error> {
+    if let Some(gradient) = gradient {
+        draw_skin_editor_gradient(cr, width, height, gradient)
+    } else {
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        cr.paint()?;
+        cr.set_source_rgb(0.45, 0.45, 0.45);
+        cr.set_dash(&[3.0, 2.0], 0.0);
+        cr.rectangle(
+            0.5,
+            0.5,
+            f64::from(width.max(1)) - 1.0,
+            f64::from(height.max(1)) - 1.0,
+        );
+        let result = cr.stroke();
+        cr.set_dash(&[], 0.0);
+        result
+    }
+}
+
+fn draw_skin_editor_gradient(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+    skin_gradient: &SkinGradient,
+) -> Result<(), cairo::Error> {
+    let width = width.max(1);
+    let height = height.max(1);
+    draw_alpha_checkerboard(cr, width, height)?;
+
+    let gradient = cairo::LinearGradient::new(0.0, 0.0, f64::from(width), 0.0);
+    for stop in skin_gradient.stops() {
+        let [r, g, b, a] = rgba_to_cairo(stop.color);
+        gradient.add_color_stop_rgba(stop.position, r, g, b, a);
+    }
+    cr.set_source(&gradient)?;
+    cr.rectangle(0.0, 0.0, f64::from(width), f64::from(height));
+    cr.fill()?;
+
+    cr.set_source_rgb(0.12, 0.12, 0.12);
+    cr.rectangle(0.5, 0.5, f64::from(width) - 1.0, f64::from(height) - 1.0);
+    cr.stroke()
+}
+
+fn draw_alpha_checkerboard(
+    cr: &cairo::Context,
+    width: i32,
+    height: i32,
+) -> Result<(), cairo::Error> {
+    const CELL: i32 = 6;
+    cr.set_source_rgb(0.72, 0.72, 0.72);
+    cr.rectangle(0.0, 0.0, f64::from(width), f64::from(height));
+    cr.fill()?;
+    for y in (0..height).step_by(CELL as usize) {
+        for x in (0..width).step_by(CELL as usize) {
+            if ((x / CELL) + (y / CELL)) & 1 == 0 {
+                cr.set_source_rgb(0.48, 0.48, 0.48);
+                cr.rectangle(
+                    f64::from(x),
+                    f64::from(y),
+                    f64::from(CELL.min(width - x)),
+                    f64::from(CELL.min(height - y)),
+                );
+                cr.fill()?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rgba_to_cairo([r, g, b, a]: [u8; 4]) -> [f64; 4] {
+    [
+        f64::from(r) / 255.0,
+        f64::from(g) / 255.0,
+        f64::from(b) / 255.0,
+        f64::from(a) / 255.0,
+    ]
 }
 
 fn style_color_shelf_button(button: &gtk::Button, color: Option<[u8; 4]>) {
@@ -4820,20 +5281,15 @@ pub enum PlaylistMenuKind {
     List,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum PlaylistMenu {
+    #[default]
     Closed,
     Open {
         kind: PlaylistMenuKind,
         hover: Option<usize>,
         pressed: bool,
     },
-}
-
-impl Default for PlaylistMenu {
-    fn default() -> Self {
-        Self::Closed
-    }
 }
 
 impl PlaylistMenu {
@@ -5917,16 +6373,13 @@ fn sync_panel_windows(windows: &PanelWindows, state: &MainWindowUiState) {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 enum PlaylistSearch {
+    #[default]
     Inactive,
-    Active { query: String },
-}
-
-impl Default for PlaylistSearch {
-    fn default() -> Self {
-        Self::Inactive
-    }
+    Active {
+        query: String,
+    },
 }
 
 impl PlaylistSearch {
@@ -5978,17 +6431,18 @@ impl PlaylistSearch {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum MainPointer {
+    #[default]
     Idle,
-    PressedButton { control: MainControl, inside: bool },
-    DraggingSlider { slider: MainSlider, offset: i32 },
-}
-
-impl Default for MainPointer {
-    fn default() -> Self {
-        Self::Idle
-    }
+    PressedButton {
+        control: MainControl,
+        inside: bool,
+    },
+    DraggingSlider {
+        slider: MainSlider,
+        offset: i32,
+    },
 }
 
 impl MainPointer {
@@ -6010,8 +6464,9 @@ impl MainPointer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum EqualizerPointer {
+    #[default]
     Idle,
     PressedControl {
         control: EqualizerControl,
@@ -6021,12 +6476,6 @@ enum EqualizerPointer {
         slider: EqualizerSlider,
         offset: i32,
     },
-}
-
-impl Default for EqualizerPointer {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 impl EqualizerPointer {
@@ -6048,18 +6497,20 @@ impl EqualizerPointer {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum PlaylistPointer {
+    #[default]
     Idle,
-    DraggingEntry { index: usize, moved: bool },
-    DraggingScrollbar { offset: i32 },
-    Resizing { offset_y: i32 },
-}
-
-impl Default for PlaylistPointer {
-    fn default() -> Self {
-        Self::Idle
-    }
+    DraggingEntry {
+        index: usize,
+        moved: bool,
+    },
+    DraggingScrollbar {
+        offset: i32,
+    },
+    Resizing {
+        offset_y: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6807,7 +7258,7 @@ impl MainWindowUiState {
     }
 
     fn ensure_current_playlist_position_for_seek(&mut self) {
-        if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
+        if self.app_state.playlist.position().is_none() && !self.app_state.playlist.is_empty() {
             self.app_state.playlist.set_position(0);
         }
     }
@@ -6999,7 +7450,7 @@ impl MainWindowUiState {
         let mut offset_y = main_window_height(self.shaded);
         if self.panel_state(PanelKind::Equalizer).is_docked_visible() {
             let height = equalizer_window_height(self.equalizer.panel.shaded);
-            if x >= 0 && x < EQUALIZER_WINDOW_WIDTH && y >= offset_y && y < offset_y + height {
+            if (0..EQUALIZER_WINDOW_WIDTH).contains(&x) && y >= offset_y && y < offset_y + height {
                 return Some((PanelKind::Equalizer, x, y - offset_y));
             }
             offset_y += height;
@@ -7628,7 +8079,7 @@ impl MainWindowUiState {
     fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
         self.playback_transition = PlaybackTransitionState::start_playback();
         self.set_runtime_volume(self.app_state.config.volume);
-        if self.app_state.playlist.position().is_none() && self.app_state.playlist.len() > 0 {
+        if self.app_state.playlist.position().is_none() && !self.app_state.playlist.is_empty() {
             self.app_state.playlist.set_position(0);
         }
         let Some(position) = self.app_state.playlist.position() else {
@@ -8452,7 +8903,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn main_title_drag_region(&self, x: i32, y: i32) -> bool {
-        y >= 0 && y < MAIN_TITLEBAR_HEIGHT && self.hit_test(x, y).is_none()
+        (0..MAIN_TITLEBAR_HEIGHT).contains(&y) && self.hit_test(x, y).is_none()
     }
 
     pub(crate) fn playlist_resize_region(&self, x: i32, y: i32) -> bool {

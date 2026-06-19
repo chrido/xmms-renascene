@@ -562,7 +562,7 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
     bin.add(&sink)
         .map_err(|err| format!("failed to add autoaudiosink to bin: {err}"))?;
 
-    let chain = vec![
+    let chain = [
         convert.clone(),
         panorama.clone(),
         preamp.clone(),

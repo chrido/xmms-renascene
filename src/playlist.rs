@@ -308,9 +308,9 @@ impl Playlist {
         let current = old_position.and_then(|position| self.entries.get(position).cloned());
         let old_len = self.entries.len();
         self.entries.retain(|entry| {
-            !entry_local_path(entry)
+            entry_local_path(entry)
                 .as_ref()
-                .is_some_and(|path| !path.exists())
+                .is_none_or(|path| path.exists())
         });
 
         if self.entries.len() == old_len {
