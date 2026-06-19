@@ -27,17 +27,9 @@ use crate::ui::{
     PlaylistSortAction, PreferencesPage, UiAction,
 };
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct PlayerSettings {
     config: Config,
-}
-
-impl Default for PlayerSettings {
-    fn default() -> Self {
-        Self {
-            config: Config::default(),
-        }
-    }
 }
 
 impl PlayerSettings {

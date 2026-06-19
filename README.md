@@ -11,6 +11,7 @@ A modernized version of the classic [XMMS](https://en.wikipedia.org/wiki/XMMS) (
 - **MPRIS2 D-Bus interface** for media key integration
 - **Unified output device picker** — seamlessly switch between local and network audio devices
 - **Skin browser** for switching between installed skins
+- **Skin editor** for live pixel editing, cloning/saving skins, and exporting Winamp `.wsz` files
 - Wide audio format support via GStreamer (MP3, OGG, FLAC, WAV, AAC, and more)
 - Vim-like playlist navigation (j/k, p for playback, / for incremental search)
 
@@ -78,6 +79,8 @@ XMMS RS supports Winamp 2.x compatible skins. Place skin files in:
 - `/usr/share/xmms/Skins/` — system skin directory
 
 Skins can be `.wsz`, `.zip`, `.tar`, `.tar.gz`, or `.tar.bz2` archives, or unpacked directories. Use **Alt+S** to open the skin browser.
+
+The **Skin Editor** is available from the player menu. It opens in a separate window, shows every skin pixmap on one canvas, exposes playlist/visualization/text color swatches, provides a popup custom color wheel with a 32-slot color shelf, supports brush, spraycan, color picker, drag/pan, line, rectangle, select/copy/cut/paste, lighten, darken, and dither tools, updates the player live as you paint, saves edited skins into the user skin directory, and exports Winamp-compatible `.wsz` archives.
 
 ## Keyboard Shortcuts
 

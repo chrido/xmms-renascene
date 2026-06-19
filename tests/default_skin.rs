@@ -37,6 +37,10 @@ fn parses_all_bundled_default_xpm_files() {
     );
     assert_eq!(skin.get(SkinPixmapKind::Titlebar).unwrap().width(), 344);
     assert_eq!(skin.get(SkinPixmapKind::EqMain).unwrap().height(), 315);
+    assert_eq!(skin.get(SkinPixmapKind::PlEdit).unwrap().width(), 280);
+    assert_eq!(skin.get(SkinPixmapKind::PlEdit).unwrap().height(), 190);
+    assert_eq!(skin.get(SkinPixmapKind::Volume).unwrap().height(), 433);
+    assert_eq!(skin.get(SkinPixmapKind::PosBar).unwrap().width(), 307);
 }
 
 #[test]

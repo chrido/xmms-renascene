@@ -707,7 +707,7 @@ fn draw_vis_pixel(
     y: i32,
     color_idx: usize,
 ) -> Result<(), RenderError> {
-    if x < 0 || x >= width || y < 0 || y >= 16 {
+    if x < 0 || x >= width || !(0..16).contains(&y) {
         return Ok(());
     }
     set_vis_color(cr, colors, color_idx);

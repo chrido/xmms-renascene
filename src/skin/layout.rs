@@ -195,13 +195,13 @@ pub fn pixmap_info(kind: SkinPixmapKind) -> SkinPixmapInfo {
         },
         SkinPixmapKind::Titlebar => SkinPixmapInfo {
             file_stem: "titlebar",
-            width: MAIN_WINDOW_WIDTH as usize,
-            height: MAIN_WINDOW_HEIGHT as usize,
+            width: 344,
+            height: 87,
         },
         SkinPixmapKind::ShufRep => SkinPixmapInfo {
             file_stem: "shufrep",
-            width: 28,
-            height: 60,
+            width: 92,
+            height: 85,
         },
         SkinPixmapKind::Text => SkinPixmapInfo {
             file_stem: "text",
@@ -211,21 +211,21 @@ pub fn pixmap_info(kind: SkinPixmapKind) -> SkinPixmapInfo {
         SkinPixmapKind::Volume => SkinPixmapInfo {
             file_stem: "volume",
             width: 68,
-            height: 421,
+            height: 433,
         },
         SkinPixmapKind::Balance => SkinPixmapInfo {
             file_stem: "balance",
             width: 38,
-            height: 421,
+            height: 433,
         },
         SkinPixmapKind::MonoStereo => SkinPixmapInfo {
             file_stem: "monoster",
-            width: 56,
-            height: 12,
+            width: 58,
+            height: 24,
         },
         SkinPixmapKind::PlayPause => SkinPixmapInfo {
             file_stem: "playpaus",
-            width: 11,
+            width: 42,
             height: 9,
         },
         SkinPixmapKind::Numbers => SkinPixmapInfo {
@@ -235,13 +235,13 @@ pub fn pixmap_info(kind: SkinPixmapKind) -> SkinPixmapInfo {
         },
         SkinPixmapKind::PosBar => SkinPixmapInfo {
             file_stem: "posbar",
-            width: 248,
+            width: 307,
             height: 10,
         },
         SkinPixmapKind::PlEdit => SkinPixmapInfo {
             file_stem: "pledit",
-            width: 150,
-            height: 18,
+            width: 280,
+            height: 190,
         },
         SkinPixmapKind::EqMain => SkinPixmapInfo {
             file_stem: "eqmain",
@@ -251,7 +251,7 @@ pub fn pixmap_info(kind: SkinPixmapKind) -> SkinPixmapInfo {
         SkinPixmapKind::EqEx => SkinPixmapInfo {
             file_stem: "eq_ex",
             width: EQUALIZER_WINDOW_WIDTH as usize,
-            height: 50,
+            height: 82,
         },
     }
 }

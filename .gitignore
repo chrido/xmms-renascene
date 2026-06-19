@@ -1,4 +1,5 @@
 target/
+.pi-lens/
 *.o
 *.so
 *.a
