@@ -93,6 +93,21 @@ After installation, run it with:
 flatpak run org.xmms.Renascene
 ```
 
+Tagged GitHub releases build and attach a single-file Flatpak bundle named
+`xmms-renascene-x86_64.flatpak`. Install a downloaded release bundle with:
+
+```sh
+flatpak install --user ./xmms-renascene-x86_64.flatpak
+flatpak run org.xmms.Renascene
+```
+
+Maintainers can publish a new downloadable release by pushing a version tag:
+
+```sh
+git tag v2.0.0
+git push origin v2.0.0
+```
+
 ## Skins
 
 XMMS RS supports Winamp 2.x compatible skins. Place skin files in:
