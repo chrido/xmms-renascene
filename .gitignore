@@ -1,5 +1,10 @@
 target/
+dist/
+build-flatpak/
+.flatpak-builder/
 .pi-lens/
+__pycache__/
+*.pyc
 *.o
 *.so
 *.a

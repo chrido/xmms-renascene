@@ -18,9 +18,11 @@ A modernized version of the classic [XMMS](https://en.wikipedia.org/wiki/XMMS) (
 ## Screenshots
 
 ### Main Player
+
 ![XMMS Main Player](screenshots/xmms.png)
 
 ### Playlist Editor
+
 ![Playlist Editor](screenshots/xmmsplaylist.png)
 
 ## Dependencies
@@ -71,6 +73,47 @@ The helper script builds when needed and starts the GTK application:
 ./repo
 ```
 
+## Flatpak installer
+
+A local Flatpak manifest is provided as `org.xmms.Renascene.yml`.
+To build and install XMMS Renascene into your user Flatpak installation:
+
+```sh
+./repo create_flatpack
+```
+
+The installer is implemented in Python and requires `flatpak` and
+`flatpak-builder`. It adds Flathub if needed, installs the GNOME 49 SDK/runtime
+and Rust SDK extension, builds the Rust release binary with vendored Cargo
+crates, and installs the app as `org.xmms.Renascene`.
+
+After installation, run it with:
+
+```sh
+flatpak run org.xmms.Renascene
+```
+
+The same release bundle build used by CI can be run locally with:
+
+```sh
+python3 scripts/flatpak.py build-release-bundle
+```
+
+Tagged GitHub releases build and attach a single-file Flatpak bundle named
+`xmms-renascene-x86_64.flatpak`. Install a downloaded release bundle with:
+
+```sh
+flatpak install --user ./xmms-renascene-x86_64.flatpak
+flatpak run org.xmms.Renascene
+```
+
+Maintainers can publish a new downloadable release by pushing a version tag:
+
+```sh
+git tag v2.0.0
+git push origin v2.0.0
+```
+
 ## Skins
 
 XMMS RS supports Winamp 2.x compatible skins. Place skin files in:
@@ -103,6 +146,6 @@ GNU General Public License v2.0 or later. See [COPYING](COPYING) for details.
 
 ## Credits
 
-Originally written by Peter Alm, Thomas Nilsson, Olle Hallnas, and Havard Kvalen https://sourceforge.net/projects/xmms/
-Modernized for GTK 4 and GStreamer by Christian Schaller https://gitlab.com/cschalle/xmms-renascene.
+Originally written by Peter Alm, Thomas Nilsson, Olle Hallnas, and Havard Kvalen <https://sourceforge.net/projects/xmms/>
+Modernized for GTK 4 and GStreamer by Christian Schaller <https://gitlab.com/cschalle/xmms-renascene>.
 Ported to Rust (AI Assisted)
