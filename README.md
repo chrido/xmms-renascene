@@ -93,6 +93,12 @@ After installation, run it with:
 flatpak run org.xmms.Renascene
 ```
 
+The same release bundle build used by CI can be run locally with:
+
+```sh
+python3 scripts/flatpak.py build-release-bundle
+```
+
 Tagged GitHub releases build and attach a single-file Flatpak bundle named
 `xmms-renascene-x86_64.flatpak`. Install a downloaded release bundle with:
 
