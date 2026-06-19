@@ -76,7 +76,7 @@ class FlatpakInstaller:
         logging.info("Installing Flatpak build tools with apt...")
         required_command(("sudo", "apt-get"))
         ["sudo", "apt-get", "update"] @ cli_follow | raise_on_error
-        ["sudo", "apt-get", "install", "--no-install-recommends", "--yes", "appstream", "ca-certificates", "desktop-file-utils", "flatpak", "flatpak-builder"] @ cli_follow | raise_on_error
+        ["sudo", "apt-get", "install", "--no-install-recommends", "--yes", "appstream", "ca-certificates", "desktop-file-utils", "elfutils", "flatpak", "flatpak-builder"] @ cli_follow | raise_on_error
 
     def _generate_cargo_sources(self) -> None:
         logging.info("Generating vendored Cargo source manifest...")
