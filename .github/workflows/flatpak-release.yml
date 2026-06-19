@@ -15,50 +15,14 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      APP_ID: org.xmms.Renascene
       BUNDLE: xmms-renascene-x86_64.flatpak
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Flatpak build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes \
-            appstream \
-            ca-certificates \
-            desktop-file-utils \
-            flatpak \
-            flatpak-builder
-
-      - name: Add Flathub remote
-        run: flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-
-      - name: Install build runtime and SDK
-        run: |
-          flatpak install --user --yes flathub \
-            org.gnome.Platform//49 \
-            org.gnome.Sdk//49 \
-            org.freedesktop.Sdk.Extension.rust-stable//25.08
-
-      - name: Validate vendored Cargo sources
-        run: python3 -m json.tool cargo-sources.json >/dev/null
-
-      - name: Build Flatpak repository
-        run: |
-          flatpak-builder \
-            --force-clean \
-            --repo=flatpak-repo \
-            --install-deps-from=flathub \
-            --user \
-            build-flatpak \
-            org.xmms.Renascene.yml
-
       - name: Build single-file Flatpak bundle
-        run: |
-          flatpak build-bundle flatpak-repo "$BUNDLE" "$APP_ID" master
-          sha256sum "$BUNDLE" > "$BUNDLE.sha256"
+        run: python3 scripts/flatpak.py build-release-bundle --install-build-tools --bundle="$BUNDLE"
 
       - name: Upload Flatpak artifact
         uses: actions/upload-artifact@v4
