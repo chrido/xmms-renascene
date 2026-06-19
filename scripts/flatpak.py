@@ -3,9 +3,11 @@
 """Build and package XMMS Renascene as a Flatpak."""
 
 import hashlib
+import json
 import logging
 import os
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_DIR = Path(__file__).resolve().parent.parent
@@ -76,6 +78,27 @@ class FlatpakInstaller:
         ["sudo", "apt-get", "update"] @ cli_follow | raise_on_error
         ["sudo", "apt-get", "install", "--no-install-recommends", "--yes", "appstream", "ca-certificates", "desktop-file-utils", "flatpak", "flatpak-builder"] @ cli_follow | raise_on_error
 
+    def _generate_cargo_sources(self) -> None:
+        logging.info("Generating vendored Cargo source manifest...")
+        cargo_lock = tomllib.loads(Path("Cargo.lock").read_text())
+        sources = []
+        seen = set()
+        for package in cargo_lock["package"]:
+            if package.get("source") != "registry+https://github.com/rust-lang/crates.io-index":
+                continue
+            name = package["name"]
+            version = package["version"]
+            checksum = package["checksum"]
+            crate_dir = f"{name}-{version}"
+            if crate_dir in seen:
+                continue
+            seen.add(crate_dir)
+            sources.append({"type": "archive", "archive-type": "tar-gzip", "url": f"https://static.crates.io/crates/{name}/{crate_dir}.crate", "sha256": checksum, "dest": f"cargo/vendor/{crate_dir}"})
+            sources.append({"type": "inline", "dest": f"cargo/vendor/{crate_dir}", "dest-filename": ".cargo-checksum.json", "contents": json.dumps({"package": checksum, "files": {}})})
+        sources.append({"type": "inline", "dest": ".cargo", "dest-filename": "config.toml", "contents": '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "cargo/vendor"\n'})
+        Path("cargo-sources.json").write_text(json.dumps(sources, indent=2) + "\n")
+        logging.info("Generated cargo-sources.json with %d crates", len(seen))
+
     def _validate_cargo_sources(self) -> None:
         logging.info("Validating vendored Cargo sources...")
         [sys.executable, "-m", "json.tool", "cargo-sources.json"] @ cli | raise_on_error
@@ -115,6 +138,8 @@ class FlatpakInstaller:
         self._require_flatpak_commands()
         self._add_remote_if_needed(remote, remote_url, installation)
         self._install_build_runtimes(remote, installation)
+        self._generate_cargo_sources()
+        self._validate_cargo_sources()
         self._build_and_install(build_dir, remote, installation)
 
         logging.info("%s is installed. Run it with: flatpak run %s", APP_ID, APP_ID)
@@ -141,6 +166,7 @@ class FlatpakInstaller:
         self._require_flatpak_commands()
         self._add_remote_if_needed(remote, remote_url, installation)
         self._install_build_runtimes(remote, installation)
+        self._generate_cargo_sources()
         self._validate_cargo_sources()
         self._build_repo(flatpak_repo, build_dir, remote, installation)
         self._build_bundle(flatpak_repo, bundle)
