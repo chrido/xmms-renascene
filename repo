@@ -8,11 +8,12 @@ export GSK_RENDERER="${XMMS_GSK_RENDERER:-cairo}"
 
 usage() {
     cat <<EOF
-Usage: ./repo [--rust] [screenshot] [app args...]
+Usage: ./repo [--rust] [screenshot|create_flatpack] [app args...]
 
 Options:
-  --rust      Start the Rust version (default).
-  screenshot Capture a root-window screenshot after starting the selected version.
+  --rust          Start the Rust version (default).
+  screenshot     Capture a root-window screenshot after starting the selected version.
+  create_flatpack Build and install the local Flatpak package.
 
 Rust preview app args:
   --playlist / --equalizer    Show floating windows on startup.
@@ -38,6 +39,14 @@ while [ "$#" -gt 0 ]; do
        screenshot)
             screenshot=1
             shift
+            ;;
+        create_flatpack)
+            shift
+            if ! command -v python3 >/dev/null 2>&1; then
+                echo "python3 is required for ./repo create_flatpack." >&2
+                exit 127
+            fi
+            exec python3 ./scripts/flatpak.py "$@"
             ;;
         --help|-h)
             usage
