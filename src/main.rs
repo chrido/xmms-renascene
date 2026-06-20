@@ -112,11 +112,20 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             options.skin_path = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("--screenshot=") {
             options.screenshot_path = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--scale=") {
+            options.scale_factor = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--scale-factor=") {
+            options.scale_factor = Some(value.to_string());
         } else if arg == "--screenshot" {
             let Some(value) = iter.next() else {
                 return Err("--screenshot requires PATH".to_string());
             };
             options.screenshot_path = Some(value.to_string());
+        } else if arg == "--scale" || arg == "--scale-factor" {
+            let Some(value) = iter.next() else {
+                return Err(format!("{arg} requires SCALE"));
+            };
+            options.scale_factor = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("--playlist-size=") {
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
@@ -201,5 +210,12 @@ mod tests {
         assert!(options.open_skin_editor);
         assert_eq!(options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
         assert_eq!(options.screenshot_path.as_deref(), Some("/tmp/player.png"));
+        assert_eq!(options.scale_factor, None);
+    }
+
+    #[test]
+    fn parses_scale_factor_preview_option() {
+        let options = parse_preview_options(&args(&["--gtk", "--scale=1.7"])).unwrap();
+        assert_eq!(options.scale_factor.as_deref(), Some("1.7"));
     }
 }
