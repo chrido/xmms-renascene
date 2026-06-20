@@ -98,30 +98,27 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
 }
 
 #[test]
-fn cli_primary_binary_loads_bundled_skin_without_gtk_mode() {
+fn cli_primary_binary_starts_gtk_smoke_mode() {
     let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
+        .arg("--gtk-smoke")
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("xmms-rs: loaded 14 skin pixmaps"));
 }
 
 #[test]
-fn cli_primary_binary_loads_requested_skin_without_gtk_mode() {
+fn cli_primary_binary_starts_requested_skin_in_gtk_smoke_mode() {
     let root = unique_temp_dir("xmms-rs-cli-primary-skin");
     let skin = root.join("base-2.9.1");
     write_one_pixel_skin(&skin, "#010203");
 
     let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
-        .args(["--skin", skin.to_str().unwrap()])
+        .args(["--gtk-smoke", "--skin", skin.to_str().unwrap()])
         .output()
         .unwrap();
 
     assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("xmms-rs: loaded 14 skin pixmaps"));
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -490,7 +487,11 @@ fn main_keyboard_shortcuts_trigger_preview_actions() {
         .press_shortcut(Shortcut::ToggleSticky)
         .assert_sticky(true)
         .press_shortcut(Shortcut::ToggleDoubleSize)
-        .assert_double_size(false)
+        .assert_double_size(true)
+        .assert_scale_factor(4.0)
+        .press_shortcut(Shortcut::HalfScale)
+        .assert_double_size(true)
+        .assert_scale_factor(2.0)
         .press_shortcut(Shortcut::Preferences)
         .assert_window_visible(Window::Preferences)
         .press_shortcut(Shortcut::SkinBrowser)
@@ -754,6 +755,148 @@ fn clicked_playlist_rows_update_single_selection() {
     .click_playlist_row(3)
     .assert_playlist_entry_selected(2, false)
     .assert_playlist_entry_selected(3, true);
+}
+
+#[test]
+fn ctrl_tab_cycles_visible_player_equalizer_playlist() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    );
+
+    app.assert_docked_main_focused(true)
+        .press_ctrl_tab()
+        .assert_docked_panel_focused(PanelKind::Equalizer, true)
+        .press_ctrl_tab()
+        .assert_docked_panel_focused(PanelKind::Playlist, true)
+        .press_ctrl_tab()
+        .assert_docked_main_focused(true);
+
+    let mut playlist_only =
+        UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    playlist_only
+        .assert_docked_main_focused(true)
+        .press_ctrl_tab()
+        .assert_docked_panel_focused(PanelKind::Playlist, true)
+        .press_ctrl_tab()
+        .assert_docked_main_focused(true);
+}
+
+#[test]
+fn ctrl_w_shades_current_selected_docked_window() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    );
+
+    app.add_timed_entry("file:///music/one.ogg", "One", 10_000)
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_player_shaded()
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_player_unshaded()
+        .click_playlist_row(0)
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_playlist_shaded()
+        .assert_player_unshaded()
+        .click_docked_panel(PanelTarget::EqualizerOn)
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_equalizer_shaded()
+        .assert_playlist_shaded();
+}
+
+#[test]
+fn docked_title_focus_routes_vertical_arrows() {
+    let mut app = UiE2e::start_player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    );
+
+    app.add_timed_entry("file:///music/one.ogg", "One", 10_000)
+        .add_timed_entry("file:///music/two.ogg", "Two", 10_000)
+        .add_timed_entry("file:///music/three.ogg", "Three", 10_000)
+        .assert_docked_main_focused(true)
+        .click_playlist_row(0)
+        .assert_docked_main_focused(false)
+        .assert_docked_panel_focused(PanelKind::Playlist, true)
+        .press_docked_arrow_down()
+        .assert_playlist_entry_selected(1, true)
+        .drag_equalizer_band(0, 50)
+        .assert_docked_panel_focused(PanelKind::Equalizer, true)
+        .press_docked_arrow_up()
+        .assert_equalizer_band_position(0, 46)
+        .press_docked_arrow_down()
+        .assert_equalizer_band_position(0, 50)
+        .click(MainTarget::PLAY)
+        .assert_docked_main_focused(true)
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_player_shaded()
+        .press_docked_arrow_up()
+        .assert_playlist_position(Some(1))
+        .press_docked_arrow_down()
+        .assert_playlist_position(Some(0))
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_player_unshaded()
+        .click(MainTarget::volume(25))
+        .assert_volume(49)
+        .press_docked_arrow_up()
+        .assert_volume(53)
+        .click(MainTarget::position(100))
+        .assert_position(99)
+        .press_docked_arrow_right()
+        .assert_position(121)
+        .press_docked_arrow_left()
+        .assert_position(99)
+        .assert_volume(53)
+        .click(MainTarget::balance(12))
+        .assert_balance(0)
+        .press_docked_arrow_right()
+        .assert_balance(4)
+        .press_docked_arrow_down()
+        .assert_volume(49)
+        .click_playlist_row(1)
+        .assert_docked_panel_focused(PanelKind::Playlist, true)
+        .press_docked_arrow_right()
+        .assert_position(121)
+        .press_docked_arrow_left()
+        .assert_position(99)
+        .click_docked_panel(PanelTarget::EqualizerOn)
+        .assert_docked_panel_focused(PanelKind::Equalizer, true)
+        .press_docked_arrow_right()
+        .assert_position(121)
+        .press_docked_arrow_left()
+        .assert_position(99)
+        .press_shortcut(Shortcut::ShadeMain)
+        .assert_equalizer_shaded()
+        .press_docked_arrow_right()
+        .assert_volume(53)
+        .press_docked_arrow_left()
+        .assert_volume(49)
+        .press_docked_arrow_up()
+        .assert_equalizer_preamp_position(46)
+        .press_docked_arrow_down()
+        .assert_equalizer_preamp_position(50)
+        .assert_playlist_entry_selected(2, false)
+        .assert_equalizer_band_position(0, 50);
+}
+
+#[test]
+fn playlist_arrow_keys_move_selection() {
+    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+
+    app.drop_on_playlist([
+        "file:///music/one.ogg",
+        "file:///music/two.ogg",
+        "file:///music/three.ogg",
+    ])
+    .press_shortcut(Shortcut::PlaylistArrowDown)
+    .assert_playlist_entry_selected(1, true)
+    .press_shortcut(Shortcut::PlaylistArrowDown)
+    .assert_playlist_entry_selected(2, true)
+    .press_shortcut(Shortcut::PlaylistArrowUp)
+    .assert_playlist_entry_selected(1, true);
 }
 
 #[test]

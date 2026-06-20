@@ -329,6 +329,7 @@ fn build_preview_window(
             let (base_x, base_y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let docked_panel = { main_state.borrow().docked_panel_at(base_x, base_y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
+                main_state.borrow_mut().select_docked_panel(kind);
                 if n_press >= 2
                     && kind == PanelKind::Equalizer
                     && main_state
@@ -381,6 +382,8 @@ fn build_preview_window(
                 }
                 return;
             }
+            main_state.borrow_mut().select_docked_main();
+            drawing_area.queue_draw();
             if main_state.borrow().main_title_drag_region(base_x, base_y) {
                 let Some(device) = gesture.current_event_device() else {
                     return;
@@ -568,6 +571,13 @@ fn build_preview_window(
         let window = window.clone();
         let drawing_area = drawing_area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+            if focus_cycle_shortcut(key, state) {
+                main_state.borrow_mut().cycle_visible_focus();
+                drawing_area.queue_draw();
+                panel_windows.playlist_area.queue_draw();
+                panel_windows.equalizer_area.queue_draw();
+                return gtk::glib::Propagation::Stop;
+            }
             if handle_main_playlist_key_pressed(&main_state, key, state) {
                 drawing_area.queue_draw();
                 sync_panel_windows(&panel_windows, &main_state.borrow());
@@ -794,6 +804,13 @@ enum MainKeyboardShortcut {
     ToggleEqualizer,
     ShadePlaylist,
     ShadeEqualizer,
+    ToggleTimerRemaining,
+    ToggleSticky,
+    DoubleScale,
+    HalfScale,
+    ToggleEasyMove,
+    StartOfList,
+    FileInfo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,6 +934,16 @@ fn keyboard_shortcut_from_event(
         ("<Alt>g", MainKeyboardShortcut::ToggleEqualizer),
         ("<Control><Shift>w", MainKeyboardShortcut::ShadePlaylist),
         ("<Control><Alt>w", MainKeyboardShortcut::ShadeEqualizer),
+        ("<Control>r", MainKeyboardShortcut::ToggleTimerRemaining),
+        ("<Control>a", MainKeyboardShortcut::ToggleSticky),
+        ("<Control>d", MainKeyboardShortcut::DoubleScale),
+        ("<Control>m", MainKeyboardShortcut::HalfScale),
+        ("<Control>e", MainKeyboardShortcut::ToggleEasyMove),
+        ("<Control>z", MainKeyboardShortcut::StartOfList),
+        ("<Control>3", MainKeyboardShortcut::FileInfo),
+        ("Insert", MainKeyboardShortcut::OpenFiles),
+        ("<Shift>Insert", MainKeyboardShortcut::OpenDirectory),
+        ("<Alt>Insert", MainKeyboardShortcut::OpenLocation),
     ]
     .into_iter()
     .find_map(|(accelerator, shortcut)| {
@@ -936,15 +963,22 @@ fn handle_main_playlist_key_pressed(
             return handled;
         }
     }
+    let mut ui_state = main_state.borrow_mut();
+    match ui_state.selected_docked_panel() {
+        Some(PanelKind::Playlist) => {}
+        Some(PanelKind::Equalizer) => {
+            return handle_equalizer_key_pressed(&mut ui_state, key, state)
+        }
+        None => return handle_main_player_key_pressed(&mut ui_state, key, state),
+    }
+    if handle_playlist_parity_key_pressed(&mut ui_state, key, state) {
+        return true;
+    }
     if state.intersects(
         gtk::gdk::ModifierType::CONTROL_MASK
             | gtk::gdk::ModifierType::ALT_MASK
             | gtk::gdk::ModifierType::META_MASK,
     ) {
-        return false;
-    }
-    let mut ui_state = main_state.borrow_mut();
-    if !ui_state.playlist_ui.panel.visible {
         return false;
     }
     if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
@@ -1012,11 +1046,22 @@ fn handle_keyboard_shortcut(
             state.app_state.playlist.set_no_advance(enabled);
         }
         MainKeyboardShortcut::ShadeMain => {
-            {
-                let mut state = main_state.borrow_mut();
-                state.shaded = !state.shaded;
+            let toggled_panel = main_state.borrow_mut().toggle_selected_window_shade();
+            match toggled_panel {
+                Some(PanelKind::Playlist) => sync_single_panel_window_from_state(
+                    PanelKind::Playlist,
+                    &panel_windows.playlist,
+                    &panel_windows.playlist_area,
+                    main_state,
+                ),
+                Some(PanelKind::Equalizer) => sync_single_panel_window_from_state(
+                    PanelKind::Equalizer,
+                    &panel_windows.equalizer,
+                    &panel_windows.equalizer_area,
+                    main_state,
+                ),
+                None => resize_main_window(window, drawing_area, &main_state.borrow()),
             }
-            resize_main_window(window, drawing_area, &main_state.borrow());
         }
         MainKeyboardShortcut::JumpTime => {
             main_state.borrow_mut().set_jump_time_visible(true);
@@ -1068,6 +1113,30 @@ fn handle_keyboard_shortcut(
                 &panel_windows.equalizer_area,
                 main_state,
             );
+        }
+        MainKeyboardShortcut::ToggleTimerRemaining => {
+            let enabled = !main_state.borrow().preference_timer_remaining();
+            main_state
+                .borrow_mut()
+                .set_preference_timer_remaining(enabled);
+        }
+        MainKeyboardShortcut::ToggleSticky => {
+            main_state.borrow_mut().toggle_sticky();
+        }
+        MainKeyboardShortcut::DoubleScale => {
+            main_state.borrow_mut().double_fractional_scale();
+        }
+        MainKeyboardShortcut::HalfScale => {
+            main_state.borrow_mut().halve_fractional_scale();
+        }
+        MainKeyboardShortcut::ToggleEasyMove => {
+            main_state.borrow_mut().toggle_easy_move();
+        }
+        MainKeyboardShortcut::StartOfList => {
+            main_state.borrow_mut().select_first_playlist_entry();
+        }
+        MainKeyboardShortcut::FileInfo => {
+            main_state.borrow_mut().show_selected_or_current_file_info();
         }
     }
     resize_main_window(window, drawing_area, &main_state.borrow());
@@ -1154,7 +1223,7 @@ fn render_docked_ui_state(
             rendered |= render_playlist_frame(
                 cr,
                 skin,
-                state.playlist_ui.panel.focused(),
+                state.playlist_focused(),
                 state.playlist_ui.panel.shaded,
                 state.playlist_ui.width,
                 state.playlist_ui.height,
@@ -1450,7 +1519,7 @@ fn build_playlist_window(
         let state = state.borrow();
         let skin = state.active_skin();
         let shaded = state.playlist_ui.panel.shaded;
-        let focused = state.playlist_ui.panel.focused();
+        let focused = state.playlist_focused();
         let playlist_width = state.playlist_ui.width;
         let playlist_height = state.playlist_ui.height;
         let base_height = if shaded {
@@ -1574,22 +1643,7 @@ fn add_equalizer_key_controller(
     {
         let area = area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
-            if state.intersects(
-                gtk::gdk::ModifierType::CONTROL_MASK
-                    | gtk::gdk::ModifierType::ALT_MASK
-                    | gtk::gdk::ModifierType::META_MASK,
-            ) {
-                return gtk::glib::Propagation::Proceed;
-            }
-            let diff = match key {
-                gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => -4,
-                gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => 4,
-                _ => return gtk::glib::Propagation::Proceed,
-            };
-            if main_state
-                .borrow_mut()
-                .adjust_shaded_equalizer_balance(diff)
-            {
+            if handle_equalizer_key_pressed(&mut main_state.borrow_mut(), key, state) {
                 area.queue_draw();
                 gtk::glib::Propagation::Stop
             } else {
@@ -1598,6 +1652,60 @@ fn add_equalizer_key_controller(
         });
     }
     area.add_controller(key_controller);
+}
+
+fn focus_cycle_shortcut(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
+    key == gtk::gdk::Key::Tab
+        && state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        && !state.intersects(gtk::gdk::ModifierType::ALT_MASK | gtk::gdk::ModifierType::META_MASK)
+}
+
+fn handle_main_player_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    if state.intersects(
+        gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return false;
+    }
+    match key {
+        gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => ui_state.adjust_main_vertical_arrow(-1),
+        gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => ui_state.adjust_main_vertical_arrow(1),
+        gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => ui_state.adjust_main_horizontal_arrow(-4),
+        gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => ui_state.adjust_main_horizontal_arrow(4),
+        _ => false,
+    }
+}
+
+fn handle_equalizer_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    if state.intersects(
+        gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return false;
+    }
+    match key {
+        gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => ui_state.adjust_selected_equalizer_slider(-4),
+        gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => {
+            ui_state.adjust_selected_equalizer_slider(4)
+        }
+        gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => {
+            ui_state.adjust_equalizer_horizontal_arrow(-4)
+        }
+        gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => {
+            ui_state.adjust_equalizer_horizontal_arrow(4)
+        }
+        _ => false,
+    }
 }
 
 fn handle_playlist_key_pressed(
@@ -1613,6 +1721,12 @@ fn handle_playlist_key_pressed(
         }
     }
 
+    {
+        let mut ui_state = main_state.borrow_mut();
+        if handle_playlist_parity_key_pressed(&mut ui_state, key, state) {
+            return true;
+        }
+    }
     if state.intersects(
         gtk::gdk::ModifierType::CONTROL_MASK
             | gtk::gdk::ModifierType::ALT_MASK
@@ -1668,6 +1782,44 @@ fn handle_active_playlist_search_key_pressed(
         return Some(true);
     }
     Some(true)
+}
+
+fn handle_playlist_parity_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    let control = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+    let alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
+    let is_delete = key == gtk::gdk::Key::Delete || key == gtk::gdk::Key::KP_Delete;
+    let is_q = key == gtk::gdk::Key::q || key == gtk::gdk::Key::Q;
+    if control && is_delete {
+        return ui_state.crop_playlist_to_selected_or_current();
+    }
+    if alt && is_q {
+        return ui_state.open_queue_manager();
+    }
+    if shift && is_q {
+        return ui_state.clear_playlist_queue();
+    }
+    if !control && !shift && !alt && is_q {
+        return ui_state.toggle_queue_selected_playlist_entries();
+    }
+    match key {
+        gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => ui_state.move_playlist_arrow_selection(-1),
+        gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => ui_state.move_playlist_arrow_selection(1),
+        gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => ui_state.adjust_main_seek(-4),
+        gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => ui_state.adjust_main_seek(4),
+        gtk::gdk::Key::Page_Up | gtk::gdk::Key::KP_Page_Up => ui_state.move_playlist_page(-1),
+        gtk::gdk::Key::Page_Down | gtk::gdk::Key::KP_Page_Down => ui_state.move_playlist_page(1),
+        gtk::gdk::Key::Home | gtk::gdk::Key::KP_Home => ui_state.move_playlist_to_start(),
+        gtk::gdk::Key::End | gtk::gdk::Key::KP_End => ui_state.move_playlist_to_end(),
+        gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+            ui_state.activate_selected_or_current_playlist_entry()
+        }
+        _ => false,
+    }
 }
 
 fn handle_playlist_navigation_key_pressed(
@@ -5223,6 +5375,23 @@ pub enum PanelKind {
     Playlist,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum DockedFocusTarget {
+    #[default]
+    Main,
+    Equalizer,
+    Playlist,
+}
+
+impl From<PanelKind> for DockedFocusTarget {
+    fn from(kind: PanelKind) -> Self {
+        match kind {
+            PanelKind::Equalizer => Self::Equalizer,
+            PanelKind::Playlist => Self::Playlist,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanelState {
     Hidden,
@@ -6666,6 +6835,7 @@ struct EqualizerUiState {
     active: bool,
     automatic: bool,
     pointer: EqualizerPointer,
+    keyboard_slider: Option<EqualizerSlider>,
     preamp_position: i32,
     band_positions: [i32; 10],
     preset_dir: PathBuf,
@@ -6684,6 +6854,7 @@ impl EqualizerUiState {
             active: true,
             automatic: false,
             pointer: EqualizerPointer::default(),
+            keyboard_slider: None,
             preamp_position: 50,
             band_positions: [50; 10],
             preset_dir: default_config_dir().join("xmms-renascene"),
@@ -6754,12 +6925,15 @@ pub(crate) struct MainWindowUiState {
     playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
+    docked_focus: DockedFocusTarget,
     equalizer: EqualizerUiState,
     playlist_ui: PlaylistUiState,
     dialogs: DialogVisibility,
     last_playlist_file_info: Option<String>,
     active_skin: DefaultSkin,
     playlist_options_opened: bool,
+    playlist_queue: Vec<usize>,
+    queue_manager_opened: bool,
     preferences_page: PreferencesPage,
     preferences_saved: bool,
     skin_browser: SkinBrowserState,
@@ -6769,6 +6943,7 @@ pub(crate) struct MainWindowUiState {
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
     playback_transition: PlaybackTransitionState,
+    main_keyboard_slider: Option<MainSlider>,
     last_open_location: Option<String>,
     last_jump_time_ms: Option<i64>,
     position_position: i32,
@@ -6815,12 +6990,15 @@ impl MainWindowUiState {
             playback_requests: Vec::new(),
             shaded: main_shaded,
             menu_visible: false,
+            docked_focus: DockedFocusTarget::default(),
             equalizer,
             playlist_ui,
             dialogs: DialogVisibility::default(),
             last_playlist_file_info: None,
             active_skin,
             playlist_options_opened: false,
+            playlist_queue: Vec::new(),
+            queue_manager_opened: false,
             preferences_page: PreferencesPage::Options,
             preferences_saved: false,
             skin_browser: SkinBrowserState::default(),
@@ -6830,6 +7008,7 @@ impl MainWindowUiState {
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
             playback_transition: PlaybackTransitionState::Idle,
+            main_keyboard_slider: None,
             last_open_location: None,
             last_jump_time_ms: None,
             position_position: 0,
@@ -7039,6 +7218,7 @@ impl MainWindowUiState {
 
     fn render_state(&self) -> MainWindowRenderState {
         MainWindowRenderState {
+            focused: self.main_focused(),
             title: self
                 .equalizer_drag_info_text()
                 .unwrap_or_else(|| self.formatted_current_title()),
@@ -7067,7 +7247,6 @@ impl MainWindowUiState {
             },
             channels: self.app_state.player.channels(),
             visualization: self.make_visualization_render_state(),
-            ..MainWindowRenderState::default()
         }
     }
 
@@ -7388,9 +7567,104 @@ impl MainWindowUiState {
         }
     }
 
+    fn main_focused(&self) -> bool {
+        self.selected_docked_panel().is_none()
+    }
+
+    fn equalizer_focused(&self) -> bool {
+        if self.equalizer.panel.detached {
+            self.equalizer.panel.focused()
+        } else {
+            self.docked_focus == DockedFocusTarget::Equalizer || self.equalizer.panel.dragging_title
+        }
+    }
+
+    fn playlist_focused(&self) -> bool {
+        if self.playlist_ui.panel.detached {
+            self.playlist_ui.panel.focused()
+        } else {
+            self.docked_focus == DockedFocusTarget::Playlist
+                || self.playlist_ui.panel.dragging_title
+        }
+    }
+
+    fn select_focus_target(&mut self, target: DockedFocusTarget) {
+        self.docked_focus = target;
+        self.equalizer.panel.focused = target == DockedFocusTarget::Equalizer;
+        self.playlist_ui.panel.focused = target == DockedFocusTarget::Playlist;
+    }
+
+    pub(crate) fn select_docked_main(&mut self) {
+        self.select_focus_target(DockedFocusTarget::Main);
+    }
+
+    pub(crate) fn select_docked_panel(&mut self, kind: PanelKind) {
+        if self.panel_state(kind).is_docked_visible() {
+            self.select_focus_target(kind.into());
+        }
+    }
+
+    pub(crate) fn cycle_visible_focus(&mut self) {
+        let mut targets = vec![DockedFocusTarget::Main];
+        if self.panel_state(PanelKind::Equalizer) != PanelState::Hidden {
+            targets.push(DockedFocusTarget::Equalizer);
+        }
+        if self.panel_state(PanelKind::Playlist) != PanelState::Hidden {
+            targets.push(DockedFocusTarget::Playlist);
+        }
+        let current = if self.equalizer_focused() {
+            DockedFocusTarget::Equalizer
+        } else if self.playlist_focused() {
+            DockedFocusTarget::Playlist
+        } else {
+            DockedFocusTarget::Main
+        };
+        let position = targets
+            .iter()
+            .position(|target| *target == current)
+            .unwrap_or(0);
+        let next = targets[(position + 1) % targets.len()];
+        self.select_focus_target(next);
+    }
+
+    pub(crate) fn handle_docked_vertical_arrow(&mut self, delta: isize) -> bool {
+        match self.selected_docked_panel() {
+            Some(PanelKind::Playlist) => self.move_playlist_arrow_selection(delta),
+            Some(PanelKind::Equalizer) => {
+                self.adjust_selected_equalizer_slider(if delta < 0 { -4 } else { 4 })
+            }
+            None => self.adjust_main_vertical_arrow(delta),
+        }
+    }
+
+    pub(crate) fn docked_focus_is_main(&self) -> bool {
+        self.main_focused()
+    }
+
+    pub(crate) fn docked_focus_is_panel(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Equalizer => self.equalizer_focused(),
+            PanelKind::Playlist => self.playlist_focused(),
+        }
+    }
+
+    fn selected_docked_panel(&self) -> Option<PanelKind> {
+        match self.docked_focus {
+            DockedFocusTarget::Main => None,
+            DockedFocusTarget::Equalizer => self
+                .panel_state(PanelKind::Equalizer)
+                .is_docked_visible()
+                .then_some(PanelKind::Equalizer),
+            DockedFocusTarget::Playlist => self
+                .panel_state(PanelKind::Playlist)
+                .is_docked_visible()
+                .then_some(PanelKind::Playlist),
+        }
+    }
+
     fn equalizer_render_state(&self) -> EqualizerRenderState {
         EqualizerRenderState {
-            focused: self.equalizer.panel.focused(),
+            focused: self.equalizer_focused(),
             shaded: self.equalizer.panel.shaded,
             active: self.equalizer.active,
             automatic: self.equalizer.automatic,
@@ -7439,15 +7713,15 @@ impl MainWindowUiState {
 
     pub(crate) fn docked_panel_state(&self) -> DockedPanelState {
         DockedPanelState {
-            main_focused: true,
+            main_focused: self.main_focused(),
             main_shaded: self.shaded,
             equalizer_visible: self.equalizer.panel.visible,
             equalizer_detached: self.equalizer.panel.detached,
-            equalizer_focused: self.equalizer.panel.focused(),
+            equalizer_focused: self.equalizer_focused(),
             equalizer_shaded: self.equalizer.panel.shaded,
             playlist_visible: self.playlist_ui.panel.visible,
             playlist_detached: self.playlist_ui.panel.detached,
-            playlist_focused: self.playlist_ui.panel.focused(),
+            playlist_focused: self.playlist_focused(),
             playlist_shaded: self.playlist_ui.panel.shaded,
             playlist_width: self.playlist_ui.width,
             playlist_height: self.playlist_ui.height,
@@ -7914,17 +8188,30 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn toggle_double_size(&mut self) {
-        if self.app_state.config.scale_factor <= 1.0 {
-            self.app_state.config.scale_factor = 2.0;
-            self.app_state.config.doublesize = true;
-        } else {
-            self.app_state.config.scale_factor = 1.0;
-            self.app_state.config.doublesize = false;
-        }
+        self.double_fractional_scale();
+    }
+
+    pub(crate) fn double_fractional_scale(&mut self) {
+        let scale = (self.app_state.config.scale_factor * 2.0).clamp(1.0, 5.0);
+        self.app_state.config.scale_factor = scale;
+        self.app_state.config.doublesize = scale > 1.0;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn halve_fractional_scale(&mut self) {
+        let scale = (self.app_state.config.scale_factor / 2.0).clamp(1.0, 5.0);
+        self.app_state.config.scale_factor = scale;
+        self.app_state.config.doublesize = scale > 1.0;
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn double_size(&self) -> bool {
         self.app_state.config.doublesize
+    }
+
+    pub(crate) fn toggle_easy_move(&mut self) {
+        self.app_state.config.easy_move = !self.app_state.config.easy_move;
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn show_current_file_info(&mut self) {
@@ -7935,6 +8222,24 @@ impl MainWindowUiState {
             .and_then(|position| self.app_state.playlist.entries().get(position))
             .or_else(|| self.app_state.playlist.entries().first())
             .map(|entry| entry.title.clone());
+    }
+
+    pub(crate) fn show_selected_or_current_file_info(&mut self) {
+        self.last_playlist_file_info = self
+            .selected_playlist_index()
+            .or_else(|| self.app_state.playlist.position())
+            .and_then(|index| self.app_state.playlist.entries().get(index))
+            .or_else(|| self.app_state.playlist.entries().first())
+            .map(|entry| entry.title.clone());
+    }
+
+    pub(crate) fn select_first_playlist_entry(&mut self) -> bool {
+        if self.app_state.playlist.is_empty() {
+            return false;
+        }
+        self.select_single_playlist_entry(0);
+        self.scroll_playlist_entry_into_view(0);
+        true
     }
 
     pub(crate) fn play_first_playlist_entry(&mut self) {
@@ -8619,6 +8924,7 @@ impl MainWindowUiState {
     pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
         if self.equalizer.panel.shaded {
             if let Some(slider) = equalizer_shaded_slider_at(x, y) {
+                self.equalizer.keyboard_slider = Some(slider);
                 self.equalizer.pointer = EqualizerPointer::DraggingSlider {
                     slider,
                     offset: self.begin_equalizer_slider_drag(slider, x, y),
@@ -8629,6 +8935,7 @@ impl MainWindowUiState {
         }
 
         if let Some(control) = equalizer_control_at(x, y) {
+            self.equalizer.keyboard_slider = None;
             self.equalizer.pointer = EqualizerPointer::PressedControl {
                 control,
                 inside: true,
@@ -8637,6 +8944,7 @@ impl MainWindowUiState {
         }
 
         if let Some(slider) = equalizer_slider_at(x, y) {
+            self.equalizer.keyboard_slider = Some(slider);
             self.equalizer.pointer = EqualizerPointer::DraggingSlider {
                 slider,
                 offset: self.begin_equalizer_slider_drag(slider, x, y),
@@ -8678,13 +8986,41 @@ impl MainWindowUiState {
         let Some(slider) = slider else {
             return false;
         };
-        let diff = if dy < 0.0 {
-            -4
-        } else if dy > 0.0 {
-            4
+        match slider {
+            EqualizerSlider::ShadedVolume => self.scroll_volume(dy),
+            EqualizerSlider::ShadedBalance => self.scroll_balance(dy),
+            EqualizerSlider::Preamp | EqualizerSlider::Band(_) => {
+                let diff = if dy < 0.0 {
+                    -4
+                } else if dy > 0.0 {
+                    4
+                } else {
+                    return false;
+                };
+                self.adjust_equalizer_slider(slider, diff)
+            }
+        }
+    }
+
+    pub(crate) fn adjust_selected_equalizer_slider(&mut self, diff: i32) -> bool {
+        let slider = self
+            .equalizer
+            .keyboard_slider
+            .unwrap_or(EqualizerSlider::Preamp);
+        self.adjust_equalizer_slider(slider, diff)
+    }
+
+    pub(crate) fn adjust_equalizer_horizontal_arrow(&mut self, diff: i32) -> bool {
+        if self.equalizer.panel.shaded {
+            self.adjust_volume_by(diff)
+        } else if self.equalizer.keyboard_slider == Some(EqualizerSlider::ShadedBalance) {
+            self.adjust_balance_by(diff)
         } else {
-            return false;
-        };
+            self.adjust_main_seek(diff)
+        }
+    }
+
+    fn adjust_equalizer_slider(&mut self, slider: EqualizerSlider, diff: i32) -> bool {
         match slider {
             EqualizerSlider::Preamp => {
                 let next = (self.equalizer.preamp_position + diff).clamp(0, 100);
@@ -8707,24 +9043,9 @@ impl MainWindowUiState {
                 }
                 changed
             }
-            EqualizerSlider::ShadedVolume => self.scroll_volume(dy),
-            EqualizerSlider::ShadedBalance => self.scroll_balance(dy),
+            EqualizerSlider::ShadedVolume => self.adjust_volume_by(-diff),
+            EqualizerSlider::ShadedBalance => self.adjust_balance_by(-diff),
         }
-    }
-
-    pub(crate) fn adjust_shaded_equalizer_balance(&mut self, diff: i32) -> bool {
-        if !self.equalizer.panel.shaded {
-            return false;
-        }
-        let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
-        let changed = self.app_state.player.balance() != balance;
-        self.app_state.player.set_balance(balance);
-        if changed {
-            if let Some(backend) = &self.playback_backend {
-                backend.borrow().set_balance_percent(balance);
-            }
-        }
-        changed
     }
 
     pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
@@ -9312,6 +9633,14 @@ impl MainWindowUiState {
         if !self.app_state.config.vim_playlist_navigation {
             return false;
         }
+        self.move_playlist_selection_by(delta)
+    }
+
+    pub(crate) fn move_playlist_arrow_selection(&mut self, delta: isize) -> bool {
+        self.move_playlist_selection_by(delta)
+    }
+
+    fn move_playlist_selection_by(&mut self, delta: isize) -> bool {
         let len = self.app_state.playlist.len();
         if len == 0 {
             return false;
@@ -9326,10 +9655,81 @@ impl MainWindowUiState {
         true
     }
 
+    pub(crate) fn move_playlist_page(&mut self, direction: isize) -> bool {
+        let visible = self.playlist_visible_entries().max(1) as isize;
+        self.move_playlist_selection_by(direction.signum() * visible)
+    }
+
+    pub(crate) fn move_playlist_to_start(&mut self) -> bool {
+        self.select_first_playlist_entry()
+    }
+
+    pub(crate) fn move_playlist_to_end(&mut self) -> bool {
+        let Some(last) = self.app_state.playlist.len().checked_sub(1) else {
+            return false;
+        };
+        self.select_single_playlist_entry(last);
+        self.scroll_playlist_entry_into_view(last);
+        true
+    }
+
+    pub(crate) fn crop_playlist_to_selected_or_current(&mut self) -> bool {
+        self.app_state.playlist.crop_to_selected_or_current()
+    }
+
+    pub(crate) fn toggle_queue_selected_playlist_entries(&mut self) -> bool {
+        let selected = self
+            .app_state
+            .playlist
+            .entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| entry.selected.then_some(index))
+            .collect::<Vec<_>>();
+        let targets = if selected.is_empty() {
+            self.selected_playlist_index()
+                .or_else(|| self.app_state.playlist.position())
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            selected
+        };
+        if targets.is_empty() {
+            return false;
+        }
+        for index in targets {
+            if let Some(position) = self
+                .playlist_queue
+                .iter()
+                .position(|queued| *queued == index)
+            {
+                self.playlist_queue.remove(position);
+            } else {
+                self.playlist_queue.push(index);
+            }
+        }
+        true
+    }
+
+    pub(crate) fn clear_playlist_queue(&mut self) -> bool {
+        let changed = !self.playlist_queue.is_empty();
+        self.playlist_queue.clear();
+        changed
+    }
+
+    pub(crate) fn open_queue_manager(&mut self) -> bool {
+        self.queue_manager_opened = true;
+        true
+    }
+
     pub(crate) fn play_selected_playlist_entry(&mut self) -> bool {
         if !self.app_state.config.vim_playlist_navigation {
             return false;
         }
+        self.activate_selected_or_current_playlist_entry()
+    }
+
+    pub(crate) fn activate_selected_or_current_playlist_entry(&mut self) -> bool {
         let Some(index) = self
             .selected_playlist_index()
             .or_else(|| self.app_state.playlist.position())
@@ -9559,6 +9959,19 @@ impl MainWindowUiState {
 
     pub(crate) fn toggle_shaded(&mut self) {
         self.shaded = !self.shaded;
+    }
+
+    pub(crate) fn toggle_selected_window_shade(&mut self) -> Option<PanelKind> {
+        match self.selected_docked_panel() {
+            Some(kind) => {
+                self.toggle_panel_shaded(kind);
+                Some(kind)
+            }
+            None => {
+                self.toggle_shaded();
+                None
+            }
+        }
     }
 
     pub(crate) fn toggle_playlist_shaded(&mut self) {
@@ -10146,6 +10559,7 @@ impl MainWindowUiState {
         };
 
         self.main_pointer = if let MainControl::Slider(slider) = control {
+            self.main_keyboard_slider = Some(slider);
             MainPointer::DraggingSlider {
                 slider,
                 offset: self.begin_slider_drag(slider, x),
@@ -10218,6 +10632,32 @@ impl MainWindowUiState {
         }
     }
 
+    pub(crate) fn adjust_main_vertical_arrow(&mut self, delta: isize) -> bool {
+        if self.shaded {
+            let button = if delta < 0 {
+                MainPushButton::Next
+            } else {
+                MainPushButton::Previous
+            };
+            self.activate_push(button);
+            true
+        } else {
+            self.adjust_volume_by(if delta < 0 { 4 } else { -4 })
+        }
+    }
+
+    pub(crate) fn adjust_main_horizontal_arrow(&mut self, diff: i32) -> bool {
+        if self.main_keyboard_slider == Some(MainSlider::Balance) {
+            self.adjust_balance_by(diff)
+        } else {
+            self.adjust_main_seek(diff)
+        }
+    }
+
+    pub(crate) fn adjust_main_seek(&mut self, diff: i32) -> bool {
+        self.scroll_position_slider(f64::from(diff))
+    }
+
     fn scroll_volume(&mut self, dy: f64) -> bool {
         let step = self.app_state.config.mouse_wheel_change.clamp(1, 100);
         let diff = if dy < 0.0 {
@@ -10227,6 +10667,10 @@ impl MainWindowUiState {
         } else {
             return false;
         };
+        self.adjust_volume_by(diff)
+    }
+
+    fn adjust_volume_by(&mut self, diff: i32) -> bool {
         let volume = (self.app_state.player.volume() + diff).clamp(0, 100);
         if volume == self.app_state.player.volume() {
             return false;
@@ -10248,6 +10692,10 @@ impl MainWindowUiState {
         } else {
             return false;
         };
+        self.adjust_balance_by(diff)
+    }
+
+    fn adjust_balance_by(&mut self, diff: i32) -> bool {
         let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
         if balance == self.app_state.player.balance() {
             return false;

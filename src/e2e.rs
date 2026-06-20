@@ -375,10 +375,13 @@ pub enum Shortcut {
     TimerRemaining,
     ToggleSticky,
     ToggleDoubleSize,
+    HalfScale,
     FileInfo,
     PlayFirst,
     PlaylistDown,
     PlaylistUp,
+    PlaylistArrowDown,
+    PlaylistArrowUp,
     PlaylistPlay,
 }
 
@@ -469,6 +472,7 @@ impl UiE2e {
 
     pub fn click(&mut self, target: MainTarget) -> &mut Self {
         let (x, y) = target.point(self.state.is_shaded());
+        self.state.select_docked_main();
         let action = self.state.click(x, y);
         self.apply_action(action);
         self.sync_windows();
@@ -489,6 +493,48 @@ impl UiE2e {
         self
     }
 
+    pub fn press_ctrl_tab(&mut self) -> &mut Self {
+        self.state.cycle_visible_focus();
+        self.sync_windows();
+        self
+    }
+
+    pub fn press_docked_arrow_down(&mut self) -> &mut Self {
+        self.state.handle_docked_vertical_arrow(1);
+        self.sync_windows();
+        self
+    }
+
+    pub fn press_docked_arrow_up(&mut self) -> &mut Self {
+        self.state.handle_docked_vertical_arrow(-1);
+        self.sync_windows();
+        self
+    }
+
+    pub fn press_docked_arrow_left(&mut self) -> &mut Self {
+        if self.state.docked_focus_is_panel(PanelKind::Equalizer) {
+            self.state.adjust_equalizer_horizontal_arrow(-4);
+        } else if self.state.docked_focus_is_panel(PanelKind::Playlist) {
+            self.state.adjust_main_seek(-4);
+        } else if self.state.docked_focus_is_main() {
+            self.state.adjust_main_horizontal_arrow(-4);
+        }
+        self.sync_windows();
+        self
+    }
+
+    pub fn press_docked_arrow_right(&mut self) -> &mut Self {
+        if self.state.docked_focus_is_panel(PanelKind::Equalizer) {
+            self.state.adjust_equalizer_horizontal_arrow(4);
+        } else if self.state.docked_focus_is_panel(PanelKind::Playlist) {
+            self.state.adjust_main_seek(4);
+        } else if self.state.docked_focus_is_main() {
+            self.state.adjust_main_horizontal_arrow(4);
+        }
+        self.sync_windows();
+        self
+    }
+
     pub fn click_docked_panel(&mut self, target: PanelTarget) -> &mut Self {
         let (kind, x, y) = target.point(&self.state);
         let mut offset_y = main_window_height(self.state.is_shaded());
@@ -503,8 +549,10 @@ impl UiE2e {
             panic!("expected {target:?} to hit a docked panel");
         };
         assert_eq!(actual_kind, kind);
+        self.state.select_docked_panel(actual_kind);
         match actual_kind {
             PanelKind::Equalizer => {
+                self.state.equalizer_press(panel_x, panel_y);
                 let title_action = self.state.panel_click(actual_kind, panel_x, panel_y);
                 if title_action == PanelAction::None {
                     self.state.equalizer_release(panel_x, panel_y);
@@ -660,6 +708,7 @@ impl UiE2e {
     }
 
     pub fn click_playlist_row(&mut self, index: usize) -> &mut Self {
+        self.state.select_docked_panel(PanelKind::Playlist);
         let y = self.playlist_row_y(index);
         assert!(
             self.state.playlist_press(20, y),
@@ -671,6 +720,7 @@ impl UiE2e {
     }
 
     pub fn ctrl_click_playlist_row(&mut self, index: usize) -> &mut Self {
+        self.state.select_docked_panel(PanelKind::Playlist);
         let y = self.playlist_row_y(index);
         assert!(
             self.state.playlist_press_with_ctrl(20, y, true),
@@ -682,6 +732,7 @@ impl UiE2e {
     }
 
     pub fn double_click_playlist_row(&mut self, index: usize) -> &mut Self {
+        self.state.select_docked_panel(PanelKind::Playlist);
         let y = self.playlist_row_y(index);
         assert!(
             self.state.playlist_press(20, y),
@@ -816,7 +867,7 @@ impl UiE2e {
                 self.state.set_no_advance(enabled);
             }
             Shortcut::ShadeMain => {
-                self.state.toggle_shaded();
+                self.state.toggle_selected_window_shade();
             }
             Shortcut::JumpTime => self.state.set_jump_time_visible(true),
             Shortcut::SkinBrowser => {
@@ -841,6 +892,7 @@ impl UiE2e {
             Shortcut::TimerRemaining => self.state.set_preference_timer_remaining(true),
             Shortcut::ToggleSticky => self.state.toggle_sticky(),
             Shortcut::ToggleDoubleSize => self.state.toggle_double_size(),
+            Shortcut::HalfScale => self.state.halve_fractional_scale(),
             Shortcut::FileInfo => self.state.show_current_file_info(),
             Shortcut::PlayFirst => self.state.play_first_playlist_entry(),
             Shortcut::PlaylistDown => {
@@ -848,6 +900,12 @@ impl UiE2e {
             }
             Shortcut::PlaylistUp => {
                 self.state.move_playlist_selection(-1);
+            }
+            Shortcut::PlaylistArrowDown => {
+                self.state.move_playlist_arrow_selection(1);
+            }
+            Shortcut::PlaylistArrowUp => {
+                self.state.move_playlist_arrow_selection(-1);
             }
             Shortcut::PlaylistPlay => {
                 self.state.play_selected_playlist_entry();
@@ -1274,6 +1332,24 @@ impl UiE2e {
             self.state.is_panel_focused(panel),
             expected,
             "expected {panel:?} focused state to be {expected}"
+        );
+        self
+    }
+
+    pub fn assert_docked_main_focused(&mut self, expected: bool) -> &mut Self {
+        assert_eq!(
+            self.state.docked_focus_is_main(),
+            expected,
+            "expected docked main focus to be {expected}"
+        );
+        self
+    }
+
+    pub fn assert_docked_panel_focused(&mut self, panel: PanelKind, expected: bool) -> &mut Self {
+        assert_eq!(
+            self.state.docked_focus_is_panel(panel),
+            expected,
+            "expected docked {panel:?} focus to be {expected}"
         );
         self
     }
@@ -2124,6 +2200,7 @@ impl UiE2e {
     }
 
     fn drag_equalizer_slider(&mut self, x: i32, position: i32) -> &mut Self {
+        self.state.select_docked_panel(PanelKind::Equalizer);
         let current = if x == 21 {
             self.state.equalizer_preamp_position()
         } else {
@@ -2139,6 +2216,7 @@ impl UiE2e {
     }
 
     fn drag_equalizer_shaded_slider(&mut self, x: i32, position: i32) -> &mut Self {
+        self.state.select_docked_panel(PanelKind::Equalizer);
         let y = 8;
         let current = if x == 61 {
             ((self.state.volume().clamp(0, 100) * 94 + 50) / 100).clamp(0, 94)
