@@ -61,6 +61,10 @@ use crate::skineditor::{
     MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
 };
 
+pub(crate) mod file_info;
+
+use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};
+
 const DEFAULT_SCALE: i32 = 2;
 const STOP_FADE_DURATION_MS: i64 = 1_000;
 type PreferencesChanged = Rc<dyn Fn()>;
@@ -1167,7 +1171,7 @@ fn handle_keyboard_shortcut(
             main_state.borrow_mut().select_first_playlist_entry();
         }
         MainKeyboardShortcut::FileInfo => {
-            main_state.borrow_mut().show_selected_or_current_file_info();
+            show_file_info_dialog(window, Rc::clone(main_state));
         }
     }
     resize_main_window(window, drawing_area, &main_state.borrow());
@@ -5657,6 +5661,7 @@ pub(crate) enum PanelAction {
     OpenPlaylistLoadDialog,
     OpenPlaylistSaveDialog,
     ShowPlaylistSortMenu,
+    ShowFileInfo,
     ShowPlaylistMenu(PlaylistMenuKind),
     ShowEqualizerPresets,
 }
@@ -5830,6 +5835,9 @@ fn add_panel_click_controller(
                         .borrow_mut()
                         .set_playlist_save_dialog_visible(true);
                     show_playlist_save_dialog(&window, Rc::clone(&main_state));
+                }
+                PanelAction::ShowFileInfo => {
+                    show_file_info_dialog(&window, Rc::clone(&main_state));
                 }
                 PanelAction::ShowPlaylistSortMenu => {
                     if let Some(popover) = playlist_sort_menu.as_ref() {
@@ -6418,6 +6426,9 @@ fn handle_panel_action_for_main_window(
                 .set_playlist_save_dialog_visible(true);
             show_playlist_save_dialog(window, Rc::clone(main_state));
         }
+        PanelAction::ShowFileInfo => {
+            show_file_info_dialog(window, Rc::clone(main_state));
+        }
         PanelAction::ShowPlaylistSortMenu => {
             show_playlist_sort_menu(playlist_sort_menu, area);
             area.queue_draw();
@@ -6917,6 +6928,7 @@ impl PlaylistUiState {
 struct DialogVisibility {
     playlist_load: bool,
     playlist_save: bool,
+    file_info: bool,
     preferences: bool,
     open_location: bool,
     jump_time: bool,
@@ -8309,23 +8321,30 @@ impl MainWindowUiState {
         self.mark_preferences_saved();
     }
 
-    pub(crate) fn show_current_file_info(&mut self) {
-        self.last_playlist_file_info = self
-            .app_state
-            .playlist
-            .position()
-            .and_then(|position| self.app_state.playlist.entries().get(position))
-            .or_else(|| self.app_state.playlist.entries().first())
-            .map(|entry| entry.title.clone());
-    }
-
     pub(crate) fn show_selected_or_current_file_info(&mut self) {
         self.last_playlist_file_info = self
+            .selected_or_current_file_info_details()
+            .map(|details| details.title);
+    }
+
+    pub(crate) fn selected_or_current_file_info_details(&mut self) -> Option<FileInfoDetails> {
+        let details = self
             .selected_playlist_index()
             .or_else(|| self.app_state.playlist.position())
             .and_then(|index| self.app_state.playlist.entries().get(index))
             .or_else(|| self.app_state.playlist.entries().first())
-            .map(|entry| entry.title.clone());
+            .map(file_info_details_for_entry);
+        self.last_playlist_file_info = details.as_ref().map(|details| details.title.clone());
+        self.dialogs.file_info = details.is_some();
+        details
+    }
+
+    pub(crate) fn is_file_info_dialog_visible(&self) -> bool {
+        self.dialogs.file_info
+    }
+
+    pub(crate) fn set_file_info_dialog_visible(&mut self, visible: bool) {
+        self.dialogs.file_info = visible;
     }
 
     pub(crate) fn select_first_playlist_entry(&mut self) -> bool {
@@ -9554,14 +9573,7 @@ impl MainWindowUiState {
             PlaylistMenuCommand::OpenDirectoryDialog => return PanelAction::OpenDirectoryDialog,
             PlaylistMenuCommand::OpenFileDialog => return PanelAction::OpenFileDialog,
             PlaylistMenuCommand::ShowSortMenu => return PanelAction::ShowPlaylistSortMenu,
-            PlaylistMenuCommand::ShowFileInfo => {
-                self.last_playlist_file_info = self
-                    .selected_playlist_index()
-                    .or_else(|| self.app_state.playlist.position())
-                    .and_then(|index| self.app_state.playlist.entries().get(index))
-                    .map(|entry| entry.title.clone());
-                true
-            }
+            PlaylistMenuCommand::ShowFileInfo => return PanelAction::ShowFileInfo,
             PlaylistMenuCommand::OpenOptions => {
                 self.playlist_options_opened = true;
                 true

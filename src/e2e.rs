@@ -577,6 +577,9 @@ impl UiE2e {
                 self.state.set_playlist_save_dialog_visible(true)
             }
             PanelAction::ShowPlaylistSortMenu => {}
+            PanelAction::ShowFileInfo => {
+                self.state.show_selected_or_current_file_info();
+            }
             _ => {}
         }
         self.sync_windows();
@@ -881,7 +884,9 @@ impl UiE2e {
             Shortcut::ToggleSticky => self.state.toggle_sticky(),
             Shortcut::ToggleDoubleSize => self.state.toggle_double_size(),
             Shortcut::HalfScale => self.state.halve_fractional_scale(),
-            Shortcut::FileInfo => self.state.show_current_file_info(),
+            Shortcut::FileInfo => {
+                self.state.selected_or_current_file_info_details();
+            }
             Shortcut::PlayFirst => self.state.play_first_playlist_entry(),
             Shortcut::PlaylistDown => {
                 self.state.move_playlist_selection(1);
@@ -1119,6 +1124,14 @@ impl UiE2e {
         assert!(
             self.state.is_playlist_save_dialog_visible(),
             "expected playlist save dialog to be visible"
+        );
+        self
+    }
+
+    pub fn assert_file_info_dialog_visible(&mut self) -> &mut Self {
+        assert!(
+            self.state.is_file_info_dialog_visible(),
+            "expected file info dialog to be visible"
         );
         self
     }
@@ -2167,6 +2180,9 @@ impl UiE2e {
             }
             PanelAction::OpenPlaylistSaveDialog => {
                 self.state.set_playlist_save_dialog_visible(true)
+            }
+            PanelAction::ShowFileInfo => {
+                self.state.show_selected_or_current_file_info();
             }
             PanelAction::ShowPlaylistMenu(_) | PanelAction::ShowEqualizerPresets => {}
         }
