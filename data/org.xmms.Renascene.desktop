@@ -1,10 +1,12 @@
 [Desktop Entry]
+Type=Application
 Name=XMMS Renascene
-Comment=X Multimedia System - Music Player
+GenericName=Music Player
+Comment=Play music with Winamp-compatible skins
 Exec=xmms %F
 Icon=org.xmms.Renascene
 Terminal=false
-Type=Application
-Categories=Audio;Music;Player;AudioVideo;
+StartupNotify=true
+Categories=AudioVideo;Audio;Player;GTK;
 MimeType=audio/mpeg;audio/x-mp3;audio/x-wav;audio/ogg;audio/x-vorbis+ogg;audio/flac;audio/x-flac;audio/mp4;audio/x-aac;audio/webm;
-Keywords=Music;Player;Audio;
+Keywords=Music;Player;Audio;Winamp;XMMS;Skin;

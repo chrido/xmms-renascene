@@ -51,7 +51,7 @@ modules:
       - chmod 755 /app/bin/xmms
       - install -Dm644 data/org.xmms.Renascene.desktop /app/share/applications/org.xmms.Renascene.desktop
       - install -Dm644 data/org.xmms.Renascene.metainfo.xml /app/share/metainfo/org.xmms.Renascene.metainfo.xml
-      - install -Dm644 data/org.xmms.Renascene.svg /app/share/icons/hicolor/scalable/apps/org.xmms.Renascene.svg
+      - install -Dm644 data/org.xmms.Renascene.png /app/share/icons/hicolor/128x128/apps/org.xmms.Renascene.png
       - install -Dm644 data/xmms.1 /app/share/man/man1/xmms.1
       - mkdir -p /app/share/xmms/Skins/Default
       - cp -a data/defskin/*.xpm /app/share/xmms/Skins/Default/
