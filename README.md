@@ -100,10 +100,10 @@ python3 scripts/flatpak.py build-release-bundle
 ```
 
 Tagged GitHub releases build and attach a single-file Flatpak bundle named
-`xmms-renascene-x86_64.flatpak`. Install a downloaded release bundle with:
+`xmms-renascene_<git-sha>.flatpack`. Install a downloaded release bundle with:
 
 ```sh
-flatpak install --user ./xmms-renascene-x86_64.flatpak
+flatpak install --user ./xmms-renascene_<git-sha>.flatpack
 flatpak run org.xmms.Renascene
 ```
 
@@ -121,24 +121,31 @@ XMMS RS supports Winamp 2.x compatible skins. Place skin files in:
 - `~/.config/xmms/Skins/` — user skin directory
 - `/usr/share/xmms/Skins/` — system skin directory
 
-Skins can be `.wsz`, `.zip`, `.tar`, `.tar.gz`, or `.tar.bz2` archives, or unpacked directories. Use **Alt+S** to open the skin browser.
+Skins can be `.wsz`, `.zip`, `.tar`, `.tar.gz`, or `.tar.bz2` archives,
+or unpacked directories. Use **Alt+S** to open the skin browser.
 
-The **Skin Editor** is available from the player menu. It opens in a separate window, shows every skin pixmap on one canvas, exposes playlist/visualization/text color swatches, provides a popup custom color wheel with a 32-slot color shelf, supports brush, spraycan, color picker, drag/pan, line, rectangle, select/copy/cut/paste, lighten, darken, and dither tools, updates the player live as you paint, saves edited skins into the user skin directory, and exports Winamp-compatible `.wsz` archives.
+The **Skin Editor** is available from the player menu. It opens in a separate
+window, shows every skin pixmap on one canvas, exposes playlist, visualization,
+and text color swatches, provides a popup custom color wheel with a 32-slot color
+shelf, supports brush, spraycan, color picker, drag/pan, line, rectangle,
+select/copy/cut/paste, lighten, darken, and dither tools, updates the player
+live as you paint, saves edited skins into the user skin directory, and exports
+Winamp-compatible `.wsz` archives.
 
 ## Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `z` | Previous track |
-| `x` | Play |
-| `c` | Pause |
-| `v` | Stop |
-| `b` | Next track |
-| `Alt+E` | Toggle playlist window |
-| `Alt+G` | Toggle equalizer window |
-| `Alt+S` | Open skin browser |
-| `Up/Down` | Volume up/down |
-| `Left/Right` | Seek backward/forward 5 seconds |
+|Key|Action|
+|---|---|
+|`z`|Previous track|
+|`x`|Play|
+|`c`|Pause|
+|`v`|Stop|
+|`b`|Next track|
+|`Alt+E`|Toggle playlist window|
+|`Alt+G`|Toggle equalizer window|
+|`Alt+S`|Open skin browser|
+|`Up/Down`|Volume up/down|
+|`Left/Right`|Seek backward/forward 5 seconds|
 
 ## License
 
@@ -146,6 +153,8 @@ GNU General Public License v2.0 or later. See [COPYING](COPYING) for details.
 
 ## Credits
 
-Originally written by Peter Alm, Thomas Nilsson, Olle Hallnas, and Havard Kvalen <https://sourceforge.net/projects/xmms/>
-Modernized for GTK 4 and GStreamer by Christian Schaller <https://gitlab.com/cschalle/xmms-renascene>.
+Originally written by Peter Alm, Thomas Nilsson, Olle Hallnas, and Havard
+Kvalen <https://sourceforge.net/projects/xmms/>
+Modernized for GTK 4 and GStreamer by Christian Schaller
+<https://gitlab.com/cschalle/xmms-renascene>.
 Ported to Rust (AI Assisted)

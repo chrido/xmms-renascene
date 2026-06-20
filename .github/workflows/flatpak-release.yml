@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      BUNDLE: xmms-renascene-x86_64.flatpak
+      BUNDLE: xmms-renascene_${{ github.sha }}.flatpack
 
     steps:
       - name: Check out repository
@@ -45,9 +45,9 @@ jobs:
             ${{ env.BUNDLE }}
             ${{ env.BUNDLE }}.sha256
           body: |
-            Download `xmms-renascene-x86_64.flatpak` and install it with:
+            Download `${{ env.BUNDLE }}` and install it with:
 
             ```sh
-            flatpak install --user ./xmms-renascene-x86_64.flatpak
+            flatpak install --user ./${{ env.BUNDLE }}
             flatpak run org.xmms.Renascene
             ```

@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -33,6 +34,21 @@ INSTALLATION_CHOICES = {"--user", "--system"}
 
 def env_default(name: str, fallback: str) -> str:
     return os.environ.get(name, fallback)
+
+
+def git_commit_sha() -> str:
+    github_sha = os.environ.get("GITHUB_SHA")
+    if github_sha:
+        return github_sha
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_DIR, check=True, text=True, stdout=subprocess.PIPE)
+        return result.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
+def default_bundle_name() -> str:
+    return f"xmms-renascene_{git_commit_sha()}.flatpack"
 
 
 class FlatpakInstaller:
@@ -76,7 +92,7 @@ class FlatpakInstaller:
         logging.info("Installing Flatpak build tools with apt...")
         required_command(("sudo", "apt-get"))
         ["sudo", "apt-get", "update"] @ cli_follow | raise_on_error
-        ["sudo", "apt-get", "install", "--no-install-recommends", "--yes", "appstream", "ca-certificates", "desktop-file-utils", "flatpak", "flatpak-builder"] @ cli_follow | raise_on_error
+        ["sudo", "apt-get", "install", "--no-install-recommends", "--yes", "appstream", "ca-certificates", "desktop-file-utils", "elfutils", "flatpak", "flatpak-builder", "librsvg2-bin", "librsvg2-common"] @ cli_follow | raise_on_error
 
     def _generate_cargo_sources(self) -> None:
         logging.info("Generating vendored Cargo source manifest...")
@@ -148,7 +164,7 @@ class FlatpakInstaller:
     @alias(["release"])
     async def build_release_bundle(
         self,
-        bundle: str = env_default("FLATPAK_BUNDLE", "xmms-renascene-x86_64.flatpak"),
+        bundle: str = env_default("FLATPAK_BUNDLE", default_bundle_name()),
         flatpak_repo: str = env_default("FLATPAK_REPO", "flatpak-repo"),
         build_dir: str = env_default("FLATPAK_BUILD_DIR", "build-flatpak"),
         remote: str = env_default("FLATPAK_REMOTE", DEFAULT_REMOTE),
