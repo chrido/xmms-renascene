@@ -512,25 +512,13 @@ impl UiE2e {
     }
 
     pub fn press_docked_arrow_left(&mut self) -> &mut Self {
-        if self.state.docked_focus_is_panel(PanelKind::Equalizer) {
-            self.state.adjust_equalizer_horizontal_arrow(-4);
-        } else if self.state.docked_focus_is_panel(PanelKind::Playlist) {
-            self.state.adjust_main_seek(-4);
-        } else if self.state.docked_focus_is_main() {
-            self.state.adjust_main_horizontal_arrow(-4);
-        }
+        self.state.handle_docked_horizontal_arrow(-4);
         self.sync_windows();
         self
     }
 
     pub fn press_docked_arrow_right(&mut self) -> &mut Self {
-        if self.state.docked_focus_is_panel(PanelKind::Equalizer) {
-            self.state.adjust_equalizer_horizontal_arrow(4);
-        } else if self.state.docked_focus_is_panel(PanelKind::Playlist) {
-            self.state.adjust_main_seek(4);
-        } else if self.state.docked_focus_is_main() {
-            self.state.adjust_main_horizontal_arrow(4);
-        }
+        self.state.handle_docked_horizontal_arrow(4);
         self.sync_windows();
         self
     }

@@ -814,6 +814,37 @@ enum MainKeyboardShortcut {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrowKey {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl ArrowKey {
+    fn from_gdk(key: gtk::gdk::Key) -> Option<Self> {
+        match key {
+            gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => Some(Self::Up),
+            gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => Some(Self::Down),
+            gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => Some(Self::Left),
+            gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => Some(Self::Right),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyCommand {
+    Volume(i32),
+    Balance(i32),
+    Seek(i32),
+    PreviousTrack,
+    NextTrack,
+    PlaylistMove(isize),
+    EqualizerAdjust(i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreferencesPage {
     Audio,
     Visualization,
@@ -1660,8 +1691,9 @@ fn focus_cycle_shortcut(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bo
         && !state.intersects(gtk::gdk::ModifierType::ALT_MASK | gtk::gdk::ModifierType::META_MASK)
 }
 
-fn handle_main_player_key_pressed(
+fn handle_arrow_key_pressed(
     ui_state: &mut MainWindowUiState,
+    focus: KeyboardFocus,
     key: gtk::gdk::Key,
     state: gtk::gdk::ModifierType,
 ) -> bool {
@@ -1672,13 +1704,18 @@ fn handle_main_player_key_pressed(
     ) {
         return false;
     }
-    match key {
-        gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => ui_state.adjust_main_vertical_arrow(-1),
-        gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => ui_state.adjust_main_vertical_arrow(1),
-        gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => ui_state.adjust_main_horizontal_arrow(-4),
-        gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => ui_state.adjust_main_horizontal_arrow(4),
-        _ => false,
-    }
+    let Some(arrow) = ArrowKey::from_gdk(key) else {
+        return false;
+    };
+    ui_state.apply_key_command(ui_state.arrow_key_command(focus, arrow))
+}
+
+fn handle_main_player_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    handle_arrow_key_pressed(ui_state, KeyboardFocus::Main, key, state)
 }
 
 fn handle_equalizer_key_pressed(
@@ -1686,26 +1723,7 @@ fn handle_equalizer_key_pressed(
     key: gtk::gdk::Key,
     state: gtk::gdk::ModifierType,
 ) -> bool {
-    if state.intersects(
-        gtk::gdk::ModifierType::CONTROL_MASK
-            | gtk::gdk::ModifierType::ALT_MASK
-            | gtk::gdk::ModifierType::META_MASK,
-    ) {
-        return false;
-    }
-    match key {
-        gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => ui_state.adjust_selected_equalizer_slider(-4),
-        gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => {
-            ui_state.adjust_selected_equalizer_slider(4)
-        }
-        gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => {
-            ui_state.adjust_equalizer_horizontal_arrow(-4)
-        }
-        gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => {
-            ui_state.adjust_equalizer_horizontal_arrow(4)
-        }
-        _ => false,
-    }
+    handle_arrow_key_pressed(ui_state, KeyboardFocus::Equalizer, key, state)
 }
 
 fn handle_playlist_key_pressed(
@@ -1806,11 +1824,10 @@ fn handle_playlist_parity_key_pressed(
     if !control && !shift && !alt && is_q {
         return ui_state.toggle_queue_selected_playlist_entries();
     }
+    if handle_arrow_key_pressed(ui_state, KeyboardFocus::Playlist, key, state) {
+        return true;
+    }
     match key {
-        gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => ui_state.move_playlist_arrow_selection(-1),
-        gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => ui_state.move_playlist_arrow_selection(1),
-        gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => ui_state.adjust_main_seek(-4),
-        gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => ui_state.adjust_main_seek(4),
         gtk::gdk::Key::Page_Up | gtk::gdk::Key::KP_Page_Up => ui_state.move_playlist_page(-1),
         gtk::gdk::Key::Page_Down | gtk::gdk::Key::KP_Page_Down => ui_state.move_playlist_page(1),
         gtk::gdk::Key::Home | gtk::gdk::Key::KP_Home => ui_state.move_playlist_to_start(),
@@ -5376,14 +5393,14 @@ pub enum PanelKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum DockedFocusTarget {
+enum KeyboardFocus {
     #[default]
     Main,
     Equalizer,
     Playlist,
 }
 
-impl From<PanelKind> for DockedFocusTarget {
+impl From<PanelKind> for KeyboardFocus {
     fn from(kind: PanelKind) -> Self {
         match kind {
             PanelKind::Equalizer => Self::Equalizer,
@@ -6925,7 +6942,7 @@ pub(crate) struct MainWindowUiState {
     playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
-    docked_focus: DockedFocusTarget,
+    docked_focus: KeyboardFocus,
     equalizer: EqualizerUiState,
     playlist_ui: PlaylistUiState,
     dialogs: DialogVisibility,
@@ -6990,7 +7007,7 @@ impl MainWindowUiState {
             playback_requests: Vec::new(),
             shaded: main_shaded,
             menu_visible: false,
-            docked_focus: DockedFocusTarget::default(),
+            docked_focus: KeyboardFocus::default(),
             equalizer,
             playlist_ui,
             dialogs: DialogVisibility::default(),
@@ -7575,7 +7592,7 @@ impl MainWindowUiState {
         if self.equalizer.panel.detached {
             self.equalizer.panel.focused()
         } else {
-            self.docked_focus == DockedFocusTarget::Equalizer || self.equalizer.panel.dragging_title
+            self.docked_focus == KeyboardFocus::Equalizer || self.equalizer.panel.dragging_title
         }
     }
 
@@ -7583,19 +7600,18 @@ impl MainWindowUiState {
         if self.playlist_ui.panel.detached {
             self.playlist_ui.panel.focused()
         } else {
-            self.docked_focus == DockedFocusTarget::Playlist
-                || self.playlist_ui.panel.dragging_title
+            self.docked_focus == KeyboardFocus::Playlist || self.playlist_ui.panel.dragging_title
         }
     }
 
-    fn select_focus_target(&mut self, target: DockedFocusTarget) {
+    fn select_focus_target(&mut self, target: KeyboardFocus) {
         self.docked_focus = target;
-        self.equalizer.panel.focused = target == DockedFocusTarget::Equalizer;
-        self.playlist_ui.panel.focused = target == DockedFocusTarget::Playlist;
+        self.equalizer.panel.focused = target == KeyboardFocus::Equalizer;
+        self.playlist_ui.panel.focused = target == KeyboardFocus::Playlist;
     }
 
     pub(crate) fn select_docked_main(&mut self) {
-        self.select_focus_target(DockedFocusTarget::Main);
+        self.select_focus_target(KeyboardFocus::Main);
     }
 
     pub(crate) fn select_docked_panel(&mut self, kind: PanelKind) {
@@ -7605,19 +7621,19 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn cycle_visible_focus(&mut self) {
-        let mut targets = vec![DockedFocusTarget::Main];
+        let mut targets = vec![KeyboardFocus::Main];
         if self.panel_state(PanelKind::Equalizer) != PanelState::Hidden {
-            targets.push(DockedFocusTarget::Equalizer);
+            targets.push(KeyboardFocus::Equalizer);
         }
         if self.panel_state(PanelKind::Playlist) != PanelState::Hidden {
-            targets.push(DockedFocusTarget::Playlist);
+            targets.push(KeyboardFocus::Playlist);
         }
         let current = if self.equalizer_focused() {
-            DockedFocusTarget::Equalizer
+            KeyboardFocus::Equalizer
         } else if self.playlist_focused() {
-            DockedFocusTarget::Playlist
+            KeyboardFocus::Playlist
         } else {
-            DockedFocusTarget::Main
+            KeyboardFocus::Main
         };
         let position = targets
             .iter()
@@ -7627,14 +7643,93 @@ impl MainWindowUiState {
         self.select_focus_target(next);
     }
 
-    pub(crate) fn handle_docked_vertical_arrow(&mut self, delta: isize) -> bool {
+    fn current_keyboard_focus(&self) -> KeyboardFocus {
         match self.selected_docked_panel() {
-            Some(PanelKind::Playlist) => self.move_playlist_arrow_selection(delta),
-            Some(PanelKind::Equalizer) => {
-                self.adjust_selected_equalizer_slider(if delta < 0 { -4 } else { 4 })
-            }
-            None => self.adjust_main_vertical_arrow(delta),
+            Some(PanelKind::Playlist) => KeyboardFocus::Playlist,
+            Some(PanelKind::Equalizer) => KeyboardFocus::Equalizer,
+            None => KeyboardFocus::Main,
         }
+    }
+
+    fn arrow_key_command(&self, focus: KeyboardFocus, arrow: ArrowKey) -> KeyCommand {
+        match (focus, arrow) {
+            (KeyboardFocus::Main, ArrowKey::Up) if self.shaded => KeyCommand::NextTrack,
+            (KeyboardFocus::Main, ArrowKey::Down) if self.shaded => KeyCommand::PreviousTrack,
+            (KeyboardFocus::Main, ArrowKey::Up) => KeyCommand::Volume(4),
+            (KeyboardFocus::Main, ArrowKey::Down) => KeyCommand::Volume(-4),
+            (KeyboardFocus::Main, ArrowKey::Left)
+                if self.main_keyboard_slider == Some(MainSlider::Balance) =>
+            {
+                KeyCommand::Balance(-4)
+            }
+            (KeyboardFocus::Main, ArrowKey::Right)
+                if self.main_keyboard_slider == Some(MainSlider::Balance) =>
+            {
+                KeyCommand::Balance(4)
+            }
+            (KeyboardFocus::Main, ArrowKey::Left) => KeyCommand::Seek(-4),
+            (KeyboardFocus::Main, ArrowKey::Right) => KeyCommand::Seek(4),
+            (KeyboardFocus::Playlist, ArrowKey::Up) => KeyCommand::PlaylistMove(-1),
+            (KeyboardFocus::Playlist, ArrowKey::Down) => KeyCommand::PlaylistMove(1),
+            (KeyboardFocus::Playlist, ArrowKey::Left) => KeyCommand::Seek(-4),
+            (KeyboardFocus::Playlist, ArrowKey::Right) => KeyCommand::Seek(4),
+            (KeyboardFocus::Equalizer, ArrowKey::Up) => KeyCommand::EqualizerAdjust(-4),
+            (KeyboardFocus::Equalizer, ArrowKey::Down) => KeyCommand::EqualizerAdjust(4),
+            (KeyboardFocus::Equalizer, ArrowKey::Left) if self.equalizer.panel.shaded => {
+                KeyCommand::Volume(-4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Right) if self.equalizer.panel.shaded => {
+                KeyCommand::Volume(4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Left)
+                if self.equalizer.keyboard_slider == Some(EqualizerSlider::ShadedBalance) =>
+            {
+                KeyCommand::Balance(-4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Right)
+                if self.equalizer.keyboard_slider == Some(EqualizerSlider::ShadedBalance) =>
+            {
+                KeyCommand::Balance(4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Left) => KeyCommand::Seek(-4),
+            (KeyboardFocus::Equalizer, ArrowKey::Right) => KeyCommand::Seek(4),
+        }
+    }
+
+    fn apply_key_command(&mut self, command: KeyCommand) -> bool {
+        match command {
+            KeyCommand::Volume(diff) => self.adjust_volume_by(diff),
+            KeyCommand::Balance(diff) => self.adjust_balance_by(diff),
+            KeyCommand::Seek(diff) => self.adjust_main_seek(diff),
+            KeyCommand::PreviousTrack => {
+                self.activate_push(MainPushButton::Previous);
+                true
+            }
+            KeyCommand::NextTrack => {
+                self.activate_push(MainPushButton::Next);
+                true
+            }
+            KeyCommand::PlaylistMove(delta) => self.move_playlist_arrow_selection(delta),
+            KeyCommand::EqualizerAdjust(diff) => self.adjust_selected_equalizer_slider(diff),
+        }
+    }
+
+    pub(crate) fn handle_docked_vertical_arrow(&mut self, delta: isize) -> bool {
+        let arrow = if delta < 0 {
+            ArrowKey::Up
+        } else {
+            ArrowKey::Down
+        };
+        self.apply_key_command(self.arrow_key_command(self.current_keyboard_focus(), arrow))
+    }
+
+    pub(crate) fn handle_docked_horizontal_arrow(&mut self, diff: i32) -> bool {
+        let arrow = if diff < 0 {
+            ArrowKey::Left
+        } else {
+            ArrowKey::Right
+        };
+        self.apply_key_command(self.arrow_key_command(self.current_keyboard_focus(), arrow))
     }
 
     pub(crate) fn docked_focus_is_main(&self) -> bool {
@@ -7650,12 +7745,12 @@ impl MainWindowUiState {
 
     fn selected_docked_panel(&self) -> Option<PanelKind> {
         match self.docked_focus {
-            DockedFocusTarget::Main => None,
-            DockedFocusTarget::Equalizer => self
+            KeyboardFocus::Main => None,
+            KeyboardFocus::Equalizer => self
                 .panel_state(PanelKind::Equalizer)
                 .is_docked_visible()
                 .then_some(PanelKind::Equalizer),
-            DockedFocusTarget::Playlist => self
+            KeyboardFocus::Playlist => self
                 .panel_state(PanelKind::Playlist)
                 .is_docked_visible()
                 .then_some(PanelKind::Playlist),
@@ -9008,16 +9103,6 @@ impl MainWindowUiState {
             .keyboard_slider
             .unwrap_or(EqualizerSlider::Preamp);
         self.adjust_equalizer_slider(slider, diff)
-    }
-
-    pub(crate) fn adjust_equalizer_horizontal_arrow(&mut self, diff: i32) -> bool {
-        if self.equalizer.panel.shaded {
-            self.adjust_volume_by(diff)
-        } else if self.equalizer.keyboard_slider == Some(EqualizerSlider::ShadedBalance) {
-            self.adjust_balance_by(diff)
-        } else {
-            self.adjust_main_seek(diff)
-        }
     }
 
     fn adjust_equalizer_slider(&mut self, slider: EqualizerSlider, diff: i32) -> bool {
@@ -10629,28 +10714,6 @@ impl MainWindowUiState {
             MainSlider::Volume => self.scroll_volume(dy),
             MainSlider::Balance => self.scroll_balance(dy),
             MainSlider::Position => self.scroll_position_slider(dy),
-        }
-    }
-
-    pub(crate) fn adjust_main_vertical_arrow(&mut self, delta: isize) -> bool {
-        if self.shaded {
-            let button = if delta < 0 {
-                MainPushButton::Next
-            } else {
-                MainPushButton::Previous
-            };
-            self.activate_push(button);
-            true
-        } else {
-            self.adjust_volume_by(if delta < 0 { 4 } else { -4 })
-        }
-    }
-
-    pub(crate) fn adjust_main_horizontal_arrow(&mut self, diff: i32) -> bool {
-        if self.main_keyboard_slider == Some(MainSlider::Balance) {
-            self.adjust_balance_by(diff)
-        } else {
-            self.adjust_main_seek(diff)
         }
     }
 
