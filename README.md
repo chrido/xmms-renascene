@@ -67,10 +67,16 @@ cargo install --path .
 
 ## Running
 
-The helper script builds when needed and starts the GTK application:
+The helper script shows command help by default:
 
 ```sh
 ./repo
+```
+
+To build when needed and start the GTK application:
+
+```sh
+./repo run
 ```
 
 ## Flatpak installer

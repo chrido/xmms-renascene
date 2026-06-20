@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import inspect
+from collections.abc import Callable, Coroutine, Mapping
+from typing import Any
 import io
 import os
 import re
@@ -32,7 +34,7 @@ class FireLite:
     def __init__(self, classes: list[tuple[list[str], object]]):
         self.classes = classes
 
-    def _method_map(self) -> dict[str, tuple[list[str], object, inspect.Signature, object]]:
+    def _method_map(self) -> dict[str, tuple[list[str], object, Mapping[str, inspect.Parameter], Callable[..., Coroutine[Any, Any, Any]]]]:
         async_methods = [
             (path, method, cls)
             for path, cls in self.classes
@@ -217,7 +219,7 @@ class FireLite:
             method = None
             method_arg_count = 0
             for i in range(len(cmdargs), 0, -1):
-                candidate = " ".join(cmdargs[:i])
+                candidate = " ".join(arg.replace("_", "-") for arg in cmdargs[:i])
                 if candidate in m:
                     method = candidate
                     method_arg_count = i
@@ -233,6 +235,9 @@ class FireLite:
             m_args = {}
             positional_args = []
             remaining_args = cmdargs[method_arg_count:]
+            if remaining_args and remaining_args[0] in {"-h", "--help", "help"}:
+                print_help()
+                return 0
             positional_params = [
                 name
                 for name, param in params.items()
@@ -312,6 +317,7 @@ class FireLite:
                 print(f"Error executing method '{method}': {str(e)}")
                 traceback.print_exc()
                 return 1
+        return 0
 
 
 class _RootTestTool:
