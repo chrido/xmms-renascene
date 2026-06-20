@@ -47,7 +47,7 @@ modules:
     build-commands:
       - cargo build --release --locked --offline
       - install -Dm755 target/release/xmms-rs /app/bin/xmms-rs
-      - printf '#!/bin/sh\nexec /app/bin/xmms-rs --gtk "$@"\n' > /app/bin/xmms
+      - printf '#!/bin/sh\nexec /app/bin/xmms-rs "$@"\n' > /app/bin/xmms
       - chmod 755 /app/bin/xmms
       - install -Dm644 data/org.xmms.Renascene.desktop /app/share/applications/org.xmms.Renascene.desktop
       - install -Dm644 data/org.xmms.Renascene.metainfo.xml /app/share/metainfo/org.xmms.Renascene.metainfo.xml
