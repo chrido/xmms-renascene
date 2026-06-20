@@ -141,6 +141,7 @@ pub struct PreviewOptions {
     pub open_skin_editor: bool,
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
+    pub scale_factor: Option<String>,
 }
 
 pub fn run_default_skin_preview(options: PreviewOptions) {
@@ -227,6 +228,10 @@ fn build_preview_window(
         Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
         Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
     }
+    let (initial_width, initial_height) = state.docked_panel_size();
+    let initial_scale = state.scale_factor();
+    let initial_device_width = scale_dim(initial_width, initial_scale);
+    let initial_device_height = scale_dim(initial_height, initial_scale);
     let main_state = Rc::new(RefCell::new(state));
     install_xmms_menu_css(main_state.borrow().active_skin());
 
@@ -235,8 +240,8 @@ fn build_preview_window(
         .title("XMMS Renascene Rust Preview")
         .resizable(false)
         .decorated(false)
-        .default_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
-        .default_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
+        .default_width(initial_device_width)
+        .default_height(initial_device_height)
         .build();
     if persist_session {
         let main_state = Rc::clone(&main_state);
@@ -267,8 +272,8 @@ fn build_preview_window(
     }
 
     let drawing_area = gtk::DrawingArea::builder()
-        .content_width(MAIN_WINDOW_WIDTH * DEFAULT_SCALE)
-        .content_height(MAIN_WINDOW_HEIGHT * DEFAULT_SCALE)
+        .content_width(initial_device_width)
+        .content_height(initial_device_height)
         .focusable(true)
         .build();
     let panel_windows = Rc::new(PanelWindows::new(app, &main_state, &drawing_area, &window));
@@ -698,6 +703,13 @@ fn preview_state_from_app_state(
     }
     if let Some(skin_path) = options.skin_path.as_ref() {
         app_state.config.skin = Some(skin_path.clone());
+    }
+    if let Some(scale_factor) = options.scale_factor.as_ref() {
+        app_state.config.scale_factor = scale_factor
+            .parse::<f64>()
+            .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
+            .clamp(1.0, 5.0);
+        app_state.config.doublesize = app_state.config.scale_factor > 1.0;
     }
 
     let mut state = MainWindowUiState::from_app_state(app_state);

@@ -5,6 +5,7 @@
 import asyncio
 import logging
 import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -25,11 +26,24 @@ def _args_include_gtk_mode(args: tuple[str, ...] | list[str]) -> bool:
     return any(arg in {"--gtk", "--gtk-smoke"} for arg in args)
 
 
-def _app_args(args: tuple[str, ...]) -> list[str]:
+def _app_args(args: tuple[str, ...] | list[str]) -> list[str]:
     app_args = list(args)
     if not _args_include_gtk_mode(app_args):
         app_args.insert(0, "--gtk")
     return app_args
+
+
+def _split_screenshot_args(args: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+    background = os.environ.get("XMMS_SCREENSHOT_BG", "black")
+    app_args = []
+    for arg in args:
+        if arg == "--bgwhite":
+            background = "white"
+        elif arg == "--bgblack":
+            background = "black"
+        else:
+            app_args.append(arg)
+    return background, tuple(app_args)
 
 
 class RepoTool:
@@ -54,7 +68,7 @@ class RepoTool:
         logging.info("Starting %s", " ".join(command))
         os.execvpe(command[0], command, os.environ)
 
-    def _xvfb_environment(self) -> dict[str, str]:
+    def _xvfb_environment(self, background: str) -> dict[str, str]:
         env = os.environ.copy()
         env.pop("WAYLAND_DISPLAY", None)
         env.pop("DBUS_SESSION_BUS_ADDRESS", None)
@@ -67,16 +81,24 @@ class RepoTool:
                 "XMMS_NON_UNIQUE": "1",
                 "XMMS_EXEC_SKIP_BUILD": "1",
                 "XMMS_SCREENSHOT_UNDER_XVFB": "1",
+                "XMMS_SCREENSHOT_BG": background,
             }
         )
         return env
 
-    def _exec_screenshot_under_xvfb(self, args: tuple[str, ...]) -> None:
+    def _xvfb_server_args(self, background: str) -> str:
+        raw_server_args = os.environ.get("XMMS_XVFB_SERVER_ARGS", "-screen 0 1024x768x24")
+        server_args = [arg for arg in shlex.split(raw_server_args) if arg not in {"-wr", "-br"}]
+        background_arg = "-wr" if background == "white" else "-br"
+        server_args.append(background_arg)
+        return shlex.join(server_args)
+
+    def _exec_screenshot_under_xvfb(self, args: tuple[str, ...], background: str) -> None:
         required_command("xvfb-run")
-        xvfb_server_args = os.environ.get("XMMS_XVFB_SERVER_ARGS", "-screen 0 1024x768x24")
+        xvfb_server_args = self._xvfb_server_args(background)
         command = ["xvfb-run", "-a", "-s", xvfb_server_args, str(REPO_DIR / "repo"), "screenshot", *args]
         logging.info("Restarting under Xvfb: %s", " ".join(command))
-        os.execvpe("xvfb-run", command, self._xvfb_environment())
+        os.execvpe("xvfb-run", command, self._xvfb_environment(background))
 
     async def _start_app_in_background(self, args: tuple[str, ...]) -> asyncio.subprocess.Process:
         self._ensure_rust_binary()
@@ -120,13 +142,14 @@ class RepoTool:
         os.chdir(REPO_DIR)
         _configure_gtk_environment()
         self._build_unless_skipped()
+        background, app_args = _split_screenshot_args(args)
 
         if os.environ.get("XMMS_SCREENSHOT_UNDER_XVFB") != "1":
-            self._exec_screenshot_under_xvfb(args)
+            self._exec_screenshot_under_xvfb(app_args, background)
 
         screenshot_file = os.environ.get("XMMS_SCREENSHOT_FILE", "screenshot.png")
         screenshot_delay = float(os.environ.get("XMMS_SCREENSHOT_DELAY", "3"))
-        proc = await self._start_app_in_background(args)
+        proc = await self._start_app_in_background(app_args)
         try:
             await asyncio.sleep(screenshot_delay)
             if proc.returncode is not None:
