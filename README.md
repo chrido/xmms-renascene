@@ -11,12 +11,11 @@ while preserving Winamp 2.x skin compatibility.
 - **Spectrum analyzer** visualization, Milkdrop-inspired
 - **Playlist editor** with drag-and-drop support
 - **MPRIS 2 D-Bus interface** for media key integration
-- **Unified output device picker** — switch between local and network audio devices
 - **Skin browser** for switching between installed skins
 - **Skin editor** for live pixel editing, cloning/saving skins, and exporting
   Winamp `.wsz` files
-- Wide audio format support via GStreamer (MP3, OGG, FLAC, WAV, AAC, and more)
-- Vim-like playlist navigation (j/k, p for playback, / for incremental search)
+- **Wide audio format support via GStreamer** (MP3, OGG, FLAC, WAV, AAC, and more)
+- **Vim-like playlist navigation** (j/k, p for playback, / for incremental search)
 
 ## Screenshots
 
@@ -26,8 +25,8 @@ while preserving Winamp 2.x skin compatibility.
 
 ### Classic Winamp skin
 
-Browse this collection of classic Winamp skins and try XMMS Renascene with one
-of the available skins: <https://skins.webamp.org/>
+Browse this awesome collection of classic Winamp skins and try XMMS Renascene with one
+of those: <https://skins.webamp.org/>
 
 ![XMMS Renascene with Winamp classic skin](screenshots/screenshot_winamp_skin.png)
 
