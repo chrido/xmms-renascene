@@ -6,7 +6,6 @@ import hashlib
 import json
 import logging
 import os
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -41,8 +40,7 @@ def git_commit_sha() -> str:
     if github_sha:
         return github_sha
     try:
-        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_DIR, check=True, text=True, stdout=subprocess.PIPE)
-        return result.stdout.strip()
+        return ["git", "rev-parse", "HEAD"] @ cli(cwd=str(REPO_DIR), log_command=False) | stdout
     except Exception:
         return "unknown"
 

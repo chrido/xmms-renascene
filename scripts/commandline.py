@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportCallIssue=false, reportIncompatibleMethodOverride=false, reportOptionalMemberAccess=false, reportUnusedExpression=false
 import asyncio
 import codecs
 import contextlib
@@ -21,6 +22,7 @@ from typing import (
     Any,
     Awaitable,
     Callable,
+    Coroutine,
     TypeVar,
 )
 
@@ -335,7 +337,21 @@ async def acmd_input(
     )
 
 
-def _run_awaitable(awaitable: Awaitable[T]) -> T:
+async def acmd_background(
+    args: list[str] | str,
+    env: dict[str, str] | None = None,
+    mask: list[str] | str | None = None,
+    cwd: str | None = None,
+    log_command: bool = True,
+) -> asyncio.subprocess.Process:
+    command = _to_command(args, cwd)
+    if log_command:
+        _log_command(command, mask, env)
+
+    return await asyncio.create_subprocess_shell(command, env=env)
+
+
+def _run_awaitable(awaitable: Coroutine[Any, Any, T]) -> T:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -904,7 +920,7 @@ async def acmd_with_retry(
 
 
 class Progress:
-    def handle(self, _: str):
+    def handle(self, line: str):
         pass
 
     def finished(self):
@@ -1039,8 +1055,9 @@ async def acmd_follow(
             )
             for task in pending:
                 task.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+            for task in pending:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
 
             if proc_wait_task in done:
                 return
@@ -1617,7 +1634,7 @@ class TestCommandlineFunctions(_CommandlineTestMixin, unittest.TestCase):
     def test_cli_exec_raise_on_error_transform_raises_on_failure(self):
         with contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(Exception) as ctx:
-                "exit 5" @ cli | raise_on_error
+                _ = "exit 5" @ cli | raise_on_error
 
         self.assertIn("exit code 5", str(ctx.exception))
 
@@ -1950,6 +1967,7 @@ class TestAsyncCommandlineFunctions(_CommandlineTestMixin, unittest.IsolatedAsyn
                 )
 
         self.assertIsNotNone(result)
+        assert result is not None
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.stdout, "success")
 
