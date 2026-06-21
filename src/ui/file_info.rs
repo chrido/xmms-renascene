@@ -1,16 +1,33 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fs;
-use std::path::Path;
+use std::panic::{self, AssertUnwindSafe};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk::prelude::*;
+use id3::frame::{Comment, Content};
+use id3::{Tag, TagLike, Version};
 
 use super::MainWindowUiState;
 use crate::playlist::{file_uri_to_path, PlaylistEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct EditableFileInfo {
+    title: String,
+    artist: String,
+    album: String,
+    comment: String,
+    year: String,
+    track_number: String,
+    genre: String,
+}
+
 pub(crate) struct FileInfoDetails {
     pub(super) uri: String,
+    path: Option<PathBuf>,
+    editable: bool,
+    has_tag: bool,
     pub(super) filename: String,
     pub(super) basename: String,
     pub(super) title: String,
@@ -32,6 +49,23 @@ pub(super) fn show_file_info_dialog(
     parent: &gtk::ApplicationWindow,
     main_state: Rc<RefCell<MainWindowUiState>>,
 ) {
+    if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+        show_file_info_dialog_inner(parent, Rc::clone(&main_state));
+    })) {
+        if let Ok(mut state) = main_state.try_borrow_mut() {
+            state.set_file_info_dialog_visible(false);
+        }
+        eprintln!(
+            "xmms-rs: file info dialog failed to open: {}",
+            panic_payload_message(payload.as_ref())
+        );
+    }
+}
+
+fn show_file_info_dialog_inner(
+    parent: &gtk::ApplicationWindow,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+) {
     let Some(details) = main_state
         .borrow_mut()
         .selected_or_current_file_info_details()
@@ -40,7 +74,7 @@ pub(super) fn show_file_info_dialog(
     };
 
     let window = gtk::Window::builder()
-        .title(format!("File Info - {}", details.basename))
+        .title(gtk_safe_text(&format!("File Info - {}", details.basename)))
         .transient_for(parent)
         .default_width(620)
         .default_height(320)
@@ -59,7 +93,7 @@ pub(super) fn show_file_info_dialog(
     let filename = gtk::Entry::new();
     filename.set_editable(false);
     filename.set_hexpand(true);
-    filename.set_text(&details.filename);
+    set_entry_text(&filename, &details.filename);
     filename_row.append(&filename);
     root.append(&filename_row);
 
@@ -80,26 +114,83 @@ pub(super) fn show_file_info_dialog(
     tag_grid.set_column_spacing(5);
     tag_frame.set_child(Some(&tag_grid));
 
-    append_file_info_entry(&tag_grid, 0, "Title:", &details.title, true);
-    append_file_info_entry(&tag_grid, 1, "Artist:", &details.artist, true);
-    append_file_info_entry(&tag_grid, 2, "Album:", &details.album, true);
-    append_file_info_entry(&tag_grid, 3, "Comment:", &details.comment, true);
-    append_file_info_entry(&tag_grid, 4, details.date_label, &details.date, false);
-    append_file_info_entry(&tag_grid, 5, "Track number:", &details.track_number, false);
-    append_file_info_entry(&tag_grid, 6, "Genre:", &details.genre, true);
+    let title_entry = append_file_info_entry(
+        &tag_grid,
+        0,
+        "Title:",
+        &details.title,
+        true,
+        details.editable,
+    );
+    let artist_entry = append_file_info_entry(
+        &tag_grid,
+        1,
+        "Artist:",
+        &details.artist,
+        true,
+        details.editable,
+    );
+    let album_entry = append_file_info_entry(
+        &tag_grid,
+        2,
+        "Album:",
+        &details.album,
+        true,
+        details.editable,
+    );
+    let comment_entry = append_file_info_entry(
+        &tag_grid,
+        3,
+        "Comment:",
+        &details.comment,
+        true,
+        details.editable,
+    );
+    let date_entry = append_file_info_entry(
+        &tag_grid,
+        4,
+        details.date_label,
+        &details.date,
+        false,
+        details.editable,
+    );
+    let track_entry = append_file_info_entry(
+        &tag_grid,
+        5,
+        "Track number:",
+        &details.track_number,
+        false,
+        details.editable,
+    );
+    let genre_entry = append_file_info_entry(
+        &tag_grid,
+        6,
+        "Genre:",
+        &details.genre,
+        true,
+        details.editable,
+    );
 
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 5);
     buttons.set_halign(gtk::Align::End);
     let save = gtk::Button::with_label("Save");
-    save.set_sensitive(false);
-    save.set_tooltip_text(Some("Tag editing is not implemented yet"));
+    save.set_sensitive(details.editable);
+    if !details.editable {
+        save.set_tooltip_text(Some(
+            "Tag editing is currently supported for local MP3 files",
+        ));
+    }
     let remove = gtk::Button::with_label(if details.tag_frame == "ID3 Tag:" {
         "Remove ID3"
     } else {
         "Remove Tag"
     });
-    remove.set_sensitive(false);
-    remove.set_tooltip_text(Some("Tag editing is not implemented yet"));
+    remove.set_sensitive(details.editable && details.has_tag);
+    if !details.editable {
+        remove.set_tooltip_text(Some(
+            "Tag editing is currently supported for local MP3 files",
+        ));
+    }
     let close = gtk::Button::with_label("Close");
     buttons.append(&save);
     buttons.append(&remove);
@@ -120,10 +211,71 @@ pub(super) fn show_file_info_dialog(
     append_file_info_label(&info_box, &format!("File size: {}", details.file_size));
     append_file_info_label(&info_box, &format!("URI: {}", details.uri));
 
+    if let Some(path) = details.path.clone() {
+        let main_state_for_save = Rc::clone(&main_state);
+        let window_for_save = window.clone();
+        let uri = details.uri.clone();
+        let save_path = path.clone();
+        save.connect_clicked(move |_| {
+            let values = EditableFileInfo {
+                title: title_entry.text().to_string(),
+                artist: artist_entry.text().to_string(),
+                album: album_entry.text().to_string(),
+                comment: comment_entry.text().to_string(),
+                year: date_entry.text().to_string(),
+                track_number: track_entry.text().to_string(),
+                genre: genre_entry.text().to_string(),
+            };
+            if let Err(payload) =
+                panic::catch_unwind(AssertUnwindSafe(|| {
+                    match write_id3_metadata(&save_path, &values) {
+                        Ok(()) => {
+                            if let Ok(mut state) = main_state_for_save.try_borrow_mut() {
+                                state.update_playlist_title_for_uri(&uri, &values.title);
+                            }
+                            window_for_save.close();
+                        }
+                        Err(err) => eprintln!("xmms-rs: failed to write ID3 tag: {err}"),
+                    }
+                }))
+            {
+                eprintln!(
+                    "xmms-rs: failed to save file info metadata: {}",
+                    panic_payload_message(payload.as_ref())
+                );
+            }
+        });
+
+        let main_state = Rc::clone(&main_state);
+        let window_for_remove = window.clone();
+        let uri = details.uri.clone();
+        let fallback_title = fallback_title_from_basename(&details.basename);
+        remove.connect_clicked(move |_| {
+            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
+                match id3::v1v2::remove_from_path(&path) {
+                    Ok(_) => {
+                        if let Ok(mut state) = main_state.try_borrow_mut() {
+                            state.update_playlist_title_for_uri(&uri, &fallback_title);
+                        }
+                        window_for_remove.close();
+                    }
+                    Err(err) => eprintln!("xmms-rs: failed to remove ID3 tag: {err}"),
+                }
+            })) {
+                eprintln!(
+                    "xmms-rs: failed to remove file info metadata: {}",
+                    panic_payload_message(payload.as_ref())
+                );
+            }
+        });
+    }
+
     {
         let main_state = Rc::clone(&main_state);
         window.connect_close_request(move |_| {
-            main_state.borrow_mut().set_file_info_dialog_visible(false);
+            if let Ok(mut state) = main_state.try_borrow_mut() {
+                state.set_file_info_dialog_visible(false);
+            }
             gtk::glib::Propagation::Proceed
         });
     }
@@ -137,19 +289,47 @@ pub(super) fn show_file_info_dialog(
     window.present();
 }
 
-fn append_file_info_entry(grid: &gtk::Grid, row: i32, label: &str, value: &str, wide: bool) {
-    let label_widget = gtk::Label::new(Some(label));
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    payload
+        .downcast_ref::<&'static str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
+}
+
+fn gtk_safe_text(text: &str) -> Cow<'_, str> {
+    if text.contains('\0') {
+        Cow::Owned(text.replace('\0', "�"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+fn set_entry_text(entry: &gtk::Entry, text: &str) {
+    entry.set_text(&gtk_safe_text(text));
+}
+
+fn append_file_info_entry(
+    grid: &gtk::Grid,
+    row: i32,
+    label: &str,
+    value: &str,
+    wide: bool,
+    editable: bool,
+) -> gtk::Entry {
+    let label_widget = gtk::Label::new(Some(&gtk_safe_text(label)));
     label_widget.set_halign(gtk::Align::End);
     grid.attach(&label_widget, 0, row, 1, 1);
     let entry = gtk::Entry::new();
-    entry.set_text(value);
-    entry.set_editable(false);
+    set_entry_text(&entry, value);
+    entry.set_editable(editable);
     entry.set_hexpand(wide);
     grid.attach(&entry, 1, row, if wide { 3 } else { 1 }, 1);
+    entry
 }
 
 fn append_file_info_label(box_: &gtk::Box, text: &str) {
-    let label = gtk::Label::new(Some(text));
+    let label = gtk::Label::new(Some(&gtk_safe_text(text)));
     label.set_halign(gtk::Align::Start);
     label.set_wrap(true);
     label.set_selectable(true);
@@ -181,6 +361,12 @@ pub(super) fn file_info_details_for_entry(entry: &PlaylistEntry) -> FileInfoDeta
         .unwrap_or_default()
         .to_ascii_lowercase();
     let (tag_frame, info_frame, format) = file_info_labels_for_extension(&extension);
+    let editable = extension == "mp3" && local_path.as_deref().is_some_and(Path::exists);
+    let id3_tag = local_path
+        .as_deref()
+        .filter(|_| editable)
+        .and_then(read_id3_tag);
+    let has_tag = id3_tag.is_some();
     let file_size = local_path
         .as_deref()
         .and_then(|path| fs::metadata(path).ok())
@@ -193,22 +379,109 @@ pub(super) fn file_info_details_for_entry(entry: &PlaylistEntry) -> FileInfoDeta
 
     FileInfoDetails {
         uri: entry.filename.clone(),
+        path: local_path,
+        editable,
+        has_tag,
         filename,
         basename,
-        title: entry.title.clone(),
-        artist: String::new(),
-        album: String::new(),
-        comment: String::new(),
+        title: id3_tag
+            .as_ref()
+            .and_then(TagLike::title)
+            .unwrap_or(&entry.title)
+            .to_string(),
+        artist: id3_tag
+            .as_ref()
+            .and_then(TagLike::artist)
+            .unwrap_or_default()
+            .to_string(),
+        album: id3_tag
+            .as_ref()
+            .and_then(TagLike::album)
+            .unwrap_or_default()
+            .to_string(),
+        comment: id3_tag
+            .as_ref()
+            .and_then(first_id3_comment)
+            .unwrap_or_default(),
         date_label: if extension == "mp3" { "Year:" } else { "Date:" },
-        date: String::new(),
-        track_number: String::new(),
-        genre: String::new(),
+        date: id3_tag
+            .as_ref()
+            .and_then(TagLike::year)
+            .map(|year| format!("{year:04}"))
+            .unwrap_or_default(),
+        track_number: id3_tag
+            .as_ref()
+            .and_then(TagLike::track)
+            .map(|track| track.to_string())
+            .unwrap_or_default(),
+        genre: id3_tag
+            .as_ref()
+            .and_then(TagLike::genre)
+            .unwrap_or_default()
+            .to_string(),
         tag_frame,
         info_frame,
         format: format.to_string(),
         duration: format_duration_ms(entry.length_ms),
         file_size,
     }
+}
+
+fn read_id3_tag(path: &Path) -> Option<Tag> {
+    match id3::no_tag_ok(id3::v1v2::read_from_path(path)) {
+        Ok(tag) => tag,
+        Err(err) => {
+            eprintln!(
+                "xmms-rs: failed to read ID3 tag from {}: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+fn first_id3_comment(tag: &Tag) -> Option<String> {
+    tag.frames().find_map(|frame| match frame.content() {
+        Content::Comment(comment) => Some(comment.text.clone()),
+        _ => None,
+    })
+}
+
+fn write_id3_metadata(path: &Path, values: &EditableFileInfo) -> id3::Result<()> {
+    let mut tag = id3::v1v2::read_from_path(path).unwrap_or_else(|_| Tag::new());
+    set_or_remove_text(&mut tag, "TIT2", &values.title);
+    set_or_remove_text(&mut tag, "TPE1", &values.artist);
+    set_or_remove_text(&mut tag, "TALB", &values.album);
+    set_or_remove_text(&mut tag, "TCON", &values.genre);
+    set_or_remove_text(&mut tag, "TYER", &values.year);
+    set_or_remove_text(&mut tag, "TRCK", &values.track_number);
+    tag.remove_comment(None, None);
+    if !values.comment.trim().is_empty() {
+        tag.add_frame(Comment {
+            lang: "eng".to_string(),
+            description: String::new(),
+            text: values.comment.trim().to_string(),
+        });
+    }
+    id3::v1v2::write_to_path(path, &tag, Version::Id3v24)
+}
+
+fn set_or_remove_text(tag: &mut Tag, frame: &str, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        tag.remove(frame);
+    } else {
+        tag.set_text(frame, value);
+    }
+}
+
+fn fallback_title_from_basename(basename: &str) -> String {
+    Path::new(basename)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(basename)
+        .replace(['_', '-'], " ")
 }
 
 fn file_info_labels_for_extension(extension: &str) -> (&'static str, &'static str, &'static str) {
@@ -243,5 +516,71 @@ fn format_file_size(bytes: u64) -> String {
         format!("{:.1} KiB ({bytes} bytes)", bytes as f64 / KIB)
     } else {
         format!("{bytes} bytes")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_file(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{nanos}.mp3", std::process::id()))
+    }
+
+    fn file_uri(path: &Path) -> String {
+        format!("file://{}", path.display())
+    }
+
+    #[test]
+    fn gtk_safe_text_replaces_interior_nuls() {
+        assert_eq!(gtk_safe_text("abc"), Cow::Borrowed("abc"));
+        assert_eq!(gtk_safe_text("a\0b").as_ref(), "a�b");
+    }
+
+    #[test]
+    fn id3_metadata_round_trips_through_file_info_details() {
+        let path = unique_temp_file("xmms-file-info-id3");
+        fs::File::create(&path)
+            .unwrap()
+            .write_all(b"fake mp3 payload")
+            .unwrap();
+
+        write_id3_metadata(
+            &path,
+            &EditableFileInfo {
+                title: "Title".to_string(),
+                artist: "Artist".to_string(),
+                album: "Album".to_string(),
+                comment: "Comment".to_string(),
+                year: "1994".to_string(),
+                track_number: "7".to_string(),
+                genre: "Electronic".to_string(),
+            },
+        )
+        .unwrap();
+
+        let entry = PlaylistEntry::new_uri(file_uri(&path));
+        let details = file_info_details_for_entry(&entry);
+        assert_eq!(details.title, "Title");
+        assert_eq!(details.artist, "Artist");
+        assert_eq!(details.album, "Album");
+        assert_eq!(details.comment, "Comment");
+        assert_eq!(details.date, "1994");
+        assert_eq!(details.track_number, "7");
+        assert_eq!(details.genre, "Electronic");
+        assert!(details.editable);
+        assert!(details.has_tag);
+
+        id3::v1v2::remove_from_path(&path).unwrap();
+        let removed = file_info_details_for_entry(&entry);
+        assert!(!removed.has_tag);
+
+        fs::remove_file(path).unwrap();
     }
 }

@@ -8399,6 +8399,19 @@ impl MainWindowUiState {
         self.last_playlist_file_info.as_deref()
     }
 
+    pub(crate) fn update_playlist_title_for_uri(&mut self, uri: &str, title: &str) {
+        let title = title.trim();
+        if title.is_empty() {
+            return;
+        }
+        for entry in self.app_state.playlist.entries_mut() {
+            if entry.filename == uri {
+                entry.title = title.to_string();
+            }
+        }
+        self.last_playlist_file_info = Some(title.to_string());
+    }
+
     pub(crate) fn playlist_options_opened(&self) -> bool {
         self.playlist_options_opened
     }
