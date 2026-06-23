@@ -84,6 +84,11 @@ const SKIN_EDITOR_SIDEBAR_WIDTH: i32 = SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32
     + (SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32 - 1) * SKIN_EDITOR_COLOR_SHELF_GAP;
 const SKIN_EDITOR_GRADIENT_WIDTH: i32 = SKIN_EDITOR_SIDEBAR_WIDTH;
 const SKIN_EDITOR_GRADIENT_HEIGHT: i32 = 34;
+
+thread_local! {
+    static XMMS_MENU_CSS_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+    static XMMS_WINDOW_CSS_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+}
 const XMMS_MENU_ROOT_SELECTORS: &[&str] = &[
     ".xmms-menu-popover",
     ".xmms-menu-popover contents",
@@ -283,8 +288,7 @@ fn build_preview_window(
     let initial_device_width = scale_dim(initial_width, initial_scale);
     let initial_device_height = scale_dim(initial_height, initial_scale);
     let main_state = Rc::new(RefCell::new(state));
-    install_xmms_menu_css(main_state.borrow().active_skin());
-    install_xmms_window_css(main_state.borrow().active_skin());
+    refresh_xmms_skin_css(main_state.borrow().active_skin());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -697,25 +701,39 @@ fn build_preview_window(
     Ok(())
 }
 
+fn refresh_xmms_skin_css(skin: &DefaultSkin) {
+    install_xmms_menu_css(skin);
+    install_xmms_window_css(skin);
+}
+
 fn install_xmms_menu_css(skin: &DefaultSkin) {
-    install_css_provider(&xmms_menu_css(skin));
+    install_css_provider_slot(&XMMS_MENU_CSS_PROVIDER, &xmms_menu_css(skin));
 }
 
 fn install_xmms_window_css(skin: &DefaultSkin) {
-    install_css_provider(&xmms_window_css(skin));
+    install_css_provider_slot(&XMMS_WINDOW_CSS_PROVIDER, &xmms_window_css(skin));
 }
 
-fn install_css_provider(css: &str) {
+fn install_css_provider_slot(
+    slot: &'static std::thread::LocalKey<RefCell<Option<gtk::CssProvider>>>,
+    css: &str,
+) {
     let Some(display) = gtk::gdk::Display::default() else {
         return;
     };
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(css);
-    gtk::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+    slot.with(|provider| {
+        let mut provider = provider.borrow_mut();
+        let provider = provider.get_or_insert_with(|| {
+            let provider = gtk::CssProvider::new();
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            provider
+        });
+        provider.load_from_data(css);
+    });
 }
 
 fn xmms_menu_css(skin: &DefaultSkin) -> String {
@@ -4256,6 +4274,7 @@ fn build_skin_editor_tools(
             };
             if let Some(cloned_name) = cloned_name {
                 name.set_text(&cloned_name);
+                refresh_xmms_skin_css(main_state.borrow().active_skin());
                 queue_skin_editor_areas(&canvas, &main_area, &equalizer_area, &playlist_area, true);
             }
         });
@@ -4273,6 +4292,7 @@ fn build_skin_editor_tools(
             if let Err(err) = main_state.borrow_mut().save_editor_skin_to_user_dir() {
                 eprintln!("xmms-rs: failed to save edited skin: {err}");
             }
+            refresh_xmms_skin_css(main_state.borrow().active_skin());
             queue_skin_editor_areas(&canvas, &main_area, &equalizer_area, &playlist_area, true);
         });
     }
@@ -4916,6 +4936,18 @@ enum SkinColorTarget {
     TextForeground(usize),
 }
 
+impl SkinColorTarget {
+    fn affects_playlist_colors(self) -> bool {
+        matches!(
+            self,
+            Self::PlaylistNormal
+                | Self::PlaylistCurrent
+                | Self::PlaylistNormalBg
+                | Self::PlaylistSelectedBg
+        )
+    }
+}
+
 fn build_skin_color_swatches(
     parent: &gtk::Box,
     canvas: &gtk::DrawingArea,
@@ -5052,6 +5084,9 @@ fn skin_color_button(
                 (changed, rgb)
             };
             style_skin_color_button(&swatch_button, rgb);
+            if changed && target.affects_playlist_colors() {
+                refresh_xmms_skin_css(main_state.borrow().active_skin());
+            }
             queue_skin_editor_areas(
                 &canvas,
                 &main_area,
@@ -5399,8 +5434,7 @@ fn connect_skin_browser_selection(
         };
         let selected = row.index().max(0) as usize;
         if main_state.borrow_mut().select_skin_browser_index(selected) {
-            install_xmms_menu_css(main_state.borrow().active_skin());
-            install_xmms_window_css(main_state.borrow().active_skin());
+            refresh_xmms_skin_css(main_state.borrow().active_skin());
             main_area.queue_draw();
             equalizer_area.queue_draw();
             playlist_area.queue_draw();
@@ -5439,8 +5473,7 @@ fn show_add_skin_dialog(
                             eprintln!("xmms-rs: failed to load imported skin: {err}");
                             state.app_state.config.skin = None;
                         }
-                        install_xmms_menu_css(state.active_skin());
-                        install_xmms_window_css(state.active_skin());
+                        refresh_xmms_skin_css(state.active_skin());
                         populating.set(true);
                         if let Err(err) = refresh_skin_browser_list(&list, &mut state, &dirs) {
                             eprintln!("xmms-rs: failed to refresh skins after import: {err}");
