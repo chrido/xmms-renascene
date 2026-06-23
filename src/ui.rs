@@ -54,7 +54,8 @@ use crate::skin::widget::{
     VisScopeMode, VisVuMode, Visualization, WidgetId,
 };
 use crate::skin::{
-    discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry, SkinPixmapKind,
+    discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, PlaylistColors, SkinEntry,
+    SkinPixmapKind,
 };
 use crate::skineditor::{
     ElementSlot, SkinEditorState, SkinGradient, Tool, COLOR_SHELF_SIZE, GRADIENT_SHELF_SIZE,
@@ -83,143 +84,98 @@ const SKIN_EDITOR_SIDEBAR_WIDTH: i32 = SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32
     + (SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32 - 1) * SKIN_EDITOR_COLOR_SHELF_GAP;
 const SKIN_EDITOR_GRADIENT_WIDTH: i32 = SKIN_EDITOR_SIDEBAR_WIDTH;
 const SKIN_EDITOR_GRADIENT_HEIGHT: i32 = 34;
-const XMMS_MENU_CSS_TEMPLATE: &str = r#"
-.xmms-menu-popover,
-.xmms-menu-popover contents,
-.xmms-menu-box {
-    background: MENU_NORMAL_BG;
-    color: MENU_NORMAL;
-}
+const XMMS_MENU_ROOT_SELECTORS: &[&str] = &[
+    ".xmms-menu-popover",
+    ".xmms-menu-popover contents",
+    ".xmms-menu-box",
+];
+const XMMS_MENU_BUTTON_SELECTORS: &[&str] =
+    &[".xmms-menu-button", ".xmms-menu-popover modelbutton"];
+const XMMS_MENU_BUTTON_ACTIVE_SELECTORS: &[&str] = &[
+    ".xmms-menu-button:hover",
+    ".xmms-menu-button:active",
+    ".xmms-menu-popover modelbutton:hover",
+];
 
-.xmms-menu-button {
-    background: MENU_NORMAL_BG;
-    background-image: none;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    color: MENU_NORMAL;
-    padding: 1px 12px;
-    min-height: 0;
-    text-shadow: none;
-}
-
-.xmms-menu-button:hover {
-    background: MENU_SELECTED_BG;
-    color: MENU_CURRENT;
-}
-
-.xmms-menu-button:active {
-    background: MENU_SELECTED_BG;
-    color: MENU_CURRENT;
-}
-
-.xmms-menu-popover modelbutton {
-    background: MENU_NORMAL_BG;
-    background-image: none;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    color: MENU_NORMAL;
-    padding: 1px 12px;
-    min-height: 0;
-    text-shadow: none;
-}
-
-.xmms-menu-popover modelbutton:hover {
-    background: MENU_SELECTED_BG;
-    color: MENU_CURRENT;
-}
-"#;
-
-const PREFERENCES_CSS_TEMPLATE: &str = r#"
-.xmms-preferences,
-.xmms-preferences box,
-.xmms-preferences frame,
-.xmms-preferences notebook,
-.xmms-preferences notebook > stack,
-.xmms-preferences viewport {
-    background: PREFERENCES_NORMAL_BG;
-    color: PREFERENCES_NORMAL;
-}
-
-.xmms-preferences label,
-.xmms-preferences checkbutton,
-.xmms-preferences radiobutton {
-    color: PREFERENCES_NORMAL;
-}
-
-window.xmms-preferences.csd,
-window.xmms-preferences decoration,
-window.xmms-preferences decoration:backdrop,
-window.xmms-preferences .titlebar,
-window.xmms-preferences .titlebar:backdrop,
-window.xmms-preferences .default-decoration,
-window.xmms-preferences .default-decoration:backdrop,
-window.xmms-preferences titlebar,
-window.xmms-preferences titlebar:backdrop,
-window.xmms-preferences headerbar,
-window.xmms-preferences headerbar:backdrop,
-window.xmms-preferences windowhandle,
-window.xmms-preferences windowhandle:backdrop {
-    border: 1px solid PREFERENCES_SELECTED_BG;
-    box-shadow: none;
-    outline: 0;
-}
-
-.xmms-preferences entry,
-.xmms-preferences spinbutton,
-.xmms-preferences textview,
-.xmms-preferences combobox,
-.xmms-preferences button {
-    background: PREFERENCES_NORMAL_BG;
-    background-image: none;
-    border: 1px solid PREFERENCES_SELECTED_BG;
-    border-radius: 0;
-    box-shadow: none;
-    color: PREFERENCES_CURRENT;
-    text-shadow: none;
-}
-
-.xmms-preferences entry selection,
-.xmms-preferences textview text selection,
-.xmms-preferences button:hover,
-.xmms-preferences button:active,
-.xmms-preferences notebook > header > tabs > tab:checked {
-    background: PREFERENCES_SELECTED_BG;
-    color: PREFERENCES_CURRENT;
-}
-
-.xmms-preferences notebook > header {
-    background: PREFERENCES_NORMAL_BG;
-    border-color: PREFERENCES_SELECTED_BG;
-}
-
-.xmms-preferences notebook > header > tabs > tab {
-    background: PREFERENCES_NORMAL_BG;
-    border: 1px solid PREFERENCES_SELECTED_BG;
-    color: PREFERENCES_NORMAL;
-}
-
-.xmms-preferences checkbutton check,
-.xmms-preferences radiobutton radio {
-    background: PREFERENCES_NORMAL_BG;
-    border: 1px solid PREFERENCES_SELECTED_BG;
-    border-radius: 0;
-    box-shadow: none;
-}
-
-.xmms-preferences checkbutton check:checked,
-.xmms-preferences radiobutton radio:checked {
-    background: PREFERENCES_SELECTED_BG;
-    color: PREFERENCES_CURRENT;
-}
-
-.xmms-preferences button:disabled,
-.xmms-preferences entry:disabled,
-.xmms-preferences spinbutton:disabled {
-    opacity: 0.45;
-}
-"#;
+const SKINNED_WINDOW_SURFACE_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window",
+    ".xmms-skinned-window box",
+    ".xmms-skinned-window frame",
+    ".xmms-skinned-window notebook",
+    ".xmms-skinned-window notebook > stack",
+    ".xmms-skinned-window scrolledwindow",
+    ".xmms-skinned-window viewport",
+    ".xmms-skinned-window list",
+    ".xmms-skinned-window listbox",
+    ".xmms-skinned-window row",
+    ".xmms-skinned-window textview",
+    ".xmms-skinned-window textview text",
+];
+const SKINNED_WINDOW_TEXT_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window label",
+    ".xmms-skinned-window checkbutton",
+    ".xmms-skinned-window radiobutton",
+];
+const SKINNED_WINDOW_DECORATION_SELECTORS: &[&str] = &[
+    "window.xmms-skinned-window.csd",
+    "window.xmms-skinned-window decoration",
+    "window.xmms-skinned-window decoration:backdrop",
+    "window.xmms-skinned-window .titlebar",
+    "window.xmms-skinned-window .titlebar:backdrop",
+    "window.xmms-skinned-window .default-decoration",
+    "window.xmms-skinned-window .default-decoration:backdrop",
+    "window.xmms-skinned-window titlebar",
+    "window.xmms-skinned-window titlebar:backdrop",
+    "window.xmms-skinned-window headerbar",
+    "window.xmms-skinned-window headerbar:backdrop",
+    "window.xmms-skinned-window windowhandle",
+    "window.xmms-skinned-window windowhandle:backdrop",
+];
+const SKINNED_WINDOW_CONTROL_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window entry",
+    ".xmms-skinned-window spinbutton",
+    ".xmms-skinned-window textview",
+    ".xmms-skinned-window textview text",
+    ".xmms-skinned-window combobox",
+    ".xmms-skinned-window button",
+    ".xmms-skinned-window list",
+    ".xmms-skinned-window listbox",
+    ".xmms-skinned-window row",
+];
+const SKINNED_WINDOW_BORDERED_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window entry",
+    ".xmms-skinned-window spinbutton",
+    ".xmms-skinned-window textview",
+    ".xmms-skinned-window button",
+    ".xmms-skinned-window list",
+    ".xmms-skinned-window listbox",
+];
+const SKINNED_WINDOW_ACTIVE_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window entry selection",
+    ".xmms-skinned-window textview text selection",
+    ".xmms-skinned-window button:hover",
+    ".xmms-skinned-window button:active",
+    ".xmms-skinned-window row:selected",
+    ".xmms-skinned-window row:hover",
+    ".xmms-skinned-window notebook > header > tabs > tab:checked",
+];
+const SKINNED_WINDOW_CHECK_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window checkbutton check",
+    ".xmms-skinned-window radiobutton radio",
+];
+const SKINNED_WINDOW_CHECKED_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window checkbutton check:checked",
+    ".xmms-skinned-window radiobutton radio:checked",
+];
+const SKINNED_WINDOW_SCROLLBAR_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window scrollbar",
+    ".xmms-skinned-window scrollbar trough",
+];
+const SKINNED_WINDOW_DISABLED_SELECTORS: &[&str] = &[
+    ".xmms-skinned-window button:disabled",
+    ".xmms-skinned-window entry:disabled",
+    ".xmms-skinned-window spinbutton:disabled",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
@@ -328,6 +284,7 @@ fn build_preview_window(
     let initial_device_height = scale_dim(initial_height, initial_scale);
     let main_state = Rc::new(RefCell::new(state));
     install_xmms_menu_css(main_state.borrow().active_skin());
+    install_xmms_window_css(main_state.borrow().active_skin());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -744,8 +701,8 @@ fn install_xmms_menu_css(skin: &DefaultSkin) {
     install_css_provider(&xmms_menu_css(skin));
 }
 
-fn install_preferences_css(skin: &DefaultSkin) {
-    install_css_provider(&preferences_css(skin));
+fn install_xmms_window_css(skin: &DefaultSkin) {
+    install_css_provider(&xmms_window_css(skin));
 }
 
 fn install_css_provider(css: &str) {
@@ -762,24 +719,218 @@ fn install_css_provider(css: &str) {
 }
 
 fn xmms_menu_css(skin: &DefaultSkin) -> String {
-    let colors = skin.playlist_colors();
-    XMMS_MENU_CSS_TEMPLATE
-        .replace("MENU_NORMAL_BG", &css_rgb(colors.normal_bg))
-        .replace("MENU_NORMAL", &css_rgb(colors.normal))
-        .replace("MENU_SELECTED_BG", &css_rgb(colors.selected_bg))
-        .replace("MENU_CURRENT", &css_rgb(colors.current))
+    let colors = CssColors::from_playlist_colors(skin.playlist_colors());
+    let mut css = String::new();
+
+    append_css_rule(
+        &mut css,
+        XMMS_MENU_ROOT_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("color", colors.normal.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        XMMS_MENU_BUTTON_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("background-image", "none"),
+            ("border", "0"),
+            ("border-radius", "0"),
+            ("box-shadow", "none"),
+            ("color", colors.normal.as_str()),
+            ("padding", "1px 12px"),
+            ("min-height", "0"),
+            ("text-shadow", "none"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        XMMS_MENU_BUTTON_ACTIVE_SELECTORS,
+        &[
+            ("background", colors.selected_bg.as_str()),
+            ("color", colors.current.as_str()),
+        ],
+    );
+    css
 }
 
-fn preferences_css(skin: &DefaultSkin) -> String {
-    let colors = skin.playlist_colors();
-    PREFERENCES_CSS_TEMPLATE
-        .replace("PREFERENCES_NORMAL_BG", &css_rgb(colors.normal_bg))
-        .replace("PREFERENCES_NORMAL", &css_rgb(colors.normal))
-        .replace("PREFERENCES_SELECTED_BG", &css_rgb(colors.selected_bg))
-        .replace("PREFERENCES_CURRENT", &css_rgb(colors.current))
+fn xmms_window_css(skin: &DefaultSkin) -> String {
+    let colors = CssColors::from_playlist_colors(skin.playlist_colors());
+    let mut css = String::new();
+
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_SURFACE_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("color", colors.normal.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_TEXT_SELECTORS,
+        &[("color", colors.normal.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_DECORATION_SELECTORS,
+        &[
+            ("border", colors.selected_border.as_str()),
+            ("box-shadow", "none"),
+            ("outline", "0"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_CONTROL_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("background-image", "none"),
+            ("border-color", colors.selected_bg.as_str()),
+            ("border-radius", "0"),
+            ("box-shadow", "none"),
+            ("color", colors.current.as_str()),
+            ("text-shadow", "none"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_BORDERED_SELECTORS,
+        &[("border", colors.selected_border.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_ACTIVE_SELECTORS,
+        &[
+            ("background", colors.selected_bg.as_str()),
+            ("color", colors.current.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-skinned-window notebook > header"],
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("border-color", colors.selected_bg.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-skinned-window notebook > header > tabs > tab"],
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("border", colors.selected_border.as_str()),
+            ("color", colors.normal.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_CHECK_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("border", colors.selected_border.as_str()),
+            ("border-radius", "0"),
+            ("box-shadow", "none"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_CHECKED_SELECTORS,
+        &[
+            ("background", colors.selected_bg.as_str()),
+            ("color", colors.current.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-skinned-window separator"],
+        &[
+            ("background", colors.selected_bg.as_str()),
+            ("color", colors.selected_bg.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_SCROLLBAR_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("border-color", colors.selected_bg.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-skinned-window scrollbar slider"],
+        &[
+            ("background", colors.selected_bg.as_str()),
+            ("border-radius", "0"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_DISABLED_SELECTORS,
+        &[("opacity", "0.45")],
+    );
+    css
 }
 
-fn css_rgb(color: [u8; 3]) -> String {
+#[derive(Debug, Clone)]
+pub(super) struct CssColors {
+    pub(super) normal_bg: String,
+    pub(super) normal: String,
+    pub(super) selected_bg: String,
+    pub(super) selected_border: String,
+    pub(super) current: String,
+}
+
+impl CssColors {
+    pub(super) fn from_playlist_colors(colors: PlaylistColors) -> Self {
+        let selected_bg = css_rgb(colors.selected_bg);
+        Self {
+            normal_bg: css_rgb(colors.normal_bg),
+            normal: css_rgb(colors.normal),
+            selected_border: format!("1px solid {selected_bg}"),
+            selected_bg,
+            current: css_rgb(colors.current),
+        }
+    }
+}
+
+pub(super) fn append_css_rule(css: &mut String, selectors: &[&str], declarations: &[(&str, &str)]) {
+    append_css_rule_groups(css, &[selectors], declarations);
+}
+
+pub(super) fn append_css_rule_groups(
+    css: &mut String,
+    selector_groups: &[&[&str]],
+    declarations: &[(&str, &str)],
+) {
+    if !css.is_empty() {
+        css.push('\n');
+    }
+    let mut first = true;
+    for selectors in selector_groups {
+        for selector in *selectors {
+            if !first {
+                css.push_str(",\n");
+            }
+            css.push_str(selector);
+            first = false;
+        }
+    }
+    css.push_str(" {\n");
+    for (property, value) in declarations {
+        css.push_str("    ");
+        css.push_str(property);
+        css.push_str(": ");
+        css.push_str(value);
+        css.push_str(";\n");
+    }
+    css.push_str("}\n");
+}
+
+pub(super) fn css_rgb(color: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
 }
 
@@ -2038,8 +2189,10 @@ fn show_playlist_delete_confirmation(
     {
         window.set_transient_for(Some(&root));
     }
+    window.add_css_class("xmms-skinned-window");
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -2385,7 +2538,6 @@ fn build_preferences_window(
     playlist_window: &gtk::ApplicationWindow,
     playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
-    install_preferences_css(main_state.borrow().active_skin());
     let (default_width, default_height) = preferences_window_default_size();
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -2393,8 +2545,10 @@ fn build_preferences_window(
         .default_width(default_width)
         .default_height(default_height)
         .build();
+    window.add_css_class("xmms-skinned-window");
     window.add_css_class("xmms-preferences");
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("xmms-skinned-window");
     root.add_css_class("xmms-preferences");
     root.set_margin_top(10);
     root.set_margin_bottom(10);
@@ -3415,7 +3569,9 @@ fn build_prompt_window(
         .default_width(360)
         .default_height(110)
         .build();
+    window.add_css_class("xmms-skinned-window");
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.add_css_class("xmms-skinned-window");
     content.set_margin_top(12);
     content.set_margin_bottom(12);
     content.set_margin_start(12);
@@ -3476,6 +3632,7 @@ fn build_skin_browser_window(
         .default_width(300)
         .default_height(280)
         .build();
+    window.add_css_class("xmms-skinned-window");
     let add = gtk::Button::with_label("Add...");
     add.set_widget_name(SKIN_BROWSER_ADD_WIDGET);
     let close = gtk::Button::with_label("Close");
@@ -3554,8 +3711,10 @@ fn build_skin_editor_window(
         .default_width(980)
         .default_height(700)
         .build();
+    window.add_css_class("xmms-skinned-window");
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    root.add_css_class("xmms-skinned-window");
     root.set_margin_top(8);
     root.set_margin_bottom(8);
     root.set_margin_start(8);
@@ -5240,6 +5399,8 @@ fn connect_skin_browser_selection(
         };
         let selected = row.index().max(0) as usize;
         if main_state.borrow_mut().select_skin_browser_index(selected) {
+            install_xmms_menu_css(main_state.borrow().active_skin());
+            install_xmms_window_css(main_state.borrow().active_skin());
             main_area.queue_draw();
             equalizer_area.queue_draw();
             playlist_area.queue_draw();
@@ -5278,6 +5439,8 @@ fn show_add_skin_dialog(
                             eprintln!("xmms-rs: failed to load imported skin: {err}");
                             state.app_state.config.skin = None;
                         }
+                        install_xmms_menu_css(state.active_skin());
+                        install_xmms_window_css(state.active_skin());
                         populating.set(true);
                         if let Err(err) = refresh_skin_browser_list(&list, &mut state, &dirs) {
                             eprintln!("xmms-rs: failed to refresh skins after import: {err}");
@@ -5295,6 +5458,7 @@ fn show_add_skin_dialog(
 
 fn build_skin_browser_content(add: &gtk::Button, close: &gtk::Button) -> (gtk::Box, gtk::ListBox) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    root.add_css_class("xmms-skinned-window");
     root.set_widget_name(SKIN_BROWSER_ROOT_WIDGET);
     root.set_margin_top(10);
     root.set_margin_bottom(10);
@@ -6279,7 +6443,9 @@ fn show_equalizer_save_name_dialog(
     if let Some(parent_window) = area_window(parent) {
         window.set_transient_for(Some(&parent_window));
     }
+    window.add_css_class("xmms-skinned-window");
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -6336,7 +6502,9 @@ fn show_equalizer_preset_list_dialog(
     if let Some(parent_window) = area_window(parent) {
         window.set_transient_for(Some(&parent_window));
     }
+    window.add_css_class("xmms-skinned-window");
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -6422,7 +6590,9 @@ fn show_equalizer_configure_dialog(
     if let Some(parent_window) = area_window(parent) {
         window.set_transient_for(Some(&parent_window));
     }
+    window.add_css_class("xmms-skinned-window");
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -12294,6 +12464,31 @@ static char * main_xpm[] = {
         )));
         assert!(css.contains(&format!(
             "background: #{:02x}{:02x}{:02x}",
+            colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
+        )));
+        assert!(css.contains(&format!(
+            "color: #{:02x}{:02x}{:02x}",
+            colors.current[0], colors.current[1], colors.current[2]
+        )));
+    }
+
+    #[test]
+    fn xmms_window_css_uses_playlist_skin_colors_and_shared_window_class() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let colors = skin.playlist_colors();
+        let css = xmms_window_css(&skin);
+
+        assert!(css.contains(".xmms-skinned-window"));
+        assert!(css.contains(&format!(
+            "background: #{:02x}{:02x}{:02x}",
+            colors.normal_bg[0], colors.normal_bg[1], colors.normal_bg[2]
+        )));
+        assert!(css.contains(&format!(
+            "color: #{:02x}{:02x}{:02x}",
+            colors.normal[0], colors.normal[1], colors.normal[2]
+        )));
+        assert!(css.contains(&format!(
+            "border: 1px solid #{:02x}{:02x}{:02x}",
             colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
         )));
         assert!(css.contains(&format!(

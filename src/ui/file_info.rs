@@ -9,120 +9,66 @@ use gtk::prelude::*;
 use id3::frame::{Comment, Content};
 use id3::{Tag, TagLike, Version};
 
-use super::MainWindowUiState;
+use super::{append_css_rule, append_css_rule_groups, CssColors, MainWindowUiState};
 use crate::playlist::{file_uri_to_path, PlaylistEntry};
 use crate::skin::PlaylistColors;
 
-const FILE_INFO_CSS_TEMPLATE: &str = r#"
-.xmms-file-info,
-.xmms-file-info box,
-.xmms-file-info frame,
-window.xmms-file-info contents {
-    background: PLAYLIST_NORMAL_BG;
-    color: PLAYLIST_NORMAL;
-}
-
-window.xmms-file-info contents,
-window.xmms-file-info contents:backdrop,
-window.xmms-file-info decoration,
-window.xmms-file-info decoration:backdrop,
-window.xmms-file-info .titlebar,
-window.xmms-file-info .titlebar:backdrop,
-window.xmms-file-info .default-decoration,
-window.xmms-file-info .default-decoration:backdrop,
-window.xmms-file-info titlebar,
-window.xmms-file-info titlebar:backdrop,
-window.xmms-file-info headerbar,
-window.xmms-file-info headerbar:backdrop,
-window.xmms-file-info windowhandle,
-window.xmms-file-info windowhandle:backdrop,
-.xmms-file-info entry,
-.xmms-file-info button {
-    box-shadow: none;
-}
-
-window.xmms-file-info.csd,
-window.xmms-file-info decoration,
-window.xmms-file-info decoration:backdrop,
-window.xmms-file-info .titlebar,
-window.xmms-file-info .titlebar:backdrop,
-window.xmms-file-info .default-decoration,
-window.xmms-file-info .default-decoration:backdrop,
-window.xmms-file-info titlebar,
-window.xmms-file-info titlebar:backdrop,
-window.xmms-file-info headerbar,
-window.xmms-file-info headerbar:backdrop,
-window.xmms-file-info windowhandle,
-window.xmms-file-info windowhandle:backdrop,
-.xmms-file-info entry,
-.xmms-file-info button {
-    border: 1px solid PLAYLIST_SELECTED_BG;
-}
-
-window.xmms-file-info .titlebar,
-window.xmms-file-info .titlebar:backdrop,
-window.xmms-file-info .default-decoration,
-window.xmms-file-info .default-decoration:backdrop,
-window.xmms-file-info titlebar,
-window.xmms-file-info titlebar:backdrop,
-window.xmms-file-info headerbar,
-window.xmms-file-info headerbar:backdrop,
-window.xmms-file-info windowhandle,
-window.xmms-file-info windowhandle:backdrop {
-    outline: 0;
-}
-
-window.xmms-file-info contents,
-window.xmms-file-info contents:backdrop,
-window.xmms-file-info .titlebar separator,
-window.xmms-file-info .titlebar separator:backdrop,
-window.xmms-file-info headerbar separator,
-window.xmms-file-info headerbar separator:backdrop {
-    border: 0;
-}
-
-window.xmms-file-info .titlebar separator,
-window.xmms-file-info .titlebar separator:backdrop,
-window.xmms-file-info headerbar separator,
-window.xmms-file-info headerbar separator:backdrop {
-    background: transparent;
-    min-height: 0;
-}
-
-.xmms-file-info entry,
-.xmms-file-info button {
-    background: PLAYLIST_NORMAL_BG;
-    background-image: none;
-    border-radius: 0;
-    text-shadow: none;
-}
-
-.xmms-file-info label,
-.xmms-file-info button {
-    color: PLAYLIST_NORMAL;
-}
-
-.xmms-file-info entry,
-.xmms-file-info entry selection,
-.xmms-file-info button:hover,
-.xmms-file-info button:active {
-    color: PLAYLIST_CURRENT;
-}
-
-.xmms-file-info entry {
-    caret-color: PLAYLIST_CURRENT;
-}
-
-.xmms-file-info entry selection,
-.xmms-file-info button:hover,
-.xmms-file-info button:active {
-    background: PLAYLIST_SELECTED_BG;
-}
-
-.xmms-file-info button:disabled {
-    opacity: 0.45;
-}
-"#;
+const FILE_INFO_SURFACE_SELECTORS: &[&str] = &[
+    ".xmms-file-info",
+    ".xmms-file-info box",
+    ".xmms-file-info frame",
+    "window.xmms-file-info contents",
+];
+const FILE_INFO_DECORATION_SELECTORS: &[&str] = &[
+    "window.xmms-file-info decoration",
+    "window.xmms-file-info decoration:backdrop",
+    "window.xmms-file-info .titlebar",
+    "window.xmms-file-info .titlebar:backdrop",
+    "window.xmms-file-info .default-decoration",
+    "window.xmms-file-info .default-decoration:backdrop",
+    "window.xmms-file-info titlebar",
+    "window.xmms-file-info titlebar:backdrop",
+    "window.xmms-file-info headerbar",
+    "window.xmms-file-info headerbar:backdrop",
+    "window.xmms-file-info windowhandle",
+    "window.xmms-file-info windowhandle:backdrop",
+];
+const FILE_INFO_CONTENT_SELECTORS: &[&str] = &[
+    "window.xmms-file-info contents",
+    "window.xmms-file-info contents:backdrop",
+];
+const FILE_INFO_OUTLINE_SELECTORS: &[&str] = &[
+    "window.xmms-file-info .titlebar",
+    "window.xmms-file-info .titlebar:backdrop",
+    "window.xmms-file-info .default-decoration",
+    "window.xmms-file-info .default-decoration:backdrop",
+    "window.xmms-file-info titlebar",
+    "window.xmms-file-info titlebar:backdrop",
+    "window.xmms-file-info headerbar",
+    "window.xmms-file-info headerbar:backdrop",
+    "window.xmms-file-info windowhandle",
+    "window.xmms-file-info windowhandle:backdrop",
+];
+const FILE_INFO_SEPARATOR_SELECTORS: &[&str] = &[
+    "window.xmms-file-info .titlebar separator",
+    "window.xmms-file-info .titlebar separator:backdrop",
+    "window.xmms-file-info headerbar separator",
+    "window.xmms-file-info headerbar separator:backdrop",
+];
+const FILE_INFO_CONTROL_SELECTORS: &[&str] = &[".xmms-file-info entry", ".xmms-file-info button"];
+const FILE_INFO_NORMAL_TEXT_SELECTORS: &[&str] =
+    &[".xmms-file-info label", ".xmms-file-info button"];
+const FILE_INFO_CURRENT_TEXT_SELECTORS: &[&str] = &[
+    ".xmms-file-info entry",
+    ".xmms-file-info entry selection",
+    ".xmms-file-info button:hover",
+    ".xmms-file-info button:active",
+];
+const FILE_INFO_ACTIVE_SELECTORS: &[&str] = &[
+    ".xmms-file-info entry selection",
+    ".xmms-file-info button:hover",
+    ".xmms-file-info button:active",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditableFileInfo {
@@ -195,9 +141,11 @@ fn show_file_info_dialog_inner(
         .default_height(320)
         .build();
     window.set_modal(false);
+    window.add_css_class("xmms-skinned-window");
     window.add_css_class("xmms-file-info");
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("xmms-skinned-window");
     root.add_css_class("xmms-file-info");
     root.set_margin_top(10);
     root.set_margin_bottom(10);
@@ -420,15 +368,78 @@ fn install_file_info_css(colors: PlaylistColors) {
 }
 
 fn file_info_css(colors: PlaylistColors) -> String {
-    FILE_INFO_CSS_TEMPLATE
-        .replace("PLAYLIST_NORMAL_BG", &css_rgb(colors.normal_bg))
-        .replace("PLAYLIST_NORMAL", &css_rgb(colors.normal))
-        .replace("PLAYLIST_CURRENT", &css_rgb(colors.current))
-        .replace("PLAYLIST_SELECTED_BG", &css_rgb(colors.selected_bg))
-}
+    let colors = CssColors::from_playlist_colors(colors);
+    let mut css = String::new();
 
-fn css_rgb(color: [u8; 3]) -> String {
-    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+    append_css_rule(
+        &mut css,
+        FILE_INFO_SURFACE_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("color", colors.normal.as_str()),
+        ],
+    );
+    append_css_rule_groups(
+        &mut css,
+        &[
+            FILE_INFO_CONTENT_SELECTORS,
+            FILE_INFO_DECORATION_SELECTORS,
+            FILE_INFO_CONTROL_SELECTORS,
+        ],
+        &[("box-shadow", "none")],
+    );
+    append_css_rule_groups(
+        &mut css,
+        &[FILE_INFO_DECORATION_SELECTORS, FILE_INFO_CONTROL_SELECTORS],
+        &[("border", colors.selected_border.as_str())],
+    );
+    append_css_rule(&mut css, FILE_INFO_OUTLINE_SELECTORS, &[("outline", "0")]);
+    append_css_rule_groups(
+        &mut css,
+        &[FILE_INFO_CONTENT_SELECTORS, FILE_INFO_SEPARATOR_SELECTORS],
+        &[("border", "0")],
+    );
+    append_css_rule(
+        &mut css,
+        FILE_INFO_SEPARATOR_SELECTORS,
+        &[("background", "transparent"), ("min-height", "0")],
+    );
+    append_css_rule(
+        &mut css,
+        FILE_INFO_CONTROL_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("background-image", "none"),
+            ("border-radius", "0"),
+            ("text-shadow", "none"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        FILE_INFO_NORMAL_TEXT_SELECTORS,
+        &[("color", colors.normal.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        FILE_INFO_CURRENT_TEXT_SELECTORS,
+        &[("color", colors.current.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-file-info entry"],
+        &[("caret-color", colors.current.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        FILE_INFO_ACTIVE_SELECTORS,
+        &[("background", colors.selected_bg.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-file-info button:disabled"],
+        &[("opacity", "0.45")],
+    );
+    css
 }
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
