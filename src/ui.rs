@@ -131,6 +131,96 @@ const XMMS_MENU_CSS_TEMPLATE: &str = r#"
 }
 "#;
 
+const PREFERENCES_CSS_TEMPLATE: &str = r#"
+.xmms-preferences,
+.xmms-preferences box,
+.xmms-preferences frame,
+.xmms-preferences notebook,
+.xmms-preferences notebook > stack,
+.xmms-preferences viewport {
+    background: PREFERENCES_NORMAL_BG;
+    color: PREFERENCES_NORMAL;
+}
+
+.xmms-preferences label,
+.xmms-preferences checkbutton,
+.xmms-preferences radiobutton {
+    color: PREFERENCES_NORMAL;
+}
+
+window.xmms-preferences.csd,
+window.xmms-preferences decoration,
+window.xmms-preferences decoration:backdrop,
+window.xmms-preferences .titlebar,
+window.xmms-preferences .titlebar:backdrop,
+window.xmms-preferences .default-decoration,
+window.xmms-preferences .default-decoration:backdrop,
+window.xmms-preferences titlebar,
+window.xmms-preferences titlebar:backdrop,
+window.xmms-preferences headerbar,
+window.xmms-preferences headerbar:backdrop,
+window.xmms-preferences windowhandle,
+window.xmms-preferences windowhandle:backdrop {
+    border: 1px solid PREFERENCES_SELECTED_BG;
+    box-shadow: none;
+    outline: 0;
+}
+
+.xmms-preferences entry,
+.xmms-preferences spinbutton,
+.xmms-preferences textview,
+.xmms-preferences combobox,
+.xmms-preferences button {
+    background: PREFERENCES_NORMAL_BG;
+    background-image: none;
+    border: 1px solid PREFERENCES_SELECTED_BG;
+    border-radius: 0;
+    box-shadow: none;
+    color: PREFERENCES_CURRENT;
+    text-shadow: none;
+}
+
+.xmms-preferences entry selection,
+.xmms-preferences textview text selection,
+.xmms-preferences button:hover,
+.xmms-preferences button:active,
+.xmms-preferences notebook > header > tabs > tab:checked {
+    background: PREFERENCES_SELECTED_BG;
+    color: PREFERENCES_CURRENT;
+}
+
+.xmms-preferences notebook > header {
+    background: PREFERENCES_NORMAL_BG;
+    border-color: PREFERENCES_SELECTED_BG;
+}
+
+.xmms-preferences notebook > header > tabs > tab {
+    background: PREFERENCES_NORMAL_BG;
+    border: 1px solid PREFERENCES_SELECTED_BG;
+    color: PREFERENCES_NORMAL;
+}
+
+.xmms-preferences checkbutton check,
+.xmms-preferences radiobutton radio {
+    background: PREFERENCES_NORMAL_BG;
+    border: 1px solid PREFERENCES_SELECTED_BG;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.xmms-preferences checkbutton check:checked,
+.xmms-preferences radiobutton radio:checked {
+    background: PREFERENCES_SELECTED_BG;
+    color: PREFERENCES_CURRENT;
+}
+
+.xmms-preferences button:disabled,
+.xmms-preferences entry:disabled,
+.xmms-preferences spinbutton:disabled {
+    opacity: 0.45;
+}
+"#;
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
     pub show_playlist: bool,
@@ -651,11 +741,19 @@ fn build_preview_window(
 }
 
 fn install_xmms_menu_css(skin: &DefaultSkin) {
+    install_css_provider(&xmms_menu_css(skin));
+}
+
+fn install_preferences_css(skin: &DefaultSkin) {
+    install_css_provider(&preferences_css(skin));
+}
+
+fn install_css_provider(css: &str) {
     let Some(display) = gtk::gdk::Display::default() else {
         return;
     };
     let provider = gtk::CssProvider::new();
-    provider.load_from_data(&xmms_menu_css(skin));
+    provider.load_from_data(css);
     gtk::style_context_add_provider_for_display(
         &display,
         &provider,
@@ -670,6 +768,15 @@ fn xmms_menu_css(skin: &DefaultSkin) -> String {
         .replace("MENU_NORMAL", &css_rgb(colors.normal))
         .replace("MENU_SELECTED_BG", &css_rgb(colors.selected_bg))
         .replace("MENU_CURRENT", &css_rgb(colors.current))
+}
+
+fn preferences_css(skin: &DefaultSkin) -> String {
+    let colors = skin.playlist_colors();
+    PREFERENCES_CSS_TEMPLATE
+        .replace("PREFERENCES_NORMAL_BG", &css_rgb(colors.normal_bg))
+        .replace("PREFERENCES_NORMAL", &css_rgb(colors.normal))
+        .replace("PREFERENCES_SELECTED_BG", &css_rgb(colors.selected_bg))
+        .replace("PREFERENCES_CURRENT", &css_rgb(colors.current))
 }
 
 fn css_rgb(color: [u8; 3]) -> String {
@@ -2278,6 +2385,7 @@ fn build_preferences_window(
     playlist_window: &gtk::ApplicationWindow,
     playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
+    install_preferences_css(main_state.borrow().active_skin());
     let (default_width, default_height) = preferences_window_default_size();
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -2285,7 +2393,9 @@ fn build_preferences_window(
         .default_width(default_width)
         .default_height(default_height)
         .build();
+    window.add_css_class("xmms-preferences");
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("xmms-preferences");
     root.set_margin_top(10);
     root.set_margin_bottom(10);
     root.set_margin_start(10);
