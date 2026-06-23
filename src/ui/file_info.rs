@@ -11,6 +11,118 @@ use id3::{Tag, TagLike, Version};
 
 use super::MainWindowUiState;
 use crate::playlist::{file_uri_to_path, PlaylistEntry};
+use crate::skin::PlaylistColors;
+
+const FILE_INFO_CSS_TEMPLATE: &str = r#"
+.xmms-file-info,
+.xmms-file-info box,
+.xmms-file-info frame,
+window.xmms-file-info contents {
+    background: PLAYLIST_NORMAL_BG;
+    color: PLAYLIST_NORMAL;
+}
+
+window.xmms-file-info contents,
+window.xmms-file-info contents:backdrop,
+window.xmms-file-info decoration,
+window.xmms-file-info decoration:backdrop,
+window.xmms-file-info .titlebar,
+window.xmms-file-info .titlebar:backdrop,
+window.xmms-file-info .default-decoration,
+window.xmms-file-info .default-decoration:backdrop,
+window.xmms-file-info titlebar,
+window.xmms-file-info titlebar:backdrop,
+window.xmms-file-info headerbar,
+window.xmms-file-info headerbar:backdrop,
+window.xmms-file-info windowhandle,
+window.xmms-file-info windowhandle:backdrop,
+.xmms-file-info entry,
+.xmms-file-info button {
+    box-shadow: none;
+}
+
+window.xmms-file-info.csd,
+window.xmms-file-info decoration,
+window.xmms-file-info decoration:backdrop,
+window.xmms-file-info .titlebar,
+window.xmms-file-info .titlebar:backdrop,
+window.xmms-file-info .default-decoration,
+window.xmms-file-info .default-decoration:backdrop,
+window.xmms-file-info titlebar,
+window.xmms-file-info titlebar:backdrop,
+window.xmms-file-info headerbar,
+window.xmms-file-info headerbar:backdrop,
+window.xmms-file-info windowhandle,
+window.xmms-file-info windowhandle:backdrop,
+.xmms-file-info entry,
+.xmms-file-info button {
+    border: 1px solid PLAYLIST_SELECTED_BG;
+}
+
+window.xmms-file-info .titlebar,
+window.xmms-file-info .titlebar:backdrop,
+window.xmms-file-info .default-decoration,
+window.xmms-file-info .default-decoration:backdrop,
+window.xmms-file-info titlebar,
+window.xmms-file-info titlebar:backdrop,
+window.xmms-file-info headerbar,
+window.xmms-file-info headerbar:backdrop,
+window.xmms-file-info windowhandle,
+window.xmms-file-info windowhandle:backdrop {
+    outline: 0;
+}
+
+window.xmms-file-info contents,
+window.xmms-file-info contents:backdrop,
+window.xmms-file-info .titlebar separator,
+window.xmms-file-info .titlebar separator:backdrop,
+window.xmms-file-info headerbar separator,
+window.xmms-file-info headerbar separator:backdrop {
+    border: 0;
+}
+
+window.xmms-file-info .titlebar separator,
+window.xmms-file-info .titlebar separator:backdrop,
+window.xmms-file-info headerbar separator,
+window.xmms-file-info headerbar separator:backdrop {
+    background: transparent;
+    min-height: 0;
+}
+
+.xmms-file-info entry,
+.xmms-file-info button {
+    background: PLAYLIST_NORMAL_BG;
+    background-image: none;
+    border-radius: 0;
+    text-shadow: none;
+}
+
+.xmms-file-info label,
+.xmms-file-info button {
+    color: PLAYLIST_NORMAL;
+}
+
+.xmms-file-info entry,
+.xmms-file-info entry selection,
+.xmms-file-info button:hover,
+.xmms-file-info button:active {
+    color: PLAYLIST_CURRENT;
+}
+
+.xmms-file-info entry {
+    caret-color: PLAYLIST_CURRENT;
+}
+
+.xmms-file-info entry selection,
+.xmms-file-info button:hover,
+.xmms-file-info button:active {
+    background: PLAYLIST_SELECTED_BG;
+}
+
+.xmms-file-info button:disabled {
+    opacity: 0.45;
+}
+"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditableFileInfo {
@@ -66,12 +178,15 @@ fn show_file_info_dialog_inner(
     parent: &gtk::ApplicationWindow,
     main_state: Rc<RefCell<MainWindowUiState>>,
 ) {
-    let Some(details) = main_state
-        .borrow_mut()
-        .selected_or_current_file_info_details()
-    else {
-        return;
+    let (details, playlist_colors) = {
+        let mut state = main_state.borrow_mut();
+        let playlist_colors = state.active_skin().playlist_colors();
+        let Some(details) = state.selected_or_current_file_info_details() else {
+            return;
+        };
+        (details, playlist_colors)
     };
+    install_file_info_css(playlist_colors);
 
     let window = gtk::Window::builder()
         .title(gtk_safe_text(&format!("File Info - {}", details.basename)))
@@ -80,8 +195,10 @@ fn show_file_info_dialog_inner(
         .default_height(320)
         .build();
     window.set_modal(false);
+    window.add_css_class("xmms-file-info");
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("xmms-file-info");
     root.set_margin_top(10);
     root.set_margin_bottom(10);
     root.set_margin_start(10);
@@ -287,6 +404,31 @@ fn show_file_info_dialog_inner(
     }
 
     window.present();
+}
+
+fn install_file_info_css(colors: PlaylistColors) {
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    let provider = gtk::CssProvider::new();
+    provider.load_from_data(&file_info_css(colors));
+    gtk::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
+fn file_info_css(colors: PlaylistColors) -> String {
+    FILE_INFO_CSS_TEMPLATE
+        .replace("PLAYLIST_NORMAL_BG", &css_rgb(colors.normal_bg))
+        .replace("PLAYLIST_NORMAL", &css_rgb(colors.normal))
+        .replace("PLAYLIST_CURRENT", &css_rgb(colors.current))
+        .replace("PLAYLIST_SELECTED_BG", &css_rgb(colors.selected_bg))
+}
+
+fn css_rgb(color: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
 }
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
@@ -535,6 +677,20 @@ mod tests {
 
     fn file_uri(path: &Path) -> String {
         format!("file://{}", path.display())
+    }
+
+    #[test]
+    fn file_info_css_uses_playlist_skin_colors() {
+        let css = file_info_css(PlaylistColors {
+            normal: [1, 2, 3],
+            current: [4, 5, 6],
+            normal_bg: [7, 8, 9],
+            selected_bg: [10, 11, 12],
+        });
+        assert!(css.contains("#010203"));
+        assert!(css.contains("#040506"));
+        assert!(css.contains("#070809"));
+        assert!(css.contains("#0a0b0c"));
     }
 
     #[test]
