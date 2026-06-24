@@ -35,6 +35,12 @@ const FILE_INFO_DECORATION_SELECTORS: &[&str] = &[
     "window.xmms-file-info windowhandle",
     "window.xmms-file-info windowhandle:backdrop",
 ];
+const FILE_INFO_FRAME_SELECTORS: &[&str] = &[
+    "window.xmms-file-info",
+    "window.xmms-file-info:backdrop",
+    "window.xmms-file-info.csd",
+    "window.xmms-file-info.csd:backdrop",
+];
 const FILE_INFO_CONTENT_SELECTORS: &[&str] = &[
     "window.xmms-file-info contents",
     "window.xmms-file-info contents:backdrop",
@@ -394,11 +400,22 @@ fn file_info_css(colors: PlaylistColors) -> String {
     );
     append_css_rule(
         &mut css,
+        FILE_INFO_FRAME_SELECTORS,
+        &[
+            ("background", style.window_bg.as_str()),
+            ("border", style.window_border_line.as_str()),
+            ("border-radius", "0"),
+            ("box-shadow", "none"),
+            ("outline", "0"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
         FILE_INFO_CONTENT_SELECTORS,
         &[
             ("background", style.window_bg.as_str()),
             ("border", "0"),
-            ("box-shadow", style.window_border_shadow.as_str()),
+            ("box-shadow", "none"),
         ],
     );
     append_css_rule(
@@ -409,7 +426,7 @@ fn file_info_css(colors: PlaylistColors) -> String {
             ("border", "0"),
             ("border-bottom", style.window_border_line.as_str()),
             ("border-radius", "0"),
-            ("box-shadow", style.window_border_shadow.as_str()),
+            ("box-shadow", "none"),
         ],
     );
     append_css_rule(
@@ -734,7 +751,7 @@ mod tests {
         assert!(css.contains("#040506"));
         assert!(css.contains("#070809"));
         assert!(css.contains("#0a0b0c"));
-        assert!(css.contains("box-shadow: inset 0 0 0 1px #f8f7f6"));
+        assert!(css.contains("window.xmms-file-info.csd"));
         assert!(css.contains("window.xmms-file-info headerbar.xmms-skinned-window-titlebar"));
         assert!(css.contains("border-bottom: 1px solid #f8f7f6"));
         assert!(css.contains(".xmms-skinned-window-title"));

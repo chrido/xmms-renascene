@@ -33,7 +33,6 @@ const SKINNED_WINDOW_TEXT_SELECTORS: &[&str] = &[
     ".xmms-skinned-window radiobutton",
 ];
 const SKINNED_WINDOW_DECORATION_SELECTORS: &[&str] = &[
-    "window.xmms-skinned-window.csd",
     "window.xmms-skinned-window decoration",
     "window.xmms-skinned-window decoration:backdrop",
     "window.xmms-skinned-window .titlebar",
@@ -46,6 +45,12 @@ const SKINNED_WINDOW_DECORATION_SELECTORS: &[&str] = &[
     "window.xmms-skinned-window headerbar:backdrop",
     "window.xmms-skinned-window windowhandle",
     "window.xmms-skinned-window windowhandle:backdrop",
+];
+const SKINNED_WINDOW_FRAME_SELECTORS: &[&str] = &[
+    "window.xmms-skinned-window",
+    "window.xmms-skinned-window:backdrop",
+    "window.xmms-skinned-window.csd",
+    "window.xmms-skinned-window.csd:backdrop",
 ];
 const SKINNED_WINDOW_CONTENT_SELECTORS: &[&str] = &[
     "window.xmms-skinned-window contents",
@@ -112,7 +117,6 @@ pub(super) struct SkinStyle {
     pub(super) selection_bg: String,
     pub(super) control_border: String,
     pub(super) window_border_line: String,
-    pub(super) window_border_shadow: String,
     pub(super) disabled_opacity: &'static str,
     pub(super) titlebar_font_weight: &'static str,
 }
@@ -123,7 +127,6 @@ impl SkinStyle {
         let selection_bg = css_rgb(colors.selected_bg);
         let control_border = format!("1px solid {selection_bg}");
         let window_border_line = format!("1px solid {window_border_color}");
-        let window_border_shadow = format!("inset 0 0 0 1px {window_border_color}");
         Self {
             window_bg: css_rgb(colors.normal_bg),
             text_normal: css_rgb(colors.normal),
@@ -131,7 +134,6 @@ impl SkinStyle {
             selection_bg,
             control_border,
             window_border_line,
-            window_border_shadow,
             disabled_opacity: "0.45",
             titlebar_font_weight: "bold",
         }
@@ -205,11 +207,22 @@ pub(super) fn xmms_window_css(skin: &DefaultSkin) -> String {
     );
     append_css_rule(
         &mut css,
+        SKINNED_WINDOW_FRAME_SELECTORS,
+        &[
+            ("background", style.window_bg.as_str()),
+            ("border", style.window_border_line.as_str()),
+            ("border-radius", "0"),
+            ("box-shadow", "none"),
+            ("outline", "0"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
         SKINNED_WINDOW_CONTENT_SELECTORS,
         &[
             ("background", style.window_bg.as_str()),
             ("border", "0"),
-            ("box-shadow", style.window_border_shadow.as_str()),
+            ("box-shadow", "none"),
         ],
     );
     append_css_rule(
@@ -220,7 +233,7 @@ pub(super) fn xmms_window_css(skin: &DefaultSkin) -> String {
             ("border", "0"),
             ("border-bottom", style.window_border_line.as_str()),
             ("border-radius", "0"),
-            ("box-shadow", style.window_border_shadow.as_str()),
+            ("box-shadow", "none"),
         ],
     );
     append_css_rule(
@@ -391,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn xmms_window_css_uses_playlist_colors_and_inverted_window_borders() {
+    fn xmms_window_css_uses_inverted_outer_window_border() {
         let skin = DefaultSkin::load_bundled().unwrap();
         let colors = skin.playlist_colors();
         let css = xmms_window_css(&skin);
@@ -415,10 +428,7 @@ mod tests {
             colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
         )));
         assert!(css.contains("window.xmms-skinned-window contents"));
-        assert!(css.contains(&format!(
-            "box-shadow: inset 0 0 0 1px #{:02x}{:02x}{:02x}",
-            inverted_bg[0], inverted_bg[1], inverted_bg[2]
-        )));
+        assert!(css.contains("window.xmms-skinned-window.csd"));
         assert!(css.contains("window.xmms-skinned-window headerbar.xmms-skinned-window-titlebar"));
         assert!(css.contains(&format!(
             "border-bottom: 1px solid #{:02x}{:02x}{:02x}",
