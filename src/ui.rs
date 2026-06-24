@@ -65,7 +65,10 @@ pub(crate) mod file_info;
 mod style;
 
 use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};
-use style::{xmms_menu_css, xmms_window_css};
+use style::{
+    refresh_xmms_skin_css, style_color_shelf_button, style_skin_color_button,
+    style_skin_editor_custom_color_button,
+};
 
 const DEFAULT_SCALE: i32 = 2;
 const STOP_FADE_DURATION_MS: i64 = 1_000;
@@ -86,10 +89,6 @@ const SKIN_EDITOR_SIDEBAR_WIDTH: i32 = SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32
 const SKIN_EDITOR_GRADIENT_WIDTH: i32 = SKIN_EDITOR_SIDEBAR_WIDTH;
 const SKIN_EDITOR_GRADIENT_HEIGHT: i32 = 34;
 
-thread_local! {
-    static XMMS_MENU_CSS_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
-    static XMMS_WINDOW_CSS_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
-}
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
     pub show_playlist: bool,
@@ -613,41 +612,6 @@ fn build_preview_window(
         panel_windows.skin_editor.present();
     }
     Ok(())
-}
-
-fn refresh_xmms_skin_css(skin: &DefaultSkin) {
-    install_xmms_menu_css(skin);
-    install_xmms_window_css(skin);
-}
-
-fn install_xmms_menu_css(skin: &DefaultSkin) {
-    install_css_provider_slot(&XMMS_MENU_CSS_PROVIDER, &xmms_menu_css(skin));
-}
-
-fn install_xmms_window_css(skin: &DefaultSkin) {
-    install_css_provider_slot(&XMMS_WINDOW_CSS_PROVIDER, &xmms_window_css(skin));
-}
-
-fn install_css_provider_slot(
-    slot: &'static std::thread::LocalKey<RefCell<Option<gtk::CssProvider>>>,
-    css: &str,
-) {
-    let Some(display) = gtk::gdk::Display::default() else {
-        return;
-    };
-    slot.with(|provider| {
-        let mut provider = provider.borrow_mut();
-        let provider = provider.get_or_insert_with(|| {
-            let provider = gtk::CssProvider::new();
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-            provider
-        });
-        provider.load_from_data(css);
-    });
 }
 
 fn apply_skinned_window_chrome(
@@ -4590,82 +4554,9 @@ fn rgba_to_cairo([r, g, b, a]: [u8; 4]) -> [f64; 4] {
     ]
 }
 
-fn style_color_shelf_button(button: &gtk::Button, color: Option<[u8; 4]>) {
-    let provider = gtk::CssProvider::new();
-    if let Some([r, g, b, a]) = color {
-        button.set_label("");
-        let alpha = f64::from(a) / 255.0;
-        provider.load_from_data(&format!(
-            "button {{
-                background: rgba({r}, {g}, {b}, {alpha:.3});
-                background-image: none;
-                border: 1px solid #222222;
-                border-radius: 3px;
-                padding: 0;
-                min-width: 0;
-                min-height: 0;
-            }}
-            button:hover {{
-                background: rgba({r}, {g}, {b}, {alpha:.3});
-                background-image: none;
-            }}"
-        ));
-    } else {
-        button.set_label("");
-        provider.load_from_data(
-            "button {
-                background: transparent;
-                background-image: none;
-                border: 1px dashed #777777;
-                border-radius: 3px;
-                padding: 0;
-                min-width: 0;
-                min-height: 0;
-            }
-            button:hover {
-                background: rgba(255, 255, 255, 0.08);
-                background-image: none;
-            }",
-        );
-    }
-    button
-        .style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-}
-
 fn set_skin_editor_color_controls(controls: &SkinEditorColorControls, rgba: [u8; 4]) {
     controls.chooser.set_rgba(&rgba_from_u8(rgba));
     style_skin_editor_custom_color_button(&controls.button, rgba);
-}
-
-fn style_skin_editor_custom_color_button(button: &gtk::Button, rgba: [u8; 4]) {
-    let [r, g, b, a] = rgba;
-    let text = if color_luminance([r, g, b]) > 140.0 && a > 127 {
-        "#000000"
-    } else {
-        "#ffffff"
-    };
-    let alpha = f64::from(a) / 255.0;
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(&format!(
-        "button {{
-            background: rgba({r}, {g}, {b}, {alpha:.3});
-            background-image: none;
-            color: {text};
-            border: 1px solid #222222;
-            border-radius: 3px;
-            padding: 4px;
-            text-shadow: none;
-        }}
-        button:hover {{
-            background: rgba({r}, {g}, {b}, {alpha:.3});
-            background-image: none;
-            color: {text};
-        }}"
-    ));
-    button
-        .style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4864,41 +4755,6 @@ fn skin_color_target_rgb(skin: &DefaultSkin, target: SkinColorTarget) -> [u8; 3]
             .copied()
             .unwrap_or([255, 255, 255]),
     }
-}
-
-fn style_skin_color_button(button: &gtk::Button, rgb: [u8; 3]) {
-    let provider = gtk::CssProvider::new();
-    let text = if color_luminance(rgb) > 140.0 {
-        "#000000"
-    } else {
-        "#ffffff"
-    };
-    provider.load_from_data(&format!(
-        "button {{
-            background: #{:02x}{:02x}{:02x};
-            background-image: none;
-            color: {text};
-            border: 1px solid #222222;
-            border-radius: 3px;
-            padding: 1px;
-            min-width: 0;
-            min-height: 0;
-            text-shadow: none;
-        }}
-        button:hover {{
-            background: #{:02x}{:02x}{:02x};
-            background-image: none;
-            color: {text};
-        }}",
-        rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]
-    ));
-    button
-        .style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-}
-
-fn color_luminance(rgb: [u8; 3]) -> f64 {
-    0.2126 * f64::from(rgb[0]) + 0.7152 * f64::from(rgb[1]) + 0.0722 * f64::from(rgb[2])
 }
 
 fn apply_skin_color_target(skin: &mut DefaultSkin, target: SkinColorTarget, rgb: [u8; 3]) -> bool {
