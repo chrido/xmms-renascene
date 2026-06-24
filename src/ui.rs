@@ -136,6 +136,10 @@ const SKINNED_WINDOW_DECORATION_SELECTORS: &[&str] = &[
     "window.xmms-skinned-window windowhandle",
     "window.xmms-skinned-window windowhandle:backdrop",
 ];
+const SKINNED_WINDOW_CONTENT_SELECTORS: &[&str] = &[
+    "window.xmms-skinned-window contents",
+    "window.xmms-skinned-window contents:backdrop",
+];
 const SKINNED_WINDOW_CONTROL_SELECTORS: &[&str] = &[
     ".xmms-skinned-window entry",
     ".xmms-skinned-window spinbutton",
@@ -181,6 +185,7 @@ const SKINNED_WINDOW_DISABLED_SELECTORS: &[&str] = &[
     ".xmms-skinned-window entry:disabled",
     ".xmms-skinned-window spinbutton:disabled",
 ];
+const SKINNED_WINDOW_TITLE_SELECTORS: &[&str] = &[".xmms-skinned-window-title"];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
@@ -193,6 +198,7 @@ pub struct PreviewOptions {
     pub equalizer_detached: Option<bool>,
     pub playlist_size: Option<(i32, i32)>,
     pub reset: bool,
+    pub open_preferences: bool,
     pub open_skin_editor: bool,
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
@@ -274,6 +280,7 @@ fn build_preview_window(
     } else {
         AppState::default()
     };
+    let open_preferences = options.open_preferences;
     let open_skin_editor = options.open_skin_editor;
     let mut state = preview_state_from_app_state(app_state, options)?;
     if let Some(config_dir) = config_path.parent() {
@@ -694,6 +701,10 @@ fn build_preview_window(
     window.set_child(Some(&drawing_area));
     window.present();
     present_visible_panel_windows(&panel_windows, &main_state.borrow());
+    if open_preferences {
+        main_state.borrow_mut().set_preferences_visible(true);
+        panel_windows.preferences.present();
+    }
     if open_skin_editor {
         main_state.borrow_mut().set_skin_editor_visible(true);
         panel_windows.skin_editor.present();
@@ -734,6 +745,24 @@ fn install_css_provider_slot(
         });
         provider.load_from_data(css);
     });
+}
+
+pub(super) fn set_skinned_window_titlebar(
+    window: &impl IsA<gtk::Window>,
+    title: &str,
+    extra_css_classes: &[&str],
+) {
+    let titlebar = gtk::HeaderBar::new();
+    titlebar.add_css_class("xmms-skinned-window");
+    for class in extra_css_classes {
+        titlebar.add_css_class(class);
+    }
+    titlebar.set_show_title_buttons(true);
+    titlebar.set_decoration_layout(Some(":close"));
+    let title_label = gtk::Label::new(Some(title));
+    title_label.add_css_class("xmms-skinned-window-title");
+    titlebar.set_title_widget(Some(&title_label));
+    window.as_ref().set_titlebar(Some(&titlebar));
 }
 
 fn xmms_menu_css(skin: &DefaultSkin) -> String {
@@ -795,9 +824,19 @@ fn xmms_window_css(skin: &DefaultSkin) -> String {
         &mut css,
         SKINNED_WINDOW_DECORATION_SELECTORS,
         &[
-            ("border", colors.selected_border.as_str()),
-            ("box-shadow", "none"),
+            ("border", "0"),
+            ("border-radius", "0"),
+            ("box-shadow", colors.selected_inset_border.as_str()),
             ("outline", "0"),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_CONTENT_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("border", "0"),
+            ("box-shadow", colors.selected_inset_border.as_str()),
         ],
     );
     append_css_rule(
@@ -890,6 +929,11 @@ fn xmms_window_css(skin: &DefaultSkin) -> String {
         SKINNED_WINDOW_DISABLED_SELECTORS,
         &[("opacity", "0.45")],
     );
+    append_css_rule(
+        &mut css,
+        SKINNED_WINDOW_TITLE_SELECTORS,
+        &[("font-weight", "bold")],
+    );
     css
 }
 
@@ -899,17 +943,21 @@ pub(super) struct CssColors {
     pub(super) normal: String,
     pub(super) selected_bg: String,
     pub(super) selected_border: String,
+    pub(super) selected_inset_border: String,
     pub(super) current: String,
 }
 
 impl CssColors {
     pub(super) fn from_playlist_colors(colors: PlaylistColors) -> Self {
         let selected_bg = css_rgb(colors.selected_bg);
+        let selected_border = format!("1px solid {selected_bg}");
+        let selected_inset_border = format!("inset 0 0 0 1px {selected_bg}");
         Self {
             normal_bg: css_rgb(colors.normal_bg),
             normal: css_rgb(colors.normal),
-            selected_border: format!("1px solid {selected_bg}"),
             selected_bg,
+            selected_border,
+            selected_inset_border,
             current: css_rgb(colors.current),
         }
     }
@@ -2208,6 +2256,7 @@ fn show_playlist_delete_confirmation(
         window.set_transient_for(Some(&root));
     }
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, "Delete selected files?", &[]);
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
     layout.add_css_class("xmms-skinned-window");
@@ -2565,6 +2614,8 @@ fn build_preferences_window(
         .build();
     window.add_css_class("xmms-skinned-window");
     window.add_css_class("xmms-preferences");
+    set_skinned_window_titlebar(&window, "Preferences", &["xmms-preferences"]);
+
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
     root.add_css_class("xmms-skinned-window");
     root.add_css_class("xmms-preferences");
@@ -3588,6 +3639,7 @@ fn build_prompt_window(
         .default_height(110)
         .build();
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, kind.title(), &[]);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.add_css_class("xmms-skinned-window");
     content.set_margin_top(12);
@@ -3651,6 +3703,7 @@ fn build_skin_browser_window(
         .default_height(280)
         .build();
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, "Skin selector", &[]);
     let add = gtk::Button::with_label("Add...");
     add.set_widget_name(SKIN_BROWSER_ADD_WIDGET);
     let close = gtk::Button::with_label("Close");
@@ -3730,6 +3783,7 @@ fn build_skin_editor_window(
         .default_height(700)
         .build();
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, "Skin Editor (alpha)", &[]);
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     root.add_css_class("xmms-skinned-window");
@@ -6477,6 +6531,7 @@ fn show_equalizer_save_name_dialog(
         window.set_transient_for(Some(&parent_window));
     }
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, title, &[]);
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
     layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
@@ -6536,6 +6591,7 @@ fn show_equalizer_preset_list_dialog(
         window.set_transient_for(Some(&parent_window));
     }
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, title, &[]);
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
     layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
@@ -6624,6 +6680,7 @@ fn show_equalizer_configure_dialog(
         window.set_transient_for(Some(&parent_window));
     }
     window.add_css_class("xmms-skinned-window");
+    set_skinned_window_titlebar(&window, "Configure Equalizer", &[]);
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
     layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
@@ -12524,6 +12581,13 @@ static char * main_xpm[] = {
             "border: 1px solid #{:02x}{:02x}{:02x}",
             colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
         )));
+        assert!(css.contains("window.xmms-skinned-window contents"));
+        assert!(css.contains(&format!(
+            "box-shadow: inset 0 0 0 1px #{:02x}{:02x}{:02x}",
+            colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
+        )));
+        assert!(css.contains(".xmms-skinned-window-title"));
+        assert!(css.contains("font-weight: bold"));
         assert!(css.contains(&format!(
             "color: #{:02x}{:02x}{:02x}",
             colors.current[0], colors.current[1], colors.current[2]

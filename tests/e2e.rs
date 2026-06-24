@@ -86,6 +86,7 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
             "--undock-equalizer",
             "--playlist-menu-list",
             "--reset",
+            "--open-preferences",
             "--skin",
             skin.to_str().unwrap(),
             "--playlist-size=325x280",

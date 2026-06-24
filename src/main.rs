@@ -79,6 +79,8 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             options.show_playlist = true;
         } else if arg == "--reset" {
             options.reset = true;
+        } else if arg == "--preferences" || arg == "--open-preferences" {
+            options.open_preferences = true;
         } else if arg == "--skin-editor" || arg == "--open-skin-editor" {
             options.open_skin_editor = true;
         } else if let Some(value) = arg.strip_prefix("--skin=") {
@@ -169,6 +171,7 @@ mod tests {
             "--playlist-undocked",
             "--equalizer-undocked",
             "--reset",
+            "--open-preferences",
             "--skin-editor",
             "--skin",
             "/tmp/skin.wsz",
@@ -185,6 +188,7 @@ mod tests {
         assert_eq!(options.playlist_detached, Some(true));
         assert_eq!(options.equalizer_detached, Some(true));
         assert!(options.reset);
+        assert!(options.open_preferences);
         assert!(options.open_skin_editor);
         assert_eq!(options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
         assert_eq!(options.screenshot_path.as_deref(), Some("/tmp/player.png"));

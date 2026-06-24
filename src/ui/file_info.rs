@@ -9,7 +9,10 @@ use gtk::prelude::*;
 use id3::frame::{Comment, Content};
 use id3::{Tag, TagLike, Version};
 
-use super::{append_css_rule, append_css_rule_groups, CssColors, MainWindowUiState};
+use super::{
+    append_css_rule, append_css_rule_groups, set_skinned_window_titlebar, CssColors,
+    MainWindowUiState,
+};
 use crate::playlist::{file_uri_to_path, PlaylistEntry};
 use crate::skin::PlaylistColors;
 
@@ -134,8 +137,10 @@ fn show_file_info_dialog_inner(
     };
     install_file_info_css(playlist_colors);
 
+    let title_text = format!("File Info - {}", details.basename);
+    let title = gtk_safe_text(&title_text);
     let window = gtk::Window::builder()
-        .title(gtk_safe_text(&format!("File Info - {}", details.basename)))
+        .title(title.as_ref())
         .transient_for(parent)
         .default_width(620)
         .default_height(320)
@@ -143,6 +148,7 @@ fn show_file_info_dialog_inner(
     window.set_modal(false);
     window.add_css_class("xmms-skinned-window");
     window.add_css_class("xmms-file-info");
+    set_skinned_window_titlebar(&window, title.as_ref(), &["xmms-file-info"]);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
     root.add_css_class("xmms-skinned-window");
@@ -379,24 +385,36 @@ fn file_info_css(colors: PlaylistColors) -> String {
             ("color", colors.normal.as_str()),
         ],
     );
-    append_css_rule_groups(
+    append_css_rule(
         &mut css,
+        FILE_INFO_DECORATION_SELECTORS,
         &[
-            FILE_INFO_CONTENT_SELECTORS,
-            FILE_INFO_DECORATION_SELECTORS,
-            FILE_INFO_CONTROL_SELECTORS,
+            ("border", "0"),
+            ("border-radius", "0"),
+            ("box-shadow", colors.selected_inset_border.as_str()),
         ],
-        &[("box-shadow", "none")],
     );
-    append_css_rule_groups(
+    append_css_rule(
         &mut css,
-        &[FILE_INFO_DECORATION_SELECTORS, FILE_INFO_CONTROL_SELECTORS],
-        &[("border", colors.selected_border.as_str())],
+        FILE_INFO_CONTENT_SELECTORS,
+        &[
+            ("background", colors.normal_bg.as_str()),
+            ("border", "0"),
+            ("box-shadow", colors.selected_inset_border.as_str()),
+        ],
+    );
+    append_css_rule(
+        &mut css,
+        FILE_INFO_CONTROL_SELECTORS,
+        &[
+            ("border", colors.selected_border.as_str()),
+            ("box-shadow", "none"),
+        ],
     );
     append_css_rule(&mut css, FILE_INFO_OUTLINE_SELECTORS, &[("outline", "0")]);
     append_css_rule_groups(
         &mut css,
-        &[FILE_INFO_CONTENT_SELECTORS, FILE_INFO_SEPARATOR_SELECTORS],
+        &[FILE_INFO_SEPARATOR_SELECTORS],
         &[("border", "0")],
     );
     append_css_rule(
@@ -433,6 +451,11 @@ fn file_info_css(colors: PlaylistColors) -> String {
         &mut css,
         FILE_INFO_ACTIVE_SELECTORS,
         &[("background", colors.selected_bg.as_str())],
+    );
+    append_css_rule(
+        &mut css,
+        &[".xmms-skinned-window-title"],
+        &[("font-weight", "bold")],
     );
     append_css_rule(
         &mut css,
@@ -702,6 +725,9 @@ mod tests {
         assert!(css.contains("#040506"));
         assert!(css.contains("#070809"));
         assert!(css.contains("#0a0b0c"));
+        assert!(css.contains("box-shadow: inset 0 0 0 1px #0a0b0c"));
+        assert!(css.contains(".xmms-skinned-window-title"));
+        assert!(css.contains("font-weight: bold"));
     }
 
     #[test]
