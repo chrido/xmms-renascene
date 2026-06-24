@@ -1,4 +1,3 @@
-use xmms_renascene::skin::DefaultSkin;
 use xmms_renascene::ui::{self, PreviewOptions};
 
 fn main() {
@@ -22,31 +21,10 @@ fn main() {
         return;
     }
 
-    if args.iter().any(|arg| arg == "--gtk") {
-        ui::run_default_skin_preview(preview_options);
-        return;
-    }
     if args.iter().any(|arg| arg == "--gtk-smoke") {
         ui::run_default_skin_preview_smoke(preview_options);
-        return;
-    }
-
-    let skin = match preview_options.skin_path.as_deref() {
-        Some(path) => DefaultSkin::load_from_path(std::path::Path::new(path)),
-        None => DefaultSkin::load_bundled(),
-    };
-
-    match skin {
-        Ok(skin) => {
-            println!(
-                "xmms-rs: loaded {} skin pixmaps",
-                skin.loaded_pixmap_count(),
-            );
-        }
-        Err(err) => {
-            eprintln!("xmms-rs: failed to load skin: {err}");
-            std::process::exit(1);
-        }
+    } else {
+        ui::run_default_skin_preview(preview_options);
     }
 }
 
@@ -101,6 +79,8 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             options.show_playlist = true;
         } else if arg == "--reset" {
             options.reset = true;
+        } else if arg == "--preferences" || arg == "--open-preferences" {
+            options.open_preferences = true;
         } else if arg == "--skin-editor" || arg == "--open-skin-editor" {
             options.open_skin_editor = true;
         } else if let Some(value) = arg.strip_prefix("--skin=") {
@@ -191,6 +171,7 @@ mod tests {
             "--playlist-undocked",
             "--equalizer-undocked",
             "--reset",
+            "--open-preferences",
             "--skin-editor",
             "--skin",
             "/tmp/skin.wsz",
@@ -207,6 +188,7 @@ mod tests {
         assert_eq!(options.playlist_detached, Some(true));
         assert_eq!(options.equalizer_detached, Some(true));
         assert!(options.reset);
+        assert!(options.open_preferences);
         assert!(options.open_skin_editor);
         assert_eq!(options.skin_path.as_deref(), Some("/tmp/skin.wsz"));
         assert_eq!(options.screenshot_path.as_deref(), Some("/tmp/player.png"));

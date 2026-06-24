@@ -61,6 +61,15 @@ use crate::skineditor::{
     MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
 };
 
+pub(crate) mod file_info;
+mod style;
+
+use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};
+use style::{
+    refresh_xmms_skin_css, style_color_shelf_button, style_skin_color_button,
+    style_skin_editor_custom_color_button,
+};
+
 const DEFAULT_SCALE: i32 = 2;
 const STOP_FADE_DURATION_MS: i64 = 1_000;
 type PreferencesChanged = Rc<dyn Fn()>;
@@ -79,53 +88,6 @@ const SKIN_EDITOR_SIDEBAR_WIDTH: i32 = SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32
     + (SKIN_EDITOR_COLOR_SHELF_COLUMNS as i32 - 1) * SKIN_EDITOR_COLOR_SHELF_GAP;
 const SKIN_EDITOR_GRADIENT_WIDTH: i32 = SKIN_EDITOR_SIDEBAR_WIDTH;
 const SKIN_EDITOR_GRADIENT_HEIGHT: i32 = 34;
-const XMMS_MENU_CSS_TEMPLATE: &str = r#"
-.xmms-menu-popover,
-.xmms-menu-popover contents,
-.xmms-menu-box {
-    background: MENU_NORMAL_BG;
-    color: MENU_NORMAL;
-}
-
-.xmms-menu-button {
-    background: MENU_NORMAL_BG;
-    background-image: none;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    color: MENU_NORMAL;
-    padding: 1px 12px;
-    min-height: 0;
-    text-shadow: none;
-}
-
-.xmms-menu-button:hover {
-    background: MENU_SELECTED_BG;
-    color: MENU_CURRENT;
-}
-
-.xmms-menu-button:active {
-    background: MENU_SELECTED_BG;
-    color: MENU_CURRENT;
-}
-
-.xmms-menu-popover modelbutton {
-    background: MENU_NORMAL_BG;
-    background-image: none;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    color: MENU_NORMAL;
-    padding: 1px 12px;
-    min-height: 0;
-    text-shadow: none;
-}
-
-.xmms-menu-popover modelbutton:hover {
-    background: MENU_SELECTED_BG;
-    color: MENU_CURRENT;
-}
-"#;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
@@ -138,6 +100,7 @@ pub struct PreviewOptions {
     pub equalizer_detached: Option<bool>,
     pub playlist_size: Option<(i32, i32)>,
     pub reset: bool,
+    pub open_preferences: bool,
     pub open_skin_editor: bool,
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
@@ -219,6 +182,7 @@ fn build_preview_window(
     } else {
         AppState::default()
     };
+    let open_preferences = options.open_preferences;
     let open_skin_editor = options.open_skin_editor;
     let mut state = preview_state_from_app_state(app_state, options)?;
     if let Some(config_dir) = config_path.parent() {
@@ -233,7 +197,7 @@ fn build_preview_window(
     let initial_device_width = scale_dim(initial_width, initial_scale);
     let initial_device_height = scale_dim(initial_height, initial_scale);
     let main_state = Rc::new(RefCell::new(state));
-    install_xmms_menu_css(main_state.borrow().active_skin());
+    refresh_xmms_skin_css(main_state.borrow().active_skin());
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -329,6 +293,7 @@ fn build_preview_window(
             let (base_x, base_y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             let docked_panel = { main_state.borrow().docked_panel_at(base_x, base_y) };
             if let Some((kind, panel_x, panel_y)) = docked_panel {
+                main_state.borrow_mut().select_docked_panel(kind);
                 if n_press >= 2
                     && kind == PanelKind::Equalizer
                     && main_state
@@ -381,6 +346,8 @@ fn build_preview_window(
                 }
                 return;
             }
+            main_state.borrow_mut().select_docked_main();
+            drawing_area.queue_draw();
             if main_state.borrow().main_title_drag_region(base_x, base_y) {
                 let Some(device) = gesture.current_event_device() else {
                     return;
@@ -568,6 +535,13 @@ fn build_preview_window(
         let window = window.clone();
         let drawing_area = drawing_area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
+            if focus_cycle_shortcut(key, state) {
+                main_state.borrow_mut().cycle_visible_focus();
+                drawing_area.queue_draw();
+                panel_windows.playlist_area.queue_draw();
+                panel_windows.equalizer_area.queue_draw();
+                return gtk::glib::Propagation::Stop;
+            }
             if handle_main_playlist_key_pressed(&main_state, key, state) {
                 drawing_area.queue_draw();
                 sync_panel_windows(&panel_windows, &main_state.borrow());
@@ -629,6 +603,10 @@ fn build_preview_window(
     window.set_child(Some(&drawing_area));
     window.present();
     present_visible_panel_windows(&panel_windows, &main_state.borrow());
+    if open_preferences {
+        main_state.borrow_mut().set_preferences_visible(true);
+        panel_windows.preferences.present();
+    }
     if open_skin_editor {
         main_state.borrow_mut().set_skin_editor_visible(true);
         panel_windows.skin_editor.present();
@@ -636,30 +614,67 @@ fn build_preview_window(
     Ok(())
 }
 
-fn install_xmms_menu_css(skin: &DefaultSkin) {
-    let Some(display) = gtk::gdk::Display::default() else {
-        return;
-    };
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(&xmms_menu_css(skin));
-    gtk::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
+fn apply_skinned_window_chrome(
+    window: &impl IsA<gtk::Window>,
+    title: &str,
+    extra_css_classes: &[&str],
+) {
+    window.as_ref().add_css_class("xmms-skinned-window");
+    for class in extra_css_classes {
+        window.as_ref().add_css_class(class);
+    }
+    set_skinned_window_titlebar(window, title, extra_css_classes);
 }
 
-fn xmms_menu_css(skin: &DefaultSkin) -> String {
-    let colors = skin.playlist_colors();
-    XMMS_MENU_CSS_TEMPLATE
-        .replace("MENU_NORMAL_BG", &css_rgb(colors.normal_bg))
-        .replace("MENU_NORMAL", &css_rgb(colors.normal))
-        .replace("MENU_SELECTED_BG", &css_rgb(colors.selected_bg))
-        .replace("MENU_CURRENT", &css_rgb(colors.current))
+pub(super) fn set_skinned_window_titlebar(
+    window: &impl IsA<gtk::Window>,
+    title: &str,
+    extra_css_classes: &[&str],
+) {
+    let titlebar = gtk::HeaderBar::new();
+    titlebar.add_css_class("xmms-skinned-window");
+    titlebar.add_css_class("xmms-skinned-window-titlebar");
+    for class in extra_css_classes {
+        titlebar.add_css_class(class);
+    }
+    titlebar.set_show_title_buttons(true);
+    titlebar.set_decoration_layout(Some(":close"));
+    let title_label = gtk::Label::new(Some(title));
+    title_label.add_css_class("xmms-skinned-window-title");
+    titlebar.set_title_widget(Some(&title_label));
+    window.as_ref().set_titlebar(Some(&titlebar));
 }
 
-fn css_rgb(color: [u8; 3]) -> String {
-    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+fn skinned_application_window(
+    app: &gtk::Application,
+    title: &str,
+    default_width: i32,
+    default_height: i32,
+    extra_css_classes: &[&str],
+) -> gtk::ApplicationWindow {
+    let window = gtk::ApplicationWindow::builder()
+        .application(app)
+        .title(title)
+        .default_width(default_width)
+        .default_height(default_height)
+        .build();
+    apply_skinned_window_chrome(&window, title, extra_css_classes);
+    window
+}
+
+pub(super) fn skinned_window(
+    title: &str,
+    default_width: i32,
+    default_height: i32,
+    extra_css_classes: &[&str],
+) -> gtk::Window {
+    let window = gtk::Window::builder()
+        .title(title)
+        .default_width(default_width)
+        .default_height(default_height)
+        .build();
+    apply_skinned_window_chrome(&window, title, extra_css_classes);
+    window
 }
 
 fn load_skin_from_config(config: &Config) -> io::Result<DefaultSkin> {
@@ -794,6 +809,44 @@ enum MainKeyboardShortcut {
     ToggleEqualizer,
     ShadePlaylist,
     ShadeEqualizer,
+    ToggleTimerRemaining,
+    ToggleSticky,
+    DoubleScale,
+    HalfScale,
+    ToggleEasyMove,
+    StartOfList,
+    FileInfo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrowKey {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl ArrowKey {
+    fn from_gdk(key: gtk::gdk::Key) -> Option<Self> {
+        match key {
+            gtk::gdk::Key::Up | gtk::gdk::Key::KP_Up => Some(Self::Up),
+            gtk::gdk::Key::Down | gtk::gdk::Key::KP_Down => Some(Self::Down),
+            gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => Some(Self::Left),
+            gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => Some(Self::Right),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyCommand {
+    Volume(i32),
+    Balance(i32),
+    Seek(i32),
+    PreviousTrack,
+    NextTrack,
+    PlaylistMove(isize),
+    EqualizerAdjust(i32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -917,6 +970,16 @@ fn keyboard_shortcut_from_event(
         ("<Alt>g", MainKeyboardShortcut::ToggleEqualizer),
         ("<Control><Shift>w", MainKeyboardShortcut::ShadePlaylist),
         ("<Control><Alt>w", MainKeyboardShortcut::ShadeEqualizer),
+        ("<Control>r", MainKeyboardShortcut::ToggleTimerRemaining),
+        ("<Control>a", MainKeyboardShortcut::ToggleSticky),
+        ("<Control>d", MainKeyboardShortcut::DoubleScale),
+        ("<Control>m", MainKeyboardShortcut::HalfScale),
+        ("<Control>e", MainKeyboardShortcut::ToggleEasyMove),
+        ("<Control>z", MainKeyboardShortcut::StartOfList),
+        ("<Control>3", MainKeyboardShortcut::FileInfo),
+        ("Insert", MainKeyboardShortcut::OpenFiles),
+        ("<Shift>Insert", MainKeyboardShortcut::OpenDirectory),
+        ("<Alt>Insert", MainKeyboardShortcut::OpenLocation),
     ]
     .into_iter()
     .find_map(|(accelerator, shortcut)| {
@@ -936,15 +999,22 @@ fn handle_main_playlist_key_pressed(
             return handled;
         }
     }
+    let mut ui_state = main_state.borrow_mut();
+    match ui_state.selected_docked_panel() {
+        Some(PanelKind::Playlist) => {}
+        Some(PanelKind::Equalizer) => {
+            return handle_equalizer_key_pressed(&mut ui_state, key, state)
+        }
+        None => return handle_main_player_key_pressed(&mut ui_state, key, state),
+    }
+    if handle_playlist_parity_key_pressed(&mut ui_state, key, state) {
+        return true;
+    }
     if state.intersects(
         gtk::gdk::ModifierType::CONTROL_MASK
             | gtk::gdk::ModifierType::ALT_MASK
             | gtk::gdk::ModifierType::META_MASK,
     ) {
-        return false;
-    }
-    let mut ui_state = main_state.borrow_mut();
-    if !ui_state.playlist_ui.panel.visible {
         return false;
     }
     if handle_playlist_navigation_key_pressed(&mut ui_state, key) {
@@ -1012,11 +1082,22 @@ fn handle_keyboard_shortcut(
             state.app_state.playlist.set_no_advance(enabled);
         }
         MainKeyboardShortcut::ShadeMain => {
-            {
-                let mut state = main_state.borrow_mut();
-                state.shaded = !state.shaded;
+            let toggled_panel = main_state.borrow_mut().toggle_selected_window_shade();
+            match toggled_panel {
+                Some(PanelKind::Playlist) => sync_single_panel_window_from_state(
+                    PanelKind::Playlist,
+                    &panel_windows.playlist,
+                    &panel_windows.playlist_area,
+                    main_state,
+                ),
+                Some(PanelKind::Equalizer) => sync_single_panel_window_from_state(
+                    PanelKind::Equalizer,
+                    &panel_windows.equalizer,
+                    &panel_windows.equalizer_area,
+                    main_state,
+                ),
+                None => resize_main_window(window, drawing_area, &main_state.borrow()),
             }
-            resize_main_window(window, drawing_area, &main_state.borrow());
         }
         MainKeyboardShortcut::JumpTime => {
             main_state.borrow_mut().set_jump_time_visible(true);
@@ -1068,6 +1149,30 @@ fn handle_keyboard_shortcut(
                 &panel_windows.equalizer_area,
                 main_state,
             );
+        }
+        MainKeyboardShortcut::ToggleTimerRemaining => {
+            let enabled = !main_state.borrow().preference_timer_remaining();
+            main_state
+                .borrow_mut()
+                .set_preference_timer_remaining(enabled);
+        }
+        MainKeyboardShortcut::ToggleSticky => {
+            main_state.borrow_mut().toggle_sticky();
+        }
+        MainKeyboardShortcut::DoubleScale => {
+            main_state.borrow_mut().double_fractional_scale();
+        }
+        MainKeyboardShortcut::HalfScale => {
+            main_state.borrow_mut().halve_fractional_scale();
+        }
+        MainKeyboardShortcut::ToggleEasyMove => {
+            main_state.borrow_mut().toggle_easy_move();
+        }
+        MainKeyboardShortcut::StartOfList => {
+            main_state.borrow_mut().select_first_playlist_entry();
+        }
+        MainKeyboardShortcut::FileInfo => {
+            show_file_info_dialog(window, Rc::clone(main_state));
         }
     }
     resize_main_window(window, drawing_area, &main_state.borrow());
@@ -1154,7 +1259,7 @@ fn render_docked_ui_state(
             rendered |= render_playlist_frame(
                 cr,
                 skin,
-                state.playlist_ui.panel.focused(),
+                state.playlist_focused(),
                 state.playlist_ui.panel.shaded,
                 state.playlist_ui.width,
                 state.playlist_ui.height,
@@ -1450,7 +1555,7 @@ fn build_playlist_window(
         let state = state.borrow();
         let skin = state.active_skin();
         let shaded = state.playlist_ui.panel.shaded;
-        let focused = state.playlist_ui.panel.focused();
+        let focused = state.playlist_focused();
         let playlist_width = state.playlist_ui.width;
         let playlist_height = state.playlist_ui.height;
         let base_height = if shaded {
@@ -1574,22 +1679,7 @@ fn add_equalizer_key_controller(
     {
         let area = area.clone();
         key_controller.connect_key_pressed(move |_controller, key, _keycode, state| {
-            if state.intersects(
-                gtk::gdk::ModifierType::CONTROL_MASK
-                    | gtk::gdk::ModifierType::ALT_MASK
-                    | gtk::gdk::ModifierType::META_MASK,
-            ) {
-                return gtk::glib::Propagation::Proceed;
-            }
-            let diff = match key {
-                gtk::gdk::Key::Left | gtk::gdk::Key::KP_Left => -4,
-                gtk::gdk::Key::Right | gtk::gdk::Key::KP_Right => 4,
-                _ => return gtk::glib::Propagation::Proceed,
-            };
-            if main_state
-                .borrow_mut()
-                .adjust_shaded_equalizer_balance(diff)
-            {
+            if handle_equalizer_key_pressed(&mut main_state.borrow_mut(), key, state) {
                 area.queue_draw();
                 gtk::glib::Propagation::Stop
             } else {
@@ -1598,6 +1688,47 @@ fn add_equalizer_key_controller(
         });
     }
     area.add_controller(key_controller);
+}
+
+fn focus_cycle_shortcut(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> bool {
+    key == gtk::gdk::Key::Tab
+        && state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        && !state.intersects(gtk::gdk::ModifierType::ALT_MASK | gtk::gdk::ModifierType::META_MASK)
+}
+
+fn handle_arrow_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    focus: KeyboardFocus,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    if state.intersects(
+        gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return false;
+    }
+    let Some(arrow) = ArrowKey::from_gdk(key) else {
+        return false;
+    };
+    ui_state.apply_key_command(ui_state.arrow_key_command(focus, arrow))
+}
+
+fn handle_main_player_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    handle_arrow_key_pressed(ui_state, KeyboardFocus::Main, key, state)
+}
+
+fn handle_equalizer_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    handle_arrow_key_pressed(ui_state, KeyboardFocus::Equalizer, key, state)
 }
 
 fn handle_playlist_key_pressed(
@@ -1613,6 +1744,12 @@ fn handle_playlist_key_pressed(
         }
     }
 
+    {
+        let mut ui_state = main_state.borrow_mut();
+        if handle_playlist_parity_key_pressed(&mut ui_state, key, state) {
+            return true;
+        }
+    }
     if state.intersects(
         gtk::gdk::ModifierType::CONTROL_MASK
             | gtk::gdk::ModifierType::ALT_MASK
@@ -1668,6 +1805,43 @@ fn handle_active_playlist_search_key_pressed(
         return Some(true);
     }
     Some(true)
+}
+
+fn handle_playlist_parity_key_pressed(
+    ui_state: &mut MainWindowUiState,
+    key: gtk::gdk::Key,
+    state: gtk::gdk::ModifierType,
+) -> bool {
+    let control = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+    let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+    let alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
+    let is_delete = key == gtk::gdk::Key::Delete || key == gtk::gdk::Key::KP_Delete;
+    let is_q = key == gtk::gdk::Key::q || key == gtk::gdk::Key::Q;
+    if control && is_delete {
+        return ui_state.crop_playlist_to_selected_or_current();
+    }
+    if alt && is_q {
+        return ui_state.open_queue_manager();
+    }
+    if shift && is_q {
+        return ui_state.clear_playlist_queue();
+    }
+    if !control && !shift && !alt && is_q {
+        return ui_state.toggle_queue_selected_playlist_entries();
+    }
+    if handle_arrow_key_pressed(ui_state, KeyboardFocus::Playlist, key, state) {
+        return true;
+    }
+    match key {
+        gtk::gdk::Key::Page_Up | gtk::gdk::Key::KP_Page_Up => ui_state.move_playlist_page(-1),
+        gtk::gdk::Key::Page_Down | gtk::gdk::Key::KP_Page_Down => ui_state.move_playlist_page(1),
+        gtk::gdk::Key::Home | gtk::gdk::Key::KP_Home => ui_state.move_playlist_to_start(),
+        gtk::gdk::Key::End | gtk::gdk::Key::KP_End => ui_state.move_playlist_to_end(),
+        gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter => {
+            ui_state.activate_selected_or_current_playlist_entry()
+        }
+        _ => false,
+    }
 }
 
 fn handle_playlist_navigation_key_pressed(
@@ -1746,12 +1920,8 @@ fn show_playlist_delete_confirmation(
     playlist_area: gtk::DrawingArea,
     main_area: gtk::DrawingArea,
 ) {
-    let window = gtk::Window::builder()
-        .title("Delete selected files?")
-        .modal(true)
-        .default_width(280)
-        .default_height(100)
-        .build();
+    let window = skinned_window("Delete selected files?", 280, 100, &[]);
+    window.set_modal(true);
     if let Some(root) = parent
         .root()
         .and_then(|root| root.downcast::<gtk::Window>().ok())
@@ -1760,6 +1930,7 @@ fn show_playlist_delete_confirmation(
     }
 
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -2106,13 +2277,17 @@ fn build_preferences_window(
     playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
     let (default_width, default_height) = preferences_window_default_size();
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("Preferences")
-        .default_width(default_width)
-        .default_height(default_height)
-        .build();
+    let window = skinned_application_window(
+        app,
+        "Preferences",
+        default_width,
+        default_height,
+        &["xmms-preferences"],
+    );
+
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    root.add_css_class("xmms-skinned-window");
+    root.add_css_class("xmms-preferences");
     root.set_margin_top(10);
     root.set_margin_bottom(10);
     root.set_margin_start(10);
@@ -2173,7 +2348,12 @@ fn build_preferences_window(
             build_preferences_title_page(main_state, Some(Rc::clone(&preferences_changed))),
         ),
     ] {
-        notebook.append_page(&page_widget, Some(&gtk::Label::new(Some(label))));
+        let scrolled = gtk::ScrolledWindow::new();
+        scrolled.add_css_class("xmms-skinned-window");
+        scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+        scrolled.set_vexpand(true);
+        scrolled.set_child(Some(&page_widget));
+        notebook.append_page(&scrolled, Some(&gtk::Label::new(Some(label))));
         if page == PreferencesPage::Options {
             notebook.set_current_page(Some(2));
         }
@@ -3123,16 +3303,12 @@ fn build_prompt_window(
     main_state: &Rc<RefCell<MainWindowUiState>>,
     kind: PromptKind,
 ) -> gtk::ApplicationWindow {
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title(kind.title())
-        .transient_for(parent)
-        .modal(true)
-        .resizable(false)
-        .default_width(360)
-        .default_height(110)
-        .build();
+    let window = skinned_application_window(app, kind.title(), 360, 110, &[]);
+    window.set_transient_for(Some(parent));
+    window.set_modal(true);
+    window.set_resizable(false);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.add_css_class("xmms-skinned-window");
     content.set_margin_top(12);
     content.set_margin_bottom(12);
     content.set_margin_start(12);
@@ -3187,12 +3363,7 @@ fn build_skin_browser_window(
     equalizer_area: &gtk::DrawingArea,
     playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("Skin selector")
-        .default_width(300)
-        .default_height(280)
-        .build();
+    let window = skinned_application_window(app, "Skin selector", 300, 280, &[]);
     let add = gtk::Button::with_label("Add...");
     add.set_widget_name(SKIN_BROWSER_ADD_WIDGET);
     let close = gtk::Button::with_label("Close");
@@ -3265,14 +3436,10 @@ fn build_skin_editor_window(
     equalizer_area: &gtk::DrawingArea,
     playlist_area: &gtk::DrawingArea,
 ) -> gtk::ApplicationWindow {
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("Skin Editor (alpha)")
-        .default_width(980)
-        .default_height(700)
-        .build();
+    let window = skinned_application_window(app, "Skin Editor (alpha)", 980, 700, &[]);
 
     let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    root.add_css_class("xmms-skinned-window");
     root.set_margin_top(8);
     root.set_margin_bottom(8);
     root.set_margin_start(8);
@@ -3814,6 +3981,7 @@ fn build_skin_editor_tools(
             };
             if let Some(cloned_name) = cloned_name {
                 name.set_text(&cloned_name);
+                refresh_xmms_skin_css(main_state.borrow().active_skin());
                 queue_skin_editor_areas(&canvas, &main_area, &equalizer_area, &playlist_area, true);
             }
         });
@@ -3831,6 +3999,7 @@ fn build_skin_editor_tools(
             if let Err(err) = main_state.borrow_mut().save_editor_skin_to_user_dir() {
                 eprintln!("xmms-rs: failed to save edited skin: {err}");
             }
+            refresh_xmms_skin_css(main_state.borrow().active_skin());
             queue_skin_editor_areas(&canvas, &main_area, &equalizer_area, &playlist_area, true);
         });
     }
@@ -4385,82 +4554,9 @@ fn rgba_to_cairo([r, g, b, a]: [u8; 4]) -> [f64; 4] {
     ]
 }
 
-fn style_color_shelf_button(button: &gtk::Button, color: Option<[u8; 4]>) {
-    let provider = gtk::CssProvider::new();
-    if let Some([r, g, b, a]) = color {
-        button.set_label("");
-        let alpha = f64::from(a) / 255.0;
-        provider.load_from_data(&format!(
-            "button {{
-                background: rgba({r}, {g}, {b}, {alpha:.3});
-                background-image: none;
-                border: 1px solid #222222;
-                border-radius: 3px;
-                padding: 0;
-                min-width: 0;
-                min-height: 0;
-            }}
-            button:hover {{
-                background: rgba({r}, {g}, {b}, {alpha:.3});
-                background-image: none;
-            }}"
-        ));
-    } else {
-        button.set_label("");
-        provider.load_from_data(
-            "button {
-                background: transparent;
-                background-image: none;
-                border: 1px dashed #777777;
-                border-radius: 3px;
-                padding: 0;
-                min-width: 0;
-                min-height: 0;
-            }
-            button:hover {
-                background: rgba(255, 255, 255, 0.08);
-                background-image: none;
-            }",
-        );
-    }
-    button
-        .style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-}
-
 fn set_skin_editor_color_controls(controls: &SkinEditorColorControls, rgba: [u8; 4]) {
     controls.chooser.set_rgba(&rgba_from_u8(rgba));
     style_skin_editor_custom_color_button(&controls.button, rgba);
-}
-
-fn style_skin_editor_custom_color_button(button: &gtk::Button, rgba: [u8; 4]) {
-    let [r, g, b, a] = rgba;
-    let text = if color_luminance([r, g, b]) > 140.0 && a > 127 {
-        "#000000"
-    } else {
-        "#ffffff"
-    };
-    let alpha = f64::from(a) / 255.0;
-    let provider = gtk::CssProvider::new();
-    provider.load_from_data(&format!(
-        "button {{
-            background: rgba({r}, {g}, {b}, {alpha:.3});
-            background-image: none;
-            color: {text};
-            border: 1px solid #222222;
-            border-radius: 3px;
-            padding: 4px;
-            text-shadow: none;
-        }}
-        button:hover {{
-            background: rgba({r}, {g}, {b}, {alpha:.3});
-            background-image: none;
-            color: {text};
-        }}"
-    ));
-    button
-        .style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4472,6 +4568,18 @@ enum SkinColorTarget {
     Visualization(usize),
     TextBackground(usize),
     TextForeground(usize),
+}
+
+impl SkinColorTarget {
+    fn affects_playlist_colors(self) -> bool {
+        matches!(
+            self,
+            Self::PlaylistNormal
+                | Self::PlaylistCurrent
+                | Self::PlaylistNormalBg
+                | Self::PlaylistSelectedBg
+        )
+    }
 }
 
 fn build_skin_color_swatches(
@@ -4610,6 +4718,9 @@ fn skin_color_button(
                 (changed, rgb)
             };
             style_skin_color_button(&swatch_button, rgb);
+            if changed && target.affects_playlist_colors() {
+                refresh_xmms_skin_css(main_state.borrow().active_skin());
+            }
             queue_skin_editor_areas(
                 &canvas,
                 &main_area,
@@ -4644,41 +4755,6 @@ fn skin_color_target_rgb(skin: &DefaultSkin, target: SkinColorTarget) -> [u8; 3]
             .copied()
             .unwrap_or([255, 255, 255]),
     }
-}
-
-fn style_skin_color_button(button: &gtk::Button, rgb: [u8; 3]) {
-    let provider = gtk::CssProvider::new();
-    let text = if color_luminance(rgb) > 140.0 {
-        "#000000"
-    } else {
-        "#ffffff"
-    };
-    provider.load_from_data(&format!(
-        "button {{
-            background: #{:02x}{:02x}{:02x};
-            background-image: none;
-            color: {text};
-            border: 1px solid #222222;
-            border-radius: 3px;
-            padding: 1px;
-            min-width: 0;
-            min-height: 0;
-            text-shadow: none;
-        }}
-        button:hover {{
-            background: #{:02x}{:02x}{:02x};
-            background-image: none;
-            color: {text};
-        }}",
-        rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]
-    ));
-    button
-        .style_context()
-        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
-}
-
-fn color_luminance(rgb: [u8; 3]) -> f64 {
-    0.2126 * f64::from(rgb[0]) + 0.7152 * f64::from(rgb[1]) + 0.0722 * f64::from(rgb[2])
 }
 
 fn apply_skin_color_target(skin: &mut DefaultSkin, target: SkinColorTarget, rgb: [u8; 3]) -> bool {
@@ -4957,6 +5033,7 @@ fn connect_skin_browser_selection(
         };
         let selected = row.index().max(0) as usize;
         if main_state.borrow_mut().select_skin_browser_index(selected) {
+            refresh_xmms_skin_css(main_state.borrow().active_skin());
             main_area.queue_draw();
             equalizer_area.queue_draw();
             playlist_area.queue_draw();
@@ -4995,6 +5072,7 @@ fn show_add_skin_dialog(
                             eprintln!("xmms-rs: failed to load imported skin: {err}");
                             state.app_state.config.skin = None;
                         }
+                        refresh_xmms_skin_css(state.active_skin());
                         populating.set(true);
                         if let Err(err) = refresh_skin_browser_list(&list, &mut state, &dirs) {
                             eprintln!("xmms-rs: failed to refresh skins after import: {err}");
@@ -5012,6 +5090,7 @@ fn show_add_skin_dialog(
 
 fn build_skin_browser_content(add: &gtk::Button, close: &gtk::Button) -> (gtk::Box, gtk::ListBox) {
     let root = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    root.add_css_class("xmms-skinned-window");
     root.set_widget_name(SKIN_BROWSER_ROOT_WIDGET);
     root.set_margin_top(10);
     root.set_margin_bottom(10);
@@ -5221,6 +5300,23 @@ fn append_skin_browser_row(list: &gtk::ListBox, label: &str) {
 pub enum PanelKind {
     Equalizer,
     Playlist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum KeyboardFocus {
+    #[default]
+    Main,
+    Equalizer,
+    Playlist,
+}
+
+impl From<PanelKind> for KeyboardFocus {
+    fn from(kind: PanelKind) -> Self {
+        match kind {
+            PanelKind::Equalizer => Self::Equalizer,
+            PanelKind::Playlist => Self::Playlist,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5471,6 +5567,7 @@ pub(crate) enum PanelAction {
     OpenPlaylistLoadDialog,
     OpenPlaylistSaveDialog,
     ShowPlaylistSortMenu,
+    ShowFileInfo,
     ShowPlaylistMenu(PlaylistMenuKind),
     ShowEqualizerPresets,
 }
@@ -5644,6 +5741,9 @@ fn add_panel_click_controller(
                         .borrow_mut()
                         .set_playlist_save_dialog_visible(true);
                     show_playlist_save_dialog(&window, Rc::clone(&main_state));
+                }
+                PanelAction::ShowFileInfo => {
+                    show_file_info_dialog(&window, Rc::clone(&main_state));
                 }
                 PanelAction::ShowPlaylistSortMenu => {
                     if let Some(popover) = playlist_sort_menu.as_ref() {
@@ -5966,16 +6066,13 @@ fn show_equalizer_save_name_dialog(
     equalizer_area: gtk::DrawingArea,
     main_area: gtk::DrawingArea,
 ) {
-    let window = gtk::Window::builder()
-        .title(title)
-        .modal(true)
-        .default_width(320)
-        .default_height(90)
-        .build();
+    let window = skinned_window(title, 320, 90, &[]);
+    window.set_modal(true);
     if let Some(parent_window) = area_window(parent) {
         window.set_transient_for(Some(&parent_window));
     }
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -6023,16 +6120,13 @@ fn show_equalizer_preset_list_dialog(
     equalizer_area: gtk::DrawingArea,
     main_area: gtk::DrawingArea,
 ) {
-    let window = gtk::Window::builder()
-        .title(title)
-        .modal(true)
-        .default_width(350)
-        .default_height(300)
-        .build();
+    let window = skinned_window(title, 350, 300, &[]);
+    window.set_modal(true);
     if let Some(parent_window) = area_window(parent) {
         window.set_transient_for(Some(&parent_window));
     }
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -6109,16 +6203,13 @@ fn show_equalizer_configure_dialog(
     equalizer_area: gtk::DrawingArea,
     main_area: gtk::DrawingArea,
 ) {
-    let window = gtk::Window::builder()
-        .title("Configure Equalizer")
-        .modal(true)
-        .default_width(360)
-        .default_height(140)
-        .build();
+    let window = skinned_window("Configure Equalizer", 360, 140, &[]);
+    window.set_modal(true);
     if let Some(parent_window) = area_window(parent) {
         window.set_transient_for(Some(&parent_window));
     }
     let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    layout.add_css_class("xmms-skinned-window");
     layout.set_margin_top(8);
     layout.set_margin_bottom(8);
     layout.set_margin_start(8);
@@ -6231,6 +6322,9 @@ fn handle_panel_action_for_main_window(
                 .borrow_mut()
                 .set_playlist_save_dialog_visible(true);
             show_playlist_save_dialog(window, Rc::clone(main_state));
+        }
+        PanelAction::ShowFileInfo => {
+            show_file_info_dialog(window, Rc::clone(main_state));
         }
         PanelAction::ShowPlaylistSortMenu => {
             show_playlist_sort_menu(playlist_sort_menu, area);
@@ -6666,6 +6760,7 @@ struct EqualizerUiState {
     active: bool,
     automatic: bool,
     pointer: EqualizerPointer,
+    keyboard_slider: Option<EqualizerSlider>,
     preamp_position: i32,
     band_positions: [i32; 10],
     preset_dir: PathBuf,
@@ -6684,6 +6779,7 @@ impl EqualizerUiState {
             active: true,
             automatic: false,
             pointer: EqualizerPointer::default(),
+            keyboard_slider: None,
             preamp_position: 50,
             band_positions: [50; 10],
             preset_dir: default_config_dir().join("xmms-renascene"),
@@ -6729,6 +6825,7 @@ impl PlaylistUiState {
 struct DialogVisibility {
     playlist_load: bool,
     playlist_save: bool,
+    file_info: bool,
     preferences: bool,
     open_location: bool,
     jump_time: bool,
@@ -6754,12 +6851,15 @@ pub(crate) struct MainWindowUiState {
     playback_requests: Vec<String>,
     shaded: bool,
     menu_visible: bool,
+    docked_focus: KeyboardFocus,
     equalizer: EqualizerUiState,
     playlist_ui: PlaylistUiState,
     dialogs: DialogVisibility,
     last_playlist_file_info: Option<String>,
     active_skin: DefaultSkin,
     playlist_options_opened: bool,
+    playlist_queue: Vec<usize>,
+    queue_manager_opened: bool,
     preferences_page: PreferencesPage,
     preferences_saved: bool,
     skin_browser: SkinBrowserState,
@@ -6769,6 +6869,7 @@ pub(crate) struct MainWindowUiState {
     mpris_events: Vec<MprisEvent>,
     mpris_quit_requested: bool,
     playback_transition: PlaybackTransitionState,
+    main_keyboard_slider: Option<MainSlider>,
     last_open_location: Option<String>,
     last_jump_time_ms: Option<i64>,
     position_position: i32,
@@ -6815,12 +6916,15 @@ impl MainWindowUiState {
             playback_requests: Vec::new(),
             shaded: main_shaded,
             menu_visible: false,
+            docked_focus: KeyboardFocus::default(),
             equalizer,
             playlist_ui,
             dialogs: DialogVisibility::default(),
             last_playlist_file_info: None,
             active_skin,
             playlist_options_opened: false,
+            playlist_queue: Vec::new(),
+            queue_manager_opened: false,
             preferences_page: PreferencesPage::Options,
             preferences_saved: false,
             skin_browser: SkinBrowserState::default(),
@@ -6830,6 +6934,7 @@ impl MainWindowUiState {
             mpris_events: Vec::new(),
             mpris_quit_requested: false,
             playback_transition: PlaybackTransitionState::Idle,
+            main_keyboard_slider: None,
             last_open_location: None,
             last_jump_time_ms: None,
             position_position: 0,
@@ -7039,6 +7144,7 @@ impl MainWindowUiState {
 
     fn render_state(&self) -> MainWindowRenderState {
         MainWindowRenderState {
+            focused: self.main_focused(),
             title: self
                 .equalizer_drag_info_text()
                 .unwrap_or_else(|| self.formatted_current_title()),
@@ -7067,7 +7173,6 @@ impl MainWindowUiState {
             },
             channels: self.app_state.player.channels(),
             visualization: self.make_visualization_render_state(),
-            ..MainWindowRenderState::default()
         }
     }
 
@@ -7388,9 +7493,182 @@ impl MainWindowUiState {
         }
     }
 
+    fn main_focused(&self) -> bool {
+        self.selected_docked_panel().is_none()
+    }
+
+    fn equalizer_focused(&self) -> bool {
+        if self.equalizer.panel.detached {
+            self.equalizer.panel.focused()
+        } else {
+            self.docked_focus == KeyboardFocus::Equalizer || self.equalizer.panel.dragging_title
+        }
+    }
+
+    fn playlist_focused(&self) -> bool {
+        if self.playlist_ui.panel.detached {
+            self.playlist_ui.panel.focused()
+        } else {
+            self.docked_focus == KeyboardFocus::Playlist || self.playlist_ui.panel.dragging_title
+        }
+    }
+
+    fn select_focus_target(&mut self, target: KeyboardFocus) {
+        self.docked_focus = target;
+        self.equalizer.panel.focused = target == KeyboardFocus::Equalizer;
+        self.playlist_ui.panel.focused = target == KeyboardFocus::Playlist;
+    }
+
+    pub(crate) fn select_docked_main(&mut self) {
+        self.select_focus_target(KeyboardFocus::Main);
+    }
+
+    pub(crate) fn select_docked_panel(&mut self, kind: PanelKind) {
+        if self.panel_state(kind).is_docked_visible() {
+            self.select_focus_target(kind.into());
+        }
+    }
+
+    pub(crate) fn cycle_visible_focus(&mut self) {
+        let mut targets = vec![KeyboardFocus::Main];
+        if self.panel_state(PanelKind::Equalizer) != PanelState::Hidden {
+            targets.push(KeyboardFocus::Equalizer);
+        }
+        if self.panel_state(PanelKind::Playlist) != PanelState::Hidden {
+            targets.push(KeyboardFocus::Playlist);
+        }
+        let current = if self.equalizer_focused() {
+            KeyboardFocus::Equalizer
+        } else if self.playlist_focused() {
+            KeyboardFocus::Playlist
+        } else {
+            KeyboardFocus::Main
+        };
+        let position = targets
+            .iter()
+            .position(|target| *target == current)
+            .unwrap_or(0);
+        let next = targets[(position + 1) % targets.len()];
+        self.select_focus_target(next);
+    }
+
+    fn current_keyboard_focus(&self) -> KeyboardFocus {
+        match self.selected_docked_panel() {
+            Some(PanelKind::Playlist) => KeyboardFocus::Playlist,
+            Some(PanelKind::Equalizer) => KeyboardFocus::Equalizer,
+            None => KeyboardFocus::Main,
+        }
+    }
+
+    fn arrow_key_command(&self, focus: KeyboardFocus, arrow: ArrowKey) -> KeyCommand {
+        match (focus, arrow) {
+            (KeyboardFocus::Main, ArrowKey::Up) if self.shaded => KeyCommand::NextTrack,
+            (KeyboardFocus::Main, ArrowKey::Down) if self.shaded => KeyCommand::PreviousTrack,
+            (KeyboardFocus::Main, ArrowKey::Up) => KeyCommand::Volume(4),
+            (KeyboardFocus::Main, ArrowKey::Down) => KeyCommand::Volume(-4),
+            (KeyboardFocus::Main, ArrowKey::Left)
+                if self.main_keyboard_slider == Some(MainSlider::Balance) =>
+            {
+                KeyCommand::Balance(-4)
+            }
+            (KeyboardFocus::Main, ArrowKey::Right)
+                if self.main_keyboard_slider == Some(MainSlider::Balance) =>
+            {
+                KeyCommand::Balance(4)
+            }
+            (KeyboardFocus::Main, ArrowKey::Left) => KeyCommand::Seek(-4),
+            (KeyboardFocus::Main, ArrowKey::Right) => KeyCommand::Seek(4),
+            (KeyboardFocus::Playlist, ArrowKey::Up) => KeyCommand::PlaylistMove(-1),
+            (KeyboardFocus::Playlist, ArrowKey::Down) => KeyCommand::PlaylistMove(1),
+            (KeyboardFocus::Playlist, ArrowKey::Left) => KeyCommand::Seek(-4),
+            (KeyboardFocus::Playlist, ArrowKey::Right) => KeyCommand::Seek(4),
+            (KeyboardFocus::Equalizer, ArrowKey::Up) => KeyCommand::EqualizerAdjust(-4),
+            (KeyboardFocus::Equalizer, ArrowKey::Down) => KeyCommand::EqualizerAdjust(4),
+            (KeyboardFocus::Equalizer, ArrowKey::Left) if self.equalizer.panel.shaded => {
+                KeyCommand::Volume(-4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Right) if self.equalizer.panel.shaded => {
+                KeyCommand::Volume(4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Left)
+                if self.equalizer.keyboard_slider == Some(EqualizerSlider::ShadedBalance) =>
+            {
+                KeyCommand::Balance(-4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Right)
+                if self.equalizer.keyboard_slider == Some(EqualizerSlider::ShadedBalance) =>
+            {
+                KeyCommand::Balance(4)
+            }
+            (KeyboardFocus::Equalizer, ArrowKey::Left) => KeyCommand::Seek(-4),
+            (KeyboardFocus::Equalizer, ArrowKey::Right) => KeyCommand::Seek(4),
+        }
+    }
+
+    fn apply_key_command(&mut self, command: KeyCommand) -> bool {
+        match command {
+            KeyCommand::Volume(diff) => self.adjust_volume_by(diff),
+            KeyCommand::Balance(diff) => self.adjust_balance_by(diff),
+            KeyCommand::Seek(diff) => self.adjust_main_seek(diff),
+            KeyCommand::PreviousTrack => {
+                self.activate_push(MainPushButton::Previous);
+                true
+            }
+            KeyCommand::NextTrack => {
+                self.activate_push(MainPushButton::Next);
+                true
+            }
+            KeyCommand::PlaylistMove(delta) => self.move_playlist_arrow_selection(delta),
+            KeyCommand::EqualizerAdjust(diff) => self.adjust_selected_equalizer_slider(diff),
+        }
+    }
+
+    pub(crate) fn handle_docked_vertical_arrow(&mut self, delta: isize) -> bool {
+        let arrow = if delta < 0 {
+            ArrowKey::Up
+        } else {
+            ArrowKey::Down
+        };
+        self.apply_key_command(self.arrow_key_command(self.current_keyboard_focus(), arrow))
+    }
+
+    pub(crate) fn handle_docked_horizontal_arrow(&mut self, diff: i32) -> bool {
+        let arrow = if diff < 0 {
+            ArrowKey::Left
+        } else {
+            ArrowKey::Right
+        };
+        self.apply_key_command(self.arrow_key_command(self.current_keyboard_focus(), arrow))
+    }
+
+    pub(crate) fn docked_focus_is_main(&self) -> bool {
+        self.main_focused()
+    }
+
+    pub(crate) fn docked_focus_is_panel(&self, kind: PanelKind) -> bool {
+        match kind {
+            PanelKind::Equalizer => self.equalizer_focused(),
+            PanelKind::Playlist => self.playlist_focused(),
+        }
+    }
+
+    fn selected_docked_panel(&self) -> Option<PanelKind> {
+        match self.docked_focus {
+            KeyboardFocus::Main => None,
+            KeyboardFocus::Equalizer => self
+                .panel_state(PanelKind::Equalizer)
+                .is_docked_visible()
+                .then_some(PanelKind::Equalizer),
+            KeyboardFocus::Playlist => self
+                .panel_state(PanelKind::Playlist)
+                .is_docked_visible()
+                .then_some(PanelKind::Playlist),
+        }
+    }
+
     fn equalizer_render_state(&self) -> EqualizerRenderState {
         EqualizerRenderState {
-            focused: self.equalizer.panel.focused(),
+            focused: self.equalizer_focused(),
             shaded: self.equalizer.panel.shaded,
             active: self.equalizer.active,
             automatic: self.equalizer.automatic,
@@ -7439,15 +7717,15 @@ impl MainWindowUiState {
 
     pub(crate) fn docked_panel_state(&self) -> DockedPanelState {
         DockedPanelState {
-            main_focused: true,
+            main_focused: self.main_focused(),
             main_shaded: self.shaded,
             equalizer_visible: self.equalizer.panel.visible,
             equalizer_detached: self.equalizer.panel.detached,
-            equalizer_focused: self.equalizer.panel.focused(),
+            equalizer_focused: self.equalizer_focused(),
             equalizer_shaded: self.equalizer.panel.shaded,
             playlist_visible: self.playlist_ui.panel.visible,
             playlist_detached: self.playlist_ui.panel.detached,
-            playlist_focused: self.playlist_ui.panel.focused(),
+            playlist_focused: self.playlist_focused(),
             playlist_shaded: self.playlist_ui.panel.shaded,
             playlist_width: self.playlist_ui.width,
             playlist_height: self.playlist_ui.height,
@@ -7914,27 +8192,65 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn toggle_double_size(&mut self) {
-        if self.app_state.config.scale_factor <= 1.0 {
-            self.app_state.config.scale_factor = 2.0;
-            self.app_state.config.doublesize = true;
-        } else {
-            self.app_state.config.scale_factor = 1.0;
-            self.app_state.config.doublesize = false;
-        }
+        self.double_fractional_scale();
+    }
+
+    pub(crate) fn double_fractional_scale(&mut self) {
+        let scale = (self.app_state.config.scale_factor * 2.0).clamp(1.0, 5.0);
+        self.app_state.config.scale_factor = scale;
+        self.app_state.config.doublesize = scale > 1.0;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn halve_fractional_scale(&mut self) {
+        let scale = (self.app_state.config.scale_factor / 2.0).clamp(1.0, 5.0);
+        self.app_state.config.scale_factor = scale;
+        self.app_state.config.doublesize = scale > 1.0;
+        self.mark_preferences_saved();
     }
 
     pub(crate) fn double_size(&self) -> bool {
         self.app_state.config.doublesize
     }
 
-    pub(crate) fn show_current_file_info(&mut self) {
+    pub(crate) fn toggle_easy_move(&mut self) {
+        self.app_state.config.easy_move = !self.app_state.config.easy_move;
+        self.mark_preferences_saved();
+    }
+
+    pub(crate) fn show_selected_or_current_file_info(&mut self) {
         self.last_playlist_file_info = self
-            .app_state
-            .playlist
-            .position()
-            .and_then(|position| self.app_state.playlist.entries().get(position))
+            .selected_or_current_file_info_details()
+            .map(|details| details.title);
+    }
+
+    pub(crate) fn selected_or_current_file_info_details(&mut self) -> Option<FileInfoDetails> {
+        let details = self
+            .selected_playlist_index()
+            .or_else(|| self.app_state.playlist.position())
+            .and_then(|index| self.app_state.playlist.entries().get(index))
             .or_else(|| self.app_state.playlist.entries().first())
-            .map(|entry| entry.title.clone());
+            .map(file_info_details_for_entry);
+        self.last_playlist_file_info = details.as_ref().map(|details| details.title.clone());
+        self.dialogs.file_info = details.is_some();
+        details
+    }
+
+    pub(crate) fn is_file_info_dialog_visible(&self) -> bool {
+        self.dialogs.file_info
+    }
+
+    pub(crate) fn set_file_info_dialog_visible(&mut self, visible: bool) {
+        self.dialogs.file_info = visible;
+    }
+
+    pub(crate) fn select_first_playlist_entry(&mut self) -> bool {
+        if self.app_state.playlist.is_empty() {
+            return false;
+        }
+        self.select_single_playlist_entry(0);
+        self.scroll_playlist_entry_into_view(0);
+        true
     }
 
     pub(crate) fn play_first_playlist_entry(&mut self) {
@@ -7978,6 +8294,19 @@ impl MainWindowUiState {
 
     pub(crate) fn last_playlist_file_info(&self) -> Option<&str> {
         self.last_playlist_file_info.as_deref()
+    }
+
+    pub(crate) fn update_playlist_title_for_uri(&mut self, uri: &str, title: &str) {
+        let title = title.trim();
+        if title.is_empty() {
+            return;
+        }
+        for entry in self.app_state.playlist.entries_mut() {
+            if entry.filename == uri {
+                entry.title = title.to_string();
+            }
+        }
+        self.last_playlist_file_info = Some(title.to_string());
     }
 
     pub(crate) fn playlist_options_opened(&self) -> bool {
@@ -8619,6 +8948,7 @@ impl MainWindowUiState {
     pub(crate) fn equalizer_press(&mut self, x: i32, y: i32) -> bool {
         if self.equalizer.panel.shaded {
             if let Some(slider) = equalizer_shaded_slider_at(x, y) {
+                self.equalizer.keyboard_slider = Some(slider);
                 self.equalizer.pointer = EqualizerPointer::DraggingSlider {
                     slider,
                     offset: self.begin_equalizer_slider_drag(slider, x, y),
@@ -8629,6 +8959,7 @@ impl MainWindowUiState {
         }
 
         if let Some(control) = equalizer_control_at(x, y) {
+            self.equalizer.keyboard_slider = None;
             self.equalizer.pointer = EqualizerPointer::PressedControl {
                 control,
                 inside: true,
@@ -8637,6 +8968,7 @@ impl MainWindowUiState {
         }
 
         if let Some(slider) = equalizer_slider_at(x, y) {
+            self.equalizer.keyboard_slider = Some(slider);
             self.equalizer.pointer = EqualizerPointer::DraggingSlider {
                 slider,
                 offset: self.begin_equalizer_slider_drag(slider, x, y),
@@ -8678,13 +9010,31 @@ impl MainWindowUiState {
         let Some(slider) = slider else {
             return false;
         };
-        let diff = if dy < 0.0 {
-            -4
-        } else if dy > 0.0 {
-            4
-        } else {
-            return false;
-        };
+        match slider {
+            EqualizerSlider::ShadedVolume => self.scroll_volume(dy),
+            EqualizerSlider::ShadedBalance => self.scroll_balance(dy),
+            EqualizerSlider::Preamp | EqualizerSlider::Band(_) => {
+                let diff = if dy < 0.0 {
+                    -4
+                } else if dy > 0.0 {
+                    4
+                } else {
+                    return false;
+                };
+                self.adjust_equalizer_slider(slider, diff)
+            }
+        }
+    }
+
+    pub(crate) fn adjust_selected_equalizer_slider(&mut self, diff: i32) -> bool {
+        let slider = self
+            .equalizer
+            .keyboard_slider
+            .unwrap_or(EqualizerSlider::Preamp);
+        self.adjust_equalizer_slider(slider, diff)
+    }
+
+    fn adjust_equalizer_slider(&mut self, slider: EqualizerSlider, diff: i32) -> bool {
         match slider {
             EqualizerSlider::Preamp => {
                 let next = (self.equalizer.preamp_position + diff).clamp(0, 100);
@@ -8707,24 +9057,9 @@ impl MainWindowUiState {
                 }
                 changed
             }
-            EqualizerSlider::ShadedVolume => self.scroll_volume(dy),
-            EqualizerSlider::ShadedBalance => self.scroll_balance(dy),
+            EqualizerSlider::ShadedVolume => self.adjust_volume_by(-diff),
+            EqualizerSlider::ShadedBalance => self.adjust_balance_by(-diff),
         }
-    }
-
-    pub(crate) fn adjust_shaded_equalizer_balance(&mut self, diff: i32) -> bool {
-        if !self.equalizer.panel.shaded {
-            return false;
-        }
-        let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
-        let changed = self.app_state.player.balance() != balance;
-        self.app_state.player.set_balance(balance);
-        if changed {
-            if let Some(backend) = &self.playback_backend {
-                backend.borrow().set_balance_percent(balance);
-            }
-        }
-        changed
     }
 
     pub(crate) fn equalizer_release(&mut self, x: i32, y: i32) -> PanelAction {
@@ -9148,14 +9483,7 @@ impl MainWindowUiState {
             PlaylistMenuCommand::OpenDirectoryDialog => return PanelAction::OpenDirectoryDialog,
             PlaylistMenuCommand::OpenFileDialog => return PanelAction::OpenFileDialog,
             PlaylistMenuCommand::ShowSortMenu => return PanelAction::ShowPlaylistSortMenu,
-            PlaylistMenuCommand::ShowFileInfo => {
-                self.last_playlist_file_info = self
-                    .selected_playlist_index()
-                    .or_else(|| self.app_state.playlist.position())
-                    .and_then(|index| self.app_state.playlist.entries().get(index))
-                    .map(|entry| entry.title.clone());
-                true
-            }
+            PlaylistMenuCommand::ShowFileInfo => return PanelAction::ShowFileInfo,
             PlaylistMenuCommand::OpenOptions => {
                 self.playlist_options_opened = true;
                 true
@@ -9312,6 +9640,14 @@ impl MainWindowUiState {
         if !self.app_state.config.vim_playlist_navigation {
             return false;
         }
+        self.move_playlist_selection_by(delta)
+    }
+
+    pub(crate) fn move_playlist_arrow_selection(&mut self, delta: isize) -> bool {
+        self.move_playlist_selection_by(delta)
+    }
+
+    fn move_playlist_selection_by(&mut self, delta: isize) -> bool {
         let len = self.app_state.playlist.len();
         if len == 0 {
             return false;
@@ -9326,10 +9662,81 @@ impl MainWindowUiState {
         true
     }
 
+    pub(crate) fn move_playlist_page(&mut self, direction: isize) -> bool {
+        let visible = self.playlist_visible_entries().max(1) as isize;
+        self.move_playlist_selection_by(direction.signum() * visible)
+    }
+
+    pub(crate) fn move_playlist_to_start(&mut self) -> bool {
+        self.select_first_playlist_entry()
+    }
+
+    pub(crate) fn move_playlist_to_end(&mut self) -> bool {
+        let Some(last) = self.app_state.playlist.len().checked_sub(1) else {
+            return false;
+        };
+        self.select_single_playlist_entry(last);
+        self.scroll_playlist_entry_into_view(last);
+        true
+    }
+
+    pub(crate) fn crop_playlist_to_selected_or_current(&mut self) -> bool {
+        self.app_state.playlist.crop_to_selected_or_current()
+    }
+
+    pub(crate) fn toggle_queue_selected_playlist_entries(&mut self) -> bool {
+        let selected = self
+            .app_state
+            .playlist
+            .entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| entry.selected.then_some(index))
+            .collect::<Vec<_>>();
+        let targets = if selected.is_empty() {
+            self.selected_playlist_index()
+                .or_else(|| self.app_state.playlist.position())
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            selected
+        };
+        if targets.is_empty() {
+            return false;
+        }
+        for index in targets {
+            if let Some(position) = self
+                .playlist_queue
+                .iter()
+                .position(|queued| *queued == index)
+            {
+                self.playlist_queue.remove(position);
+            } else {
+                self.playlist_queue.push(index);
+            }
+        }
+        true
+    }
+
+    pub(crate) fn clear_playlist_queue(&mut self) -> bool {
+        let changed = !self.playlist_queue.is_empty();
+        self.playlist_queue.clear();
+        changed
+    }
+
+    pub(crate) fn open_queue_manager(&mut self) -> bool {
+        self.queue_manager_opened = true;
+        true
+    }
+
     pub(crate) fn play_selected_playlist_entry(&mut self) -> bool {
         if !self.app_state.config.vim_playlist_navigation {
             return false;
         }
+        self.activate_selected_or_current_playlist_entry()
+    }
+
+    pub(crate) fn activate_selected_or_current_playlist_entry(&mut self) -> bool {
         let Some(index) = self
             .selected_playlist_index()
             .or_else(|| self.app_state.playlist.position())
@@ -9559,6 +9966,19 @@ impl MainWindowUiState {
 
     pub(crate) fn toggle_shaded(&mut self) {
         self.shaded = !self.shaded;
+    }
+
+    pub(crate) fn toggle_selected_window_shade(&mut self) -> Option<PanelKind> {
+        match self.selected_docked_panel() {
+            Some(kind) => {
+                self.toggle_panel_shaded(kind);
+                Some(kind)
+            }
+            None => {
+                self.toggle_shaded();
+                None
+            }
+        }
     }
 
     pub(crate) fn toggle_playlist_shaded(&mut self) {
@@ -10146,6 +10566,7 @@ impl MainWindowUiState {
         };
 
         self.main_pointer = if let MainControl::Slider(slider) = control {
+            self.main_keyboard_slider = Some(slider);
             MainPointer::DraggingSlider {
                 slider,
                 offset: self.begin_slider_drag(slider, x),
@@ -10218,6 +10639,10 @@ impl MainWindowUiState {
         }
     }
 
+    pub(crate) fn adjust_main_seek(&mut self, diff: i32) -> bool {
+        self.scroll_position_slider(f64::from(diff))
+    }
+
     fn scroll_volume(&mut self, dy: f64) -> bool {
         let step = self.app_state.config.mouse_wheel_change.clamp(1, 100);
         let diff = if dy < 0.0 {
@@ -10227,6 +10652,10 @@ impl MainWindowUiState {
         } else {
             return false;
         };
+        self.adjust_volume_by(diff)
+    }
+
+    fn adjust_volume_by(&mut self, diff: i32) -> bool {
         let volume = (self.app_state.player.volume() + diff).clamp(0, 100);
         if volume == self.app_state.player.volume() {
             return false;
@@ -10248,6 +10677,10 @@ impl MainWindowUiState {
         } else {
             return false;
         };
+        self.adjust_balance_by(diff)
+    }
+
+    fn adjust_balance_by(&mut self, diff: i32) -> bool {
         let balance = (self.app_state.player.balance() + diff).clamp(-100, 100);
         if balance == self.app_state.player.balance() {
             return false;
@@ -11630,30 +12063,6 @@ static char * main_xpm[] = {
         assert_eq!(rect.y(), 6);
         assert_eq!(rect.width(), 18);
         assert_eq!(rect.height(), 18);
-    }
-
-    #[test]
-    fn xmms_menu_css_uses_playlist_skin_colors() {
-        let skin = DefaultSkin::load_bundled().unwrap();
-        let colors = skin.playlist_colors();
-        let css = xmms_menu_css(&skin);
-
-        assert!(css.contains(&format!(
-            "background: #{:02x}{:02x}{:02x}",
-            colors.normal_bg[0], colors.normal_bg[1], colors.normal_bg[2]
-        )));
-        assert!(css.contains(&format!(
-            "color: #{:02x}{:02x}{:02x}",
-            colors.normal[0], colors.normal[1], colors.normal[2]
-        )));
-        assert!(css.contains(&format!(
-            "background: #{:02x}{:02x}{:02x}",
-            colors.selected_bg[0], colors.selected_bg[1], colors.selected_bg[2]
-        )));
-        assert!(css.contains(&format!(
-            "color: #{:02x}{:02x}{:02x}",
-            colors.current[0], colors.current[1], colors.current[2]
-        )));
     }
 
     #[test]

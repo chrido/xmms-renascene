@@ -22,15 +22,8 @@ def _configure_gtk_environment() -> None:
     os.environ["GSK_RENDERER"] = os.environ.get("XMMS_GSK_RENDERER", "cairo")
 
 
-def _args_include_gtk_mode(args: tuple[str, ...] | list[str]) -> bool:
-    return any(arg in {"--gtk", "--gtk-smoke"} for arg in args)
-
-
 def _app_args(args: tuple[str, ...] | list[str]) -> list[str]:
-    app_args = list(args)
-    if not _args_include_gtk_mode(app_args):
-        app_args.insert(0, "--gtk")
-    return app_args
+    return list(args)
 
 
 def _split_screenshot_args(args: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
