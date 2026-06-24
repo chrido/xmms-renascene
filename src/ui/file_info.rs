@@ -404,7 +404,7 @@ fn file_info_css(colors: PlaylistColors) -> String {
         &[
             ("background", style.window_bg.as_str()),
             ("border", style.window_border_line.as_str()),
-            ("border-radius", "0"),
+            ("border-radius", style.window_border_radius),
             ("box-shadow", "none"),
             ("outline", "0"),
         ],
@@ -415,6 +415,10 @@ fn file_info_css(colors: PlaylistColors) -> String {
         &[
             ("background", style.window_bg.as_str()),
             ("border", "0"),
+            ("border-top-left-radius", "0"),
+            ("border-top-right-radius", "0"),
+            ("border-bottom-left-radius", style.window_border_radius),
+            ("border-bottom-right-radius", style.window_border_radius),
             ("box-shadow", "none"),
         ],
     );
@@ -425,7 +429,10 @@ fn file_info_css(colors: PlaylistColors) -> String {
             ("background", style.window_bg.as_str()),
             ("border", "0"),
             ("border-bottom", style.window_border_line.as_str()),
-            ("border-radius", "0"),
+            ("border-top-left-radius", style.window_border_radius),
+            ("border-top-right-radius", style.window_border_radius),
+            ("border-bottom-left-radius", "0"),
+            ("border-bottom-right-radius", "0"),
             ("box-shadow", "none"),
         ],
     );
@@ -752,6 +759,9 @@ mod tests {
         assert!(css.contains("#070809"));
         assert!(css.contains("#0a0b0c"));
         assert!(css.contains("window.xmms-file-info.csd"));
+        assert!(css.contains("border-radius: 4px"));
+        assert!(css.contains("border-top-left-radius: 4px"));
+        assert!(css.contains("border-bottom-left-radius: 4px"));
         assert!(css.contains("window.xmms-file-info headerbar.xmms-skinned-window-titlebar"));
         assert!(css.contains("border-bottom: 1px solid #f8f7f6"));
         assert!(css.contains(".xmms-skinned-window-title"));

@@ -117,6 +117,7 @@ pub(super) struct SkinStyle {
     pub(super) selection_bg: String,
     pub(super) control_border: String,
     pub(super) window_border_line: String,
+    pub(super) window_border_radius: &'static str,
     pub(super) disabled_opacity: &'static str,
     pub(super) titlebar_font_weight: &'static str,
 }
@@ -134,6 +135,7 @@ impl SkinStyle {
             selection_bg,
             control_border,
             window_border_line,
+            window_border_radius: "4px",
             disabled_opacity: "0.45",
             titlebar_font_weight: "bold",
         }
@@ -211,7 +213,7 @@ pub(super) fn xmms_window_css(skin: &DefaultSkin) -> String {
         &[
             ("background", style.window_bg.as_str()),
             ("border", style.window_border_line.as_str()),
-            ("border-radius", "0"),
+            ("border-radius", style.window_border_radius),
             ("box-shadow", "none"),
             ("outline", "0"),
         ],
@@ -222,6 +224,10 @@ pub(super) fn xmms_window_css(skin: &DefaultSkin) -> String {
         &[
             ("background", style.window_bg.as_str()),
             ("border", "0"),
+            ("border-top-left-radius", "0"),
+            ("border-top-right-radius", "0"),
+            ("border-bottom-left-radius", style.window_border_radius),
+            ("border-bottom-right-radius", style.window_border_radius),
             ("box-shadow", "none"),
         ],
     );
@@ -232,7 +238,10 @@ pub(super) fn xmms_window_css(skin: &DefaultSkin) -> String {
             ("background", style.window_bg.as_str()),
             ("border", "0"),
             ("border-bottom", style.window_border_line.as_str()),
-            ("border-radius", "0"),
+            ("border-top-left-radius", style.window_border_radius),
+            ("border-top-right-radius", style.window_border_radius),
+            ("border-bottom-left-radius", "0"),
+            ("border-bottom-right-radius", "0"),
             ("box-shadow", "none"),
         ],
     );
@@ -429,6 +438,9 @@ mod tests {
         )));
         assert!(css.contains("window.xmms-skinned-window contents"));
         assert!(css.contains("window.xmms-skinned-window.csd"));
+        assert!(css.contains("border-radius: 4px"));
+        assert!(css.contains("border-top-left-radius: 4px"));
+        assert!(css.contains("border-bottom-left-radius: 4px"));
         assert!(css.contains("window.xmms-skinned-window headerbar.xmms-skinned-window-titlebar"));
         assert!(css.contains(&format!(
             "border-bottom: 1px solid #{:02x}{:02x}{:02x}",
