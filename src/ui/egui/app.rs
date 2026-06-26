@@ -17,8 +17,8 @@ use crate::equalizer::{
 use crate::player::{GStreamerBackend, PlayerState};
 use crate::render::{
     docked_panel_size, DockedPanelState, EqualizerControl, EqualizerSlider, MainPushButton,
-    MainSlider, MainToggleButton, PlaylistMenuRenderKind, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH,
+    MainSlider, MainToggleButton, PlaylistMenuRenderKind, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::playlist::Playlist;
 #[cfg(not(feature = "gstreamer-backend"))]
@@ -438,23 +438,108 @@ fn handle_dropped_files(ctx: &egui::Context, app: &mut EguiFrontendState) {
 fn show_detached_panels(ctx: &egui::Context, app: &mut EguiFrontendState) {
     let config = app.controller().state().config.clone();
     if config.equalizer_visible && config.equalizer_detached {
-        let mut open = true;
-        egui::Window::new("Equalizer")
-            .open(&mut open)
-            .resizable(false)
-            .show(ctx, |ui| equalizer::show_equalizer(ui, app));
-        if !open {
-            app.dispatch(PanelCommand::SetEqualizerVisibility(false));
-        }
+        show_detached_equalizer(ctx, app);
     }
     if config.playlist_visible && config.playlist_detached {
-        let mut open = true;
-        egui::Window::new("Playlist")
-            .open(&mut open)
-            .resizable(true)
-            .show(ctx, |ui| playlist::show_playlist(ui, app));
-        if !open {
-            app.dispatch(PanelCommand::SetPlaylistVisibility(false));
+        show_detached_playlist(ctx, app);
+    }
+}
+
+fn show_detached_equalizer(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let size = egui::vec2(
+        EQUALIZER_WINDOW_WIDTH as f32 * app.scale_factor,
+        if app.controller().state().config.equalizer_shaded {
+            crate::render::MAIN_TITLEBAR_HEIGHT as f32 * app.scale_factor
+        } else {
+            EQUALIZER_WINDOW_HEIGHT as f32 * app.scale_factor
+        },
+    );
+    let builder = egui::ViewportBuilder::default()
+        .with_title("Equalizer")
+        .with_inner_size(size)
+        .with_resizable(false)
+        .with_decorations(true);
+    ctx.show_viewport_immediate(
+        egui::ViewportId::from_hash_of("xmms-egui-detached-equalizer"),
+        builder,
+        |ctx, class| {
+            if ctx.input(|input| input.viewport().close_requested()) {
+                app.dispatch(PanelCommand::SetEqualizerVisibility(false));
+                return;
+            }
+            match class {
+                egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
+                    show_embedded_detached_panel(ctx, "Equalizer", false, |ui, app| {
+                        equalizer::show_equalizer(ui, app)
+                    }, app);
+                }
+                egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| equalizer::show_equalizer(ui, app));
+                }
+            }
+        },
+    );
+}
+
+fn show_detached_playlist(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let size = egui::vec2(
+        PLAYLIST_DEFAULT_WIDTH as f32 * app.scale_factor,
+        if app.controller().state().config.playlist_shaded {
+            crate::render::MAIN_TITLEBAR_HEIGHT as f32 * app.scale_factor
+        } else {
+            PLAYLIST_DEFAULT_HEIGHT as f32 * app.scale_factor
+        },
+    );
+    let builder = egui::ViewportBuilder::default()
+        .with_title("Playlist")
+        .with_inner_size(size)
+        .with_min_inner_size(size)
+        .with_resizable(true)
+        .with_decorations(true);
+    ctx.show_viewport_immediate(
+        egui::ViewportId::from_hash_of("xmms-egui-detached-playlist"),
+        builder,
+        |ctx, class| {
+            if ctx.input(|input| input.viewport().close_requested()) {
+                app.dispatch(PanelCommand::SetPlaylistVisibility(false));
+                return;
+            }
+            match class {
+                egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
+                    show_embedded_detached_panel(ctx, "Playlist", true, |ui, app| {
+                        playlist::show_playlist(ui, app)
+                    }, app);
+                }
+                egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ctx, |ui| playlist::show_playlist(ui, app));
+                }
+            }
+        },
+    );
+}
+
+fn show_embedded_detached_panel(
+    ctx: &egui::Context,
+    title: &str,
+    resizable: bool,
+    add_contents: impl FnOnce(&mut egui::Ui, &mut EguiFrontendState),
+    app: &mut EguiFrontendState,
+) {
+    let mut open = true;
+    egui::Window::new(title)
+        .open(&mut open)
+        .resizable(resizable)
+        .constrain(false)
+        .show(ctx, |ui| add_contents(ui, app));
+    if !open {
+        match title {
+            "Equalizer" => app.dispatch(PanelCommand::SetEqualizerVisibility(false)),
+            "Playlist" => app.dispatch(PanelCommand::SetPlaylistVisibility(false)),
+            _ => {}
         }
     }
 }
