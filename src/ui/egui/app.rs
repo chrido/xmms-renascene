@@ -5,7 +5,7 @@ use crate::app::controller::AppController;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
 
-use super::preferences::PreferencesPage;
+use super::preferences::{self, PreferencesPage};
 use super::runtime::EguiRuntime;
 use super::{equalizer, main_player, playlist};
 
@@ -66,12 +66,10 @@ impl eframe::App for EguiFrontendState {
             playlist::show_playlist(ui, self);
             ui.separator();
             equalizer::show_equalizer(ui, self);
-            if self.preferences_open {
-                ui.separator();
-                ui.heading("Preferences");
-                ui.label("egui preferences are being implemented incrementally");
-            }
         });
+        if self.preferences_open {
+            preferences::show_preferences(ctx, self);
+        }
     }
 }
 

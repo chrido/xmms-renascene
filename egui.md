@@ -550,23 +550,23 @@ Exclude:
 
 ### Tasks
 
-- [ ] Add `preferences.rs` dialog/window function.
-- [ ] Define egui-only `PreferencesUiState` if needed.
-- [ ] Use `AppState.config` as source of truth.
-- [ ] Update config through `AppController` commands where commands exist.
-- [ ] Add missing app commands for preferences that are not yet covered.
-- [ ] Support reset/apply/save behavior consistently with GTK.
-- [ ] Reuse pure helpers from `app::view_model` for title formatting preview.
-- [ ] Keep GTK-specific controls out.
-- [ ] Add tests for any newly extracted preference mapping logic.
-- [ ] Validation:
+- [x] Add `preferences.rs` dialog/window function.
+- [x] Define egui-only `PreferencesUiState` if needed.
+- [x] Use `AppState.config` as source of truth.
+- [x] Update config through `AppController` commands where commands exist.
+- [x] Add missing app commands for preferences that are not yet covered.
+- [x] Support reset/apply/save behavior consistently with GTK.
+- [x] Reuse pure helpers from `app::view_model` for title formatting preview.
+- [x] Keep GTK-specific controls out.
+- [x] Add tests for any newly extracted preference mapping logic.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 cargo test --lib --bins
 ```
 
-- [ ] Commit: `Implement egui preferences dialog`
+- [x] Commit: `Implement egui preferences dialog`
 
 ## Phase 11: Backend and effects integration for egui
 
