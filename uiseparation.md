@@ -208,17 +208,17 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the module skeleton.
 
-- [ ] **Step 2: Move preview/startup option logic out of `ui.rs`**
-  - [ ] Move `PreviewOptions` to `src/app/preview.rs`.
-  - [ ] Move `apply_preview_options_to_config` to `src/app/preview.rs`.
-  - [ ] Update `src/main.rs` imports.
-  - [ ] Update `src/session.rs` imports.
-  - [ ] Update `src/ui.rs` imports/usages.
-  - [ ] Update tests using `PreviewOptions`.
-  - [ ] Keep GTK-specific preview state construction in GTK/UI code for now if needed.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the preview extraction.
+- [x] **Step 2: Move preview/startup option logic out of `ui.rs`**
+  - [x] Move `PreviewOptions` to `src/app/preview.rs`.
+  - [x] Move `apply_preview_options_to_config` to `src/app/preview.rs`.
+  - [x] Update `src/main.rs` imports.
+  - [x] Update `src/session.rs` imports.
+  - [x] Update `src/ui.rs` imports/usages.
+  - [x] Update tests using `PreviewOptions`.
+  - [x] Keep GTK-specific preview state construction in GTK/UI code for now if needed.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the preview extraction.
 
 - [ ] **Step 3: Define frontend-neutral commands and effects**
   - [ ] Add initial `AppCommand` enum in `src/app/command.rs`.
@@ -416,11 +416,11 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
 
 ## Milestone Checklist
 
-- [ ] **Milestone 1: Create app boundary**
-  - [ ] Complete Step 1.
-  - [ ] Complete Step 2.
-  - [ ] Validate with `cargo test --lib --bins`.
-  - [ ] Validate with `cargo clippy --all-targets`.
+- [x] **Milestone 1: Create app boundary**
+  - [x] Complete Step 1.
+  - [x] Complete Step 2.
+  - [x] Validate with `cargo test --lib --bins`.
+  - [x] Validate with `cargo clippy --all-targets`.
 
 - [ ] **Milestone 2: Extract pure helpers and tests**
   - [ ] Complete Step 4.

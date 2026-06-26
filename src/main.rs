@@ -1,4 +1,5 @@
-use xmms_renascene::ui::{self, PreviewOptions};
+use xmms_renascene::app::preview::PreviewOptions;
+use xmms_renascene::ui;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

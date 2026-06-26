@@ -3,10 +3,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::playlist::{Playlist, PlaylistMenuKind};
-use crate::ui::{apply_preview_options_to_config, PreviewOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplicationLaunchFlags {
