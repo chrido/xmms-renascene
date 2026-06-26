@@ -204,6 +204,33 @@ fn add_playlist_rows_hit_region(
         ui.id().with("playlist-rows"),
         egui::Sense::click(),
     );
+    response.context_menu(|ui| {
+        if ui.button("Remove Selected").clicked() {
+            app.dispatch(PlaylistCommand::RemoveSelectedOrCurrent);
+            ui.close();
+        }
+        if ui.button("Remove Dead Files").clicked() {
+            app.dispatch(PlaylistCommand::RemoveDead);
+            ui.close();
+        }
+        if ui.button("Physically Delete").clicked() {
+            app.dispatch(PlaylistCommand::PhysicallyDeleteSelected);
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Select All").clicked() {
+            app.dispatch(PlaylistCommand::SelectAll);
+            ui.close();
+        }
+        if ui.button("Select None").clicked() {
+            app.dispatch(PlaylistCommand::SelectNone);
+            ui.close();
+        }
+        if ui.button("Invert Selection").clicked() {
+            app.dispatch(PlaylistCommand::InvertSelection);
+            ui.close();
+        }
+    });
     if (response.clicked() || response.double_clicked())
         && response.interact_pointer_pos().is_some()
     {

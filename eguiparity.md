@@ -194,7 +194,7 @@ Legend:
   - Sort Selection by Date;
   - Randomize List;
   - Reverse List.
-- [ ] Playlist context menu missing. GTK right-click context offers:
+- [x] Playlist context menu missing. GTK right-click context offers:
   - Remove Selected;
   - Remove Dead Files;
   - Physically Delete;
@@ -587,7 +587,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Jump to Time prompt.
 - [x] Playlist bottom menu popovers.
 - [x] Playlist sort popover.
-- [ ] Playlist context menu.
+- [x] Playlist context menu.
 - [ ] File Info dialog.
 - [ ] Equalizer presets popover.
 - [ ] Equalizer preset load/save/delete/configure dialogs.

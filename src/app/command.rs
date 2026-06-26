@@ -55,7 +55,10 @@ pub enum PlaylistCommand {
     AddFiles(Vec<PathBuf>),
     Clear,
     RemoveSelectedOrCurrent,
+    RemoveDead,
+    PhysicallyDeleteSelected,
     SelectAll,
+    SelectNone,
     InvertSelection,
 }
 

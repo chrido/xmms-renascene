@@ -160,8 +160,24 @@ impl AppController {
                 self.state.playlist.remove_selected_or_current();
                 self.playlist_changed_effects()
             }
+            PlaylistCommand::RemoveDead => {
+                self.state.playlist.remove_dead_files();
+                self.playlist_changed_effects()
+            }
+            PlaylistCommand::PhysicallyDeleteSelected => {
+                match self.state.playlist.physically_delete_selected() {
+                    Ok(_) => self.playlist_changed_effects(),
+                    Err(err) => vec![AppEffect::ShowError(format!(
+                        "failed to delete selected playlist files: {err}"
+                    ))],
+                }
+            }
             PlaylistCommand::SelectAll => {
                 self.state.playlist.select_all(true);
+                self.playlist_changed_effects()
+            }
+            PlaylistCommand::SelectNone => {
+                self.state.playlist.select_all(false);
                 self.playlist_changed_effects()
             }
             PlaylistCommand::InvertSelection => {
