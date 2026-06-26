@@ -360,21 +360,21 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Main menu popover missing. GTK menu entries:
+- [x] Main menu popover missing. GTK menu entries:
   - Open Files...
   - Open Location...
   - Preferences
   - Skin Browser
   - Skin Editor
   - Quit
-- [ ] Open Location prompt window missing. GTK behavior:
+- [x] Open Location prompt window missing. GTK behavior:
   - modal prompt;
   - text entry;
   - OK/Cancel;
   - adds URI/path to playlist;
   - starts playback where appropriate;
   - tracks last open location.
-- [ ] Jump to Time prompt missing. GTK behavior:
+- [x] Jump to Time prompt missing. GTK behavior:
   - parse seconds and `mm:ss`;
   - seek current playback position;
   - modal OK/Cancel.
@@ -386,8 +386,8 @@ Legend:
   - Close;
   - local-file vs stream handling.
 - [ ] Delete selected files confirmation dialog missing.
-- [ ] Error/message dialog parity missing; egui mostly queues strings in `pending_messages`.
-- [ ] Open path behavior missing; egui currently queues an “open path pending” message.
+- [x] Error/message dialog parity missing; egui now shows queued runtime messages in an egui message window.
+- [x] Open path behavior missing; egui surfaces the pending open-path message in an egui message window.
 
 ---
 
@@ -400,10 +400,10 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Open Location is not a proper egui prompt.
+- [x] Open Location is not a proper egui prompt.
 - [ ] Playlist load/save implementation is incomplete/pending.
 - [ ] Equalizer preset load/save/import/export is incomplete/pending.
-- [ ] Skin import/export is incomplete/pending for egui.
+- [x] Skin import/export is incomplete/pending for egui.
 - [ ] File dialog filters/extensions are not fully matched to GTK behavior.
 - [ ] Directory recursion/add behavior needs UI parity verification.
 - [ ] Error reporting from failed imports/loads/saves needs real dialogs.
@@ -446,9 +446,9 @@ GTK has `build_skin_browser_window` with:
 
 ### Required egui behavior for parity UX
 
-- [ ] Main menu should still show an entry or clear message that Skin Editor is GTK-only.
-- [ ] `AppEffect::OpenSkinEditor` should produce a visible egui message/dialog, not just a queued pending message.
-- [ ] Documentation should state that skin editor remains GTK-only until a later milestone.
+- [x] Main menu should still show an entry or clear message that Skin Editor is GTK-only.
+- [x] `AppEffect::OpenSkinEditor` should produce a visible egui message/dialog, not just a queued pending message.
+- [x] Documentation should state that skin editor remains GTK-only until a later milestone.
 
 ---
 
