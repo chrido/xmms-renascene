@@ -2,6 +2,7 @@
 //!
 //! Preview options are shared by the CLI/session layer and concrete frontends.
 
+use crate::app::screenshot_scenarios::ScreenshotScenario;
 use crate::config::Config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -16,7 +17,9 @@ impl FrontendKind {
         match value {
             "gtk" => Ok(Self::Gtk),
             "egui" => Ok(Self::Egui),
-            other => Err(format!("unknown frontend '{other}', expected 'gtk' or 'egui'")),
+            other => Err(format!(
+                "unknown frontend '{other}', expected 'gtk' or 'egui'"
+            )),
         }
     }
 }
@@ -36,6 +39,7 @@ pub struct PreviewOptions {
     pub open_skin_editor: bool,
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
+    pub screenshot_scenario: Option<ScreenshotScenario>,
     pub scale_factor: Option<String>,
     pub frontend: FrontendKind,
 }

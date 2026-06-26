@@ -1,4 +1,5 @@
 use xmms_renascene::app::preview::{FrontendKind, PreviewOptions};
+use xmms_renascene::app::screenshot_scenarios::ScreenshotScenario;
 #[cfg(feature = "egui-ui")]
 use xmms_renascene::egui_frontend;
 #[cfg(feature = "gtk-ui")]
@@ -154,6 +155,13 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
                 return Err("--screenshot requires PATH".to_string());
             };
             options.screenshot_path = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--screenshot-scenario=") {
+            options.screenshot_scenario = Some(ScreenshotScenario::parse(value)?);
+        } else if arg == "--screenshot-scenario" {
+            let Some(value) = iter.next() else {
+                return Err("--screenshot-scenario requires NAME".to_string());
+            };
+            options.screenshot_scenario = Some(ScreenshotScenario::parse(value)?);
         } else if arg == "--scale" || arg == "--scale-factor" {
             let Some(value) = iter.next() else {
                 return Err(format!("{arg} requires SCALE"));

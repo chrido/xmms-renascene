@@ -18,13 +18,13 @@ from .flatpak import FlatpakInstaller
 REPO_DIR = Path(__file__).resolve().parent.parent
 RUST_BIN = REPO_DIR / "target" / "debug" / "xmms-rs"
 SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
-    "main-player-default": ("--reset",),
-    "main-player-shaded": ("--reset", "--shade-main"),
-    "playlist-default": ("--reset", "--playlist"),
-    "playlist-with-selection": ("--reset", "--playlist"),
-    "equalizer-default": ("--reset", "--equalizer"),
-    "equalizer-non-default": ("--reset", "--equalizer"),
-    "preferences-default": ("--reset", "--preferences"),
+    "main-player-default": ("--reset", "--screenshot-scenario", "main-player-default"),
+    "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
+    "playlist-default": ("--reset", "--playlist", "--screenshot-scenario", "playlist-default"),
+    "playlist-with-selection": ("--reset", "--playlist", "--screenshot-scenario", "playlist-with-selection"),
+    "equalizer-default": ("--reset", "--equalizer", "--screenshot-scenario", "equalizer-default"),
+    "equalizer-non-default": ("--reset", "--equalizer", "--screenshot-scenario", "equalizer-non-default"),
+    "preferences-default": ("--reset", "--preferences", "--screenshot-scenario", "preferences-default"),
 }
 
 
@@ -110,9 +110,9 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
         return _diff_plain_ppm(left, right, diff, tolerance)
     try:
         from PIL import Image, ImageChops
-    except ImportError:
+    except ImportError as err:
         if not command_exists("compare"):
-            raise RuntimeError("Install Pillow or ImageMagick 'compare' to diff non-PPM screenshots")
+            raise RuntimeError("Install Pillow or ImageMagick 'compare' to diff non-PPM screenshots") from err
         diff.parent.mkdir(parents=True, exist_ok=True)
         command = ["compare", "-metric", "AE", "-fuzz", f"{tolerance}%", str(left), str(right), str(diff)]
         result = subprocess.run(command, text=True, capture_output=True, check=False)
@@ -130,7 +130,7 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
         changed = 0
         max_delta = 0
         diff_pixels = []
-        for delta, base in zip(delta_image.getdata(), left_image.getdata()):
+        for delta, base in zip(list(delta_image.getdata()), list(left_image.getdata())):
             pixel_delta = max(delta)
             max_delta = max(max_delta, pixel_delta)
             if pixel_delta > tolerance:
@@ -158,7 +158,11 @@ class RepoTool:
         ["cargo", "build", "--manifest-path", "Cargo.toml", "--features", "egui-ui", "--quiet"] @ cli_follow | raise_on_error
 
     def _ensure_rust_binary(self) -> None:
-        if RUST_BIN.exists() and os.access(RUST_BIN, os.X_OK):
+        try:
+            rust_binary_ready = RUST_BIN.exists() and os.access(RUST_BIN, os.X_OK)
+        except OSError:
+            rust_binary_ready = False
+        if rust_binary_ready:
             return
         logging.error("Rust binary '%s' is missing. Run without XMMS_EXEC_SKIP_BUILD=1 first.", RUST_BIN)
         sys.exit(127)
@@ -253,7 +257,11 @@ class RepoTool:
             self._exec_screenshot_under_xvfb(app_args, background)
 
         screenshot_file = os.environ.get("XMMS_SCREENSHOT_FILE", "screenshot.png")
-        screenshot_delay = float(os.environ.get("XMMS_SCREENSHOT_DELAY", "3"))
+        try:
+            screenshot_delay = float(os.environ.get("XMMS_SCREENSHOT_DELAY", "3"))
+        except ValueError:
+            logging.error("XMMS_SCREENSHOT_DELAY must be a floating point number")
+            return 2
         proc = await self._start_app_in_background(app_args)
         try:
             await asyncio.sleep(screenshot_delay)
@@ -267,7 +275,8 @@ class RepoTool:
                 proc.terminate()
                 try:
                     await asyncio.wait_for(proc.wait(), timeout=5)
-                except asyncio.TimeoutError:
+                except asyncio.TimeoutError as err:
+                    logging.debug("Timed out waiting for screenshot process shutdown: %s", err)
                     proc.kill()
                     await proc.wait()
 

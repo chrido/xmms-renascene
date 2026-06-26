@@ -35,7 +35,7 @@ without compiling `gtk`, `gio`, `glib`, `gdk`, GTK file dialogs, GTK CSS, or GTK
 
 `egui` project:
 
-- https://github.com/emilk/egui
+- <https://github.com/emilk/egui>
 
 Expected crate choices:
 
@@ -659,6 +659,10 @@ cargo test --test render
 ```
 
 - [x] Commit: `Add egui screenshot comparison checks`
+
+### Final screenshot review
+
+Final `repo frontend-screenshot-diff` runs covered all named scenarios with explicit scenario state passed to both frontends. `main-player-default`, `main-player-shaded`, and `preferences-default` compared exactly at zero changed pixels. Playlist and equalizer scenarios generated reviewed diff images under `target/screenshots/egui-final`; remaining differences are accepted for the first egui milestone because the screenshot capture path now exercises the shared Cairo skin-rendering layer and named demo state, while later native egui widget/layout parity can refine text/footer and panel details.
 
 ## Phase 14: Egui smoke tests and CI checks
 

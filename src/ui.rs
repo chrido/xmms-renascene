@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 
-use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
 pub use crate::app::panel::PanelKind;
+use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
 use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
@@ -59,8 +59,8 @@ use crate::session::{
 use crate::skin::layout::{
     equalizer_control_at, equalizer_shaded_slider_at, equalizer_slider_at, equalizer_slider_layout,
     main_push_button_rect, main_slider_layout, main_toggle_button_rect, panel_title_button_at,
-    playlist_footer_button_at, snap_playlist_size, EqualizerSlider,
-    LayoutPanelKind as LayoutPanel, PanelTitleButton, PlaylistFooterButton, SkinRect,
+    playlist_footer_button_at, snap_playlist_size, EqualizerSlider, LayoutPanelKind as LayoutPanel,
+    PanelTitleButton, PlaylistFooterButton, SkinRect,
 };
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
@@ -693,6 +693,9 @@ fn preview_state_from_app_state(
         app_state = AppState::default();
     }
     apply_preview_options_to_config(&mut app_state.config, &options)?;
+    if let Some(scenario) = options.screenshot_scenario {
+        scenario.apply_to_app_state(&mut app_state);
+    }
 
     let mut state = MainWindowUiState::from_app_state(app_state);
     if let Some((width, height)) = options.playlist_size {
