@@ -1977,7 +1977,10 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_equalizer_gstreamer_band_db_values(&mut self, expected: EqualizerBandDb) -> &mut Self {
+    pub fn assert_equalizer_gstreamer_band_db_values(
+        &mut self,
+        expected: EqualizerBandDb,
+    ) -> &mut Self {
         assert_eq!(self.state.equalizer_gstreamer_band_db_values(), expected);
         self
     }

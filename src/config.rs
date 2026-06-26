@@ -3,7 +3,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::audio_model::{db_to_equalizer_position, equalizer_position_to_db, EqualizerBandPositions};
+use crate::audio_model::{
+    db_to_equalizer_position, equalizer_position_to_db, EqualizerBandPositions,
+};
 use crate::equalizer::{default_preset_extension, default_preset_file};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
