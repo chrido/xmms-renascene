@@ -608,22 +608,22 @@ Handle file/directory open/save effects without GTK.
 
 ### Tasks
 
-- [ ] Decide whether to use a cross-platform non-GTK dialog crate such as `rfd`.
-- [ ] Add it as an optional dependency only under `egui-ui` if chosen.
-- [ ] Implement add files.
-- [ ] Implement add directory.
-- [ ] Implement playlist load/save.
-- [ ] Implement equalizer preset load/save if needed.
-- [ ] Implement skin import selection if needed.
-- [ ] Ensure no GTK file chooser code is referenced.
-- [ ] Validation:
+- [x] Decide whether to use a cross-platform non-GTK dialog crate such as `rfd`.
+- [x] Add it as an optional dependency only under `egui-ui` if chosen.
+- [x] Implement add files.
+- [x] Implement add directory.
+- [x] Implement playlist load/save.
+- [x] Implement equalizer preset load/save if needed.
+- [x] Implement skin import selection if needed.
+- [x] Ensure no GTK file chooser code is referenced.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 cargo test --lib --bins
 ```
 
-- [ ] Commit: `Implement non-GTK file dialogs for egui`
+- [x] Commit: `Implement non-GTK file dialogs for egui`
 
 ## Phase 13: Screenshot comparison against GTK/reference output
 

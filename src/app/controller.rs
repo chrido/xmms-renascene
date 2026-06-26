@@ -140,7 +140,7 @@ impl AppController {
             }
             PlaylistCommand::AddFiles(paths) => {
                 for path in paths {
-                    self.state.playlist.add_path(path);
+                    let _ = self.state.playlist.add_path_or_directory(&path);
                 }
                 self.playlist_changed_effects()
             }

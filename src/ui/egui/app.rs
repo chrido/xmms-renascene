@@ -1,8 +1,8 @@
 //! eframe application lifecycle for the egui frontend.
 
-use crate::app::command::AppCommand;
+use crate::app::command::{AppCommand, PlaylistCommand};
 use crate::app::controller::AppController;
-use crate::app::effect::AppEffect;
+use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
 #[cfg(feature = "gstreamer-backend")]
@@ -128,7 +128,46 @@ impl EguiFrontendState {
                 _ => {}
             }
         }
-        self.runtime.apply_effect(effect);
+        match effect {
+            AppEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
+            other => self.runtime.apply_effect(other),
+        }
+    }
+
+    fn handle_file_dialog(&mut self, request: FileDialogRequest) {
+        match request {
+            FileDialogRequest::AddAudioFiles => {
+                if let Some(files) = rfd::FileDialog::new().set_title("Add audio files").pick_files() {
+                    self.dispatch(PlaylistCommand::AddFiles(files));
+                }
+            }
+            FileDialogRequest::AddAudioDirectory => {
+                if let Some(folder) = rfd::FileDialog::new().set_title("Add audio directory").pick_folder() {
+                    self.dispatch(PlaylistCommand::AddFiles(vec![folder]));
+                }
+            }
+            FileDialogRequest::LoadPlaylist => {
+                if let Some(path) = rfd::FileDialog::new().set_title("Load playlist").pick_file() {
+                    self.runtime
+                        .pending_messages
+                        .push(format!("playlist loading pending egui handler: {}", path.display()));
+                }
+            }
+            FileDialogRequest::SavePlaylist => {
+                if let Some(path) = rfd::FileDialog::new().set_title("Save playlist").save_file() {
+                    self.runtime
+                        .pending_messages
+                        .push(format!("playlist saving pending egui handler: {}", path.display()));
+                }
+            }
+            FileDialogRequest::LoadEqualizerPreset
+            | FileDialogRequest::SaveEqualizerPreset
+            | FileDialogRequest::ImportSkin
+            | FileDialogRequest::ExportSkin => self
+                .runtime
+                .pending_messages
+                .push(format!("file dialog pending egui handler: {request:?}")),
+        }
     }
 }
 
