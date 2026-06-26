@@ -220,20 +220,20 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the preview extraction.
 
-- [ ] **Step 3: Define frontend-neutral commands and effects**
-  - [ ] Add initial `AppCommand` enum in `src/app/command.rs`.
-  - [ ] Include playback commands: play, pause, stop, toggle pause, previous, next, seek.
-  - [ ] Include audio commands: set volume, set balance, equalizer-related commands as needed.
-  - [ ] Include playlist commands: execute playlist menu, playlist selection/action commands as needed.
-  - [ ] Include panel commands: toggle visibility, shade, detach/dock, set playlist size.
-  - [ ] Add initial `AppEffect` enum in `src/app/effect.rs`.
-  - [ ] Add `RenderTarget` or equivalent render invalidation target type.
-  - [ ] Include playback effects: start, pause, stop, seek, update backend volume/balance/equalizer.
-  - [ ] Include UI/platform effects: queue render, save config, open dialogs, show errors.
-  - [ ] Do not migrate all handlers yet; only introduce the vocabulary.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the command/effect API.
+- [x] **Step 3: Define frontend-neutral commands and effects**
+  - [x] Add initial `AppCommand` enum in `src/app/command.rs`.
+  - [x] Include playback commands: play, pause, stop, toggle pause, previous, next, seek.
+  - [x] Include audio commands: set volume, set balance, equalizer-related commands as needed.
+  - [x] Include playlist commands: execute playlist menu, playlist selection/action commands as needed.
+  - [x] Include panel commands: toggle visibility, shade, detach/dock, set playlist size.
+  - [x] Add initial `AppEffect` enum in `src/app/effect.rs`.
+  - [x] Add `RenderTarget` or equivalent render invalidation target type.
+  - [x] Include playback effects: start, pause, stop, seek, update backend volume/balance/equalizer.
+  - [x] Include UI/platform effects: queue render, save config, open dialogs, show errors.
+  - [x] Do not migrate all handlers yet; only introduce the vocabulary.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the command/effect API.
 
 - [ ] **Step 4: Extract simple pure helpers from `ui.rs`**
   - [ ] Move time formatting helpers.
