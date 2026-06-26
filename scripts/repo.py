@@ -152,6 +152,11 @@ class RepoTool:
         logging.info("Building Rust application...")
         ["cargo", "build", "--manifest-path", "Cargo.toml", "--quiet"] @ cli_follow | raise_on_error
 
+    def _build_frontend_diff_app(self) -> None:
+        required_command("cargo")
+        logging.info("Building Rust application with egui support for screenshot diffing...")
+        ["cargo", "build", "--manifest-path", "Cargo.toml", "--features", "egui-ui", "--quiet"] @ cli_follow | raise_on_error
+
     def _ensure_rust_binary(self) -> None:
         if RUST_BIN.exists() and os.access(RUST_BIN, os.X_OK):
             return
@@ -296,7 +301,8 @@ class RepoTool:
     ) -> int:
         """Capture GTK and egui screenshots for a scenario and write a diff image."""
         os.chdir(REPO_DIR)
-        self._build_unless_skipped()
+        if os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
+            self._build_frontend_diff_app()
         output_root = Path(output_dir)
         gtk_path = Path(gtk_output) if gtk_output else output_root / f"gtk-{scenario}.png"
         egui_path = Path(egui_output) if egui_output else output_root / f"egui-{scenario}.png"

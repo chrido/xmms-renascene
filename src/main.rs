@@ -52,6 +52,16 @@ fn run_gtk_frontend(_preview_options: PreviewOptions, _args: &[String]) {
 
 #[cfg(feature = "egui-ui")]
 fn run_egui_frontend(preview_options: PreviewOptions) {
+    if let Some(path) = preview_options.screenshot_path.as_deref() {
+        if let Err(err) = egui_frontend::screenshots::write_egui_screenshot(
+            preview_options.clone(),
+            std::path::Path::new(path),
+        ) {
+            eprintln!("xmms-rs: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(err) = egui_frontend::app::run_egui_frontend(preview_options) {
         eprintln!("xmms-rs: {err}");
         std::process::exit(1);
