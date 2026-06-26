@@ -1,3 +1,4 @@
+pub mod app;
 pub mod app_state;
 pub mod audio_model;
 pub mod config;

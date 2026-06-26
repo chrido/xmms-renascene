@@ -195,18 +195,18 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Record high-value extraction candidates.
   - [x] Confirm no behavior changes were made, or run validation if notes/code changed.
 
-- [ ] **Step 1: Introduce the `app` module skeleton**
-  - [ ] Add `src/app/mod.rs`.
-  - [ ] Add `src/app/preview.rs`.
-  - [ ] Add `src/app/command.rs`.
-  - [ ] Add `src/app/effect.rs`.
-  - [ ] Add `src/app/controller.rs`.
-  - [ ] Add `src/app/view_model.rs`.
-  - [ ] Register `pub mod app;` in `src/lib.rs`.
-  - [ ] Keep placeholders/documentation only where behavior is not yet migrated.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the module skeleton.
+- [x] **Step 1: Introduce the `app` module skeleton**
+  - [x] Add `src/app/mod.rs`.
+  - [x] Add `src/app/preview.rs`.
+  - [x] Add `src/app/command.rs`.
+  - [x] Add `src/app/effect.rs`.
+  - [x] Add `src/app/controller.rs`.
+  - [x] Add `src/app/view_model.rs`.
+  - [x] Register `pub mod app;` in `src/lib.rs`.
+  - [x] Keep placeholders/documentation only where behavior is not yet migrated.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the module skeleton.
 
 - [ ] **Step 2: Move preview/startup option logic out of `ui.rs`**
   - [ ] Move `PreviewOptions` to `src/app/preview.rs`.
