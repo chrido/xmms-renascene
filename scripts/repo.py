@@ -148,13 +148,30 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
 
 class RepoTool:
     def _build_selected_app(self) -> None:
+        self._build_gtk_app()
+
+    def _build_gtk_app(self) -> None:
         required_command("cargo")
-        logging.info("Building Rust application...")
+        logging.info("Building Rust application with default GTK frontend...")
         ["cargo", "build", "--manifest-path", "Cargo.toml", "--quiet"] @ cli_follow | raise_on_error
+
+    def _build_egui_app(self) -> None:
+        required_command("cargo")
+        logging.info("Building Rust application with egui frontend...")
+        [
+            "cargo",
+            "build",
+            "--manifest-path",
+            "Cargo.toml",
+            "--no-default-features",
+            "--features",
+            "egui-ui,gstreamer-backend",
+            "--quiet",
+        ] @ cli_follow | raise_on_error
 
     def _build_frontend_diff_app(self) -> None:
         required_command("cargo")
-        logging.info("Building Rust application with egui support for screenshot diffing...")
+        logging.info("Building Rust application with GTK and egui support for screenshot diffing...")
         ["cargo", "build", "--manifest-path", "Cargo.toml", "--features", "egui-ui", "--quiet"] @ cli_follow | raise_on_error
 
     def _ensure_rust_binary(self) -> None:
@@ -170,6 +187,14 @@ class RepoTool:
     def _build_unless_skipped(self) -> None:
         if os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
             self._build_selected_app()
+
+    def _build_frontend_unless_skipped(self, frontend: str) -> None:
+        if os.environ.get("XMMS_EXEC_SKIP_BUILD") == "1":
+            return
+        if frontend == "egui":
+            self._build_egui_app()
+        else:
+            self._build_gtk_app()
 
     def _exec_app(self, args: tuple[str, ...]) -> None:
         self._ensure_rust_binary()
@@ -238,12 +263,62 @@ class RepoTool:
             raise RuntimeError(f"Screenshot command did not create {screenshot_file}.")
         logging.info("Screenshot saved to %s", screenshot_file)
 
+    def _select_run_frontend(self, args: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+        frontend = "gtk"
+        explicit_frontend = False
+        app_args: list[str] = []
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--":
+                index += 1
+                continue
+            if arg == "--gtk":
+                frontend = "gtk"
+                index += 1
+                continue
+            if arg == "--egui":
+                frontend = "egui"
+                index += 1
+                continue
+            if arg.startswith("--frontend="):
+                explicit_frontend = True
+                frontend = arg.split("=", 1)[1]
+                app_args.append(arg)
+                index += 1
+                continue
+            if arg == "--frontend" and index + 1 < len(args):
+                explicit_frontend = True
+                frontend = args[index + 1]
+                app_args.extend([arg, args[index + 1]])
+                index += 2
+                continue
+            app_args.append(arg)
+            index += 1
+
+        if frontend not in {"gtk", "egui"}:
+            raise ValueError(f"unknown frontend '{frontend}', expected 'gtk' or 'egui'")
+        if not explicit_frontend:
+            app_args = ["--frontend", frontend, *app_args]
+        return frontend, tuple(app_args)
+
     async def run(self, *args: str) -> int:
-        """Build when needed and start the GTK application."""
+        """Build when needed and start the selected frontend.
+
+        Shorthands:
+          ./repo run --gtk  -> build default GTK binary and run --frontend gtk
+          ./repo run --egui -> build egui binary and run --frontend egui
+        """
         os.chdir(REPO_DIR)
-        _configure_gtk_environment()
-        self._build_unless_skipped()
-        self._exec_app(args)
+        try:
+            frontend, app_args = self._select_run_frontend(args)
+        except ValueError as err:
+            logging.error("%s", err)
+            return 2
+        if frontend == "gtk":
+            _configure_gtk_environment()
+        self._build_frontend_unless_skipped(frontend)
+        self._exec_app(app_args)
         return 0
 
     async def screenshot(self, *args: str) -> int:
