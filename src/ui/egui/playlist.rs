@@ -1,6 +1,6 @@
 //! egui playlist panel/window.
 
-use crate::app::command::{PlayerCommand, PlaylistCommand};
+use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
     format_playlist_footer_duration, playlist_view_model, PlaylistViewModel,
@@ -12,8 +12,9 @@ use crate::render::{
     PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::layout::{
-    playlist_footer_button_rect, playlist_menu_button_rect, playlist_menu_popup_rect,
-    PlaylistFooterButton, PlaylistMenuButton, SkinRect,
+    panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
+    playlist_menu_popup_rect, LayoutPanelKind, PanelTitleButton, PlaylistFooterButton,
+    PlaylistMenuButton, SkinRect,
 };
 
 use super::app::EguiFrontendState;
@@ -156,6 +157,7 @@ fn add_playlist_hit_regions(
     view_model: &PlaylistViewModel,
 ) {
     app.playlist_menu_hover = None;
+    add_playlist_title_button_hits(ui, app, base_rect);
     if view_model.shaded {
         return;
     }
@@ -207,6 +209,33 @@ fn add_playlist_hit_regions(
         );
         if response.clicked() {
             dispatch_playlist_footer_button(app, button);
+        }
+    }
+}
+
+fn add_playlist_title_button_hits(
+    ui: &mut egui::Ui,
+    app: &mut EguiFrontendState,
+    base_rect: egui::Rect,
+) {
+    for button in [PanelTitleButton::Shade, PanelTitleButton::Close] {
+        let rect = scale_skin_rect(
+            base_rect,
+            panel_title_button_rect(LayoutPanelKind::Playlist, button, PLAYLIST_DEFAULT_WIDTH),
+            app.scale_factor,
+        );
+        let response = ui.interact(
+            rect,
+            ui.id().with(("playlist-title-button", button as u8)),
+            egui::Sense::click(),
+        );
+        if response.clicked() {
+            match button {
+                PanelTitleButton::Shade => app.dispatch(PanelCommand::TogglePlaylistShade),
+                PanelTitleButton::Close => {
+                    app.dispatch(PanelCommand::SetPlaylistVisibility(false));
+                }
+            }
         }
     }
 }

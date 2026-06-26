@@ -1,6 +1,6 @@
 //! egui equalizer panel/window.
 
-use crate::app::command::EqualizerCommand;
+use crate::app::command::{EqualizerCommand, PanelCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, eq_slider_pixel_to_position, equalizer_view_model,
@@ -11,7 +11,9 @@ use crate::render::{
     equalizer_slider_layout, EqualizerControl, EqualizerRenderState, EqualizerSlider,
     EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
 };
-use crate::skin::layout::{equalizer_control_rect, SkinRect};
+use crate::skin::layout::{
+    equalizer_control_rect, panel_title_button_rect, LayoutPanelKind, PanelTitleButton, SkinRect,
+};
 
 use super::app::EguiFrontendState;
 use super::skin_texture::{render_equalizer_color_image, upload_color_image};
@@ -80,6 +82,7 @@ fn add_equalizer_hit_regions(
 ) {
     app.equalizer_pressed_control = None;
     app.equalizer_pressed_slider = None;
+    add_equalizer_title_button_hits(ui, app, base_rect);
     if view_model.shaded {
         add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::ShadedVolume);
         add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::ShadedBalance);
@@ -109,6 +112,33 @@ fn add_equalizer_hit_regions(
     add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::Preamp);
     for band in 0..crate::audio_model::EQUALIZER_BANDS {
         add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::Band(band));
+    }
+}
+
+fn add_equalizer_title_button_hits(
+    ui: &mut egui::Ui,
+    app: &mut EguiFrontendState,
+    base_rect: egui::Rect,
+) {
+    for button in [PanelTitleButton::Shade, PanelTitleButton::Close] {
+        let rect = scale_skin_rect(
+            base_rect,
+            panel_title_button_rect(LayoutPanelKind::Equalizer, button, EQUALIZER_WINDOW_WIDTH),
+            app.scale_factor,
+        );
+        let response = ui.interact(
+            rect,
+            ui.id().with(("eq-title-button", button as u8)),
+            egui::Sense::click(),
+        );
+        if response.clicked() {
+            match button {
+                PanelTitleButton::Shade => app.dispatch(PanelCommand::ToggleEqualizerShade),
+                PanelTitleButton::Close => {
+                    app.dispatch(PanelCommand::SetEqualizerVisibility(false));
+                }
+            }
+        }
     }
 }
 
