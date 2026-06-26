@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::app::command::{AppCommand, PanelCommand, PlayerCommand, PlaylistCommand};
+use crate::app::command::{AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
@@ -53,6 +53,7 @@ pub struct EguiFrontendState {
     pub main_pressed_slider: Option<MainSlider>,
     pub equalizer_pressed_control: Option<EqualizerControl>,
     pub equalizer_pressed_slider: Option<EqualizerSlider>,
+    pub equalizer_keyboard_slider: Option<EqualizerSlider>,
     pub equalizer_presets_open: bool,
     pub playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
     pub playlist_menu_open: Option<PlaylistMenuRenderKind>,
@@ -93,6 +94,7 @@ impl EguiFrontendState {
             main_pressed_slider: None,
             equalizer_pressed_control: None,
             equalizer_pressed_slider: None,
+            equalizer_keyboard_slider: None,
             equalizer_presets_open: false,
             playlist_menu_hover: None,
             playlist_menu_open: None,
@@ -432,8 +434,61 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
             app.dispatch(PanelCommand::ToggleMainShade);
         }
         handle_playlist_shortcuts(input, app);
+        handle_equalizer_shortcuts(input, app);
         handle_mouse_wheel(input, app);
     });
+}
+
+fn handle_equalizer_shortcuts(input: &egui::InputState, app: &mut EguiFrontendState) {
+    if !app.controller().state().config.equalizer_visible {
+        return;
+    }
+    if input.key_pressed(egui::Key::Q) {
+        app.dispatch(EqualizerCommand::ToggleActive);
+    }
+    if input.key_pressed(egui::Key::W) {
+        app.dispatch(EqualizerCommand::ToggleAuto);
+    }
+    if input.key_pressed(egui::Key::Tab) {
+        app.equalizer_keyboard_slider = Some(next_equalizer_keyboard_slider(
+            app.equalizer_keyboard_slider,
+        ));
+    }
+    let Some(slider) = app.equalizer_keyboard_slider else {
+        return;
+    };
+    let delta = if input.key_pressed(egui::Key::ArrowUp) {
+        -1
+    } else if input.key_pressed(egui::Key::ArrowDown) {
+        1
+    } else {
+        0
+    };
+    if delta == 0 {
+        return;
+    }
+    let config = &app.controller().state().config;
+    match slider {
+        EqualizerSlider::Preamp => app.dispatch(EqualizerCommand::SetPreamp(
+            config.equalizer_preamp_pos.saturating_add(delta),
+        )),
+        EqualizerSlider::Band(band) => app.dispatch(EqualizerCommand::SetBand {
+            band,
+            position: config.equalizer_band_pos[band].saturating_add(delta),
+        }),
+        EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => {}
+    }
+}
+
+fn next_equalizer_keyboard_slider(current: Option<EqualizerSlider>) -> EqualizerSlider {
+    match current {
+        None => EqualizerSlider::Preamp,
+        Some(EqualizerSlider::Preamp) => EqualizerSlider::Band(0),
+        Some(EqualizerSlider::Band(band)) if band + 1 < crate::audio_model::EQUALIZER_BANDS => {
+            EqualizerSlider::Band(band + 1)
+        }
+        _ => EqualizerSlider::Preamp,
+    }
 }
 
 fn handle_mouse_wheel(input: &egui::InputState, app: &mut EguiFrontendState) {

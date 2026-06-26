@@ -279,7 +279,7 @@ Legend:
 - [ ] Detached equalizer window behavior missing.
 - [ ] Equalizer titlebar shade/close behavior missing/incomplete for egui panel.
 - [ ] Equalizer graph interaction/parity needs manual audit.
-- [ ] Equalizer keyboard focus/arrow adjustment behavior missing.
+- [x] Equalizer keyboard focus/arrow adjustment behavior missing.
 - [ ] Auto-preset load-on-track behavior parity needs verification in egui.
 
 ---
@@ -485,7 +485,7 @@ GTK has `build_skin_browser_window` with:
   - search typing;
   - Vim key mode;
   - page/home/end navigation.
-- [ ] Equalizer key handling:
+- [x] Equalizer key handling:
   - selecting sliders;
   - arrow adjustment;
   - active/auto toggles.
