@@ -204,7 +204,7 @@ Legend:
 - [x] Physical delete confirmation dialog missing.
 - [x] File Info dialog from playlist missing.
 - [ ] Playlist search overlay missing.
-- [ ] Playlist keyboard navigation missing/incomplete:
+- [x] Playlist keyboard navigation missing/incomplete:
   - arrow keys;
   - page up/down;
   - home/end;
@@ -478,7 +478,7 @@ GTK has `build_skin_browser_window` with:
   - open files/directory/location;
   - jump to time;
   - shade/unshade selected panel.
-- [ ] Playlist key handling:
+- [x] Playlist key handling:
   - Delete removes selected/current;
   - Ctrl+Delete crops;
   - Enter plays selected/current;

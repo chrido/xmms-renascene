@@ -431,7 +431,62 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
         if input.key_pressed(egui::Key::M) {
             app.dispatch(PanelCommand::ToggleMainShade);
         }
+        handle_playlist_shortcuts(input, app);
     });
+}
+
+fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendState) {
+    if !app.controller().state().config.playlist_visible {
+        return;
+    }
+    let len = app.controller().state().playlist.len();
+    if len == 0 {
+        return;
+    }
+    if input.key_pressed(egui::Key::Delete) {
+        if input.modifiers.ctrl {
+            app.controller_mut()
+                .state_mut()
+                .playlist
+                .crop_to_selected_or_current();
+        } else {
+            app.dispatch(PlaylistCommand::RemoveSelectedOrCurrent);
+        }
+    }
+    if input.key_pressed(egui::Key::A) && input.modifiers.ctrl {
+        app.dispatch(PlaylistCommand::SelectAll);
+    }
+    if input.key_pressed(egui::Key::I) && input.modifiers.ctrl {
+        app.dispatch(PlaylistCommand::InvertSelection);
+    }
+    if input.key_pressed(egui::Key::Enter) {
+        app.dispatch(PlayerCommand::Play);
+    }
+    let current = app.controller().state().playlist.position().unwrap_or(0);
+    let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
+    let next = if input.key_pressed(egui::Key::ArrowDown)
+        || (app.controller().state().config.vim_playlist_navigation && input.key_pressed(egui::Key::J))
+    {
+        Some((current + 1).min(len - 1))
+    } else if input.key_pressed(egui::Key::ArrowUp)
+        || (app.controller().state().config.vim_playlist_navigation && input.key_pressed(egui::Key::K))
+    {
+        Some(current.saturating_sub(1))
+    } else if input.key_pressed(egui::Key::PageDown) {
+        Some((current + visible_rows).min(len - 1))
+    } else if input.key_pressed(egui::Key::PageUp) {
+        Some(current.saturating_sub(visible_rows))
+    } else if input.key_pressed(egui::Key::Home) {
+        Some(0)
+    } else if input.key_pressed(egui::Key::End) {
+        Some(len - 1)
+    } else {
+        None
+    };
+    if let Some(position) = next {
+        app.controller_mut().state_mut().playlist.set_position(position);
+        app.playlist_scroll_offset = app.playlist_scroll_offset.min(position);
+    }
 }
 
 pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
