@@ -9,7 +9,9 @@ import os
 import shlex
 import subprocess
 import sys
+from importlib.util import find_spec
 from pathlib import Path
+from typing import Any, cast
 
 from .commandline import acmd_background, cli_follow, command_exists, configure_logging, raise_on_error, required_command
 from .fire_lite import FireLite
@@ -108,11 +110,9 @@ def _diff_plain_ppm(left: Path, right: Path, diff: Path, tolerance: int) -> tupl
 def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[int, int]:
     if left.suffix.lower() == right.suffix.lower() == diff.suffix.lower() == ".ppm":
         return _diff_plain_ppm(left, right, diff, tolerance)
-    try:
-        from PIL import Image, ImageChops
-    except ImportError as err:
+    if find_spec("PIL") is None:
         if not command_exists("compare"):
-            raise RuntimeError("Install Pillow or ImageMagick 'compare' to diff non-PPM screenshots") from err
+            raise RuntimeError("Install Pillow or ImageMagick 'compare' to diff non-PPM screenshots")
         diff.parent.mkdir(parents=True, exist_ok=True)
         command = ["compare", "-metric", "AE", "-fuzz", f"{tolerance}%", str(left), str(right), str(diff)]
         result = subprocess.run(command, text=True, capture_output=True, check=False)
@@ -123,6 +123,8 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
             changed = 0 if result.returncode == 0 else 1
         return changed, 0
 
+    from PIL import Image, ImageChops
+
     with Image.open(left).convert("RGB") as left_image, Image.open(right).convert("RGB") as right_image:
         if left_image.size != right_image.size:
             raise ValueError(f"image dimensions differ: {left_image.size} vs {right_image.size}")
@@ -130,7 +132,7 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
         changed = 0
         max_delta = 0
         diff_pixels = []
-        for delta, base in zip(list(delta_image.getdata()), list(left_image.getdata())):
+        for delta, base in zip(list(cast(Any, delta_image.getdata())), list(cast(Any, left_image.getdata()))):
             pixel_delta = max(delta)
             max_delta = max(max_delta, pixel_delta)
             if pixel_delta > tolerance:
@@ -209,8 +211,8 @@ class RepoTool:
         env.update(
             {
                 "GDK_BACKEND": "x11",
-                "GSK_RENDERER": "cairo",
-                "GDK_DISABLE": os.environ["GDK_DISABLE"],
+                "GSK_RENDERER": os.environ.get("GSK_RENDERER", "cairo"),
+                "GDK_DISABLE": os.environ.get("GDK_DISABLE", "gl"),
                 "NO_AT_BRIDGE": "1",
                 "XMMS_NON_UNIQUE": "1",
                 "XMMS_EXEC_SKIP_BUILD": "1",
@@ -322,11 +324,17 @@ class RepoTool:
         return 0
 
     async def screenshot(self, *args: str) -> int:
-        """Capture a root-window screenshot after starting the GTK application."""
+        """Capture a root-window screenshot after starting the selected frontend."""
         os.chdir(REPO_DIR)
-        _configure_gtk_environment()
-        self._build_unless_skipped()
-        background, app_args = _split_screenshot_args(args)
+        try:
+            frontend, selected_args = self._select_run_frontend(args)
+        except ValueError as err:
+            logging.error("%s", err)
+            return 2
+        if frontend == "gtk":
+            _configure_gtk_environment()
+        self._build_frontend_unless_skipped(frontend)
+        background, app_args = _split_screenshot_args(selected_args)
 
         if os.environ.get("XMMS_SCREENSHOT_UNDER_XVFB") != "1":
             self._exec_screenshot_under_xvfb(app_args, background)
@@ -355,7 +363,7 @@ class RepoTool:
                     proc.kill()
                     await proc.wait()
 
-    def _write_frontend_screenshot(self, frontend: str, scenario: str, output: Path) -> None:
+    def _write_offscreen_frontend_screenshot(self, frontend: str, scenario: str, output: Path) -> None:
         self._ensure_rust_binary()
         output.parent.mkdir(parents=True, exist_ok=True)
         args = [
@@ -366,10 +374,30 @@ class RepoTool:
             str(output),
             *_scenario_args(scenario),
         ]
-        logging.info("Capturing %s screenshot: %s", frontend, " ".join(args))
+        logging.info("Capturing offscreen %s screenshot: %s", frontend, " ".join(args))
         args @ cli_follow | raise_on_error
         if not output.is_file() or output.stat().st_size == 0:
             raise RuntimeError(f"{frontend} screenshot was not created at {output}")
+
+    def _write_live_frontend_screenshot(self, frontend: str, scenario: str, output: Path) -> None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        args = [
+            str(REPO_DIR / "repo"),
+            "screenshot",
+            "--frontend",
+            frontend,
+            *_scenario_args(scenario),
+        ]
+        env = os.environ.copy()
+        env.pop("XMMS_EXEC_SKIP_BUILD", None)
+        env["XMMS_SCREENSHOT_FILE"] = str(output)
+        env.setdefault("XMMS_SCREENSHOT_DELAY", "3")
+        logging.info("Capturing live %s screenshot: %s", frontend, " ".join(args))
+        result = subprocess.run(args, cwd=REPO_DIR, env=env, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"live {frontend} screenshot command failed with exit code {result.returncode}")
+        if not output.is_file() or output.stat().st_size == 0:
+            raise RuntimeError(f"live {frontend} screenshot was not created at {output}")
 
     async def frontend_screenshot_diff(
         self,
@@ -382,18 +410,30 @@ class RepoTool:
         fail_on_diff_threshold: int = -1,
         keep_intermediate: bool = True,
         update_references: bool = False,
+        capture_mode: str = "live",
     ) -> int:
-        """Capture GTK and egui screenshots for a scenario and write a diff image."""
+        """Capture GTK and egui screenshots for a scenario and write a diff image.
+
+        capture_mode=live captures actual frontend windows under Xvfb/root screenshot.
+        capture_mode=offscreen uses the app's --screenshot render path.
+        """
         os.chdir(REPO_DIR)
-        if os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
+        if capture_mode not in {"live", "offscreen"}:
+            logging.error("capture_mode must be 'live' or 'offscreen'")
+            return 2
+        if capture_mode == "offscreen" and os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
             self._build_frontend_diff_app()
         output_root = Path(output_dir)
         gtk_path = Path(gtk_output) if gtk_output else output_root / f"gtk-{scenario}.png"
         egui_path = Path(egui_output) if egui_output else output_root / f"egui-{scenario}.png"
         diff_path = Path(diff_output) if diff_output else output_root / f"diff-{scenario}.png"
         try:
-            self._write_frontend_screenshot("gtk", scenario, gtk_path)
-            self._write_frontend_screenshot("egui", scenario, egui_path)
+            if capture_mode == "live":
+                self._write_live_frontend_screenshot("gtk", scenario, gtk_path)
+                self._write_live_frontend_screenshot("egui", scenario, egui_path)
+            else:
+                self._write_offscreen_frontend_screenshot("gtk", scenario, gtk_path)
+                self._write_offscreen_frontend_screenshot("egui", scenario, egui_path)
             if update_references:
                 logging.info("Reference update requested; keeping freshly captured frontend screenshots")
             changed, max_delta = _diff_images(gtk_path, egui_path, diff_path, tolerance)
