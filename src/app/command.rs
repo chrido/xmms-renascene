@@ -39,9 +39,16 @@ pub enum PlaylistCommand {
     ToggleShuffle,
     ToggleRepeat,
     ToggleNoAdvance,
-    SetSize { width: i32, height: i32 },
-    ExecuteMenu { kind: PlaylistMenuKind, index: usize },
+    SetSize {
+        width: i32,
+        height: i32,
+    },
+    ExecuteMenu {
+        kind: PlaylistMenuKind,
+        index: usize,
+    },
     Sort(PlaylistSortKey),
+    SortSelected(PlaylistSortKey),
     Reverse,
     Randomize,
     AddUris(Vec<String>),

@@ -105,11 +105,15 @@ impl AppController {
     fn handle_playlist_command(&mut self, command: PlaylistCommand) -> Vec<AppEffect> {
         match command {
             PlaylistCommand::ToggleShuffle => {
-                self.state.playlist.set_shuffle(!self.state.playlist.shuffle());
+                self.state
+                    .playlist
+                    .set_shuffle(!self.state.playlist.shuffle());
                 self.playlist_changed_effects()
             }
             PlaylistCommand::ToggleRepeat => {
-                self.state.playlist.set_repeat(!self.state.playlist.repeat());
+                self.state
+                    .playlist
+                    .set_repeat(!self.state.playlist.repeat());
                 self.playlist_changed_effects()
             }
             PlaylistCommand::ToggleNoAdvance => {
@@ -122,6 +126,10 @@ impl AppController {
             PlaylistCommand::ExecuteMenu { kind, index } => self.execute_playlist_menu(kind, index),
             PlaylistCommand::Sort(key) => {
                 self.state.playlist.sort_by(key);
+                self.playlist_changed_effects()
+            }
+            PlaylistCommand::SortSelected(key) => {
+                self.state.playlist.sort_selected_by(key);
                 self.playlist_changed_effects()
             }
             PlaylistCommand::Reverse => {
@@ -233,9 +241,15 @@ impl AppController {
             return Vec::new();
         };
         match command {
-            PlaylistMenuCommand::OpenLocationWindow => vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles)],
-            PlaylistMenuCommand::OpenDirectoryDialog => vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioDirectory)],
-            PlaylistMenuCommand::OpenFileDialog => vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles)],
+            PlaylistMenuCommand::OpenLocationWindow => {
+                vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles)]
+            }
+            PlaylistMenuCommand::OpenDirectoryDialog => vec![AppEffect::OpenFileDialog(
+                FileDialogRequest::AddAudioDirectory,
+            )],
+            PlaylistMenuCommand::OpenFileDialog => {
+                vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles)]
+            }
             PlaylistMenuCommand::ShowSortMenu => Vec::new(),
             PlaylistMenuCommand::ShowFileInfo => vec![AppEffect::OpenFileInfoDialog],
             PlaylistMenuCommand::OpenOptions => vec![AppEffect::OpenPreferences],
@@ -263,24 +277,37 @@ impl AppController {
                 self.state.playlist.select_all(true);
                 self.playlist_changed_effects()
             }
-            PlaylistMenuCommand::SavePlaylist => vec![AppEffect::OpenFileDialog(FileDialogRequest::SavePlaylist)],
-            PlaylistMenuCommand::LoadPlaylist => vec![AppEffect::OpenFileDialog(FileDialogRequest::LoadPlaylist)],
+            PlaylistMenuCommand::SavePlaylist => {
+                vec![AppEffect::OpenFileDialog(FileDialogRequest::SavePlaylist)]
+            }
+            PlaylistMenuCommand::LoadPlaylist => {
+                vec![AppEffect::OpenFileDialog(FileDialogRequest::LoadPlaylist)]
+            }
         }
     }
 
     fn playlist_changed_effects(&self) -> Vec<AppEffect> {
-        vec![AppEffect::SaveConfig, AppEffect::QueueRender(RenderTarget::Playlist)]
+        vec![
+            AppEffect::SaveConfig,
+            AppEffect::QueueRender(RenderTarget::Playlist),
+        ]
     }
 
     fn panel_changed_effects(&self) -> Vec<AppEffect> {
-        vec![AppEffect::SaveConfig, AppEffect::QueueRender(RenderTarget::All)]
+        vec![
+            AppEffect::SaveConfig,
+            AppEffect::QueueRender(RenderTarget::All),
+        ]
     }
 
     fn play(&mut self) -> Vec<AppEffect> {
         match self.state.player.state() {
             PlayerState::Paused => {
                 self.state.player.unpause();
-                vec![AppEffect::ResumePlayback, AppEffect::QueueRender(RenderTarget::All)]
+                vec![
+                    AppEffect::ResumePlayback,
+                    AppEffect::QueueRender(RenderTarget::All),
+                ]
             }
             PlayerState::Stopped => self.start_current_playlist_playback(0),
             PlayerState::Playing => Vec::new(),
@@ -292,7 +319,10 @@ impl AppController {
             return Vec::new();
         }
         self.state.player.pause();
-        vec![AppEffect::PausePlayback, AppEffect::QueueRender(RenderTarget::All)]
+        vec![
+            AppEffect::PausePlayback,
+            AppEffect::QueueRender(RenderTarget::All),
+        ]
     }
 
     fn toggle_pause(&mut self) -> Vec<AppEffect> {
@@ -306,7 +336,10 @@ impl AppController {
     fn stop(&mut self) -> Vec<AppEffect> {
         self.state.player.stop();
         self.state.player.clear_visualization_data();
-        vec![AppEffect::StopPlayback, AppEffect::QueueRender(RenderTarget::All)]
+        vec![
+            AppEffect::StopPlayback,
+            AppEffect::QueueRender(RenderTarget::All),
+        ]
     }
 
     fn previous_track(&mut self) -> Vec<AppEffect> {
@@ -343,11 +376,17 @@ impl AppController {
         }
         let Some(position) = self.state.playlist.position() else {
             self.state.player.stop();
-            return vec![AppEffect::StopPlayback, AppEffect::QueueRender(RenderTarget::All)];
+            return vec![
+                AppEffect::StopPlayback,
+                AppEffect::QueueRender(RenderTarget::All),
+            ];
         };
         let Some(entry) = self.state.playlist.entries().get(position) else {
             self.state.player.stop();
-            return vec![AppEffect::StopPlayback, AppEffect::QueueRender(RenderTarget::All)];
+            return vec![
+                AppEffect::StopPlayback,
+                AppEffect::QueueRender(RenderTarget::All),
+            ];
         };
         let uri = entry.filename.clone();
         self.state.player.mark_playing();
@@ -460,7 +499,12 @@ mod tests {
             .into(),
         );
 
-        assert!(controller.state().playlist.entries().iter().all(|entry| entry.selected));
+        assert!(controller
+            .state()
+            .playlist
+            .entries()
+            .iter()
+            .all(|entry| entry.selected));
         assert!(effects.contains(&AppEffect::SaveConfig));
         assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::Playlist)));
     }
@@ -481,7 +525,8 @@ mod tests {
     fn playback_events_update_controller_player_state() {
         let mut controller = AppController::new(AppState::default());
 
-        let effects = controller.handle_playback_event(PlaybackEvent::DurationChanged(Some(12_000)));
+        let effects =
+            controller.handle_playback_event(PlaybackEvent::DurationChanged(Some(12_000)));
 
         assert_eq!(controller.state().player.duration_ms(), Some(12_000));
         assert_eq!(effects, vec![AppEffect::QueueRender(RenderTarget::All)]);

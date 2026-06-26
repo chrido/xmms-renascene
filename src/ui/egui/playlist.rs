@@ -5,7 +5,7 @@ use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
     format_playlist_footer_duration, playlist_view_model, PlaylistViewModel,
 };
-use crate::playlist::PlaylistMenuKind;
+use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 use crate::render::{
     PlaylistRowRenderEntry, PlaylistRowsRenderState, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH,
@@ -60,6 +60,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     add_playlist_hit_regions(ui, app, rect, &view_model);
     show_playlist_menu_popover(ui.ctx(), app);
+    show_playlist_sort_popover(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -308,8 +309,64 @@ fn dispatch_playlist_menu_item(app: &mut EguiFrontendState, kind: PlaylistMenuKi
         (PlaylistMenuKind::Add, 2) => {
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
         }
+        (PlaylistMenuKind::Misc, 0) => app.playlist_sort_menu_open = true,
         _ => app.dispatch(PlaylistCommand::ExecuteMenu { kind, index }),
     }
+}
+
+fn show_playlist_sort_popover(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    if !app.playlist_sort_menu_open {
+        return;
+    }
+    let mut open = true;
+    let mut close_after_click = false;
+    egui::Window::new("Playlist Sort")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label("Sort List");
+            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Title, "By Title");
+            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Filename, "By Filename");
+            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Path, "By Path + Filename");
+            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Date, "By Date");
+            ui.separator();
+            ui.label("Sort Selection");
+            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Title, "By Title");
+            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Filename, "By Filename");
+            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Path, "By Path + Filename");
+            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Date, "By Date");
+            ui.separator();
+            if ui.button("Randomize List").clicked() {
+                app.dispatch(PlaylistCommand::Randomize);
+                close_after_click = true;
+            }
+            if ui.button("Reverse List").clicked() {
+                app.dispatch(PlaylistCommand::Reverse);
+                close_after_click = true;
+            }
+        });
+    if !open || close_after_click {
+        app.playlist_sort_menu_open = false;
+    }
+}
+
+fn playlist_sort_item(
+    ui: &mut egui::Ui,
+    app: &mut EguiFrontendState,
+    selected_only: bool,
+    key: PlaylistSortKey,
+    label: &str,
+) -> bool {
+    if !ui.button(label).clicked() {
+        return false;
+    }
+    if selected_only {
+        app.dispatch(PlaylistCommand::SortSelected(key));
+    } else {
+        app.dispatch(PlaylistCommand::Sort(key));
+    }
+    true
 }
 
 fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: PlaylistFooterButton) {

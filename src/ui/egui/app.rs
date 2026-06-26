@@ -45,6 +45,7 @@ pub struct EguiFrontendState {
     pub equalizer_pressed_slider: Option<EqualizerSlider>,
     pub playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
     pub playlist_menu_open: Option<PlaylistMenuRenderKind>,
+    pub playlist_sort_menu_open: bool,
     pub playlist_scroll_offset: usize,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
@@ -79,6 +80,7 @@ impl EguiFrontendState {
             equalizer_pressed_slider: None,
             playlist_menu_hover: None,
             playlist_menu_open: None,
+            playlist_sort_menu_open: false,
             playlist_scroll_offset: 0,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]

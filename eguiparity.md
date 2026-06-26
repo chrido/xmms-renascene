@@ -183,7 +183,7 @@ Legend:
   - Clear list;
   - Save playlist;
   - Load playlist.
-- [ ] Playlist sort popover missing. GTK has `build_playlist_sort_popover` with:
+- [x] Playlist sort popover missing. GTK has `build_playlist_sort_popover` with:
   - Sort List by Title;
   - Sort List by Filename;
   - Sort List by Path + Filename;
@@ -586,7 +586,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Open Location prompt.
 - [x] Jump to Time prompt.
 - [x] Playlist bottom menu popovers.
-- [ ] Playlist sort popover.
+- [x] Playlist sort popover.
 - [ ] Playlist context menu.
 - [ ] File Info dialog.
 - [ ] Equalizer presets popover.
