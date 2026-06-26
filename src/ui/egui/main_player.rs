@@ -24,7 +24,15 @@ pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
 
 pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let view_model = main_player_view_model(app.controller().state());
-    let render_state = main_render_state(&view_model);
+    let config = &app.controller().state().config;
+    let render_state = main_render_state(
+        &view_model,
+        config.equalizer_visible,
+        config.playlist_visible,
+        app.main_pressed_push,
+        app.main_pressed_toggle,
+        app.main_pressed_slider,
+    );
     let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
         ui.label("failed to render skinned main player");
         return;
@@ -52,7 +60,14 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     }
 }
 
-fn main_render_state(view_model: &MainPlayerViewModel) -> MainWindowRenderState {
+fn main_render_state(
+    view_model: &MainPlayerViewModel,
+    equalizer_visible: bool,
+    playlist_visible: bool,
+    pressed_push: Option<MainPushButton>,
+    pressed_toggle: Option<MainToggleButton>,
+    pressed_slider: Option<MainSlider>,
+) -> MainWindowRenderState {
     MainWindowRenderState {
         title: if view_model.title.is_empty() {
             "XMMS Renascene".to_string()
@@ -67,13 +82,16 @@ fn main_render_state(view_model: &MainPlayerViewModel) -> MainWindowRenderState 
         balance_position: balance_to_position(view_model.balance),
         shuffle_selected: view_model.shuffle,
         repeat_selected: view_model.repeat,
-        equalizer_selected: false,
-        playlist_selected: false,
+        equalizer_selected: equalizer_visible,
+        playlist_selected: playlist_visible,
         play_status: match view_model.player_state {
             PlayerState::Playing => PlayStatusValue::Playing,
             PlayerState::Paused => PlayStatusValue::Paused,
             PlayerState::Stopped => PlayStatusValue::Stopped,
         },
+        pressed_push,
+        pressed_toggle,
+        pressed_slider,
         time_digits: [NumberDisplay::BLANK; 5],
         ..MainWindowRenderState::default()
     }
@@ -93,6 +111,10 @@ fn add_main_hit_regions(
     base_rect: egui::Rect,
     view_model: &MainPlayerViewModel,
 ) {
+    app.main_pressed_push = None;
+    app.main_pressed_toggle = None;
+    app.main_pressed_slider = None;
+
     for &button in main_push_buttons(view_model.shaded) {
         let rect = scale_skin_rect(
             base_rect,
@@ -104,8 +126,12 @@ fn add_main_hit_regions(
             ui.id().with(("main-push", button as u8)),
             egui::Sense::click(),
         );
+        if response.is_pointer_button_down_on() {
+            app.main_pressed_push = Some(button);
+            ui.ctx().request_repaint();
+        }
         if response.clicked() {
-            dispatch_push(app, button);
+            dispatch_push(ui.ctx(), app, button);
         }
     }
 
@@ -123,6 +149,10 @@ fn add_main_hit_regions(
                 ui.id().with(("main-toggle", toggle as u8)),
                 egui::Sense::click(),
             );
+            if response.is_pointer_button_down_on() {
+                app.main_pressed_toggle = Some(toggle);
+                ui.ctx().request_repaint();
+            }
             if response.clicked() {
                 dispatch_toggle(app, toggle);
             }
@@ -137,12 +167,16 @@ fn add_main_hit_regions(
             ui.id().with(("main-slider", slider as u8)),
             egui::Sense::click_and_drag(),
         );
+        if response.is_pointer_button_down_on() || response.dragged() {
+            app.main_pressed_slider = Some(slider);
+            ui.ctx().request_repaint();
+        }
         if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
             let pointer = response.interact_pointer_pos().unwrap();
             let normalized = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
             let position =
                 layout.min + ((layout.max - layout.min) as f32 * normalized).round() as i32;
-            dispatch_slider(app, slider, position);
+            dispatch_slider(app, slider, position, view_model.shaded);
         }
     }
 }
@@ -199,7 +233,7 @@ fn scale_skin_rect(base: egui::Rect, rect: SkinRect, scale: f32) -> egui::Rect {
     )
 }
 
-fn dispatch_push(app: &mut EguiFrontendState, button: MainPushButton) {
+fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainPushButton) {
     match button {
         MainPushButton::Previous => app.dispatch(PlayerCommand::PreviousTrack),
         MainPushButton::Play => app.dispatch(PlayerCommand::Play),
@@ -211,7 +245,9 @@ fn dispatch_push(app: &mut EguiFrontendState, button: MainPushButton) {
             index: 0,
         }),
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
-        MainPushButton::Menu | MainPushButton::Minimize | MainPushButton::Close => {}
+        MainPushButton::Menu => app.preferences_open = true,
+        MainPushButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+        MainPushButton::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
     }
 }
 
@@ -224,14 +260,39 @@ fn dispatch_toggle(app: &mut EguiFrontendState, toggle: MainToggleButton) {
     }
 }
 
-fn dispatch_slider(app: &mut EguiFrontendState, slider: MainSlider, position: i32) {
+fn dispatch_slider(app: &mut EguiFrontendState, slider: MainSlider, position: i32, shaded: bool) {
     match slider {
         MainSlider::Volume => app.dispatch(AudioCommand::SetVolume(position_to_volume(position))),
         MainSlider::Balance => {
             app.dispatch(AudioCommand::SetBalance(position_to_balance(position)))
         }
-        MainSlider::Position => app.dispatch(PlayerCommand::SeekToMs(0)),
+        MainSlider::Position => {
+            if let Some(position_ms) = position_to_seek_ms(app, position, shaded) {
+                app.dispatch(PlayerCommand::SeekToMs(position_ms));
+            }
+        }
     }
+}
+
+fn position_to_seek_ms(app: &EguiFrontendState, position: i32, shaded: bool) -> Option<i64> {
+    let state = app.controller().state();
+    let duration_ms = state.player.duration_ms().or_else(|| {
+        state
+            .playlist
+            .position()
+            .and_then(|index| state.playlist.entries().get(index))
+            .map(|entry| entry.length_ms)
+    })?;
+    if duration_ms <= 0 {
+        return None;
+    }
+    let position_ms = if shaded {
+        (duration_ms * i64::from((position - 1).clamp(0, 12))) / 12
+    } else {
+        let layout = main_slider_layout(MainSlider::Position, false);
+        (duration_ms * i64::from(position.clamp(layout.min, layout.max))) / i64::from(layout.max)
+    };
+    Some(position_ms.clamp(0, duration_ms))
 }
 
 #[cfg(test)]
@@ -257,22 +318,71 @@ mod tests {
 
     #[test]
     fn main_render_state_uses_skin_slider_positions() {
-        let state = main_render_state(&MainPlayerViewModel {
-            title: String::new(),
-            player_state: PlayerState::Stopped,
-            volume: 100,
-            balance: 0,
-            shuffle: false,
-            repeat: false,
-            shaded: false,
-            bitrate_text: "0".to_string(),
-            frequency_text: "0".to_string(),
-            channels_text: "0".to_string(),
-        });
+        let state = main_render_state(
+            &MainPlayerViewModel {
+                title: String::new(),
+                player_state: PlayerState::Stopped,
+                volume: 100,
+                balance: 0,
+                shuffle: false,
+                repeat: false,
+                shaded: false,
+                bitrate_text: "0".to_string(),
+                frequency_text: "0".to_string(),
+                channels_text: "0".to_string(),
+            },
+            true,
+            true,
+            Some(MainPushButton::Play),
+            Some(MainToggleButton::Repeat),
+            Some(MainSlider::Volume),
+        );
 
         assert_eq!(state.volume_position, 51);
         assert_eq!(state.balance_position, 12);
         assert_eq!(state.title, "XMMS Renascene");
         assert!(state.bitrate_text.is_empty());
+        assert!(state.equalizer_selected);
+        assert!(state.playlist_selected);
+        assert_eq!(state.pressed_push, Some(MainPushButton::Play));
+        assert_eq!(state.pressed_toggle, Some(MainToggleButton::Repeat));
+        assert_eq!(state.pressed_slider, Some(MainSlider::Volume));
+    }
+
+    #[test]
+    fn position_slider_maps_to_current_track_duration() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        app.controller_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/song.ogg",
+            "Song",
+            219_000,
+        );
+        app.controller_mut().state_mut().playlist.set_position(0);
+
+        assert_eq!(position_to_seek_ms(&app, 109, false), Some(109_000));
+        assert_eq!(position_to_seek_ms(&app, 7, true), Some(109_500));
+    }
+
+    #[test]
+    fn skinned_main_controls_dispatch_to_app_state() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        let ctx = egui::Context::default();
+
+        dispatch_push(&ctx, &mut app, MainPushButton::Shade);
+        assert!(app.controller().state().config.main_shaded);
+
+        dispatch_toggle(&mut app, MainToggleButton::Playlist);
+        assert!(app.controller().state().config.playlist_visible);
+
+        dispatch_toggle(&mut app, MainToggleButton::Shuffle);
+        assert!(app.controller().state().playlist.shuffle());
+
+        dispatch_slider(&mut app, MainSlider::Volume, 0, false);
+        assert_eq!(app.controller().state().player.volume(), 0);
+
+        dispatch_slider(&mut app, MainSlider::Balance, 24, false);
+        assert_eq!(app.controller().state().player.balance(), 100);
     }
 }

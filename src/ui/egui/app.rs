@@ -9,7 +9,9 @@ use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
 #[cfg(feature = "gstreamer-backend")]
 use crate::player::GStreamerBackend;
-use crate::render::{main_window_height, MAIN_WINDOW_WIDTH};
+use crate::render::{
+    main_window_height, MainPushButton, MainSlider, MainToggleButton, MAIN_WINDOW_WIDTH,
+};
 use crate::skin::DefaultSkin;
 
 use super::preferences::{self, PreferencesPage};
@@ -29,6 +31,9 @@ pub struct EguiFrontendState {
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
     pub active_skin: DefaultSkin,
+    pub main_pressed_push: Option<MainPushButton>,
+    pub main_pressed_toggle: Option<MainToggleButton>,
+    pub main_pressed_slider: Option<MainSlider>,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
@@ -51,6 +56,9 @@ impl EguiFrontendState {
             dock_panels: true,
             runtime: EguiRuntime::default(),
             active_skin,
+            main_pressed_push: None,
+            main_pressed_toggle: None,
+            main_pressed_slider: None,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
