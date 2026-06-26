@@ -363,21 +363,21 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the GTK module split.
 
-- [ ] **Step 12: Define frontend service boundaries**
-  - [ ] Identify file dialog service needs.
-  - [ ] Identify directory dialog service needs.
-  - [ ] Identify message/error dialog service needs.
-  - [ ] Identify clipboard service needs.
-  - [ ] Identify timer/main-loop scheduling needs.
-  - [ ] Identify config/storage path service needs.
-  - [ ] Identify skin import/export path service needs.
-  - [ ] Identify external URL opening needs.
-  - [ ] Identify platform window action needs.
-  - [ ] Prefer explicit `AppEffect` payloads over injecting many service traits too early.
-  - [ ] Document the frontend/platform surface area.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit service boundary documentation/types.
+- [x] **Step 12: Define frontend service boundaries**
+  - [x] Identify file dialog service needs.
+  - [x] Identify directory dialog service needs.
+  - [x] Identify message/error dialog service needs.
+  - [x] Identify clipboard service needs.
+  - [x] Identify timer/main-loop scheduling needs.
+  - [x] Identify config/storage path service needs.
+  - [x] Identify skin import/export path service needs.
+  - [x] Identify external URL opening needs.
+  - [x] Identify platform window action needs.
+  - [x] Prefer explicit `AppEffect` payloads over injecting many service traits too early.
+  - [x] Document the frontend/platform surface area.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit service boundary documentation/types.
 
 - [ ] **Step 13: Separate playback backend from UI concerns**
   - [ ] Split playback model types from GStreamer implementation where practical.
