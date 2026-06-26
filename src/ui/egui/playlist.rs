@@ -5,6 +5,7 @@ use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
     format_playlist_footer_duration, playlist_view_model, PlaylistViewModel,
 };
+use crate::player::PlayerState;
 use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 use crate::render::{
     PlaylistRowRenderEntry, PlaylistRowsRenderState, PLAYLIST_DEFAULT_HEIGHT,
@@ -29,6 +30,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     }
     let rows = playlist_rows_render_state(app, &view_model);
     let footer_info = playlist_footer_info(app);
+    let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
     let Ok(image) = render_playlist_color_image(
         &app.active_skin,
         true,
@@ -37,6 +39,8 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         PLAYLIST_DEFAULT_HEIGHT,
         &rows,
         Some(&footer_info),
+        Some(&footer_time_minutes),
+        Some(&footer_time_seconds),
     ) else {
         ui.label("failed to render skinned playlist");
         return;
@@ -97,6 +101,16 @@ fn playlist_rows_render_state(
         width: PLAYLIST_DEFAULT_WIDTH,
         height: PLAYLIST_DEFAULT_HEIGHT,
     }
+}
+
+fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
+    if app.controller().state().player.state() == PlayerState::Stopped {
+        return ("   ".to_string(), "  ".to_string());
+    }
+    let total_seconds = app.controller().state().config.playback_position_ms.max(0) / 1_000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    (format!("{minutes:>3}"), format!("{seconds:02}"))
 }
 
 fn playlist_footer_info(app: &EguiFrontendState) -> String {

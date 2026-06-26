@@ -74,6 +74,8 @@ pub fn render_playlist_color_image(
     height: i32,
     rows: &PlaylistRowsRenderState,
     footer_info: Option<&str>,
+    footer_time_minutes: Option<&str>,
+    footer_time_seconds: Option<&str>,
 ) -> Result<egui::ColorImage, RenderError> {
     let render_height = playlist_window_height(shaded, height);
     let mut surface = ImageSurface::create(Format::ARgb32, width, render_height)?;
@@ -87,8 +89,8 @@ pub fn render_playlist_color_image(
         height,
         None,
         footer_info,
-        Some("   "),
-        Some("  "),
+        footer_time_minutes,
+        footer_time_seconds,
     )?;
     if !shaded {
         render_playlist_rows(&cr, skin, rows, RenderPass::Bitmap)?;

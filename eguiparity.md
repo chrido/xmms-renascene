@@ -223,7 +223,7 @@ Legend:
 - [ ] Playlist focused/unfocused titlebar rendering and focus switching missing.
 - [ ] Current row and selected row behavior needs parity audit for multi-select/range behavior.
 - [x] Save/load playlist through egui is still placeholder/pending; `rfd` selections now load and save M3U playlist files.
-- [ ] Footer time fields are placeholder in egui (`"   "`, `"  "`) rather than live elapsed/remaining split.
+- [x] Footer time fields are placeholder in egui (`"   "`, `"  "`) rather than live elapsed/remaining split.
 
 ---
 
