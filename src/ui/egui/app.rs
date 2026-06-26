@@ -2,9 +2,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::app::command::{AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand};
+use crate::app::command::{
+    AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
+};
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
@@ -28,7 +31,7 @@ use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin,
 
 use super::file_info;
 use super::menu::{self, EguiPrompt};
-use super::preferences::{self, PreferencesPage};
+use super::preferences::{self, PreferencesPage, PreferencesViewportState};
 use super::runtime::EguiRuntime;
 use super::{equalizer, main_player, playlist};
 
@@ -46,6 +49,7 @@ pub struct EguiFrontendState {
     pub prompt_open: Option<EguiPrompt>,
     pub prompt_text: String,
     pub selected_preferences_page: PreferencesPage,
+    pub preferences_viewport: Arc<Mutex<PreferencesViewportState>>,
     pub texture_cache: EguiTextureCache,
     pub last_tick: Instant,
     pub scale_factor: f32,
@@ -79,6 +83,11 @@ impl EguiFrontendState {
         let active_skin = load_skin_from_config(&app_state)?;
         let skin_entries = discover_runtime_skins();
         let scale_factor = app_state.config.scale_factor as f32;
+        let preferences_viewport = Arc::new(Mutex::new(PreferencesViewportState::new(
+            &app_state.config,
+            PreferencesPage::default(),
+            options.open_preferences,
+        )));
         Ok(Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
@@ -88,6 +97,7 @@ impl EguiFrontendState {
             prompt_open: None,
             prompt_text: String::new(),
             selected_preferences_page: PreferencesPage::default(),
+            preferences_viewport,
             texture_cache: EguiTextureCache::default(),
             last_tick: Instant::now(),
             scale_factor,
@@ -458,7 +468,7 @@ fn show_detached_equalizer(ctx: &egui::Context, app: &mut EguiFrontendState) {
         .with_title("Equalizer")
         .with_inner_size(size)
         .with_resizable(false)
-        .with_decorations(true);
+        .with_decorations(false);
     ctx.show_viewport_immediate(
         egui::ViewportId::from_hash_of("xmms-egui-detached-equalizer"),
         builder,
@@ -497,7 +507,7 @@ fn show_detached_playlist(ctx: &egui::Context, app: &mut EguiFrontendState) {
         .with_inner_size(size)
         .with_min_inner_size(size)
         .with_resizable(true)
-        .with_decorations(true);
+        .with_decorations(false);
     ctx.show_viewport_immediate(
         egui::ViewportId::from_hash_of("xmms-egui-detached-playlist"),
         builder,
