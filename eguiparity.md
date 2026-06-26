@@ -270,7 +270,7 @@ Legend:
 - [ ] Equalizer configure dialog missing:
   - directory preset file;
   - file preset extension.
-- [ ] Equalizer file dialogs are placeholder/pending for several actions.
+- [x] Equalizer file dialogs are placeholder/pending for several actions.
 - [ ] Shaded equalizer mode interaction incomplete:
   - shaded volume slider;
   - shaded balance slider;
@@ -402,7 +402,7 @@ Legend:
 
 - [x] Open Location is not a proper egui prompt.
 - [x] Playlist load/save implementation is incomplete/pending.
-- [ ] Equalizer preset load/save/import/export is incomplete/pending.
+- [x] Equalizer preset load/save/import/export is incomplete/pending.
 - [x] Skin import/export is incomplete/pending for egui.
 - [ ] File dialog filters/extensions are not fully matched to GTK behavior.
 - [ ] Directory recursion/add behavior needs UI parity verification.

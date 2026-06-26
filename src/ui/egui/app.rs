@@ -8,6 +8,10 @@ use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
+use crate::equalizer::{
+    load_winamp_eqf_first, load_xmms_preset_file, save_winamp_eqf, save_xmms_preset_file,
+    EqualizerPreset,
+};
 #[cfg(feature = "gstreamer-backend")]
 use crate::player::GStreamerBackend;
 use crate::render::{
@@ -221,13 +225,29 @@ impl EguiFrontendState {
                     self.save_playlist_file(&path);
                 }
             }
-            FileDialogRequest::LoadEqualizerPreset
-            | FileDialogRequest::SaveEqualizerPreset
-            | FileDialogRequest::ImportSkin
-            | FileDialogRequest::ExportSkin => self
+            FileDialogRequest::LoadEqualizerPreset => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Load equalizer preset")
+                    .add_filter("Equalizer presets", &["preset", "eqf"])
+                    .pick_file()
+                {
+                    self.load_equalizer_preset_file(&path);
+                }
+            }
+            FileDialogRequest::SaveEqualizerPreset => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Save equalizer preset")
+                    .add_filter("Equalizer presets", &["preset", "eqf"])
+                    .save_file()
+                {
+                    self.save_equalizer_preset_file(&path);
+                }
+            }
+            FileDialogRequest::ImportSkin => import_skin_from_dialog(self),
+            FileDialogRequest::ExportSkin => self
                 .runtime
                 .pending_messages
-                .push(format!("file dialog pending egui handler: {request:?}")),
+                .push("skin export from egui is not needed for playback parity".to_string()),
         }
     }
 
@@ -253,6 +273,63 @@ impl EguiFrontendState {
             ));
         }
     }
+
+    fn load_equalizer_preset_file(&mut self, path: &Path) {
+        let loaded = if is_winamp_eqf(path) {
+            load_winamp_eqf_first(path)
+        } else {
+            load_xmms_preset_file(path)
+        };
+        match loaded {
+            Ok(Some(preset)) => self.apply_equalizer_preset(&preset),
+            Ok(None) => self.runtime.pending_messages.push(format!(
+                "no equalizer preset found in '{}'",
+                path.display()
+            )),
+            Err(err) => self.runtime.pending_messages.push(format!(
+                "failed to load equalizer preset '{}': {err}",
+                path.display()
+            )),
+        }
+    }
+
+    fn save_equalizer_preset_file(&mut self, path: &Path) {
+        let preset = self.current_equalizer_preset(if is_winamp_eqf(path) { "Entry1" } else { "File" });
+        let saved = if is_winamp_eqf(path) {
+            save_winamp_eqf(path, &preset)
+        } else {
+            save_xmms_preset_file(path, &preset)
+        };
+        if let Err(err) = saved {
+            self.runtime.pending_messages.push(format!(
+                "failed to save equalizer preset '{}': {err}",
+                path.display()
+            ));
+        }
+    }
+
+    fn current_equalizer_preset(&self, name: &str) -> EqualizerPreset {
+        let config = &self.controller.state().config;
+        EqualizerPreset::from_positions(
+            name,
+            config.equalizer_preamp_pos,
+            config.equalizer_band_pos,
+        )
+    }
+
+    fn apply_equalizer_preset(&mut self, preset: &EqualizerPreset) {
+        let config = &mut self.controller.state_mut().config;
+        config.equalizer_preamp_pos = preset.preamp_position();
+        config.equalizer_band_pos = preset.band_positions();
+        self.runtime.apply_effect(AppEffect::QueueRender(RenderTarget::Equalizer));
+        self.apply_effect(AppEffect::SetBackendEqualizer);
+    }
+}
+
+fn is_winamp_eqf(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("eqf"))
 }
 
 impl EguiFrontendState {
@@ -576,6 +653,32 @@ mod tests {
         let saved = std::fs::read_to_string(&output).unwrap();
         assert!(saved.contains("#EXTM3U"));
         assert!(saved.contains("file:///tmp/loaded.mp3"));
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn equalizer_preset_load_and_save_use_shared_formats() {
+        let root = std::env::temp_dir().join(format!(
+            "xmms-rs-egui-eq-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("custom.preset");
+
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.controller_mut().state_mut().config.equalizer_preamp_pos = 25;
+        app.controller_mut().state_mut().config.equalizer_band_pos[0] = 75;
+        app.save_equalizer_preset_file(&path);
+
+        app.controller_mut().state_mut().config.equalizer_preamp_pos = 50;
+        app.controller_mut().state_mut().config.equalizer_band_pos[0] = 50;
+        app.load_equalizer_preset_file(&path);
+
+        assert_eq!(app.controller().state().config.equalizer_preamp_pos, 25);
+        assert_eq!(app.controller().state().config.equalizer_band_pos[0], 75);
+        assert!(app.runtime.repaint_requested);
 
         let _ = std::fs::remove_dir_all(&root);
     }
