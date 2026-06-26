@@ -399,21 +399,21 @@ Use the current Cairo renderer to render into an image buffer, then upload that 
 
 ### Tasks
 
-- [ ] Add `src/ui/egui/skin_texture.rs` helpers.
-- [ ] Render main player state with existing render functions into a Cairo image surface.
-- [ ] Convert Cairo image data into `egui::ColorImage`.
-- [ ] Upload/update `egui::TextureHandle`.
-- [ ] Add texture invalidation when relevant `AppEffect::QueueRender` is received.
-- [ ] Handle scale factor cleanly.
-- [ ] Preserve render parity by not changing renderer behavior.
-- [ ] Add shared screenshot helpers outside GTK-only modules if egui needs behavior currently available only through GTK preview/screenshot code.
-- [ ] Add a deterministic GTK reference screenshot path for main player, playlist, equalizer, and preferences states where practical.
-- [ ] Add an egui screenshot capture path for the same states.
-- [ ] Add a pixel/image comparison helper with documented tolerance.
-- [ ] Compare egui screenshots against GTK/reference screenshots after each visible UI milestone.
-- [ ] Store/update reference images only intentionally.
-- [ ] Add tests for conversion helpers if practical without requiring a window.
-- [ ] Validation:
+- [x] Add `src/ui/egui/skin_texture.rs` helpers.
+- [x] Render main player state with existing render functions into a Cairo image surface.
+- [x] Convert Cairo image data into `egui::ColorImage`.
+- [x] Upload/update `egui::TextureHandle`.
+- [x] Add texture invalidation when relevant `AppEffect::QueueRender` is received.
+- [x] Handle scale factor cleanly.
+- [x] Preserve render parity by not changing renderer behavior.
+- [x] Add shared screenshot helpers outside GTK-only modules if egui needs behavior currently available only through GTK preview/screenshot code.
+- [x] Add a deterministic GTK reference screenshot path for main player, playlist, equalizer, and preferences states where practical.
+- [x] Add an egui screenshot capture path for the same states.
+- [x] Add a pixel/image comparison helper with documented tolerance.
+- [x] Compare egui screenshots against GTK/reference screenshots after each visible UI milestone.
+- [x] Store/update reference images only intentionally.
+- [x] Add tests for conversion helpers if practical without requiring a window.
+- [x] Validation:
 
 ```bash
 cargo test --test render
@@ -422,7 +422,7 @@ cargo check --no-default-features --features egui-ui
 # cargo test --test egui_screenshots
 ```
 
-- [ ] Commit: `Render skin surfaces as egui textures`
+- [x] Commit: `Render skin surfaces as egui textures`
 
 ## Phase 7: Implement main player egui UI
 
