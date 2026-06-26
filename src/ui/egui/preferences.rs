@@ -113,7 +113,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
             .lock()
             .expect("preferences viewport state poisoned");
         next_page = state.selected_page;
-        if state.close_requested || !state.open {
+        if state.close_requested {
             next_open = false;
             state.close_requested = false;
         }
