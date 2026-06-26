@@ -7,7 +7,7 @@ use super::core::{
 use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 use crate::skin::layout::{
     main_push_button_spec, main_slider_layout, main_toggle_button_spec, MainPushButton, MainSlider,
-    MainToggleButton, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    MainToggleButton, SkinRect, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisMode, VisScopeMode,
@@ -35,12 +35,8 @@ pub fn render_main_titlebar(
     blit_surface_rect(
         cr,
         &titlebar,
-        27,
-        ysrc,
-        0,
-        0,
-        MAIN_WINDOW_WIDTH,
-        MAIN_TITLEBAR_HEIGHT,
+        SkinRect::new(27, ysrc, MAIN_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT),
+        (0, 0),
     )
 }
 
@@ -54,8 +50,12 @@ pub fn render_main_player(
     if !shaded {
         if let Some(main) = skin.get(SkinPixmapKind::Main) {
             let main = surface_from_xpm(main)?;
-            rendered |=
-                blit_surface_rect(cr, &main, 0, 0, 0, 0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT)?;
+            rendered |= blit_surface_rect(
+                cr,
+                &main,
+                SkinRect::new(0, 0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT),
+                (0, 0),
+            )?;
         }
     }
 
@@ -328,12 +328,8 @@ pub fn render_main_player_state(
         cr,
         skin,
         SkinPixmapKind::PlayPause,
-        0,
-        status_y,
-        24,
-        28,
-        11,
-        9,
+        SkinRect::new(0, status_y, 11, 9),
+        (24, 28),
     )?;
 
     Ok(rendered)
@@ -355,12 +351,13 @@ fn render_shaded_position_slider(
         cr,
         skin,
         SkinPixmapKind::Titlebar,
-        knob_source_x,
-        36,
-        layout.rect.x + position,
-        layout.rect.y,
-        layout.knob_size.width,
-        layout.knob_size.height,
+        SkinRect::new(
+            knob_source_x,
+            36,
+            layout.knob_size.width,
+            layout.knob_size.height,
+        ),
+        (layout.rect.x + position, layout.rect.y),
     )
 }
 
@@ -380,12 +377,13 @@ fn render_number(
         cr,
         skin,
         SkinPixmapKind::Numbers,
-        digit * NumberDisplay::WIDTH,
-        0,
-        xdest,
-        ydest,
-        NumberDisplay::WIDTH,
-        NumberDisplay::HEIGHT,
+        SkinRect::new(
+            digit * NumberDisplay::WIDTH,
+            0,
+            NumberDisplay::WIDTH,
+            NumberDisplay::HEIGHT,
+        ),
+        (xdest, ydest),
     )
 }
 
@@ -538,11 +536,8 @@ fn render_scope_visualization(
             VisScopeMode::Dot => draw_vis_pixel(
                 cr,
                 colors,
-                xdest,
-                ydest,
-                width,
-                x,
-                15 - h,
+                SkinRect::new(xdest, ydest, width, 16),
+                (x, 15 - h),
                 SCOPE_COLORS[h.clamp(0, 12) as usize],
             )?,
             VisScopeMode::Line => {
@@ -556,11 +551,8 @@ fn render_scope_visualization(
                     draw_vis_pixel(
                         cr,
                         colors,
-                        xdest,
-                        ydest,
-                        width,
-                        x,
-                        y,
+                        SkinRect::new(xdest, ydest, width, 16),
+                        (x, y),
                         SCOPE_COLORS[(y - 3).clamp(0, 12) as usize],
                     )?;
                 }
@@ -569,7 +561,13 @@ fn render_scope_visualization(
                 let y1 = 15 - h;
                 let color = SCOPE_COLORS[h.clamp(0, 12) as usize];
                 for y in y1.min(9)..=y1.max(9) {
-                    draw_vis_pixel(cr, colors, xdest, ydest, width, x, y, color)?;
+                    draw_vis_pixel(
+                        cr,
+                        colors,
+                        SkinRect::new(xdest, ydest, width, 16),
+                        (x, y),
+                        color,
+                    )?;
                 }
             }
         }
@@ -606,11 +604,8 @@ fn render_analyzer_visualization(
             draw_vis_pixel(
                 cr,
                 colors,
-                xdest,
-                ydest,
-                width,
-                x,
-                y,
+                SkinRect::new(xdest, ydest, width, 16),
+                (x, y),
                 analyzer_color(state.analyzer_mode, y, h),
             )?;
         }
@@ -623,7 +618,13 @@ fn render_analyzer_visualization(
             };
             let peak_y = 16 - visualization_level(state.peak[peak_index]);
             if (0..16).contains(&peak_y) {
-                draw_vis_pixel(cr, colors, xdest, ydest, width, x, peak_y, 23)?;
+                draw_vis_pixel(
+                    cr,
+                    colors,
+                    SkinRect::new(xdest, ydest, width, 16),
+                    (x, peak_y),
+                    23,
+                )?;
             }
         }
     }
@@ -661,7 +662,13 @@ fn render_milkdrop_visualization(
             let plasma = ((rx - ry) * 7.0 + phase).sin() + ((rx + ry) * 5.0 - phase * 1.3).cos();
             let color =
                 (3.0 + (tunnel + plasma + 4.0 + energy * 2.0) * 2.6).clamp(2.0, 22.0) as usize;
-            draw_vis_pixel(cr, colors, xdest, ydest, width, x, y, color)?;
+            draw_vis_pixel(
+                cr,
+                colors,
+                SkinRect::new(xdest, ydest, width, 16),
+                (x, y),
+                color,
+            )?;
         }
     }
 
@@ -669,9 +676,21 @@ fn render_milkdrop_visualization(
         let sample = state.data[x as usize];
         let y = (7.5 + (x as f32 * 0.19 + phase * 2.0).sin() * 3.0 - sample * 6.0).clamp(0.0, 15.0)
             as i32;
-        draw_vis_pixel(cr, colors, xdest, ydest, width, x, y, 23)?;
+        draw_vis_pixel(
+            cr,
+            colors,
+            SkinRect::new(xdest, ydest, width, 16),
+            (x, y),
+            23,
+        )?;
         if y + 1 < 16 {
-            draw_vis_pixel(cr, colors, xdest, ydest, width, x, y + 1, 18)?;
+            draw_vis_pixel(
+                cr,
+                colors,
+                SkinRect::new(xdest, ydest, width, 16),
+                (x, y + 1),
+                18,
+            )?;
         }
     }
 
@@ -680,7 +699,13 @@ fn render_milkdrop_visualization(
         let radius = 2.0 + energy * 7.0 + (phase * 1.4 + i as f32 * 0.7).sin() * 1.4;
         let x = (cx + a.cos() * radius * 3.4).clamp(0.0, (width - 1) as f32) as i32;
         let y = (cy + a.sin() * radius).clamp(0.0, 15.0) as i32;
-        draw_vis_pixel(cr, colors, xdest, ydest, width, x, y, 21 + (i % 3))?;
+        draw_vis_pixel(
+            cr,
+            colors,
+            SkinRect::new(xdest, ydest, width, 16),
+            (x, y),
+            21 + (i % 3),
+        )?;
     }
 
     Ok(())
@@ -701,18 +726,16 @@ fn analyzer_color(mode: VisAnalyzerMode, row: i32, height: i32) -> usize {
 fn draw_vis_pixel(
     cr: &Context,
     colors: &[[u8; 3]; 24],
-    xdest: i32,
-    ydest: i32,
-    width: i32,
-    x: i32,
-    y: i32,
+    area: SkinRect,
+    point: (i32, i32),
     color_idx: usize,
 ) -> Result<(), RenderError> {
-    if x < 0 || x >= width || !(0..16).contains(&y) {
+    let (x, y) = point;
+    if x < 0 || x >= area.width || !(0..area.height).contains(&y) {
         return Ok(());
     }
     set_vis_color(cr, colors, color_idx);
-    cr.rectangle(f64::from(xdest + x), f64::from(ydest + y), 1.0, 1.0);
+    cr.rectangle(f64::from(area.x + x), f64::from(area.y + y), 1.0, 1.0);
     cr.fill()?;
     Ok(())
 }
@@ -738,23 +761,15 @@ fn render_mono_stereo(
         cr,
         skin,
         SkinPixmapKind::MonoStereo,
-        0,
-        stereo_y,
-        xdest,
-        ydest,
-        29,
-        12,
+        SkinRect::new(0, stereo_y, 29, 12),
+        (xdest, ydest),
     )?;
     rendered |= blit_skin_rect(
         cr,
         skin,
         SkinPixmapKind::MonoStereo,
-        29,
-        mono_y,
-        xdest + 29,
-        ydest,
-        27,
-        12,
+        SkinRect::new(29, mono_y, 27, 12),
+        (xdest + 29, ydest),
     )?;
     Ok(rendered)
 }

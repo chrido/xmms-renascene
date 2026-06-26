@@ -8,10 +8,10 @@ pub use crate::skin::layout::{
     equalizer_control_spec, equalizer_slider_layout, equalizer_window_height,
     main_push_button_spec, main_slider_layout, main_toggle_button_spec, main_window_height,
     playlist_window_height, EqualizerControl, EqualizerSlider, MainPushButton, MainSlider,
-    MainToggleButton, SliderLayout, SpriteSpec, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
-    PLAYLIST_WIDTH_STEP,
+    MainToggleButton, SkinRect, SliderLayout, SpriteSpec, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH, PLAYLIST_WIDTH_STEP,
 };
 pub use core::*;
 pub use docked::*;
@@ -69,7 +69,7 @@ mod tests {
         let mut dest = ImageSurface::create(Format::ARgb32, 2, 1).unwrap();
         let cr = Context::new(&dest).unwrap();
 
-        assert!(blit_surface_rect(&cr, &source, 1, 0, 0, 0, 1, 1).unwrap());
+        assert!(blit_surface_rect(&cr, &source, SkinRect::new(1, 0, 1, 1), (0, 0)).unwrap());
         drop(cr);
         dest.flush();
 
@@ -96,7 +96,7 @@ mod tests {
         let mut dest = ImageSurface::create(Format::ARgb32, 2, 1).unwrap();
         let cr = Context::new(&dest).unwrap();
 
-        assert!(blit_surface_rect(&cr, &source, -1, 0, 0, 0, 2, 1).unwrap());
+        assert!(blit_surface_rect(&cr, &source, SkinRect::new(-1, 0, 2, 1), (0, 0)).unwrap());
         drop(cr);
         dest.flush();
 
@@ -133,7 +133,7 @@ mod tests {
         let render = |cr: &Context| -> Result<(), RenderError> {
             let mut x = 0;
             while x < base_w {
-                blit_surface_rect(cr, &source, x, 0, x, 0, 2, base_h)?;
+                blit_surface_rect(cr, &source, SkinRect::new(x, 0, 2, base_h), (x, 0))?;
                 x += 2;
             }
             Ok(())

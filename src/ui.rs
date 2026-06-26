@@ -4842,8 +4842,13 @@ fn draw_skin_editor_canvas(cr: &cairo::Context, state: &MainWindowUiState) -> Re
 
         if let Some(image) = state.active_skin().get(slot.kind) {
             let surface = surface_from_xpm(image).map_err(|err| err.to_string())?;
-            blit_surface_rect(cr, &surface, 0, 0, slot.x, slot.y, slot.width, slot.height)
-                .map_err(|err| err.to_string())?;
+            blit_surface_rect(
+                cr,
+                &surface,
+                SkinRect::new(0, 0, slot.width, slot.height),
+                (slot.x, slot.y),
+            )
+            .map_err(|err| err.to_string())?;
         }
     }
 

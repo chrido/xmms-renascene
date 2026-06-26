@@ -8,7 +8,7 @@ use crate::audio_model::{
     equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions, EQUALIZER_BANDS,
 };
 use crate::skin::layout::{
-    equalizer_control_spec, equalizer_slider_layout, EqualizerControl, EqualizerSlider,
+    equalizer_control_spec, equalizer_slider_layout, EqualizerControl, EqualizerSlider, SkinRect,
     SliderLayout, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
 };
 use crate::skin::xpm::XpmImage;
@@ -59,12 +59,13 @@ pub fn render_equalizer_background(
         return blit_surface_rect(
             cr,
             &eq_ex,
-            0,
-            if focused { 0 } else { 15 },
-            0,
-            0,
-            EQUALIZER_WINDOW_WIDTH,
-            MAIN_TITLEBAR_HEIGHT,
+            SkinRect::new(
+                0,
+                if focused { 0 } else { 15 },
+                EQUALIZER_WINDOW_WIDTH,
+                MAIN_TITLEBAR_HEIGHT,
+            ),
+            (0, 0),
         );
     }
 
@@ -75,23 +76,20 @@ pub fn render_equalizer_background(
     let mut rendered = blit_surface_rect(
         cr,
         &eqmain,
-        0,
-        0,
-        0,
-        0,
-        EQUALIZER_WINDOW_WIDTH,
-        EQUALIZER_WINDOW_HEIGHT,
+        SkinRect::new(0, 0, EQUALIZER_WINDOW_WIDTH, EQUALIZER_WINDOW_HEIGHT),
+        (0, 0),
     )?;
     if eqmain_image.height() >= 163 {
         rendered |= blit_surface_rect(
             cr,
             &eqmain,
-            0,
-            if focused { 134 } else { 149 },
-            0,
-            0,
-            EQUALIZER_WINDOW_WIDTH,
-            MAIN_TITLEBAR_HEIGHT,
+            SkinRect::new(
+                0,
+                if focused { 134 } else { 149 },
+                EQUALIZER_WINDOW_WIDTH,
+                MAIN_TITLEBAR_HEIGHT,
+            ),
+            (0, 0),
         )?;
     }
     Ok(rendered)
@@ -257,22 +255,22 @@ fn draw_eq_slider(
     let mut rendered = blit_surface_rect(
         cr,
         eqmain,
-        frame_x,
-        frame_y,
-        layout.rect.x,
-        layout.rect.y,
-        layout.rect.width,
-        layout.rect.height,
+        SkinRect::new(frame_x, frame_y, layout.rect.width, layout.rect.height),
+        (layout.rect.x, layout.rect.y),
     )?;
     rendered |= blit_surface_rect(
         cr,
         eqmain,
-        0,
-        if pressed { 176 } else { 164 },
-        layout.rect.x + ((layout.rect.width - layout.knob_size.width) / 2),
-        layout.rect.y + slider_position,
-        11,
-        layout.knob_size.height,
+        SkinRect::new(
+            0,
+            if pressed { 176 } else { 164 },
+            11,
+            layout.knob_size.height,
+        ),
+        (
+            layout.rect.x + ((layout.rect.width - layout.knob_size.width) / 2),
+            layout.rect.y + slider_position,
+        ),
     )?;
     Ok(rendered)
 }
@@ -284,16 +282,12 @@ fn draw_eq_graph(
     preamp_position: i32,
     band_positions: &EqualizerBandPositions,
 ) -> Result<(), RenderError> {
-    blit_surface_rect(cr, eqmain_surface, 0, 294, 86, 17, 113, 19)?;
+    blit_surface_rect(cr, eqmain_surface, SkinRect::new(0, 294, 113, 19), (86, 17))?;
     blit_surface_rect(
         cr,
         eqmain_surface,
-        0,
-        314,
-        86,
-        17 + preamp_line_y(preamp_position),
-        113,
-        1,
+        SkinRect::new(0, 314, 113, 1),
+        (86, 17 + preamp_line_y(preamp_position)),
     )?;
 
     let x_values = [0.0, 11.0, 23.0, 35.0, 47.0, 59.0, 71.0, 83.0, 97.0, 109.0];
