@@ -329,8 +329,10 @@ impl AppController {
 
     fn seek_to(&mut self, position_ms: i64) -> Vec<AppEffect> {
         let position_ms = position_ms.max(0);
+        self.state.config.playback_position_ms = position_ms;
         vec![
             AppEffect::SeekPlayback(position_ms),
+            AppEffect::SaveConfig,
             AppEffect::QueueRender(RenderTarget::All),
         ]
     }
@@ -358,8 +360,9 @@ impl AppController {
         ]
     }
 
-    pub fn handle_playback_event(&mut self, _event: PlaybackEvent) -> Vec<AppEffect> {
-        Vec::new()
+    pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> Vec<AppEffect> {
+        self.state.player.apply_playback_event(&event);
+        vec![AppEffect::QueueRender(RenderTarget::All)]
     }
 }
 
@@ -460,6 +463,28 @@ mod tests {
         assert!(controller.state().playlist.entries().iter().all(|entry| entry.selected));
         assert!(effects.contains(&AppEffect::SaveConfig));
         assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::Playlist)));
+    }
+
+    #[test]
+    fn seek_command_updates_saved_position_and_requests_backend_seek() {
+        let mut controller = AppController::new(AppState::default());
+
+        let effects = controller.handle_command(PlayerCommand::SeekToMs(42_000).into());
+
+        assert_eq!(controller.state().config.playback_position_ms, 42_000);
+        assert!(effects.contains(&AppEffect::SeekPlayback(42_000)));
+        assert!(effects.contains(&AppEffect::SaveConfig));
+        assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::All)));
+    }
+
+    #[test]
+    fn playback_events_update_controller_player_state() {
+        let mut controller = AppController::new(AppState::default());
+
+        let effects = controller.handle_playback_event(PlaybackEvent::DurationChanged(Some(12_000)));
+
+        assert_eq!(controller.state().player.duration_ms(), Some(12_000));
+        assert_eq!(effects, vec![AppEffect::QueueRender(RenderTarget::All)]);
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let config = &app.controller().state().config;
     let render_state = main_render_state(
         &view_model,
+        current_position_ms(app),
+        current_duration_ms(app),
         config.equalizer_visible,
         config.playlist_visible,
         app.main_pressed_push,
@@ -62,6 +64,8 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
 
 fn main_render_state(
     view_model: &MainPlayerViewModel,
+    playback_position_ms: i64,
+    duration_ms: Option<i64>,
     equalizer_visible: bool,
     playlist_visible: bool,
     pressed_push: Option<MainPushButton>,
@@ -80,6 +84,10 @@ fn main_render_state(
         channels: view_model.channels_text.parse().unwrap_or(0),
         volume_position: volume_to_position(view_model.volume),
         balance_position: balance_to_position(view_model.balance),
+        position_position: position_slider_position(playback_position_ms, duration_ms),
+        shaded_position_position: shaded_position_slider_position(playback_position_ms, duration_ms),
+        shaded_position_visible: duration_ms.is_some_and(|duration| duration > 0)
+            && view_model.player_state != PlayerState::Stopped,
         shuffle_selected: view_model.shuffle,
         repeat_selected: view_model.repeat,
         equalizer_selected: equalizer_visible,
@@ -95,6 +103,36 @@ fn main_render_state(
         time_digits: [NumberDisplay::BLANK; 5],
         ..MainWindowRenderState::default()
     }
+}
+
+fn current_position_ms(app: &EguiFrontendState) -> i64 {
+    app.controller().state().config.playback_position_ms.max(0)
+}
+
+fn current_duration_ms(app: &EguiFrontendState) -> Option<i64> {
+    let state = app.controller().state();
+    state.player.duration_ms().or_else(|| {
+        state
+            .playlist
+            .position()
+            .and_then(|index| state.playlist.entries().get(index))
+            .map(|entry| entry.length_ms)
+    })
+}
+
+fn position_slider_position(position_ms: i64, duration_ms: Option<i64>) -> i32 {
+    let Some(duration_ms) = duration_ms.filter(|duration| *duration > 0) else {
+        return 0;
+    };
+    let layout = main_slider_layout(MainSlider::Position, false);
+    ((position_ms.clamp(0, duration_ms) * i64::from(layout.max)) / duration_ms) as i32
+}
+
+fn shaded_position_slider_position(position_ms: i64, duration_ms: Option<i64>) -> i32 {
+    let Some(duration_ms) = duration_ms.filter(|duration| *duration > 0) else {
+        return 1;
+    };
+    (((position_ms.clamp(0, duration_ms) * 12) / duration_ms) as i32 + 1).clamp(1, 13)
 }
 
 fn blank_zero(text: &str) -> String {
@@ -275,14 +313,7 @@ fn dispatch_slider(app: &mut EguiFrontendState, slider: MainSlider, position: i3
 }
 
 fn position_to_seek_ms(app: &EguiFrontendState, position: i32, shaded: bool) -> Option<i64> {
-    let state = app.controller().state();
-    let duration_ms = state.player.duration_ms().or_else(|| {
-        state
-            .playlist
-            .position()
-            .and_then(|index| state.playlist.entries().get(index))
-            .map(|entry| entry.length_ms)
-    })?;
+    let duration_ms = current_duration_ms(app)?;
     if duration_ms <= 0 {
         return None;
     }
@@ -331,6 +362,8 @@ mod tests {
                 frequency_text: "0".to_string(),
                 channels_text: "0".to_string(),
             },
+            60_000,
+            Some(120_000),
             true,
             true,
             Some(MainPushButton::Play),
@@ -340,6 +373,7 @@ mod tests {
 
         assert_eq!(state.volume_position, 51);
         assert_eq!(state.balance_position, 12);
+        assert_eq!(state.position_position, 109);
         assert_eq!(state.title, "XMMS Renascene");
         assert!(state.bitrate_text.is_empty());
         assert!(state.equalizer_selected);

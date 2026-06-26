@@ -39,6 +39,7 @@ pub struct EguiFrontendState {
     pub equalizer_pressed_control: Option<EqualizerControl>,
     pub equalizer_pressed_slider: Option<EqualizerSlider>,
     pub playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
+    pub playlist_scroll_offset: usize,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
@@ -67,6 +68,7 @@ impl EguiFrontendState {
             equalizer_pressed_control: None,
             equalizer_pressed_slider: None,
             playlist_menu_hover: None,
+            playlist_scroll_offset: 0,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
@@ -153,6 +155,7 @@ impl EguiFrontendState {
         }
         match effect {
             AppEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
+            AppEffect::OpenPreferences => self.preferences_open = true,
             other => self.runtime.apply_effect(other),
         }
     }
@@ -223,7 +226,10 @@ impl EguiFrontendState {
             playlist_height: PLAYLIST_DEFAULT_HEIGHT,
             ..DockedPanelState::default()
         });
-        egui::vec2(width as f32 * self.scale_factor, height as f32 * self.scale_factor)
+        egui::vec2(
+            width as f32 * self.scale_factor,
+            height as f32 * self.scale_factor,
+        )
     }
 }
 

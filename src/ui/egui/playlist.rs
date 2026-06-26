@@ -85,7 +85,7 @@ fn playlist_rows_render_state(
                 current: row.current,
             })
             .collect(),
-        scroll_offset: 0,
+        scroll_offset: app.playlist_scroll_offset,
         scrollbar_dragging: false,
         search_query: None,
         show_numbers: app.controller().state().config.show_numbers_in_pl,
@@ -101,7 +101,14 @@ fn playlist_footer_info(app: &EguiFrontendState) -> String {
     let mut selected_more = false;
     let mut total_more = false;
     let current = app.controller().state().playlist.position();
-    for (index, entry) in app.controller().state().playlist.entries().iter().enumerate() {
+    for (index, entry) in app
+        .controller()
+        .state()
+        .playlist
+        .entries()
+        .iter()
+        .enumerate()
+    {
         if entry.length_ms >= 0 {
             total_ms += entry.length_ms;
         } else {
@@ -163,6 +170,8 @@ fn add_playlist_hit_regions(
         PlaylistFooterButton::Stop,
         PlaylistFooterButton::Next,
         PlaylistFooterButton::Eject,
+        PlaylistFooterButton::ScrollUp,
+        PlaylistFooterButton::ScrollDown,
     ] {
         let rect = scale_skin_rect(
             base_rect,
@@ -187,12 +196,18 @@ fn add_playlist_rows_hit_region(
     view_model: &PlaylistViewModel,
 ) {
     let rows_rect = scale_skin_rect(base_rect, SkinRect::new(12, 20, 243, 176), app.scale_factor);
-    let response = ui.interact(rows_rect, ui.id().with("playlist-rows"), egui::Sense::click());
-    if (response.clicked() || response.double_clicked()) && response.interact_pointer_pos().is_some()
+    let response = ui.interact(
+        rows_rect,
+        ui.id().with("playlist-rows"),
+        egui::Sense::click(),
+    );
+    if (response.clicked() || response.double_clicked())
+        && response.interact_pointer_pos().is_some()
     {
         let pointer = response.interact_pointer_pos().unwrap();
         let row = ((pointer.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
-        if let Some(model) = view_model.rows.get(row) {
+        let index = app.playlist_scroll_offset.saturating_add(row);
+        if let Some(model) = view_model.rows.get(index) {
             if response.double_clicked() {
                 app.controller_mut()
                     .state_mut()
@@ -214,7 +229,10 @@ fn add_playlist_rows_hit_region(
 
 fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
     match menu {
-        PlaylistMenuKind::Add => app.dispatch(PlaylistCommand::ExecuteMenu { kind: menu, index: 0 }),
+        PlaylistMenuKind::Add => app.dispatch(PlaylistCommand::ExecuteMenu {
+            kind: menu,
+            index: 0,
+        }),
         PlaylistMenuKind::Remove => app.dispatch(PlaylistCommand::RemoveSelectedOrCurrent),
         PlaylistMenuKind::Select => app.dispatch(PlaylistCommand::SelectAll),
         PlaylistMenuKind::Misc => app.dispatch(PlaylistCommand::InvertSelection),
@@ -233,7 +251,19 @@ fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: Playlist
             kind: PlaylistMenuKind::Add,
             index: 0,
         }),
-        PlaylistFooterButton::ScrollUp | PlaylistFooterButton::ScrollDown => {}
+        PlaylistFooterButton::ScrollUp => {
+            app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(1);
+        }
+        PlaylistFooterButton::ScrollDown => {
+            let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
+            let max_offset = app
+                .controller()
+                .state()
+                .playlist
+                .len()
+                .saturating_sub(visible_rows);
+            app.playlist_scroll_offset = (app.playlist_scroll_offset + 1).min(max_offset);
+        }
     }
 }
 
@@ -247,7 +277,10 @@ fn scale_skin_rect(base: egui::Rect, rect: SkinRect, scale: f32) -> egui::Rect {
     )
 }
 
-pub fn playlist_menu_command(kind: crate::playlist::PlaylistMenuKind, index: usize) -> PlaylistCommand {
+pub fn playlist_menu_command(
+    kind: crate::playlist::PlaylistMenuKind,
+    index: usize,
+) -> PlaylistCommand {
     PlaylistCommand::ExecuteMenu { kind, index }
 }
 
@@ -271,25 +304,48 @@ mod tests {
     fn playlist_buttons_dispatch_to_app_state() {
         let mut app =
             EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
-        app.controller_mut()
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/song.ogg", "Song", 12_000);
+        app.controller_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/song.ogg",
+            "Song",
+            12_000,
+        );
         dispatch_playlist_menu_button(&mut app, PlaylistMenuKind::Select);
         assert!(app.controller().state().playlist.entries()[0].selected);
 
         dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::Play);
-        assert_eq!(app.controller().state().player.state(), crate::player::PlayerState::Playing);
+        assert_eq!(
+            app.controller().state().player.state(),
+            crate::player::PlayerState::Playing
+        );
+    }
+
+    #[test]
+    fn playlist_footer_scroll_buttons_update_scroll_offset() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        for index in 0..20 {
+            app.controller_mut().state_mut().playlist.add_timed_uri(
+                format!("file:///tmp/{index}.ogg"),
+                format!("Song {index}"),
+                12_000,
+            );
+        }
+
+        dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::ScrollDown);
+        assert_eq!(app.playlist_scroll_offset, 1);
+        dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::ScrollUp);
+        assert_eq!(app.playlist_scroll_offset, 0);
     }
 
     #[test]
     fn playlist_footer_info_sums_durations() {
         let mut app =
             EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
-        app.controller_mut()
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/song.ogg", "Song", 12_000);
+        app.controller_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/song.ogg",
+            "Song",
+            12_000,
+        );
         app.controller_mut().state_mut().playlist.set_position(0);
 
         assert_eq!(playlist_footer_info(&app), "0:12/0:12");
