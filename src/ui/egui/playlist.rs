@@ -61,6 +61,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     add_playlist_hit_regions(ui, app, rect, &view_model);
     show_playlist_menu_popover(ui.ctx(), app);
     show_playlist_sort_popover(ui.ctx(), app);
+    show_physical_delete_confirmation(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -214,7 +215,7 @@ fn add_playlist_rows_hit_region(
             ui.close();
         }
         if ui.button("Physically Delete").clicked() {
-            app.dispatch(PlaylistCommand::PhysicallyDeleteSelected);
+            app.confirm_physical_delete_open = true;
             ui.close();
         }
         ui.separator();
@@ -259,6 +260,42 @@ fn add_playlist_rows_hit_region(
 
 fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
     app.playlist_menu_open = Some(menu);
+}
+
+fn show_physical_delete_confirmation(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    if !app.confirm_physical_delete_open {
+        return;
+    }
+    let selected_count = app
+        .controller()
+        .state()
+        .playlist
+        .entries()
+        .iter()
+        .filter(|entry| entry.selected)
+        .count();
+    let mut open = true;
+    egui::Window::new("Delete selected files?")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            ui.label(format!(
+                "Permanently delete {selected_count} selected local file(s) from disk?"
+            ));
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    app.confirm_physical_delete_open = false;
+                }
+                if ui.button("Delete").clicked() {
+                    app.dispatch(PlaylistCommand::PhysicallyDeleteSelected);
+                    app.confirm_physical_delete_open = false;
+                }
+            });
+        });
+    if !open {
+        app.confirm_physical_delete_open = false;
+    }
 }
 
 fn show_playlist_menu_popover(ctx: &egui::Context, app: &mut EguiFrontendState) {

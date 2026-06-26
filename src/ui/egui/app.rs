@@ -57,6 +57,7 @@ pub struct EguiFrontendState {
     pub playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
     pub playlist_menu_open: Option<PlaylistMenuRenderKind>,
     pub playlist_sort_menu_open: bool,
+    pub confirm_physical_delete_open: bool,
     pub playlist_scroll_offset: usize,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
@@ -96,6 +97,7 @@ impl EguiFrontendState {
             playlist_menu_hover: None,
             playlist_menu_open: None,
             playlist_sort_menu_open: false,
+            confirm_physical_delete_open: false,
             playlist_scroll_offset: 0,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]

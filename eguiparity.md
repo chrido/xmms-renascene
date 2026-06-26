@@ -201,7 +201,7 @@ Legend:
   - Select All;
   - Select None;
   - Invert Selection.
-- [ ] Physical delete confirmation dialog missing.
+- [x] Physical delete confirmation dialog missing.
 - [x] File Info dialog from playlist missing.
 - [ ] Playlist search overlay missing.
 - [ ] Playlist keyboard navigation missing/incomplete:
@@ -385,7 +385,7 @@ Legend:
   - Remove ID3/metadata action;
   - Close;
   - local-file vs stream handling.
-- [ ] Delete selected files confirmation dialog missing.
+- [x] Delete selected files confirmation dialog missing.
 - [x] Error/message dialog parity missing; egui now shows queued runtime messages in an egui message window.
 - [x] Open path behavior missing; egui surfaces the pending open-path message in an egui message window.
 
