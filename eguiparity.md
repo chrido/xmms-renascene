@@ -108,7 +108,7 @@ Legend:
 - [x] Jump to Time prompt from keyboard shortcut.
 - [ ] Titlebar dragging / easy-move behavior.
 - [ ] Minimize/close behavior needs platform verification outside tests.
-- [ ] Time display parity:
+- [x] Time display parity:
   - elapsed/remaining mode;
   - current playback position updates;
   - stopped/paused display details;
@@ -505,7 +505,7 @@ GTK has `build_skin_browser_window` with:
 
 ### Missing / incomplete
 
-- [ ] Periodic timer/state update parity:
+- [x] Periodic timer/state update parity:
   - playback position polling;
   - UI time display updates;
   - visualization ticking;
@@ -594,4 +594,4 @@ GTK has `build_skin_browser_window` with:
 - [x] Preferences full control parity.
 - [x] Skin Browser.
 - [x] Detached playlist/equalizer windows.
-- [ ] Live playback timer/visualization updates.
+- [x] Live playback timer/visualization updates.

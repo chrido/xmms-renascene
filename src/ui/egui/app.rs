@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::app::command::{AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::controller::AppController;
@@ -13,13 +14,15 @@ use crate::equalizer::{
     EqualizerPreset,
 };
 #[cfg(feature = "gstreamer-backend")]
-use crate::player::GStreamerBackend;
+use crate::player::{GStreamerBackend, PlayerState};
 use crate::render::{
     docked_panel_size, DockedPanelState, EqualizerControl, EqualizerSlider, MainPushButton,
     MainSlider, MainToggleButton, PlaylistMenuRenderKind, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::playlist::Playlist;
+#[cfg(not(feature = "gstreamer-backend"))]
+use crate::player::PlayerState;
 use crate::session::default_config_dir;
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 
@@ -44,6 +47,7 @@ pub struct EguiFrontendState {
     pub prompt_text: String,
     pub selected_preferences_page: PreferencesPage,
     pub texture_cache: EguiTextureCache,
+    pub last_tick: Instant,
     pub scale_factor: f32,
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
@@ -85,6 +89,7 @@ impl EguiFrontendState {
             prompt_text: String::new(),
             selected_preferences_page: PreferencesPage::default(),
             texture_cache: EguiTextureCache::default(),
+            last_tick: Instant::now(),
             scale_factor,
             dock_panels: true,
             runtime: EguiRuntime::default(),
@@ -133,6 +138,27 @@ impl EguiFrontendState {
                 Err(err) => self.runtime.pending_messages.push(err),
             }
         }
+    }
+
+    fn tick_playback_position(&mut self, ctx: &egui::Context) {
+        ctx.request_repaint_after(Duration::from_millis(250));
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.last_tick);
+        self.last_tick = now;
+        if self.controller.state().player.state() != PlayerState::Playing {
+            return;
+        }
+        let elapsed_ms = elapsed.as_millis().min(i64::MAX as u128) as i64;
+        if elapsed_ms == 0 {
+            return;
+        }
+        let duration_ms = self.controller.state().player.duration_ms();
+        let config = &mut self.controller.state_mut().config;
+        config.playback_position_ms = config.playback_position_ms.saturating_add(elapsed_ms);
+        if let Some(duration) = duration_ms {
+            config.playback_position_ms = config.playback_position_ms.min(duration);
+        }
+        self.runtime.apply_effect(AppEffect::QueueRender(RenderTarget::All));
     }
 
     fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
@@ -361,6 +387,7 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_playback_backend();
+        self.tick_playback_position(ctx);
         handle_global_shortcuts(ctx, self);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
         egui::CentralPanel::default()
