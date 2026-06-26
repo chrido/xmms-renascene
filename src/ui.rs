@@ -75,7 +75,8 @@ use crate::skineditor::{
 };
 
 pub(crate) mod file_info;
-mod gtk_runtime;
+#[path = "ui/gtk/mod.rs"]
+pub(crate) mod gtk_frontend;
 mod style;
 
 use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};

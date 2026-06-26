@@ -344,24 +344,24 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Manually smoke test key UI actions.
   - [x] Commit the GTK effect interpreter.
 
-- [ ] **Step 11: Physically split `src/ui.rs` into GTK modules**
-  - [ ] Convert `src/ui.rs` into `src/ui/mod.rs` or a small compatibility wrapper.
-  - [ ] Create `src/ui/gtk/mod.rs`.
-  - [ ] Move GTK application startup/lifecycle into `src/ui/gtk/app.rs`.
-  - [ ] Move main window construction into `src/ui/gtk/main_window.rs`.
-  - [ ] Move main menu/popover code into `src/ui/gtk/main_menu.rs`.
-  - [ ] Move playlist window/menu code into `src/ui/gtk/playlist_window.rs` and/or `playlist_menu.rs`.
-  - [ ] Move equalizer window code into `src/ui/gtk/equalizer_window.rs`.
-  - [ ] Move preferences window code into `src/ui/gtk/preferences.rs`.
-  - [ ] Move file-info dialog code into `src/ui/gtk/file_info_dialog.rs` if not already separate.
-  - [ ] Move skin browser code into `src/ui/gtk/skin_browser.rs`.
-  - [ ] Move gesture/event-controller glue into `src/ui/gtk/gestures.rs`.
-  - [ ] Move generic dialog helpers into `src/ui/gtk/dialogs.rs`.
-  - [ ] Keep or move style code under `src/ui/gtk/style.rs` depending on existing layout.
-  - [ ] Run `cargo test --lib --bins` after each significant move.
-  - [ ] Run `cargo test --test render` after larger moves.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the GTK module split.
+- [x] **Step 11: Physically split `src/ui.rs` into GTK modules**
+  - [x] Convert `src/ui.rs` into `src/ui/mod.rs` or a small compatibility wrapper.
+  - [x] Create `src/ui/gtk/mod.rs`.
+  - [x] Move GTK application startup/lifecycle into `src/ui/gtk/app.rs`.
+  - [x] Move main window construction into `src/ui/gtk/main_window.rs`.
+  - [x] Move main menu/popover code into `src/ui/gtk/main_menu.rs`.
+  - [x] Move playlist window/menu code into `src/ui/gtk/playlist_window.rs` and/or `playlist_menu.rs`.
+  - [x] Move equalizer window code into `src/ui/gtk/equalizer_window.rs`.
+  - [x] Move preferences window code into `src/ui/gtk/preferences.rs`.
+  - [x] Move file-info dialog code into `src/ui/gtk/file_info_dialog.rs` if not already separate.
+  - [x] Move skin browser code into `src/ui/gtk/skin_browser.rs`.
+  - [x] Move gesture/event-controller glue into `src/ui/gtk/gestures.rs`.
+  - [x] Move generic dialog helpers into `src/ui/gtk/dialogs.rs`.
+  - [x] Keep or move style code under `src/ui/gtk/style.rs` depending on existing layout.
+  - [x] Run `cargo test --lib --bins` after each significant move.
+  - [x] Run `cargo test --test render` after larger moves.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the GTK module split.
 
 - [ ] **Step 12: Define frontend service boundaries**
   - [ ] Identify file dialog service needs.
@@ -444,13 +444,13 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Validate with `cargo test --test render`.
   - [x] Validate with `cargo clippy --all-targets`.
 
-- [ ] **Milestone 5: Split GTK modules**
-  - [ ] Complete Step 10.
-  - [ ] Complete Step 11.
-  - [ ] `src/ui.rs` is removed, renamed to `src/ui/mod.rs`, or reduced to a small wrapper.
-  - [ ] Validate with `cargo test --lib --bins`.
-  - [ ] Validate with `cargo test --test render`.
-  - [ ] Validate with `cargo clippy --all-targets`.
+- [x] **Milestone 5: Split GTK modules**
+  - [x] Complete Step 10.
+  - [x] Complete Step 11.
+  - [x] `src/ui.rs` is removed, renamed to `src/ui/mod.rs`, or reduced to a small wrapper.
+  - [x] Validate with `cargo test --lib --bins`.
+  - [x] Validate with `cargo test --test render`.
+  - [x] Validate with `cargo clippy --all-targets`.
 
 # Detailed Plan
 
