@@ -330,19 +330,19 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the view-model extraction.
 
-- [ ] **Step 10: Introduce a GTK runtime/effect interpreter**
-  - [ ] Add a GTK-side effect interpreter, initially in `src/ui.rs` or `src/ui/gtk/runtime.rs`.
-  - [ ] Implement playback effects by calling the current backend integration.
-  - [ ] Implement render invalidation effects by queueing appropriate redraws.
-  - [ ] Implement config-save effects.
-  - [ ] Implement dialog-opening effects.
-  - [ ] Implement error/message effects.
-  - [ ] Route migrated GTK handlers through `apply_effects`.
-  - [ ] Keep `AppController` pure and frontend-neutral.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Manually smoke test key UI actions.
-  - [ ] Commit the GTK effect interpreter.
+- [x] **Step 10: Introduce a GTK runtime/effect interpreter**
+  - [x] Add a GTK-side effect interpreter, initially in `src/ui.rs` or `src/ui/gtk/runtime.rs`.
+  - [x] Implement playback effects by calling the current backend integration.
+  - [x] Implement render invalidation effects by queueing appropriate redraws.
+  - [x] Implement config-save effects.
+  - [x] Implement dialog-opening effects.
+  - [x] Implement error/message effects.
+  - [x] Route migrated GTK handlers through `apply_effects`.
+  - [x] Keep `AppController` pure and frontend-neutral.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Manually smoke test key UI actions.
+  - [x] Commit the GTK effect interpreter.
 
 - [ ] **Step 11: Physically split `src/ui.rs` into GTK modules**
   - [ ] Convert `src/ui.rs` into `src/ui/mod.rs` or a small compatibility wrapper.

@@ -75,6 +75,7 @@ use crate::skineditor::{
 };
 
 pub(crate) mod file_info;
+mod gtk_runtime;
 mod style;
 
 use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};
