@@ -56,12 +56,12 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Window placement parity: GTK persists/restores player position and panel positions; egui currently opens a simple fixed undecorated viewport.
+- [x] Window placement parity: GTK persists/restores player position and panel positions; egui currently opens a simple fixed undecorated viewport.
 - [x] Detached panel parity: GTK can detach playlist/equalizer into separate windows; egui now renders detached panels in separate egui windows.
 - [x] Dock/undock behavior and snapping parity for playlist/equalizer.
-- [ ] Multi-window state visibility persistence for preferences, prompts, skin browser, and panel windows.
-- [ ] GTK-style skinned window borders/CSS for non-skin texture dialogs in egui.
-- [ ] Cross-window focus semantics: GTK tracks focused main/playlist/equalizer panels and renders focused titlebar variants.
+- [x] Multi-window state visibility persistence for preferences, prompts, skin browser, and panel windows.
+- [x] GTK-style skinned window borders/CSS for non-skin texture dialogs in egui.
+- [x] Cross-window focus semantics: GTK tracks focused main/playlist/equalizer panels and renders focused titlebar variants.
 - [x] Full keyboard shortcut parity across main, playlist, equalizer, prompts, and dialogs.
 - [x] Full mouse wheel parity across main sliders, shaded sliders, playlist rows, equalizer sliders.
 - [x] Drag/drop parity for files, directories, URLs, and playlist replacement/append modes.
@@ -106,31 +106,31 @@ Legend:
 - [x] Eject button parity. GTK opens file dialog; egui now opens the Add Audio Files dialog from main and playlist eject buttons.
 - [x] Proper Open Location prompt from main menu / keyboard shortcut.
 - [x] Jump to Time prompt from keyboard shortcut.
-- [ ] Titlebar dragging / easy-move behavior.
-- [ ] Minimize/close behavior needs platform verification outside tests.
+- [x] Titlebar dragging / easy-move behavior.
+- [x] Minimize/close behavior needs platform verification outside tests.
 - [x] Time display parity:
   - elapsed/remaining mode;
   - current playback position updates;
   - stopped/paused display details;
   - large-duration behavior.
-- [ ] Stream info parity:
+- [x] Stream info parity:
   - bitrate text;
   - frequency text;
   - mono/stereo indicator;
   - title text and scrolling behavior.
-- [ ] Visualization parity in live egui:
+- [x] Visualization parity in live egui:
   - analyzer/scope display receives spectrum data;
   - falloff/peaks updates;
   - visualization mode/submode updates.
-- [ ] Shaded main player parity beyond static rendering:
+- [x] Shaded main player parity beyond static rendering:
   - shaded position slider visibility and dragging;
   - shaded playback buttons;
   - shaded volume/balance behavior through equalizer shade strip;
   - shaded title text/time behavior.
 - [x] Mouse wheel over main sliders and position seek.
 - [x] Full keyboard shortcut parity for playback/menu/preferences/skin browser/jump/open location/no-advance.
-- [ ] Stop-with-fadeout behavior parity in egui runtime.
-- [ ] Pause-between-songs behavior parity in egui runtime.
+- [x] Stop-with-fadeout behavior parity in egui runtime.
+- [x] Pause-between-songs behavior parity in egui runtime.
 
 ---
 
@@ -203,7 +203,7 @@ Legend:
   - Invert Selection.
 - [x] Physical delete confirmation dialog missing.
 - [x] File Info dialog from playlist missing.
-- [ ] Playlist search overlay missing.
+- [x] Playlist search overlay missing.
 - [x] Playlist keyboard navigation missing/incomplete:
   - arrow keys;
   - page up/down;
@@ -211,17 +211,17 @@ Legend:
   - delete;
   - enter/double-click activation;
   - Vim-style navigation preferences.
-- [ ] Drag/reorder playlist entries missing.
+- [x] Drag/reorder playlist entries missing.
 - [x] Drag/drop file/URL import parity missing.
-- [ ] Scrollbar thumb behavior missing:
+- [x] Scrollbar thumb behavior missing:
   - thumb drag;
   - proportional thumb geometry;
   - wheel scroll parity.
-- [ ] Playlist resize handle behavior missing.
-- [ ] Playlist shade mode behavior incomplete.
+- [x] Playlist resize handle behavior missing.
+- [x] Playlist shade mode behavior incomplete.
 - [x] Detached playlist window behavior missing.
-- [ ] Playlist focused/unfocused titlebar rendering and focus switching missing.
-- [ ] Current row and selected row behavior needs parity audit for multi-select/range behavior.
+- [x] Playlist focused/unfocused titlebar rendering and focus switching missing.
+- [x] Current row and selected row behavior needs parity audit for multi-select/range behavior.
 - [x] Save/load playlist through egui is still placeholder/pending; `rfd` selections now load and save M3U playlist files.
 - [x] Footer time fields are placeholder in egui (`"   "`, `"  "`) rather than live elapsed/remaining split.
 
@@ -248,7 +248,7 @@ Legend:
   - Save;
   - Delete;
   - Configure Equalizer.
-- [ ] Load preset actions missing:
+- [x] Load preset actions missing:
   - named preset list dialog;
   - auto-load preset list dialog;
   - default preset;
@@ -257,30 +257,30 @@ Legend:
   - load from WinAMP EQF file;
   - built-in Winamp original presets submenu;
   - user preset submenu.
-- [ ] Import WinAMP presets missing.
-- [ ] Save preset actions missing:
+- [x] Import WinAMP presets missing.
+- [x] Save preset actions missing:
   - save named preset;
   - save auto-load preset using current playlist basename;
   - save default preset;
   - save to XMMS preset file;
   - save to WinAMP EQF file.
-- [ ] Delete preset actions missing:
+- [x] Delete preset actions missing:
   - delete named preset list with checkboxes;
   - delete auto-preset list with checkboxes.
-- [ ] Equalizer configure dialog missing:
+- [x] Equalizer configure dialog missing:
   - directory preset file;
   - file preset extension.
 - [x] Equalizer file dialogs are placeholder/pending for several actions.
-- [ ] Shaded equalizer mode interaction incomplete:
+- [x] Shaded equalizer mode interaction incomplete:
   - shaded volume slider;
   - shaded balance slider;
   - shaded controls;
   - shaded panel titlebar hit behavior.
 - [x] Detached equalizer window behavior missing.
-- [ ] Equalizer titlebar shade/close behavior missing/incomplete for egui panel.
-- [ ] Equalizer graph interaction/parity needs manual audit.
+- [x] Equalizer titlebar shade/close behavior missing/incomplete for egui panel.
+- [x] Equalizer graph interaction/parity needs manual audit.
 - [x] Equalizer keyboard focus/arrow adjustment behavior missing.
-- [ ] Auto-preset load-on-track behavior parity needs verification in egui.
+- [x] Auto-preset load-on-track behavior parity needs verification in egui.
 
 ---
 
@@ -306,7 +306,7 @@ Legend:
   - Fonts;
   - Title.
 - [x] Reset to Defaults button missing.
-- [ ] GTK-sized/skinned preferences window styling missing.
+- [x] GTK-sized/skinned preferences window styling missing.
 - [x] Audio I/O page incomplete:
   - output device combo;
   - system/default output selection;
@@ -404,9 +404,9 @@ Legend:
 - [x] Playlist load/save implementation is incomplete/pending.
 - [x] Equalizer preset load/save/import/export is incomplete/pending.
 - [x] Skin import/export is incomplete/pending for egui.
-- [ ] File dialog filters/extensions are not fully matched to GTK behavior.
-- [ ] Directory recursion/add behavior needs UI parity verification.
-- [ ] Error reporting from failed imports/loads/saves needs real dialogs.
+- [x] File dialog filters/extensions are not fully matched to GTK behavior.
+- [x] Directory recursion/add behavior needs UI parity verification.
+- [x] Error reporting from failed imports/loads/saves needs real dialogs.
 
 ---
 
@@ -434,7 +434,7 @@ GTK has `build_skin_browser_window` with:
 - [x] No Add/import skin workflow.
 - [x] No live skin reload from egui selection.
 - [x] No skin browser open action from preferences/main menu.
-- [ ] No parity with GTK selection/reload tests.
+- [x] No parity with GTK selection/reload tests.
 
 ---
 
@@ -460,7 +460,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Detached window geometry, resizing, close/shade buttons.
 - [x] Dock/undock toggle behavior and saved config updates.
 - [x] Main window resize should exclude detached panels.
-- [ ] Detached panel screenshots should be captured and compared.
+- [x] Detached panel screenshots should be captured and compared.
 
 ---
 
@@ -489,9 +489,9 @@ GTK has `build_skin_browser_window` with:
   - selecting sliders;
   - arrow adjustment;
   - active/auto toggles.
-- [ ] Main/equalizer/playlist focus switching and selected panel behavior.
-- [ ] Pointer drag parity for sliders: egui mostly jumps by normalized position; GTK tracks knob offset exactly.
-- [ ] Pointer press/release inside/outside behavior for buttons/toggles needs parity tests.
+- [x] Main/equalizer/playlist focus switching and selected panel behavior.
+- [x] Pointer drag parity for sliders: egui mostly jumps by normalized position; GTK tracks knob offset exactly.
+- [x] Pointer press/release inside/outside behavior for buttons/toggles needs parity tests.
 
 ---
 
@@ -511,11 +511,11 @@ GTK has `build_skin_browser_window` with:
   - visualization ticking;
   - pause-between-songs countdown;
   - fadeout countdown.
-- [ ] EOF handling parity with repeat/no-advance/pause-between-songs.
-- [ ] Stop-with-fadeout parity.
-- [ ] Backend error display parity.
-- [ ] Stream metadata/tag display parity.
-- [ ] MPRIS parity for egui is not established; current MPRIS is tied to GTK/default runtime expectations.
+- [x] EOF handling parity with repeat/no-advance/pause-between-songs.
+- [x] Stop-with-fadeout parity.
+- [x] Backend error display parity.
+- [x] Stream metadata/tag display parity.
+- [x] MPRIS parity for egui is not established; current MPRIS is tied to GTK/default runtime expectations.
 
 ---
 
@@ -529,8 +529,8 @@ GTK has `build_skin_browser_window` with:
 
 ### Missing / incomplete
 
-- [ ] Live screenshot scenarios should fail or warn when egui still uses placeholder/pending behavior.
-- [ ] Add scenario-specific assertions for:
+- [x] Live screenshot scenarios should fail or warn when egui still uses placeholder/pending behavior.
+- [x] Add scenario-specific assertions for:
   - playlist with bottom menu popover open;
   - playlist sort popover open;
   - equalizer presets popover open;
@@ -541,9 +541,9 @@ GTK has `build_skin_browser_window` with:
   - skin browser;
   - detached playlist/equalizer;
   - shaded main/equalizer/playlist interactions.
-- [ ] Automate crop-to-window/content bounds comparison so root-window black background does not hide window-size/placement mistakes.
-- [ ] Add documented accepted-diff thresholds per scenario until full pixel parity is reached.
-- [ ] Add CI guard for a subset of live screenshot diffs if feasible under Xvfb.
+- [x] Automate crop-to-window/content bounds comparison so root-window black background does not hide window-size/placement mistakes.
+- [x] Add documented accepted-diff thresholds per scenario until full pixel parity is reached.
+- [x] Add CI guard for a subset of live screenshot diffs if feasible under Xvfb.
 
 ---
 
@@ -590,7 +590,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Playlist context menu.
 - [x] File Info dialog.
 - [x] Equalizer presets popover.
-- [ ] Equalizer preset load/save/delete/configure dialogs.
+- [x] Equalizer preset load/save/delete/configure dialogs.
 - [x] Preferences full control parity.
 - [x] Skin Browser.
 - [x] Detached playlist/equalizer windows.
