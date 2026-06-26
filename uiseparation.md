@@ -313,22 +313,22 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the panel state migration.
 
-- [ ] **Step 9: Extract view-model builders**
-  - [ ] Define `MainPlayerViewModel`.
-  - [ ] Define `PlaylistViewModel` and row model types.
-  - [ ] Define `EqualizerViewModel`.
-  - [ ] Define panel/preferences view model types as needed.
-  - [ ] Add `main_player_view_model(&AppState)`.
-  - [ ] Add `playlist_view_model(&AppState)`.
-  - [ ] Add `equalizer_view_model(&AppState)`.
-  - [ ] Update GTK render/update code to consume view models where practical.
-  - [ ] Move/add tests for main render state formatting.
-  - [ ] Move/add tests for playlist row selected/current states.
-  - [ ] Move/add tests for equalizer view state.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo test --test render`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the view-model extraction.
+- [x] **Step 9: Extract view-model builders**
+  - [x] Define `MainPlayerViewModel`.
+  - [x] Define `PlaylistViewModel` and row model types.
+  - [x] Define `EqualizerViewModel`.
+  - [x] Define panel/preferences view model types as needed.
+  - [x] Add `main_player_view_model(&AppState)`.
+  - [x] Add `playlist_view_model(&AppState)`.
+  - [x] Add `equalizer_view_model(&AppState)`.
+  - [x] Update GTK render/update code to consume view models where practical.
+  - [x] Move/add tests for main render state formatting.
+  - [x] Move/add tests for playlist row selected/current states.
+  - [x] Move/add tests for equalizer view state.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo test --test render`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the view-model extraction.
 
 - [ ] **Step 10: Introduce a GTK runtime/effect interpreter**
   - [ ] Add a GTK-side effect interpreter, initially in `src/ui.rs` or `src/ui/gtk/runtime.rs`.

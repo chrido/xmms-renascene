@@ -5,11 +5,113 @@
 
 use std::path::Path;
 
+use crate::app_state::AppState;
+use crate::audio_model::EqualizerBandPositions;
 use crate::config::Config;
+use crate::player::PlayerState;
 use crate::playlist::PlaylistMenuKind;
 use crate::skin::layout::{
     playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainPlayerViewModel {
+    pub title: String,
+    pub player_state: PlayerState,
+    pub volume: i32,
+    pub balance: i32,
+    pub shuffle: bool,
+    pub repeat: bool,
+    pub shaded: bool,
+    pub bitrate_text: String,
+    pub frequency_text: String,
+    pub channels_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistRowViewModel {
+    pub index: usize,
+    pub title: String,
+    pub duration_text: Option<String>,
+    pub selected: bool,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistViewModel {
+    pub rows: Vec<PlaylistRowViewModel>,
+    pub current_index: Option<usize>,
+    pub visible: bool,
+    pub shaded: bool,
+    pub detached: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EqualizerViewModel {
+    pub active: bool,
+    pub auto: bool,
+    pub preamp_position: i32,
+    pub band_positions: EqualizerBandPositions,
+    pub visible: bool,
+    pub shaded: bool,
+    pub detached: bool,
+}
+
+pub fn main_player_view_model(state: &AppState) -> MainPlayerViewModel {
+    let position = state.playlist.position();
+    let title = position
+        .and_then(|index| state.playlist.entries().get(index))
+        .map(|entry| entry.title.clone())
+        .unwrap_or_default();
+    MainPlayerViewModel {
+        title,
+        player_state: state.player.state(),
+        volume: state.player.volume(),
+        balance: state.player.balance(),
+        shuffle: state.playlist.shuffle(),
+        repeat: state.playlist.repeat(),
+        shaded: state.config.main_shaded,
+        bitrate_text: state.player.bitrate().to_string(),
+        frequency_text: state.player.frequency().to_string(),
+        channels_text: state.player.channels().to_string(),
+    }
+}
+
+pub fn playlist_view_model(state: &AppState) -> PlaylistViewModel {
+    let current_index = state.playlist.position();
+    let rows = state
+        .playlist
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| PlaylistRowViewModel {
+            index,
+            title: entry.title.clone(),
+            duration_text: (entry.length_ms >= 0).then(|| format_duration(entry.length_ms)),
+            selected: entry.selected,
+            current: Some(index) == current_index,
+        })
+        .collect();
+    PlaylistViewModel {
+        rows,
+        current_index,
+        visible: state.config.playlist_visible,
+        shaded: state.config.playlist_shaded,
+        detached: state.config.playlist_detached,
+    }
+}
+
+pub fn equalizer_view_model(state: &AppState) -> EqualizerViewModel {
+    EqualizerViewModel {
+        active: state.config.equalizer_active,
+        auto: state.config.equalizer_auto,
+        preamp_position: state.config.equalizer_preamp_pos,
+        band_positions: state.config.equalizer_band_pos,
+        visible: state.config.equalizer_visible,
+        shaded: state.config.equalizer_shaded,
+        detached: state.config.equalizer_detached,
+    }
+}
 
 pub fn playlist_menu_at(x: i32, y: i32, width: i32, height: i32) -> Option<PlaylistMenuKind> {
     playlist_menu_button_at(x, y, width, height).map(playlist_menu_from_button)
@@ -290,5 +392,46 @@ mod tests {
         assert_eq!(balance_to_position(100), 24);
         assert_eq!(eq_slider_position_to_pixel(50), 25);
         assert_eq!(eq_slider_pixel_to_position(25), 50);
+    }
+
+    #[test]
+    fn playlist_view_model_marks_current_and_selected_rows() {
+        let mut state = AppState::default();
+        state.playlist.add_timed_uri("file:///tmp/one.ogg", "One", 83_000);
+        state.playlist.add_timed_uri("file:///tmp/two.ogg", "Two", -1);
+        state.playlist.set_position(0);
+        state.playlist.entries_mut()[1].selected = true;
+
+        let view_model = playlist_view_model(&state);
+
+        assert_eq!(view_model.current_index, Some(0));
+        assert!(view_model.rows[0].current);
+        assert_eq!(view_model.rows[0].duration_text.as_deref(), Some("1:23"));
+        assert!(view_model.rows[1].selected);
+        assert_eq!(view_model.rows[1].duration_text, None);
+    }
+
+    #[test]
+    fn equalizer_view_model_follows_config_state() {
+        let state = AppState::from_config(Config {
+            equalizer_visible: true,
+            equalizer_shaded: true,
+            equalizer_detached: true,
+            equalizer_active: true,
+            equalizer_auto: true,
+            equalizer_preamp_pos: 42,
+            equalizer_band_pos: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            ..Config::default()
+        });
+
+        let view_model = equalizer_view_model(&state);
+
+        assert!(view_model.visible);
+        assert!(view_model.shaded);
+        assert!(view_model.detached);
+        assert!(view_model.active);
+        assert!(view_model.auto);
+        assert_eq!(view_model.preamp_position, 42);
+        assert_eq!(view_model.band_positions[9], 10);
     }
 }
