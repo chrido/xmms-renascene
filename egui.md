@@ -633,24 +633,24 @@ Continuously compare egui output with GTK/reference screenshots to catch visual 
 
 ### Tasks
 
-- [ ] Define the screenshot scenarios that must be compared:
-  - [ ] default main player;
-  - [ ] shaded main player;
-  - [ ] playlist visible with selected/current rows;
-  - [ ] equalizer visible with non-default sliders;
-  - [ ] preferences dialog on each implemented egui preferences page.
-- [ ] Extract any GTK-only screenshot setup logic into shared frontend-neutral helpers before egui uses it.
-- [ ] Add a GTK/reference screenshot capture path for the selected scenarios.
-- [ ] Add an egui screenshot capture path for the selected scenarios.
-- [ ] Add an image comparison helper with configurable tolerance.
-- [ ] Add a command or test target that runs screenshot comparisons.
-- [ ] Document how to intentionally refresh reference screenshots.
-- [ ] Run screenshot comparison after each visible egui UI phase:
-  - [ ] after main player;
-  - [ ] after playlist;
-  - [ ] after equalizer;
-  - [ ] after preferences.
-- [ ] Validation:
+- [x] Define the screenshot scenarios that must be compared:
+  - [x] default main player;
+  - [x] shaded main player;
+  - [x] playlist visible with selected/current rows;
+  - [x] equalizer visible with non-default sliders;
+  - [x] preferences dialog on each implemented egui preferences page.
+- [x] Extract any GTK-only screenshot setup logic into shared frontend-neutral helpers before egui uses it.
+- [x] Add a GTK/reference screenshot capture path for the selected scenarios.
+- [x] Add an egui screenshot capture path for the selected scenarios.
+- [x] Add an image comparison helper with configurable tolerance.
+- [x] Add a command or test target that runs screenshot comparisons.
+- [x] Document how to intentionally refresh reference screenshots.
+- [x] Run screenshot comparison after each visible egui UI phase:
+  - [x] after main player;
+  - [x] after playlist;
+  - [x] after equalizer;
+  - [x] after preferences.
+- [x] Validation:
 
 ```bash
 cargo test --test render
@@ -658,7 +658,7 @@ cargo test --test render
 # cargo test --test egui_screenshots
 ```
 
-- [ ] Commit: `Add egui screenshot comparison checks`
+- [x] Commit: `Add egui screenshot comparison checks`
 
 ## Phase 14: Egui smoke tests and CI checks
 
