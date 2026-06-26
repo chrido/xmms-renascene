@@ -222,7 +222,7 @@ Legend:
 - [ ] Detached playlist window behavior missing.
 - [ ] Playlist focused/unfocused titlebar rendering and focus switching missing.
 - [ ] Current row and selected row behavior needs parity audit for multi-select/range behavior.
-- [ ] Save/load playlist through egui is still placeholder/pending; `rfd` selections produce pending messages for some paths.
+- [x] Save/load playlist through egui is still placeholder/pending; `rfd` selections now load and save M3U playlist files.
 - [ ] Footer time fields are placeholder in egui (`"   "`, `"  "`) rather than live elapsed/remaining split.
 
 ---
@@ -401,7 +401,7 @@ Legend:
 ### Missing / incomplete
 
 - [x] Open Location is not a proper egui prompt.
-- [ ] Playlist load/save implementation is incomplete/pending.
+- [x] Playlist load/save implementation is incomplete/pending.
 - [ ] Equalizer preset load/save/import/export is incomplete/pending.
 - [x] Skin import/export is incomplete/pending for egui.
 - [ ] File dialog filters/extensions are not fully matched to GTK behavior.

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::app::command::{AppCommand, PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::controller::AppController;
-use crate::app::effect::{AppEffect, FileDialogRequest};
+use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
 #[cfg(feature = "gstreamer-backend")]
@@ -15,6 +15,7 @@ use crate::render::{
     MainSlider, MainToggleButton, PlaylistMenuRenderKind, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH,
 };
+use crate::playlist::Playlist;
 use crate::session::default_config_dir;
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 
@@ -205,23 +206,19 @@ impl EguiFrontendState {
             FileDialogRequest::LoadPlaylist => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Load playlist")
+                    .add_filter("M3U playlists", &["m3u", "m3u8"])
                     .pick_file()
                 {
-                    self.runtime.pending_messages.push(format!(
-                        "playlist loading pending egui handler: {}",
-                        path.display()
-                    ));
+                    self.load_playlist_file(&path);
                 }
             }
             FileDialogRequest::SavePlaylist => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Save playlist")
+                    .add_filter("M3U playlists", &["m3u", "m3u8"])
                     .save_file()
                 {
-                    self.runtime.pending_messages.push(format!(
-                        "playlist saving pending egui handler: {}",
-                        path.display()
-                    ));
+                    self.save_playlist_file(&path);
                 }
             }
             FileDialogRequest::LoadEqualizerPreset
@@ -231,6 +228,29 @@ impl EguiFrontendState {
                 .runtime
                 .pending_messages
                 .push(format!("file dialog pending egui handler: {request:?}")),
+        }
+    }
+
+    fn load_playlist_file(&mut self, path: &Path) {
+        match Playlist::load_m3u_file(path) {
+            Ok(playlist) => {
+                self.controller.state_mut().playlist = playlist;
+                self.playlist_scroll_offset = 0;
+                self.runtime.apply_effect(AppEffect::QueueRender(RenderTarget::Playlist));
+            }
+            Err(err) => self.runtime.pending_messages.push(format!(
+                "failed to load playlist '{}': {err}",
+                path.display()
+            )),
+        }
+    }
+
+    fn save_playlist_file(&mut self, path: &Path) {
+        if let Err(err) = self.controller.state().playlist.save_m3u_file(path) {
+            self.runtime.pending_messages.push(format!(
+                "failed to save playlist '{}': {err}",
+                path.display()
+            ));
         }
     }
 }
@@ -529,5 +549,34 @@ mod tests {
 
         assert!(app.controller().state().config.playlist_visible);
         assert!(app.runtime.repaint_requested);
+    }
+
+    #[test]
+    fn playlist_load_and_save_use_m3u_files() {
+        let root = std::env::temp_dir().join(format!(
+            "xmms-rs-egui-playlist-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let input = root.join("in.m3u");
+        let output = root.join("out.m3u");
+        std::fs::write(
+            &input,
+            "#EXTM3U\n#EXTINF:42,Loaded\nfile:///tmp/loaded.mp3\n",
+        )
+        .unwrap();
+
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.load_playlist_file(&input);
+        assert_eq!(app.controller().state().playlist.len(), 1);
+        assert!(app.runtime.repaint_requested);
+
+        app.save_playlist_file(&output);
+        let saved = std::fs::read_to_string(&output).unwrap();
+        assert!(saved.contains("#EXTM3U"));
+        assert!(saved.contains("file:///tmp/loaded.mp3"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
