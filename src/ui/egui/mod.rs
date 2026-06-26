@@ -8,6 +8,7 @@ pub mod equalizer;
 pub mod input;
 pub mod layout;
 pub mod main_player;
+pub mod menu;
 pub mod playlist;
 pub mod preferences;
 pub mod runtime;

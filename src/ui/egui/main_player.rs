@@ -85,7 +85,10 @@ fn main_render_state(
         volume_position: volume_to_position(view_model.volume),
         balance_position: balance_to_position(view_model.balance),
         position_position: position_slider_position(playback_position_ms, duration_ms),
-        shaded_position_position: shaded_position_slider_position(playback_position_ms, duration_ms),
+        shaded_position_position: shaded_position_slider_position(
+            playback_position_ms,
+            duration_ms,
+        ),
         shaded_position_visible: duration_ms.is_some_and(|duration| duration > 0)
             && view_model.player_state != PlayerState::Stopped,
         shuffle_selected: view_model.shuffle,
@@ -283,7 +286,7 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
             index: 0,
         }),
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
-        MainPushButton::Menu => app.preferences_open = true,
+        MainPushButton::Menu => app.main_menu_open = true,
         MainPushButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
         MainPushButton::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
     }

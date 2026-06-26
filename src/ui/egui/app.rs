@@ -16,6 +16,7 @@ use crate::render::{
 };
 use crate::skin::DefaultSkin;
 
+use super::menu::{self, EguiPrompt};
 use super::preferences::{self, PreferencesPage};
 use super::runtime::EguiRuntime;
 use super::{equalizer, main_player, playlist};
@@ -26,7 +27,11 @@ pub struct EguiTextureCache {
 }
 
 pub struct EguiFrontendState {
+    pub main_menu_open: bool,
     pub preferences_open: bool,
+    pub skin_browser_open: bool,
+    pub prompt_open: Option<EguiPrompt>,
+    pub prompt_text: String,
     pub selected_preferences_page: PreferencesPage,
     pub texture_cache: EguiTextureCache,
     pub scale_factor: f32,
@@ -55,7 +60,11 @@ impl EguiFrontendState {
         let active_skin = load_skin_from_config(&app_state)?;
         let scale_factor = app_state.config.scale_factor as f32;
         Ok(Self {
+            main_menu_open: false,
             preferences_open: options.open_preferences,
+            skin_browser_open: false,
+            prompt_open: None,
+            prompt_text: String::new(),
             selected_preferences_page: PreferencesPage::default(),
             texture_cache: EguiTextureCache::default(),
             scale_factor,
@@ -249,9 +258,15 @@ impl eframe::App for EguiFrontendState {
                     playlist::show_playlist(ui, self);
                 }
             });
+        menu::show_main_menu(ctx, self);
+        menu::show_prompts(ctx, self);
         if self.preferences_open {
             preferences::show_preferences(ctx, self);
         }
+        if self.skin_browser_open {
+            show_skin_browser_placeholder(ctx, self);
+        }
+        menu::show_pending_messages(ctx, self);
     }
 }
 
@@ -270,6 +285,18 @@ pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
         Box::new(|_cc| Ok(Box::new(app))),
     )
     .map_err(|err| format!("failed to start egui frontend: {err}"))
+}
+
+fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let mut open = app.skin_browser_open;
+    egui::Window::new("Skin selector")
+        .open(&mut open)
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.label("Skin browser parity is pending for egui.");
+            ui.label("Use --skin PATH or the GTK Skin Browser for now.");
+        });
+    app.skin_browser_open = open;
 }
 
 fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {

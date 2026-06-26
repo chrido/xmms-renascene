@@ -96,7 +96,7 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Main menu button parity. GTK opens `build_main_menu_popover`; egui currently uses `Menu` as a shortcut to preferences.
+- [x] Main menu button parity. GTK opens `build_main_menu_popover`; egui now opens an egui main menu with Open Files, Open Location, Preferences, Skin Browser, Skin Editor notice, and Quit.
   - Missing Open Files
   - Missing Open Location
   - Missing Preferences via real menu item
@@ -104,8 +104,8 @@ Legend:
   - Missing Skin Editor entry/GTK-only notice
   - Missing Quit
 - [ ] Eject button parity. GTK opens file dialog; egui currently routes through playlist Add menu index 0 and may not produce the same UX.
-- [ ] Proper Open Location prompt from main menu / keyboard shortcut.
-- [ ] Jump to Time prompt from keyboard shortcut.
+- [x] Proper Open Location prompt from main menu / keyboard shortcut.
+- [x] Jump to Time prompt from keyboard shortcut.
 - [ ] Titlebar dragging / easy-move behavior.
 - [ ] Minimize/close behavior needs platform verification outside tests.
 - [ ] Time display parity:
@@ -582,9 +582,9 @@ GTK has `build_skin_browser_window` with:
 
 ## 15. Current high-priority missing items
 
-- [ ] Main menu popover.
-- [ ] Open Location prompt.
-- [ ] Jump to Time prompt.
+- [x] Main menu popover.
+- [x] Open Location prompt.
+- [x] Jump to Time prompt.
 - [ ] Playlist bottom menu popovers.
 - [ ] Playlist sort popover.
 - [ ] Playlist context menu.
