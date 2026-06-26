@@ -1,16 +1,28 @@
 //! eframe application lifecycle for the egui frontend.
 
+use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{equalizer_view_model, main_player_view_model, playlist_view_model};
 use crate::app_state::AppState;
 
+use super::preferences::PreferencesPage;
+use super::runtime::EguiRuntime;
 use super::{equalizer, main_player, playlist};
+
+#[derive(Debug, Default)]
+pub struct EguiTextureCache {
+    pub generation: u64,
+}
 
 #[derive(Debug)]
 pub struct EguiFrontendState {
     pub preferences_open: bool,
+    pub selected_preferences_page: PreferencesPage,
+    pub texture_cache: EguiTextureCache,
     pub scale_factor: f32,
+    pub dock_panels: bool,
+    pub runtime: EguiRuntime,
     controller: AppController,
 }
 
@@ -24,13 +36,22 @@ impl EguiFrontendState {
         let scale_factor = app_state.config.scale_factor as f32;
         Ok(Self {
             preferences_open: options.open_preferences,
+            selected_preferences_page: PreferencesPage::default(),
+            texture_cache: EguiTextureCache::default(),
             scale_factor,
+            dock_panels: true,
+            runtime: EguiRuntime::default(),
             controller: AppController::new(app_state),
         })
     }
 
     pub fn controller(&self) -> &AppController {
         &self.controller
+    }
+
+    pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
+        let effects = self.controller.handle_command(command.into());
+        self.runtime.apply_effects(effects);
     }
 }
 

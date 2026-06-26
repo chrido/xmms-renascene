@@ -355,37 +355,37 @@ Wire egui to the frontend-neutral app layer.
 
 ### Tasks
 
-- [ ] Define `EguiApp` in `src/ui/egui/app.rs`.
-- [ ] Store `AppController` inside `EguiApp`.
-- [ ] Store frontend-only egui state:
-  - [ ] open/closed preferences dialog
-  - [ ] selected preferences page
-  - [ ] texture cache
-  - [ ] scale factor
-  - [ ] panel layout preferences
-- [ ] Implement `eframe::App` for `EguiApp`.
-- [ ] Add `EguiRuntime` or effect interpreter in `runtime.rs`.
-- [ ] Interpret basic `AppEffect` values:
-  - [ ] `QueueRender`
-  - [ ] `ShowError`
-  - [ ] `ShowMessage`
-  - [ ] playback effects as no-op initially if backend not wired
-  - [ ] dialog effects as no-op/log initially
-- [ ] Add a helper to dispatch commands:
+- [x] Define `EguiApp` in `src/ui/egui/app.rs`.
+- [x] Store `AppController` inside `EguiApp`.
+- [x] Store frontend-only egui state:
+  - [x] open/closed preferences dialog
+  - [x] selected preferences page
+  - [x] texture cache
+  - [x] scale factor
+  - [x] panel layout preferences
+- [x] Implement `eframe::App` for `EguiApp`.
+- [x] Add `EguiRuntime` or effect interpreter in `runtime.rs`.
+- [x] Interpret basic `AppEffect` values:
+  - [x] `QueueRender`
+  - [x] `ShowError`
+  - [x] `ShowMessage`
+  - [x] playback effects as no-op initially if backend not wired
+  - [x] dialog effects as no-op/log initially
+- [x] Add a helper to dispatch commands:
 
 ```rust
 fn dispatch(&mut self, command: impl Into<AppCommand>)
 ```
 
-- [ ] Ensure no GTK imports.
-- [ ] Validation:
+- [x] Ensure no GTK imports.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 cargo test --lib
 ```
 
-- [ ] Commit: `Wire egui app to app controller`
+- [x] Commit: `Wire egui app to app controller`
 
 ## Phase 6: Reuse skin rendering through egui textures
 
