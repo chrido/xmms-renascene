@@ -22,7 +22,7 @@ pub fn equalizer_band_count(view_model: &EqualizerViewModel) -> usize {
 
 pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let view_model = equalizer_view_model(app.controller().state());
-    if !view_model.visible || view_model.detached {
+    if !view_model.visible {
         return;
     }
     let render_state = equalizer_render_state(app, &view_model);

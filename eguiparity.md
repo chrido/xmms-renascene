@@ -57,8 +57,8 @@ Legend:
 ### Missing / incomplete
 
 - [ ] Window placement parity: GTK persists/restores player position and panel positions; egui currently opens a simple fixed undecorated viewport.
-- [ ] Detached panel parity: GTK can detach playlist/equalizer into separate windows; egui currently renders only docked panels.
-- [ ] Dock/undock behavior and snapping parity for playlist/equalizer.
+- [x] Detached panel parity: GTK can detach playlist/equalizer into separate windows; egui now renders detached panels in separate egui windows.
+- [x] Dock/undock behavior and snapping parity for playlist/equalizer.
 - [ ] Multi-window state visibility persistence for preferences, prompts, skin browser, and panel windows.
 - [ ] GTK-style skinned window borders/CSS for non-skin texture dialogs in egui.
 - [ ] Cross-window focus semantics: GTK tracks focused main/playlist/equalizer panels and renders focused titlebar variants.
@@ -219,7 +219,7 @@ Legend:
   - wheel scroll parity.
 - [ ] Playlist resize handle behavior missing.
 - [ ] Playlist shade mode behavior incomplete.
-- [ ] Detached playlist window behavior missing.
+- [x] Detached playlist window behavior missing.
 - [ ] Playlist focused/unfocused titlebar rendering and focus switching missing.
 - [ ] Current row and selected row behavior needs parity audit for multi-select/range behavior.
 - [x] Save/load playlist through egui is still placeholder/pending; `rfd` selections now load and save M3U playlist files.
@@ -276,7 +276,7 @@ Legend:
   - shaded balance slider;
   - shaded controls;
   - shaded panel titlebar hit behavior.
-- [ ] Detached equalizer window behavior missing.
+- [x] Detached equalizer window behavior missing.
 - [ ] Equalizer titlebar shade/close behavior missing/incomplete for egui panel.
 - [ ] Equalizer graph interaction/parity needs manual audit.
 - [x] Equalizer keyboard focus/arrow adjustment behavior missing.
@@ -456,10 +456,10 @@ GTK has `build_skin_browser_window` with:
 
 ### Missing / incomplete
 
-- [ ] Separate egui windows for detached playlist/equalizer.
-- [ ] Detached window geometry, resizing, close/shade buttons.
-- [ ] Dock/undock toggle behavior and saved config updates.
-- [ ] Main window resize should exclude detached panels.
+- [x] Separate egui windows for detached playlist/equalizer.
+- [x] Detached window geometry, resizing, close/shade buttons.
+- [x] Dock/undock toggle behavior and saved config updates.
+- [x] Main window resize should exclude detached panels.
 - [ ] Detached panel screenshots should be captured and compared.
 
 ---
@@ -593,5 +593,5 @@ GTK has `build_skin_browser_window` with:
 - [ ] Equalizer preset load/save/delete/configure dialogs.
 - [x] Preferences full control parity.
 - [x] Skin Browser.
-- [ ] Detached playlist/equalizer windows.
+- [x] Detached playlist/equalizer windows.
 - [ ] Live playback timer/visualization updates.

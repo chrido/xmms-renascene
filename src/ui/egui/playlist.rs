@@ -24,7 +24,7 @@ pub fn playlist_row_count(view_model: &PlaylistViewModel) -> usize {
 
 pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let view_model = playlist_view_model(app.controller().state());
-    if !view_model.visible || view_model.detached {
+    if !view_model.visible {
         return;
     }
     let rows = playlist_rows_render_state(app, &view_model);

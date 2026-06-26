@@ -368,13 +368,18 @@ impl eframe::App for EguiFrontendState {
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                 main_player::show_main_player(ui, self);
-                if self.controller.state().config.equalizer_visible {
+                if self.controller.state().config.equalizer_visible
+                    && !self.controller.state().config.equalizer_detached
+                {
                     equalizer::show_equalizer(ui, self);
                 }
-                if self.controller.state().config.playlist_visible {
+                if self.controller.state().config.playlist_visible
+                    && !self.controller.state().config.playlist_detached
+                {
                     playlist::show_playlist(ui, self);
                 }
             });
+        show_detached_panels(ctx, self);
         menu::show_main_menu(ctx, self);
         menu::show_prompts(ctx, self);
         if self.preferences_open {
@@ -385,6 +390,30 @@ impl eframe::App for EguiFrontendState {
             show_skin_browser_placeholder(ctx, self);
         }
         menu::show_pending_messages(ctx, self);
+    }
+}
+
+fn show_detached_panels(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let config = app.controller().state().config.clone();
+    if config.equalizer_visible && config.equalizer_detached {
+        let mut open = true;
+        egui::Window::new("Equalizer")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| equalizer::show_equalizer(ui, app));
+        if !open {
+            app.dispatch(PanelCommand::SetEqualizerVisibility(false));
+        }
+    }
+    if config.playlist_visible && config.playlist_detached {
+        let mut open = true;
+        egui::Window::new("Playlist")
+            .open(&mut open)
+            .resizable(true)
+            .show(ctx, |ui| playlist::show_playlist(ui, app));
+        if !open {
+            app.dispatch(PanelCommand::SetPlaylistVisibility(false));
+        }
     }
 }
 
