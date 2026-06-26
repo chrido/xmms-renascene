@@ -251,16 +251,16 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit each helper group or the completed helper extraction.
 
-- [ ] **Step 5: Introduce `AppController`**
-  - [ ] Add `AppController` holding `AppState`.
-  - [ ] Add `new`, `state`, `state_mut`, and `into_state` accessors.
-  - [ ] Add `handle_command(&mut self, AppCommand) -> Vec<AppEffect>`.
-  - [ ] Add `handle_playback_event(&mut self, PlaybackEvent) -> Vec<AppEffect>`.
-  - [ ] Keep `AppController` free of GTK/widget/backend object dependencies.
-  - [ ] Add focused controller tests for any migrated behavior.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the controller shell.
+- [x] **Step 5: Introduce `AppController`**
+  - [x] Add `AppController` holding `AppState`.
+  - [x] Add `new`, `state`, `state_mut`, and `into_state` accessors.
+  - [x] Add `handle_command(&mut self, AppCommand) -> Vec<AppEffect>`.
+  - [x] Add `handle_playback_event(&mut self, PlaybackEvent) -> Vec<AppEffect>`.
+  - [x] Keep `AppController` free of GTK/widget/backend object dependencies.
+  - [x] Add focused controller tests for any migrated behavior.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the controller shell.
 
 - [ ] **Step 6: Move playback-control state logic into `AppController`**
   - [ ] Migrate Play handling.
@@ -429,12 +429,12 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Validate with `cargo test --test render`.
   - [x] Validate with `cargo clippy --all-targets`.
 
-- [ ] **Milestone 3: Add commands/effects and controller shell**
-  - [ ] Complete Step 3.
-  - [ ] Complete Step 5.
-  - [ ] Migrate at least one command family.
-  - [ ] Validate with `cargo test --lib --bins`.
-  - [ ] Validate with `cargo clippy --all-targets`.
+- [x] **Milestone 3: Add commands/effects and controller shell**
+  - [x] Complete Step 3.
+  - [x] Complete Step 5.
+  - [x] Migrate at least one command family.
+  - [x] Validate with `cargo test --lib --bins`.
+  - [x] Validate with `cargo clippy --all-targets`.
 
 - [ ] **Milestone 4: Migrate playlist and panel state logic**
   - [ ] Complete Step 7.
