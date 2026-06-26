@@ -3,8 +3,10 @@
 use cairo::{Context, Format, ImageSurface};
 
 use crate::render::{
-    render_main_player_state, MainWindowRenderState, RenderError, MAIN_TITLEBAR_HEIGHT,
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    equalizer_window_height, playlist_window_height, render_equalizer_state,
+    render_main_player_state, render_playlist_frame, render_playlist_rows, EqualizerRenderState,
+    MainWindowRenderState, PlaylistRowsRenderState, RenderError, RenderPass,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::DefaultSkin;
 
@@ -13,7 +15,9 @@ pub fn cairo_argb_to_egui_rgba(argb: u32) -> [u8; 4] {
     [r, g, b, a]
 }
 
-pub fn cairo_surface_to_color_image(surface: &mut ImageSurface) -> Result<egui::ColorImage, RenderError> {
+pub fn cairo_surface_to_color_image(
+    surface: &mut ImageSurface,
+) -> Result<egui::ColorImage, RenderError> {
     let width = surface.width() as usize;
     let height = surface.height() as usize;
     let stride = surface.stride() as usize;
@@ -28,7 +32,10 @@ pub fn cairo_surface_to_color_image(surface: &mut ImageSurface) -> Result<egui::
             rgba.extend_from_slice(&[r, g, b, a]);
         }
     }
-    Ok(egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba))
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [width, height],
+        &rgba,
+    ))
 }
 
 pub fn render_main_player_color_image(
@@ -43,6 +50,50 @@ pub fn render_main_player_color_image(
     let mut surface = ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, height)?;
     let cr = Context::new(&surface)?;
     render_main_player_state(&cr, skin, state)?;
+    drop(cr);
+    cairo_surface_to_color_image(&mut surface)
+}
+
+pub fn render_equalizer_color_image(
+    skin: &DefaultSkin,
+    state: &EqualizerRenderState,
+) -> Result<egui::ColorImage, RenderError> {
+    let height = equalizer_window_height(state.shaded);
+    let mut surface = ImageSurface::create(Format::ARgb32, EQUALIZER_WINDOW_WIDTH, height)?;
+    let cr = Context::new(&surface)?;
+    render_equalizer_state(&cr, skin, state)?;
+    drop(cr);
+    cairo_surface_to_color_image(&mut surface)
+}
+
+pub fn render_playlist_color_image(
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+    width: i32,
+    height: i32,
+    rows: &PlaylistRowsRenderState,
+    footer_info: Option<&str>,
+) -> Result<egui::ColorImage, RenderError> {
+    let render_height = playlist_window_height(shaded, height);
+    let mut surface = ImageSurface::create(Format::ARgb32, width, render_height)?;
+    let cr = Context::new(&surface)?;
+    render_playlist_frame(
+        &cr,
+        skin,
+        focused,
+        shaded,
+        width,
+        height,
+        None,
+        footer_info,
+        Some("   "),
+        Some("  "),
+    )?;
+    if !shaded {
+        render_playlist_rows(&cr, skin, rows, RenderPass::Bitmap)?;
+        render_playlist_rows(&cr, skin, rows, RenderPass::Text)?;
+    }
     drop(cr);
     cairo_surface_to_color_image(&mut surface)
 }
@@ -68,8 +119,12 @@ mod tests {
     #[test]
     fn renders_main_player_to_egui_color_image() {
         let skin = DefaultSkin::load_bundled().unwrap();
-        let image = render_main_player_color_image(&skin, &MainWindowRenderState::default()).unwrap();
+        let image =
+            render_main_player_color_image(&skin, &MainWindowRenderState::default()).unwrap();
 
-        assert_eq!(image.size, [MAIN_WINDOW_WIDTH as usize, MAIN_WINDOW_HEIGHT as usize]);
+        assert_eq!(
+            image.size,
+            [MAIN_WINDOW_WIDTH as usize, MAIN_WINDOW_HEIGHT as usize]
+        );
     }
 }

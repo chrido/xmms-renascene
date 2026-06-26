@@ -10,7 +10,9 @@ use crate::app_state::AppState;
 #[cfg(feature = "gstreamer-backend")]
 use crate::player::GStreamerBackend;
 use crate::render::{
-    main_window_height, MainPushButton, MainSlider, MainToggleButton, MAIN_WINDOW_WIDTH,
+    docked_panel_size, DockedPanelState, EqualizerControl, EqualizerSlider, MainPushButton,
+    MainSlider, MainToggleButton, PlaylistMenuRenderKind, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::DefaultSkin;
 
@@ -34,6 +36,9 @@ pub struct EguiFrontendState {
     pub main_pressed_push: Option<MainPushButton>,
     pub main_pressed_toggle: Option<MainToggleButton>,
     pub main_pressed_slider: Option<MainSlider>,
+    pub equalizer_pressed_control: Option<EqualizerControl>,
+    pub equalizer_pressed_slider: Option<EqualizerSlider>,
+    pub playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
@@ -59,6 +64,9 @@ impl EguiFrontendState {
             main_pressed_push: None,
             main_pressed_toggle: None,
             main_pressed_slider: None,
+            equalizer_pressed_control: None,
+            equalizer_pressed_slider: None,
+            playlist_menu_hover: None,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
@@ -200,21 +208,39 @@ impl EguiFrontendState {
     }
 }
 
+impl EguiFrontendState {
+    fn desired_window_size(&self) -> egui::Vec2 {
+        let config = &self.controller.state().config;
+        let (width, height) = docked_panel_size(DockedPanelState {
+            main_shaded: config.main_shaded,
+            equalizer_visible: config.equalizer_visible,
+            equalizer_detached: config.equalizer_detached,
+            equalizer_shaded: config.equalizer_shaded,
+            playlist_visible: config.playlist_visible,
+            playlist_detached: config.playlist_detached,
+            playlist_shaded: config.playlist_shaded,
+            playlist_width: PLAYLIST_DEFAULT_WIDTH,
+            playlist_height: PLAYLIST_DEFAULT_HEIGHT,
+            ..DockedPanelState::default()
+        });
+        egui::vec2(width as f32 * self.scale_factor, height as f32 * self.scale_factor)
+    }
+}
+
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_playback_backend();
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                 main_player::show_main_player(ui, self);
-                if self.controller.state().config.playlist_visible {
-                    ui.separator();
-                    playlist::show_playlist(ui, self);
-                }
                 if self.controller.state().config.equalizer_visible {
-                    ui.separator();
                     equalizer::show_equalizer(ui, self);
+                }
+                if self.controller.state().config.playlist_visible {
+                    playlist::show_playlist(ui, self);
                 }
             });
         if self.preferences_open {
@@ -225,10 +251,7 @@ impl eframe::App for EguiFrontendState {
 
 pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
     let app = EguiFrontendState::new(options)?;
-    let window_size = egui::vec2(
-        MAIN_WINDOW_WIDTH as f32 * app.scale_factor,
-        main_window_height(app.controller.state().config.main_shaded) as f32 * app.scale_factor,
-    );
+    let window_size = app.desired_window_size();
     eframe::run_native(
         "XMMS Renascene egui",
         eframe::NativeOptions {
