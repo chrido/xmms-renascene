@@ -196,3 +196,32 @@ pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
     )
     .map_err(|err| format!("failed to start egui frontend: {err}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::command::PanelCommand;
+
+    #[test]
+    fn egui_app_constructs_without_native_window() {
+        let options = PreviewOptions {
+            open_preferences: true,
+            ..PreviewOptions::default()
+        };
+
+        let app = EguiFrontendState::new(options).unwrap();
+
+        assert!(app.preferences_open);
+        assert_eq!(app.selected_preferences_page, PreferencesPage::Options);
+    }
+
+    #[test]
+    fn egui_dispatch_mutates_config_through_controller() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+
+        app.dispatch(PanelCommand::SetPlaylistVisibility(true));
+
+        assert!(app.controller().state().config.playlist_visible);
+        assert!(app.runtime.repaint_requested);
+    }
+}

@@ -668,13 +668,13 @@ Prevent regressions where egui starts depending on GTK accidentally.
 
 ### Tasks
 
-- [ ] Add a documented local check:
+- [x] Add a documented local check:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 ```
 
-- [ ] Add a stricter check if feasible:
+- [x] Add a stricter check if feasible:
 
 ```bash
 cargo tree --no-default-features --features egui-ui | grep -E 'gtk|gio|glib|gdk'
@@ -682,11 +682,11 @@ cargo tree --no-default-features --features egui-ui | grep -E 'gtk|gio|glib|gdk'
 
 and verify no GTK stack appears.
 
-- [ ] Add CI job or script for egui-only compile.
-- [ ] Add smoke test for constructing `EguiApp` if possible without a native window.
-- [ ] Add smoke test for main player command translation.
-- [ ] Add smoke test for preferences config mutation.
-- [ ] Validation:
+- [x] Add CI job or script for egui-only compile.
+- [x] Add smoke test for constructing `EguiApp` if possible without a native window.
+- [x] Add smoke test for main player command translation.
+- [x] Add smoke test for preferences config mutation.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
@@ -694,7 +694,7 @@ cargo test --lib --bins
 cargo clippy --all-targets
 ```
 
-- [ ] Commit: `Add egui frontend smoke checks`
+- [x] Commit: `Add egui frontend smoke checks`
 
 ---
 
