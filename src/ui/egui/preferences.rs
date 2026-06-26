@@ -19,50 +19,84 @@ pub enum PreferencesPage {
 }
 
 pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    let before = app.controller().state().config.clone();
+    let viewport_id = egui::ViewportId::from_hash_of("xmms-egui-preferences");
+    let builder = egui::ViewportBuilder::default()
+        .with_title("Preferences")
+        .with_inner_size(egui::vec2(560.0, 460.0))
+        .with_min_inner_size(egui::vec2(420.0, 300.0))
+        .with_resizable(true)
+        .with_decorations(true);
+
+    ctx.show_viewport_immediate(viewport_id, builder, |ctx, class| {
+        if ctx.input(|input| input.viewport().close_requested()) {
+            app.preferences_open = false;
+            return;
+        }
+
+        let before = app.controller().state().config.clone();
+        match class {
+            egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
+                show_preferences_embedded(ctx, app);
+            }
+            egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                egui::CentralPanel::default().show(ctx, |ui| show_preferences_contents(ui, app));
+            }
+        }
+        persist_preference_changes(app, before);
+    });
+}
+
+fn show_preferences_embedded(ctx: &egui::Context, app: &mut EguiFrontendState) {
     let mut open = app.preferences_open;
     egui::Window::new("Preferences")
         .open(&mut open)
         .resizable(true)
         .default_width(520.0)
-        .show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for page in [
-                    PreferencesPage::AudioIoPlugins,
-                    PreferencesPage::VisualizationPlugins,
-                    PreferencesPage::Options,
-                    PreferencesPage::Fonts,
-                    PreferencesPage::Title,
-                ] {
-                    if ui
-                        .selectable_label(app.selected_preferences_page == page, page.label())
-                        .clicked()
-                    {
-                        app.selected_preferences_page = page;
-                    }
-                }
-            });
-            ui.separator();
-            match app.selected_preferences_page {
-                PreferencesPage::AudioIoPlugins => show_audio_page(ui, app),
-                PreferencesPage::VisualizationPlugins => show_visualization_page(ui, app),
-                PreferencesPage::Options => show_options_page(ui, app),
-                PreferencesPage::Fonts => show_fonts_page(ui, app),
-                PreferencesPage::Title => show_title_page(ui, app),
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                if ui.button("Reset to Defaults").clicked() {
-                    let state = app.controller_mut().state_mut();
-                    state.config = Config::default();
-                    state.apply_config_to_runtime();
-                }
-                if ui.button("Close").clicked() {
-                    app.preferences_open = false;
-                }
-            });
-        });
+        .constrain(false)
+        .show(ctx, |ui| show_preferences_contents(ui, app));
     app.preferences_open = open;
+}
+
+fn show_preferences_contents(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
+    ui.horizontal_wrapped(|ui| {
+        for page in [
+            PreferencesPage::AudioIoPlugins,
+            PreferencesPage::VisualizationPlugins,
+            PreferencesPage::Options,
+            PreferencesPage::Fonts,
+            PreferencesPage::Title,
+        ] {
+            if ui
+                .selectable_label(app.selected_preferences_page == page, page.label())
+                .clicked()
+            {
+                app.selected_preferences_page = page;
+            }
+        }
+    });
+    ui.separator();
+    match app.selected_preferences_page {
+        PreferencesPage::AudioIoPlugins => show_audio_page(ui, app),
+        PreferencesPage::VisualizationPlugins => show_visualization_page(ui, app),
+        PreferencesPage::Options => show_options_page(ui, app),
+        PreferencesPage::Fonts => show_fonts_page(ui, app),
+        PreferencesPage::Title => show_title_page(ui, app),
+    }
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Reset to Defaults").clicked() {
+            let state = app.controller_mut().state_mut();
+            state.config = Config::default();
+            state.apply_config_to_runtime();
+        }
+        if ui.button("Close").clicked() {
+            app.preferences_open = false;
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    });
+}
+
+fn persist_preference_changes(app: &mut EguiFrontendState, before: Config) {
     if app.controller().state().config != before {
         app.runtime.apply_effect(crate::app::effect::AppEffect::SaveConfig);
         app.runtime.apply_effect(crate::app::effect::AppEffect::QueueRender(
