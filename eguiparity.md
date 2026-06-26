@@ -64,7 +64,7 @@ Legend:
 - [ ] Cross-window focus semantics: GTK tracks focused main/playlist/equalizer panels and renders focused titlebar variants.
 - [x] Full keyboard shortcut parity across main, playlist, equalizer, prompts, and dialogs.
 - [x] Full mouse wheel parity across main sliders, shaded sliders, playlist rows, equalizer sliders.
-- [ ] Drag/drop parity for files, directories, URLs, and playlist replacement/append modes.
+- [x] Drag/drop parity for files, directories, URLs, and playlist replacement/append modes.
 
 ---
 
@@ -212,7 +212,7 @@ Legend:
   - enter/double-click activation;
   - Vim-style navigation preferences.
 - [ ] Drag/reorder playlist entries missing.
-- [ ] Drag/drop file/URL import parity missing.
+- [x] Drag/drop file/URL import parity missing.
 - [ ] Scrollbar thumb behavior missing:
   - thumb drag;
   - proportional thumb geometry;

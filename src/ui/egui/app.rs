@@ -388,6 +388,7 @@ impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_playback_backend();
         self.tick_playback_position(ctx);
+        handle_dropped_files(ctx, self);
         handle_global_shortcuts(ctx, self);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
         egui::CentralPanel::default()
@@ -417,6 +418,20 @@ impl eframe::App for EguiFrontendState {
             show_skin_browser_placeholder(ctx, self);
         }
         menu::show_pending_messages(ctx, self);
+    }
+}
+
+fn handle_dropped_files(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let dropped: Vec<PathBuf> = ctx.input(|input| {
+        input
+            .raw
+            .dropped_files
+            .iter()
+            .filter_map(|file| file.path.clone())
+            .collect()
+    });
+    if !dropped.is_empty() {
+        app.dispatch(PlaylistCommand::AddFiles(dropped));
     }
 }
 
