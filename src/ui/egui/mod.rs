@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod equalizer;
+pub mod file_info;
 pub mod input;
 pub mod layout;
 pub mod main_player;

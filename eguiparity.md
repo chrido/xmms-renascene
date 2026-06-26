@@ -202,7 +202,7 @@ Legend:
   - Select None;
   - Invert Selection.
 - [ ] Physical delete confirmation dialog missing.
-- [ ] File Info dialog from playlist missing.
+- [x] File Info dialog from playlist missing.
 - [ ] Playlist search overlay missing.
 - [ ] Playlist keyboard navigation missing/incomplete:
   - arrow keys;
@@ -378,7 +378,7 @@ Legend:
   - parse seconds and `mm:ss`;
   - seek current playback position;
   - modal OK/Cancel.
-- [ ] File Info dialog missing. GTK dialog includes:
+- [x] File Info dialog missing. GTK dialog includes:
   - metadata/tag display;
   - editable fields where supported;
   - Save;
@@ -588,7 +588,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Playlist bottom menu popovers.
 - [x] Playlist sort popover.
 - [x] Playlist context menu.
-- [ ] File Info dialog.
+- [x] File Info dialog.
 - [ ] Equalizer presets popover.
 - [ ] Equalizer preset load/save/delete/configure dialogs.
 - [ ] Preferences full control parity.

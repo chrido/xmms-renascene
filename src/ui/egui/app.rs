@@ -16,6 +16,7 @@ use crate::render::{
 };
 use crate::skin::DefaultSkin;
 
+use super::file_info;
 use super::menu::{self, EguiPrompt};
 use super::preferences::{self, PreferencesPage};
 use super::runtime::EguiRuntime;
@@ -30,6 +31,7 @@ pub struct EguiFrontendState {
     pub main_menu_open: bool,
     pub preferences_open: bool,
     pub skin_browser_open: bool,
+    pub file_info_open: bool,
     pub prompt_open: Option<EguiPrompt>,
     pub prompt_text: String,
     pub selected_preferences_page: PreferencesPage,
@@ -65,6 +67,7 @@ impl EguiFrontendState {
             main_menu_open: false,
             preferences_open: options.open_preferences,
             skin_browser_open: false,
+            file_info_open: false,
             prompt_open: None,
             prompt_text: String::new(),
             selected_preferences_page: PreferencesPage::default(),
@@ -168,6 +171,7 @@ impl EguiFrontendState {
         }
         match effect {
             AppEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
+            AppEffect::OpenFileInfoDialog => self.file_info_open = true,
             AppEffect::OpenPreferences => self.preferences_open = true,
             other => self.runtime.apply_effect(other),
         }
@@ -267,6 +271,7 @@ impl eframe::App for EguiFrontendState {
         if self.preferences_open {
             preferences::show_preferences(ctx, self);
         }
+        file_info::show_file_info_dialog(ctx, self);
         if self.skin_browser_open {
             show_skin_browser_placeholder(ctx, self);
         }
