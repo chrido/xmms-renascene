@@ -155,31 +155,31 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Playlist bottom menu popovers are missing. GTK opens menus for:
+- [x] Playlist bottom menu popovers are missing. GTK opens menus for:
   - Add
   - Remove
   - Select
   - Misc
   - List
-- [ ] Current egui bottom menu buttons use simplified direct actions instead of opening the real XMMS-style popup menu.
-- [ ] Add menu parity:
+- [x] Current egui bottom menu buttons use simplified direct actions instead of opening the real XMMS-style popup menu.
+- [x] Add menu parity:
   - Open Location prompt;
   - Open Directory dialog;
   - Open File dialog.
-- [ ] Remove menu parity:
+- [x] Remove menu parity:
   - Clear List;
   - Crop to Selection;
   - Remove Selected / Current;
   - any index-specific menu behavior.
-- [ ] Select menu parity:
+- [x] Select menu parity:
   - Invert Selection;
   - Select None;
   - Select All.
-- [ ] Misc menu parity:
+- [x] Misc menu parity:
   - Sort submenu popover;
   - File Info dialog;
   - Options/preferences.
-- [ ] List menu parity:
+- [x] List menu parity:
   - Clear list;
   - Save playlist;
   - Load playlist.
@@ -585,7 +585,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Main menu popover.
 - [x] Open Location prompt.
 - [x] Jump to Time prompt.
-- [ ] Playlist bottom menu popovers.
+- [x] Playlist bottom menu popovers.
 - [ ] Playlist sort popover.
 - [ ] Playlist context menu.
 - [ ] File Info dialog.

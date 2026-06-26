@@ -1,6 +1,7 @@
 //! egui playlist panel/window.
 
 use crate::app::command::{PlayerCommand, PlaylistCommand};
+use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
     format_playlist_footer_duration, playlist_view_model, PlaylistViewModel,
 };
@@ -58,6 +59,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_playlist_hit_regions(ui, app, rect, &view_model);
+    show_playlist_menu_popover(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -228,15 +230,85 @@ fn add_playlist_rows_hit_region(
 }
 
 fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
-    match menu {
-        PlaylistMenuKind::Add => app.dispatch(PlaylistCommand::ExecuteMenu {
-            kind: menu,
-            index: 0,
-        }),
-        PlaylistMenuKind::Remove => app.dispatch(PlaylistCommand::RemoveSelectedOrCurrent),
-        PlaylistMenuKind::Select => app.dispatch(PlaylistCommand::SelectAll),
-        PlaylistMenuKind::Misc => app.dispatch(PlaylistCommand::InvertSelection),
-        PlaylistMenuKind::List => app.dispatch(PlaylistCommand::Randomize),
+    app.playlist_menu_open = Some(menu);
+}
+
+fn show_playlist_menu_popover(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let Some(kind) = app.playlist_menu_open else {
+        return;
+    };
+    let title = match kind {
+        PlaylistMenuKind::Add => "Add",
+        PlaylistMenuKind::Remove => "Remove",
+        PlaylistMenuKind::Select => "Select",
+        PlaylistMenuKind::Misc => "Misc",
+        PlaylistMenuKind::List => "List",
+    };
+    let mut open = true;
+    let mut close_after_click = false;
+    egui::Window::new(format!("Playlist {title}"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| match kind {
+            PlaylistMenuKind::Add => {
+                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Open Location...");
+                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Open Directory...");
+                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Open Files...");
+            }
+            PlaylistMenuKind::Remove => {
+                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Clear List");
+                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Crop to Selection");
+                close_after_click |= playlist_menu_item(ui, app, kind, 3, "Remove Selected");
+            }
+            PlaylistMenuKind::Select => {
+                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Invert Selection");
+                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Select None");
+                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Select All");
+            }
+            PlaylistMenuKind::Misc => {
+                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Sort List...");
+                close_after_click |= playlist_menu_item(ui, app, kind, 1, "File Info...");
+                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Options...");
+            }
+            PlaylistMenuKind::List => {
+                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Clear List");
+                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Save List...");
+                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Load List...");
+            }
+        });
+    if !open || close_after_click {
+        app.playlist_menu_open = None;
+    }
+}
+
+fn playlist_menu_item(
+    ui: &mut egui::Ui,
+    app: &mut EguiFrontendState,
+    kind: PlaylistMenuKind,
+    index: usize,
+    label: &str,
+) -> bool {
+    if !ui.button(label).clicked() {
+        return false;
+    }
+    dispatch_playlist_menu_item(app, kind, index);
+    true
+}
+
+fn dispatch_playlist_menu_item(app: &mut EguiFrontendState, kind: PlaylistMenuKind, index: usize) {
+    match (kind, index) {
+        (PlaylistMenuKind::Add, 0) => {
+            app.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);
+            app.prompt_text.clear();
+        }
+        (PlaylistMenuKind::Add, 1) => app.apply_effect(AppEffect::OpenFileDialog(
+            FileDialogRequest::AddAudioDirectory,
+        )),
+        (PlaylistMenuKind::Add, 2) => {
+            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
+        }
+        _ => app.dispatch(PlaylistCommand::ExecuteMenu { kind, index }),
     }
 }
 
@@ -310,6 +382,8 @@ mod tests {
             12_000,
         );
         dispatch_playlist_menu_button(&mut app, PlaylistMenuKind::Select);
+        assert_eq!(app.playlist_menu_open, Some(PlaylistMenuKind::Select));
+        dispatch_playlist_menu_item(&mut app, PlaylistMenuKind::Select, 2);
         assert!(app.controller().state().playlist.entries()[0].selected);
 
         dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::Play);
