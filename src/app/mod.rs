@@ -9,5 +9,6 @@ pub mod effect;
 pub mod panel;
 pub mod playlist_actions;
 pub mod preview;
+pub mod screenshot_scenarios;
 pub mod services;
 pub mod view_model;

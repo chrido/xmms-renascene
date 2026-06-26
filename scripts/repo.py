@@ -3,9 +3,11 @@
 """Development helper commands for XMMS Renascene."""
 
 import asyncio
+import contextlib
 import logging
 import os
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +17,15 @@ from .flatpak import FlatpakInstaller
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 RUST_BIN = REPO_DIR / "target" / "debug" / "xmms-rs"
+SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
+    "main-player-default": ("--reset",),
+    "main-player-shaded": ("--reset", "--shade-main"),
+    "playlist-default": ("--reset", "--playlist"),
+    "playlist-with-selection": ("--reset", "--playlist"),
+    "equalizer-default": ("--reset", "--equalizer"),
+    "equalizer-non-default": ("--reset", "--equalizer"),
+    "preferences-default": ("--reset", "--preferences"),
+}
 
 
 def _configure_gtk_environment() -> None:
@@ -37,6 +48,102 @@ def _split_screenshot_args(args: tuple[str, ...]) -> tuple[str, tuple[str, ...]]
         else:
             app_args.append(arg)
     return background, tuple(app_args)
+
+
+def _scenario_args(scenario: str) -> tuple[str, ...]:
+    try:
+        return SCREENSHOT_SCENARIOS[scenario]
+    except KeyError as exc:
+        known = ", ".join(sorted(SCREENSHOT_SCENARIOS))
+        raise ValueError(f"unknown screenshot scenario '{scenario}'. Known scenarios: {known}") from exc
+
+
+def _load_ppm(path: Path) -> tuple[int, int, list[tuple[int, int, int]]]:
+    tokens = []
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0]
+        tokens.extend(line.split())
+    if len(tokens) < 4 or tokens[0] != "P3":
+        raise ValueError(f"{path} is not a plain PPM (P3) image")
+    width, height, max_value = map(int, tokens[1:4])
+    if max_value <= 0:
+        raise ValueError(f"{path} has invalid max color value {max_value}")
+    raw = list(map(int, tokens[4:]))
+    if len(raw) != width * height * 3:
+        raise ValueError(f"{path} contains {len(raw)} channel values, expected {width * height * 3}")
+    pixels = []
+    for i in range(0, len(raw), 3):
+        pixels.append(tuple((channel * 255) // max_value for channel in raw[i : i + 3]))
+    return width, height, pixels
+
+
+def _write_ppm(path: Path, width: int, height: int, pixels: list[tuple[int, int, int]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    values = ["P3", f"{width} {height}", "255"]
+    values.extend(f"{r} {g} {b}" for r, g, b in pixels)
+    path.write_text("\n".join(values) + "\n")
+
+
+def _diff_plain_ppm(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[int, int]:
+    left_width, left_height, left_pixels = _load_ppm(left)
+    right_width, right_height, right_pixels = _load_ppm(right)
+    if (left_width, left_height) != (right_width, right_height):
+        raise ValueError(f"image dimensions differ: {left_width}x{left_height} vs {right_width}x{right_height}")
+    changed = 0
+    max_delta = 0
+    diff_pixels = []
+    for left_pixel, right_pixel in zip(left_pixels, right_pixels):
+        delta = max(abs(a - b) for a, b in zip(left_pixel, right_pixel))
+        max_delta = max(max_delta, delta)
+        if delta > tolerance:
+            changed += 1
+            diff_pixels.append((255, 0, 255))
+        else:
+            gray = sum(left_pixel) // 3
+            diff_pixels.append((gray, gray, gray))
+    _write_ppm(diff, left_width, left_height, diff_pixels)
+    return changed, max_delta
+
+
+def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[int, int]:
+    if left.suffix.lower() == right.suffix.lower() == diff.suffix.lower() == ".ppm":
+        return _diff_plain_ppm(left, right, diff, tolerance)
+    try:
+        from PIL import Image, ImageChops
+    except ImportError:
+        if not command_exists("compare"):
+            raise RuntimeError("Install Pillow or ImageMagick 'compare' to diff non-PPM screenshots")
+        diff.parent.mkdir(parents=True, exist_ok=True)
+        command = ["compare", "-metric", "AE", "-fuzz", f"{tolerance}%", str(left), str(right), str(diff)]
+        result = subprocess.run(command, text=True, capture_output=True, check=False)
+        metric = result.stderr.strip() or result.stdout.strip() or "0"
+        try:
+            changed = int(float(metric.split()[0]))
+        except (ValueError, IndexError):
+            changed = 0 if result.returncode == 0 else 1
+        return changed, 0
+
+    with Image.open(left).convert("RGB") as left_image, Image.open(right).convert("RGB") as right_image:
+        if left_image.size != right_image.size:
+            raise ValueError(f"image dimensions differ: {left_image.size} vs {right_image.size}")
+        delta_image = ImageChops.difference(left_image, right_image)
+        changed = 0
+        max_delta = 0
+        diff_pixels = []
+        for delta, base in zip(delta_image.getdata(), left_image.getdata()):
+            pixel_delta = max(delta)
+            max_delta = max(max_delta, pixel_delta)
+            if pixel_delta > tolerance:
+                changed += 1
+                diff_pixels.append((255, 0, 255))
+            else:
+                gray = sum(base) // 3
+                diff_pixels.append((gray, gray, gray))
+        diff_image = Image.new("RGB", left_image.size)
+        diff_image.putdata(diff_pixels)
+        diff.parent.mkdir(parents=True, exist_ok=True)
+        diff_image.save(diff)
+        return changed, max_delta
 
 
 class RepoTool:
@@ -158,6 +265,83 @@ class RepoTool:
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
+
+    def _write_frontend_screenshot(self, frontend: str, scenario: str, output: Path) -> None:
+        self._ensure_rust_binary()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        args = [
+            str(RUST_BIN),
+            "--frontend",
+            frontend,
+            "--screenshot",
+            str(output),
+            *_scenario_args(scenario),
+        ]
+        logging.info("Capturing %s screenshot: %s", frontend, " ".join(args))
+        args @ cli_follow | raise_on_error
+        if not output.is_file() or output.stat().st_size == 0:
+            raise RuntimeError(f"{frontend} screenshot was not created at {output}")
+
+    async def frontend_screenshot_diff(
+        self,
+        scenario: str = "main-player-default",
+        output_dir: str = "target/screenshots",
+        gtk_output: str = "",
+        egui_output: str = "",
+        diff_output: str = "",
+        tolerance: int = 0,
+        fail_on_diff_threshold: int = -1,
+        keep_intermediate: bool = True,
+        update_references: bool = False,
+    ) -> int:
+        """Capture GTK and egui screenshots for a scenario and write a diff image."""
+        os.chdir(REPO_DIR)
+        self._build_unless_skipped()
+        output_root = Path(output_dir)
+        gtk_path = Path(gtk_output) if gtk_output else output_root / f"gtk-{scenario}.png"
+        egui_path = Path(egui_output) if egui_output else output_root / f"egui-{scenario}.png"
+        diff_path = Path(diff_output) if diff_output else output_root / f"diff-{scenario}.png"
+        try:
+            self._write_frontend_screenshot("gtk", scenario, gtk_path)
+            self._write_frontend_screenshot("egui", scenario, egui_path)
+            if update_references:
+                logging.info("Reference update requested; keeping freshly captured frontend screenshots")
+            changed, max_delta = _diff_images(gtk_path, egui_path, diff_path, tolerance)
+        except Exception as err:
+            logging.error("frontend screenshot diff failed: %s", err)
+            return 1
+        finally:
+            if not keep_intermediate:
+                for path in [gtk_path, egui_path]:
+                    with contextlib.suppress(FileNotFoundError):
+                        path.unlink()
+        logging.info(
+            "Screenshot diff written to %s (changed_pixels=%s, max_delta=%s, tolerance=%s)",
+            diff_path,
+            changed,
+            max_delta,
+            tolerance,
+        )
+        if fail_on_diff_threshold >= 0 and changed > fail_on_diff_threshold:
+            logging.error("changed pixel count %s exceeds threshold %s", changed, fail_on_diff_threshold)
+            return 2
+        return 0
+
+    async def frontend_screenshot_diff_self_test(self) -> int:
+        """Run a synthetic self-test for the screenshot diff helper."""
+        os.chdir(REPO_DIR)
+        tmp = REPO_DIR / "target" / "screenshots" / "self-test"
+        left = tmp / "left.ppm"
+        right = tmp / "right.ppm"
+        diff = tmp / "diff.ppm"
+        _write_ppm(left, 2, 1, [(0, 0, 0), (10, 10, 10)])
+        _write_ppm(right, 2, 1, [(0, 0, 0), (250, 10, 10)])
+        changed, max_delta = _diff_images(left, right, diff, tolerance=0)
+        if changed != 1 or max_delta != 240 or not diff.is_file():
+            logging.error("unexpected diff result: changed=%s max_delta=%s diff_exists=%s", changed, max_delta, diff.is_file())
+            return 1
+        logging.info("frontend screenshot diff self-test passed")
+        return 0
 
 
 def dispatch_args(argv: list[str]) -> int:

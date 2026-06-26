@@ -211,8 +211,8 @@ Add repo-tool support to capture screenshots from both GTK and egui frontends an
 
 ### Tasks
 
-- [ ] Locate the existing repo tool entrypoint and command structure.
-- [ ] Add a frontend screenshot-diff command, for example:
+- [x] Locate the existing repo tool entrypoint and command structure.
+- [x] Add a frontend screenshot-diff command, for example:
 
 ```bash
 repo-tool frontend-screenshot-diff \
@@ -222,39 +222,39 @@ repo-tool frontend-screenshot-diff \
   --diff-output target/screenshots/diff-main.png
 ```
 
-- [ ] Support named screenshot scenarios:
-  - [ ] `main-player-default`
-  - [ ] `main-player-shaded`
-  - [ ] `playlist-default`
-  - [ ] `playlist-with-selection`
-  - [ ] `equalizer-default`
-  - [ ] `equalizer-non-default`
-  - [ ] `preferences-default`
-- [ ] Add options for:
-  - [ ] output directory;
-  - [ ] image tolerance;
-  - [ ] fail-on-diff threshold;
-  - [ ] keeping intermediate GTK/egui screenshots;
-  - [ ] updating reference images intentionally.
-- [ ] Reuse existing GTK screenshot code where possible, but if that code lives in GTK-only modules and egui needs the same setup logic, extract the shared state/scenario setup into frontend-neutral code first.
-- [ ] Add shared screenshot scenario builders outside GTK-only modules, for example:
+- [x] Support named screenshot scenarios:
+  - [x] `main-player-default`
+  - [x] `main-player-shaded`
+  - [x] `playlist-default`
+  - [x] `playlist-with-selection`
+  - [x] `equalizer-default`
+  - [x] `equalizer-non-default`
+  - [x] `preferences-default`
+- [x] Add options for:
+  - [x] output directory;
+  - [x] image tolerance;
+  - [x] fail-on-diff threshold;
+  - [x] keeping intermediate GTK/egui screenshots;
+  - [x] updating reference images intentionally.
+- [x] Reuse existing GTK screenshot code where possible, but if that code lives in GTK-only modules and egui needs the same setup logic, extract the shared state/scenario setup into frontend-neutral code first.
+- [x] Add shared screenshot scenario builders outside GTK-only modules, for example:
 
 ```text
 src/app/screenshot_scenarios.rs
 src/render/screenshot_compare.rs
 ```
 
-- [ ] Add image diff generation:
-  - [ ] load GTK/reference screenshot;
-  - [ ] load egui screenshot;
-  - [ ] compare dimensions;
-  - [ ] compute per-pixel difference;
-  - [ ] write a diff heatmap/image;
-  - [ ] print summary statistics such as changed pixels and max delta.
-- [ ] Make the command work even before egui rendering is complete by allowing missing-egui output to produce a clear actionable error.
-- [ ] Add tests for the image comparison/diff helper using small synthetic images.
-- [ ] Document the command in this plan and any repo-tool help text.
-- [ ] Validation:
+- [x] Add image diff generation:
+  - [x] load GTK/reference screenshot;
+  - [x] load egui screenshot;
+  - [x] compare dimensions;
+  - [x] compute per-pixel difference;
+  - [x] write a diff heatmap/image;
+  - [x] print summary statistics such as changed pixels and max delta.
+- [x] Make the command work even before egui rendering is complete by allowing missing-egui output to produce a clear actionable error.
+- [x] Add tests for the image comparison/diff helper using small synthetic images.
+- [x] Document the command in this plan and any repo-tool help text.
+- [x] Validation:
 
 ```bash
 cargo test --lib --bins
@@ -263,7 +263,7 @@ cargo test --test render
 # repo-tool frontend-screenshot-diff --scenario main-player-default --output-dir target/screenshots
 ```
 
-- [ ] Commit: `Add repo tool frontend screenshot diff command`
+- [x] Commit: `Add repo tool frontend screenshot diff command`
 
 ## Phase 3: Add egui module skeleton
 
