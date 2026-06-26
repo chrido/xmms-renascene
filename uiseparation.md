@@ -391,15 +391,15 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit playback backend separation.
 
-- [ ] **Step 14: Decide rendering abstraction strategy**
-  - [ ] Decide whether mobile should initially reuse the Cairo renderer as a bitmap renderer.
-  - [ ] Decide whether to introduce frontend-neutral draw commands later.
-  - [ ] Document the selected rendering strategy.
-  - [ ] If choosing Cairo-first, define how non-GTK frontends receive rendered images.
-  - [ ] If choosing draw-commands, define an initial `DrawCommand` model and migration plan.
-  - [ ] Preserve existing pixel/render parity tests.
-  - [ ] Run `cargo test --test render` if code changes are made.
-  - [ ] Commit rendering strategy documentation or initial abstraction.
+- [x] **Step 14: Decide rendering abstraction strategy**
+  - [x] Decide whether mobile should initially reuse the Cairo renderer as a bitmap renderer.
+  - [x] Decide whether to introduce frontend-neutral draw commands later.
+  - [x] Document the selected rendering strategy.
+  - [x] If choosing Cairo-first, define how non-GTK frontends receive rendered images.
+  - [x] If choosing draw-commands, define an initial `DrawCommand` model and migration plan.
+  - [x] Preserve existing pixel/render parity tests.
+  - [x] Run `cargo test --test render` if code changes are made.
+  - [x] Commit rendering strategy documentation or initial abstraction.
 
 - [ ] **Step 15: Introduce feature-gated frontends**
   - [ ] Confirm app/core modules compile without GTK imports.
