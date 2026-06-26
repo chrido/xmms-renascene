@@ -3,7 +3,7 @@
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
-use crate::app::view_model::{equalizer_view_model, main_player_view_model, playlist_view_model};
+use crate::app::view_model::{equalizer_view_model, playlist_view_model};
 use crate::app_state::AppState;
 
 use super::preferences::PreferencesPage;
@@ -58,9 +58,8 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("XMMS Renascene egui");
-            let main = main_player_view_model(self.controller.state());
-            ui.label(main_player::main_player_title(&main));
+            main_player::show_main_player(ui, self);
+            ui.separator();
             let playlist_model = playlist_view_model(self.controller.state());
             ui.label(format!("Playlist rows: {}", playlist::playlist_row_count(&playlist_model)));
             let equalizer_model = equalizer_view_model(self.controller.state());

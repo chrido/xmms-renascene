@@ -432,41 +432,41 @@ Show and interact with the main XMMS player in egui.
 
 ### Tasks
 
-- [ ] Add `main_player.rs` UI function, e.g.:
+- [x] Add `main_player.rs` UI function, e.g.:
 
 ```rust
 pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiApp)
 ```
 
-- [ ] Build from `main_player_view_model(&AppState)`.
-- [ ] Display the rendered main player skin texture.
-- [ ] Add egui hit testing for main player controls:
-  - [ ] Play
-  - [ ] Pause
-  - [ ] Stop
-  - [ ] Previous
-  - [ ] Next
-  - [ ] Eject/open file effect
-  - [ ] Shuffle
-  - [ ] Repeat
-  - [ ] Volume slider
-  - [ ] Balance slider
-  - [ ] Seek slider
-- [ ] Translate interactions into hierarchical commands:
-  - [ ] `PlayerCommand`
-  - [ ] `AudioCommand`
-  - [ ] `PlaylistCommand`
-  - [ ] `PanelCommand`
-- [ ] Handle keyboard shortcuts for main controls where straightforward.
-- [ ] Add smoke tests for command translation helpers.
-- [ ] Validation:
+- [x] Build from `main_player_view_model(&AppState)`.
+- [x] Display the rendered main player skin texture.
+- [x] Add egui hit testing for main player controls:
+  - [x] Play
+  - [x] Pause
+  - [x] Stop
+  - [x] Previous
+  - [x] Next
+  - [x] Eject/open file effect
+  - [x] Shuffle
+  - [x] Repeat
+  - [x] Volume slider
+  - [x] Balance slider
+  - [x] Seek slider
+- [x] Translate interactions into hierarchical commands:
+  - [x] `PlayerCommand`
+  - [x] `AudioCommand`
+  - [x] `PlaylistCommand`
+  - [x] `PanelCommand`
+- [x] Handle keyboard shortcuts for main controls where straightforward.
+- [x] Add smoke tests for command translation helpers.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 cargo test --lib --bins
 ```
 
-- [ ] Commit: `Implement egui main player UI`
+- [x] Commit: `Implement egui main player UI`
 
 ## Phase 8: Implement playlist egui UI
 
