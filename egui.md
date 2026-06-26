@@ -273,26 +273,26 @@ Create a dedicated egui frontend namespace without implementing UI behavior yet.
 
 ### Tasks
 
-- [ ] Add `src/ui/egui/mod.rs`.
-- [ ] Add `src/ui/egui/app.rs`.
-- [ ] Add `src/ui/egui/runtime.rs`.
-- [ ] Add `src/ui/egui/main_player.rs`.
-- [ ] Add `src/ui/egui/playlist.rs`.
-- [ ] Add `src/ui/egui/equalizer.rs`.
-- [ ] Add `src/ui/egui/preferences.rs`.
-- [ ] Add `src/ui/egui/skin_texture.rs`.
-- [ ] Add `src/ui/egui/layout.rs`.
-- [ ] Add `src/ui/egui/input.rs`.
-- [ ] Export egui module only when `egui-ui` is enabled.
-- [ ] Ensure no egui module imports GTK.
-- [ ] Validation:
+- [x] Add `src/ui/egui/mod.rs`.
+- [x] Add `src/ui/egui/app.rs`.
+- [x] Add `src/ui/egui/runtime.rs`.
+- [x] Add `src/ui/egui/main_player.rs`.
+- [x] Add `src/ui/egui/playlist.rs`.
+- [x] Add `src/ui/egui/equalizer.rs`.
+- [x] Add `src/ui/egui/preferences.rs`.
+- [x] Add `src/ui/egui/skin_texture.rs`.
+- [x] Add `src/ui/egui/layout.rs`.
+- [x] Add `src/ui/egui/input.rs`.
+- [x] Export egui module only when `egui-ui` is enabled.
+- [x] Ensure no egui module imports GTK.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 cargo check
 ```
 
-- [ ] Commit: `Add egui frontend module skeleton`
+- [x] Commit: `Add egui frontend module skeleton`
 
 ## Phase 4: Add frontend selection CLI and an egui executable entrypoint
 

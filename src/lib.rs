@@ -4,6 +4,9 @@ pub mod audio_model;
 pub mod config;
 #[cfg(feature = "gtk-ui")]
 pub mod e2e;
+#[cfg(feature = "egui-ui")]
+#[path = "ui/egui/mod.rs"]
+pub mod egui_frontend;
 pub mod equalizer;
 #[cfg(feature = "gtk-ui")]
 pub mod mpris;
