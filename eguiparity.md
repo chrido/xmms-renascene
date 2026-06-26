@@ -299,21 +299,21 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Page naming/order differs from GTK. GTK notebook pages are:
+- [x] Page naming/order differs from GTK. GTK notebook pages are:
   - Audio I/O Plugins;
   - Visualization Plugins;
   - Options;
   - Fonts;
   - Title.
-- [ ] Reset to Defaults button missing.
+- [x] Reset to Defaults button missing.
 - [ ] GTK-sized/skinned preferences window styling missing.
-- [ ] Audio I/O page incomplete:
+- [x] Audio I/O page incomplete:
   - output device combo;
   - system/default output selection;
   - discovered GStreamer output devices;
   - Configure button behavior/notice;
   - input plugin explanatory parity.
-- [ ] Options page incomplete. GTK options include:
+- [x] Options page incomplete. GTK options include:
   - Volume spin button;
   - Balance spin button;
   - Zoom level slider with read-only value text;
@@ -333,11 +333,11 @@ Legend:
   - Convert underscore to space;
   - Show numbers in playlist;
   - Vim-style playlist navigation.
-- [ ] Fonts page missing as a dedicated page:
+- [x] Fonts page missing as a dedicated page:
   - playlist font family combo;
   - main window skin bitmap font explanation;
   - Open Skin Browser button.
-- [ ] Visualization page incomplete. GTK has controls for:
+- [x] Visualization page incomplete. GTK has controls for:
   - visualization mode analyzer/scope/off;
   - analyzer mode;
   - analyzer style;
@@ -348,7 +348,7 @@ Legend:
   - WindowShade VU mode;
   - refresh rate;
   - sensitivity/enablement behavior based on selected mode.
-- [ ] Title page is partial:
+- [x] Title page is partial:
   - needs exact token help text parity;
   - save/apply semantics and config persistence parity.
 - [ ] Preferences changes do not consistently trigger redraw/window resize/config save exactly like GTK.
@@ -591,7 +591,7 @@ GTK has `build_skin_browser_window` with:
 - [x] File Info dialog.
 - [x] Equalizer presets popover.
 - [ ] Equalizer preset load/save/delete/configure dialogs.
-- [ ] Preferences full control parity.
+- [x] Preferences full control parity.
 - [ ] Skin Browser.
 - [ ] Detached playlist/equalizer windows.
 - [ ] Live playback timer/visualization updates.
