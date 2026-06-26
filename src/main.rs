@@ -1,10 +1,15 @@
-use xmms_renascene::app::preview::PreviewOptions;
+use xmms_renascene::app::preview::{FrontendKind, PreviewOptions};
+#[cfg(feature = "egui-ui")]
+use xmms_renascene::egui_frontend;
 #[cfg(feature = "gtk-ui")]
 use xmms_renascene::ui;
 
-#[cfg(feature = "gtk-ui")]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_help();
+        return;
+    }
 
     let preview_options = match parse_preview_options(&args) {
         Ok(options) => options,
@@ -14,6 +19,14 @@ fn main() {
         }
     };
 
+    match preview_options.frontend {
+        FrontendKind::Gtk => run_gtk_frontend(preview_options, &args),
+        FrontendKind::Egui => run_egui_frontend(preview_options),
+    }
+}
+
+#[cfg(feature = "gtk-ui")]
+fn run_gtk_frontend(preview_options: PreviewOptions, args: &[String]) {
     if let Some(path) = preview_options.screenshot_path.as_deref() {
         if let Err(err) =
             ui::write_player_screenshot(preview_options.clone(), std::path::Path::new(path))
@@ -32,8 +45,28 @@ fn main() {
 }
 
 #[cfg(not(feature = "gtk-ui"))]
-fn main() {
+fn run_gtk_frontend(_preview_options: PreviewOptions, _args: &[String]) {
     eprintln!("xmms-rs: this binary was built without the gtk-ui frontend");
+    std::process::exit(2);
+}
+
+#[cfg(feature = "egui-ui")]
+fn run_egui_frontend(preview_options: PreviewOptions) {
+    if let Err(err) = egui_frontend::app::run_egui_frontend(preview_options) {
+        eprintln!("xmms-rs: {err}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "egui-ui"))]
+fn run_egui_frontend(_preview_options: PreviewOptions) {
+    eprintln!("xmms-rs: this binary was built without the egui-ui frontend");
+    std::process::exit(2);
+}
+
+fn print_help() {
+    println!("Usage: xmms-rs [--frontend gtk|egui] [preview options]");
+    println!("If --frontend is omitted, gtk is used for compatibility.");
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -41,7 +74,14 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
     let mut options = PreviewOptions::default();
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
-        if arg == "--show-playlist" || arg == "--playlist" {
+        if let Some(value) = arg.strip_prefix("--frontend=") {
+            options.frontend = FrontendKind::parse(value)?;
+        } else if arg == "--frontend" {
+            let Some(value) = iter.next() else {
+                return Err("--frontend requires gtk or egui".to_string());
+            };
+            options.frontend = FrontendKind::parse(value)?;
+        } else if arg == "--show-playlist" || arg == "--playlist" {
             options.show_playlist = true;
         } else if arg == "--equalizer" {
             options.show_equalizer = true;
@@ -202,5 +242,28 @@ mod tests {
     fn parses_scale_factor_preview_option() {
         let options = parse_preview_options(&args(&["--gtk", "--scale=1.7"])).unwrap();
         assert_eq!(options.scale_factor.as_deref(), Some("1.7"));
+    }
+
+    #[test]
+    fn unspecified_frontend_defaults_to_gtk() {
+        let options = parse_preview_options(&args(&[])).unwrap();
+        assert_eq!(options.frontend, FrontendKind::Gtk);
+    }
+
+    #[test]
+    fn parses_explicit_gtk_frontend() {
+        let options = parse_preview_options(&args(&["--frontend", "gtk"])).unwrap();
+        assert_eq!(options.frontend, FrontendKind::Gtk);
+    }
+
+    #[test]
+    fn parses_explicit_egui_frontend() {
+        let options = parse_preview_options(&args(&["--frontend=egui"])).unwrap();
+        assert_eq!(options.frontend, FrontendKind::Egui);
+    }
+
+    #[test]
+    fn rejects_unknown_frontend() {
+        assert!(parse_preview_options(&args(&["--frontend", "qt"])).is_err());
     }
 }

@@ -319,24 +319,24 @@ If `--frontend` is unspecified, default to GTK for compatibility.
 
 ### Tasks
 
-- [ ] Add a frontend selection enum in a frontend-neutral module, for example `app::preview::FrontendKind` or `app::frontend::FrontendKind`.
-- [ ] Add CLI parsing for `--frontend gtk`.
-- [ ] Add CLI parsing for `--frontend egui`.
-- [ ] Reject unknown frontend values with a clear error.
-- [ ] Default to GTK when `--frontend` is unspecified.
-- [ ] Gate `--frontend egui` execution behind `egui-ui`; return a clear error if the binary was built without egui support.
-- [ ] Add tests for CLI frontend parsing:
-  - [ ] unspecified frontend defaults to GTK;
-  - [ ] `--frontend gtk` selects GTK;
-  - [ ] `--frontend egui` selects egui;
-  - [ ] invalid frontend is rejected.
-- [ ] Add `src/bin/xmms-egui.rs` gated by `egui-ui` if a separate binary remains useful.
-- [ ] Parse the same preview/session options where practical, reusing `app::preview::PreviewOptions`.
-- [ ] Create an `eframe` native app runner.
-- [ ] Instantiate egui app state from `AppState::default()` or loaded config.
-- [ ] Keep GTK behavior unchanged when no frontend is specified.
-- [ ] Ensure `xmms-egui` is only built when `egui-ui` is enabled if necessary.
-- [ ] Validation:
+- [x] Add a frontend selection enum in a frontend-neutral module, for example `app::preview::FrontendKind` or `app::frontend::FrontendKind`.
+- [x] Add CLI parsing for `--frontend gtk`.
+- [x] Add CLI parsing for `--frontend egui`.
+- [x] Reject unknown frontend values with a clear error.
+- [x] Default to GTK when `--frontend` is unspecified.
+- [x] Gate `--frontend egui` execution behind `egui-ui`; return a clear error if the binary was built without egui support.
+- [x] Add tests for CLI frontend parsing:
+  - [x] unspecified frontend defaults to GTK;
+  - [x] `--frontend gtk` selects GTK;
+  - [x] `--frontend egui` selects egui;
+  - [x] invalid frontend is rejected.
+- [x] Add `src/bin/xmms-egui.rs` gated by `egui-ui` if a separate binary remains useful.
+- [x] Parse the same preview/session options where practical, reusing `app::preview::PreviewOptions`.
+- [x] Create an `eframe` native app runner.
+- [x] Instantiate egui app state from `AppState::default()` or loaded config.
+- [x] Keep GTK behavior unchanged when no frontend is specified.
+- [x] Ensure `xmms-egui` is only built when `egui-ui` is enabled if necessary.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
@@ -345,7 +345,7 @@ cargo run --features gtk-ui --bin xmms-rs -- --frontend gtk --gtk-smoke
 cargo run --features egui-ui --bin xmms-rs -- --frontend egui --help
 ```
 
-- [ ] Commit: `Add frontend CLI selection and egui binary`
+- [x] Commit: `Add frontend CLI selection and egui binary`
 
 ## Phase 5: Create egui app state and runtime
 

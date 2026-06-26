@@ -4,6 +4,23 @@
 
 use crate::config::Config;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FrontendKind {
+    #[default]
+    Gtk,
+    Egui,
+}
+
+impl FrontendKind {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "gtk" => Ok(Self::Gtk),
+            "egui" => Ok(Self::Egui),
+            other => Err(format!("unknown frontend '{other}', expected 'gtk' or 'egui'")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewOptions {
     pub show_playlist: bool,
@@ -20,6 +37,7 @@ pub struct PreviewOptions {
     pub skin_path: Option<String>,
     pub screenshot_path: Option<String>,
     pub scale_factor: Option<String>,
+    pub frontend: FrontendKind,
 }
 
 pub fn apply_preview_options_to_config(
