@@ -235,21 +235,21 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the command/effect API.
 
-- [ ] **Step 4: Extract simple pure helpers from `ui.rs`**
-  - [ ] Move time formatting helpers.
-  - [ ] Move prompt time parsing helpers.
-  - [ ] Move stream info text formatting.
-  - [ ] Move main title text formatting.
-  - [ ] Move playlist footer info formatting.
-  - [ ] Move panel state conversion helpers.
-  - [ ] Move menu-index to playlist-action mapping helpers.
-  - [ ] Move mouse wheel delta-to-volume/seek calculations.
-  - [ ] Move toolkit-independent titlebar/button hit-test rules.
-  - [ ] Move or add unit tests in the new app modules.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo test --test render`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit each helper group or the completed helper extraction.
+- [x] **Step 4: Extract simple pure helpers from `ui.rs`**
+  - [x] Move time formatting helpers.
+  - [x] Move prompt time parsing helpers.
+  - [x] Move stream info text formatting.
+  - [x] Move main title text formatting.
+  - [x] Move playlist footer info formatting.
+  - [x] Move panel state conversion helpers.
+  - [x] Move menu-index to playlist-action mapping helpers.
+  - [x] Move mouse wheel delta-to-volume/seek calculations.
+  - [x] Move toolkit-independent titlebar/button hit-test rules.
+  - [x] Move or add unit tests in the new app modules.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo test --test render`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit each helper group or the completed helper extraction.
 
 - [ ] **Step 5: Introduce `AppController`**
   - [ ] Add `AppController` holding `AppState`.
@@ -422,12 +422,12 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Validate with `cargo test --lib --bins`.
   - [x] Validate with `cargo clippy --all-targets`.
 
-- [ ] **Milestone 2: Extract pure helpers and tests**
-  - [ ] Complete Step 4.
-  - [ ] Pure helper tests live outside GTK where practical.
-  - [ ] Validate with `cargo test --lib --bins`.
-  - [ ] Validate with `cargo test --test render`.
-  - [ ] Validate with `cargo clippy --all-targets`.
+- [x] **Milestone 2: Extract pure helpers and tests**
+  - [x] Complete Step 4.
+  - [x] Pure helper tests live outside GTK where practical.
+  - [x] Validate with `cargo test --lib --bins`.
+  - [x] Validate with `cargo test --test render`.
+  - [x] Validate with `cargo clippy --all-targets`.
 
 - [ ] **Milestone 3: Add commands/effects and controller shell**
   - [ ] Complete Step 3.

@@ -11,6 +11,14 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
+use crate::app::view_model::{
+    balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
+    eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
+    eq_slider_position_to_pixel, format_duration, format_playlist_footer_duration,
+    format_title_for_preferences, parse_time_ms, playlist_menu_at, playlist_menu_rect,
+    position_to_balance, position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
+    volume_to_position,
+};
 use crate::app_state::AppState;
 use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
 use crate::config::{Config, TimerMode};
@@ -48,9 +56,8 @@ use crate::session::{
 use crate::skin::layout::{
     equalizer_control_at, equalizer_shaded_slider_at, equalizer_slider_at, equalizer_slider_layout,
     main_push_button_rect, main_slider_layout, main_toggle_button_rect, panel_title_button_at,
-    playlist_footer_button_at, playlist_menu_button_at, playlist_menu_popup_rect,
-    snap_playlist_size, EqualizerSlider, LayoutPanelKind as LayoutPanel, PanelTitleButton,
-    PlaylistFooterButton, PlaylistMenuButton, SkinRect,
+    playlist_footer_button_at, snap_playlist_size, EqualizerSlider,
+    LayoutPanelKind as LayoutPanel, PanelTitleButton, PlaylistFooterButton, SkinRect,
 };
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
@@ -10881,225 +10888,6 @@ fn panel_layout_kind(kind: PanelKind) -> LayoutPanel {
     }
 }
 
-fn playlist_menu_at(x: i32, y: i32, width: i32, height: i32) -> Option<PlaylistMenuKind> {
-    playlist_menu_button_at(x, y, width, height).map(playlist_menu_from_button)
-}
-
-fn playlist_menu_from_button(button: PlaylistMenuButton) -> PlaylistMenuKind {
-    match button {
-        PlaylistMenuButton::Add => PlaylistMenuKind::Add,
-        PlaylistMenuButton::Remove => PlaylistMenuKind::Remove,
-        PlaylistMenuButton::Select => PlaylistMenuKind::Select,
-        PlaylistMenuButton::Misc => PlaylistMenuKind::Misc,
-        PlaylistMenuButton::List => PlaylistMenuKind::List,
-    }
-}
-
-fn playlist_menu_button_from_kind(menu: PlaylistMenuKind) -> PlaylistMenuButton {
-    match menu {
-        PlaylistMenuKind::Add => PlaylistMenuButton::Add,
-        PlaylistMenuKind::Remove => PlaylistMenuButton::Remove,
-        PlaylistMenuKind::Select => PlaylistMenuButton::Select,
-        PlaylistMenuKind::Misc => PlaylistMenuButton::Misc,
-        PlaylistMenuKind::List => PlaylistMenuButton::List,
-    }
-}
-
-fn playlist_menu_rect(menu: PlaylistMenuKind, width: i32, height: i32) -> (i32, i32, i32, i32) {
-    let rect = playlist_menu_popup_rect(playlist_menu_button_from_kind(menu), width, height);
-    (rect.x, rect.y, rect.width, rect.height)
-}
-
-fn volume_to_position(volume: i32) -> i32 {
-    ((volume.clamp(0, 100) * 51 + 50) / 100).clamp(0, 51)
-}
-
-fn position_to_volume(position: i32) -> i32 {
-    ((position.clamp(0, 51) * 100) as f64 / 51.0) as i32
-}
-
-fn volume_to_eq_shaded_position(volume: i32) -> i32 {
-    ((volume.clamp(0, 100) * 94 + 50) / 100).clamp(0, 94)
-}
-
-fn balance_to_position(balance: i32) -> i32 {
-    (12 + (balance.clamp(-100, 100) * 12) / 100).clamp(0, 24)
-}
-
-fn position_to_balance(position: i32) -> i32 {
-    (((position.clamp(0, 24) - 12) * 100) as f64 / 12.0) as i32
-}
-
-fn balance_to_eq_shaded_position(balance: i32) -> i32 {
-    (19 + (balance.clamp(-100, 100) * 19) / 100).clamp(0, 39)
-}
-
-fn format_duration(milliseconds: i64) -> String {
-    let seconds = (milliseconds.max(0) / 1000) as i32;
-    format!("{}:{:02}", seconds / 60, seconds % 60)
-}
-
-fn format_playlist_footer_duration(milliseconds: i64, more: bool) -> String {
-    if milliseconds <= 0 && more {
-        return "?".to_string();
-    }
-
-    let seconds = milliseconds.max(0) / 1000;
-    if seconds > 3600 {
-        format!(
-            "{}:{:02}:{:02}{}",
-            seconds / 3600,
-            (seconds / 60) % 60,
-            seconds % 60,
-            if more { "+" } else { "" }
-        )
-    } else {
-        format!(
-            "{}:{:02}{}",
-            seconds / 60,
-            seconds % 60,
-            if more { "+" } else { "" }
-        )
-    }
-}
-
-fn format_title_for_preferences(
-    format: &str,
-    filename: &str,
-    title: &str,
-    config: &Config,
-) -> String {
-    let title = title.trim();
-    let fallback_title =
-        if title.is_empty() || title == crate::playlist::format_title(filename, None) {
-            filename_title(filename, config)
-        } else {
-            normalize_title_text(title, config)
-        };
-    let (artist, track_title) = split_artist_title(&fallback_title);
-    let file_title = filename_title(filename, config);
-    let format = if format.trim().is_empty() {
-        "%p - %t"
-    } else {
-        format.trim()
-    };
-
-    let mut output = String::new();
-    let mut chars = format.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '%' {
-            output.push(ch);
-            continue;
-        }
-        match chars.next() {
-            Some('p') => output.push_str(artist.unwrap_or("")),
-            Some('t') => output.push_str(track_title),
-            Some('f') => output.push_str(&file_title),
-            Some('a') | Some('g') => {}
-            Some('%') => output.push('%'),
-            Some(other) => {
-                output.push('%');
-                output.push(other);
-            }
-            None => output.push('%'),
-        }
-    }
-
-    cleanup_formatted_title(&output).unwrap_or(fallback_title)
-}
-
-fn split_artist_title(title: &str) -> (Option<&str>, &str) {
-    title
-        .split_once(" - ")
-        .map(|(artist, track)| (Some(artist.trim()), track.trim()))
-        .unwrap_or((None, title.trim()))
-}
-
-fn filename_title(filename: &str, config: &Config) -> String {
-    let without_query = filename.split(['?', '#']).next().unwrap_or(filename);
-    let normalized = normalize_title_text(without_query, config);
-    let path = normalized
-        .strip_prefix("file://")
-        .unwrap_or(normalized.as_str())
-        .trim_end_matches('/');
-    let basename = Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path);
-    let stem = basename
-        .rsplit_once('.')
-        .map(|(stem, _)| stem)
-        .unwrap_or(basename);
-    stem.to_string()
-}
-
-fn normalize_title_text(text: &str, config: &Config) -> String {
-    let mut normalized = text.to_string();
-    if config.convert_twenty {
-        normalized = normalized.replace("%20", " ");
-    }
-    if config.convert_underscore {
-        normalized = normalized.replace('_', " ");
-    }
-    normalized
-}
-
-fn cleanup_formatted_title(text: &str) -> Option<String> {
-    let mut cleaned = text.trim().to_string();
-    for prefix in ["- ", ":", "/", "|"] {
-        cleaned = cleaned.trim_start_matches(prefix).trim_start().to_string();
-    }
-    for suffix in [" -", ":", "/", "|"] {
-        cleaned = cleaned.trim_end_matches(suffix).trim_end().to_string();
-    }
-    if cleaned.is_empty() {
-        None
-    } else {
-        Some(cleaned)
-    }
-}
-
-fn ellipsize_chars(text: &str, max_len: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= max_len {
-        return text.to_string();
-    }
-    if max_len > 3 {
-        let mut truncated: String = text.chars().take(max_len - 3).collect();
-        truncated.push_str("...");
-        truncated
-    } else {
-        text.chars().take(max_len).collect()
-    }
-}
-
-fn eq_shaded_position_to_volume(position: i32) -> i32 {
-    ((position.clamp(0, 94) * 100 + 47) / 94).clamp(0, 100)
-}
-
-fn eq_shaded_position_to_balance(position: i32) -> i32 {
-    let position = position.clamp(0, 38);
-    (((position - 19) * 100 + if position >= 19 { 9 } else { -9 }) / 19).clamp(-100, 100)
-}
-
-fn eq_slider_position_to_pixel(position: i32) -> i32 {
-    let pixel = position.clamp(0, 100) / 2;
-    if (24..=26).contains(&pixel) {
-        25
-    } else {
-        pixel
-    }
-}
-
-fn eq_slider_pixel_to_position(pixel: i32) -> i32 {
-    let pixel = pixel.clamp(0, 50);
-    if (24..=26).contains(&pixel) {
-        50
-    } else {
-        pixel * 2
-    }
-}
-
 fn event_to_base_coords(
     area: &gtk::DrawingArea,
     state: &MainWindowUiState,
@@ -11110,20 +10898,6 @@ fn event_to_base_coords(
     let height = area.allocated_height().max(1) as f64;
     let (base_width, base_height) = state.docked_panel_size();
     scale_event_coords(width, height, base_width, base_height, x, y)
-}
-
-fn scale_event_coords(
-    width: f64,
-    height: f64,
-    base_width: i32,
-    base_height: i32,
-    x: f64,
-    y: f64,
-) -> (i32, i32) {
-    (
-        (x / (width / f64::from(base_width))) as i32,
-        (y / (height / f64::from(base_height))) as i32,
-    )
 }
 
 fn apply_ui_action(
@@ -11387,21 +11161,6 @@ fn shortcut_matches(key: gtk::gdk::Key, state: gtk::gdk::ModifierType, accelerat
             | gtk::gdk::ModifierType::SHIFT_MASK
             | gtk::gdk::ModifierType::ALT_MASK);
     key == shortcut_key && relevant_mods == shortcut_mods
-}
-
-fn parse_time_ms(text: &str) -> Option<i64> {
-    if text.is_empty() {
-        return None;
-    }
-    if let Some((minutes, seconds)) = text.split_once(':') {
-        if seconds.contains(':') {
-            return None;
-        }
-        let minutes = minutes.parse::<i64>().ok()?;
-        let seconds = seconds.parse::<i64>().ok()?;
-        return Some((minutes * 60 + seconds) * 1000);
-    }
-    Some(text.parse::<i64>().ok()? * 1000)
 }
 
 #[cfg(test)]
