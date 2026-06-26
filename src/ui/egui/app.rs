@@ -432,7 +432,38 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
             app.dispatch(PanelCommand::ToggleMainShade);
         }
         handle_playlist_shortcuts(input, app);
+        handle_mouse_wheel(input, app);
     });
+}
+
+fn handle_mouse_wheel(input: &egui::InputState, app: &mut EguiFrontendState) {
+    let scroll_y = input.raw_scroll_delta.y;
+    if scroll_y == 0.0 {
+        return;
+    }
+    if app.controller().state().config.playlist_visible && input.modifiers.shift {
+        let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
+        let max_offset = app
+            .controller()
+            .state()
+            .playlist
+            .len()
+            .saturating_sub(visible_rows);
+        if scroll_y > 0.0 {
+            app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(3);
+        } else {
+            app.playlist_scroll_offset = (app.playlist_scroll_offset + 3).min(max_offset);
+        }
+    } else {
+        let step = app.controller().state().config.mouse_wheel_change;
+        let volume = app.controller().state().player.volume();
+        let next = if scroll_y > 0.0 {
+            volume.saturating_add(step)
+        } else {
+            volume.saturating_sub(step)
+        };
+        app.dispatch(crate::app::command::AudioCommand::SetVolume(next));
+    }
 }
 
 fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendState) {
