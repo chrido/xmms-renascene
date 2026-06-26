@@ -5,5 +5,6 @@
 //! evolves.
 
 pub mod backend;
+#[cfg(feature = "gstreamer-backend")]
 pub mod gstreamer;
 pub mod model;

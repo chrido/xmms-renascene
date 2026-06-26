@@ -171,28 +171,28 @@ Make it possible to compile non-GTK frontends without GTK-related dependencies.
 
 ### Tasks
 
-- [ ] Make GTK-related dependencies optional in `Cargo.toml`:
-  - [ ] `gtk`
-  - [ ] any direct `gio` dependency if added later
-  - [ ] any direct `glib` dependency if added later
-- [ ] Update `gtk-ui` feature to include GTK dependencies.
-- [ ] Add optional egui dependencies:
-  - [ ] `egui`
-  - [ ] `eframe`
-- [ ] Add `egui-ui` feature using egui dependencies.
-- [ ] Keep default features as GTK desktop:
-  - [ ] `gtk-ui`
-  - [ ] `gstreamer-backend`
-- [ ] Gate GTK-only modules with `#[cfg(feature = "gtk-ui")]`.
-- [ ] Gate `src/skineditor.rs` with `#[cfg(feature = "gtk-ui")]` or move it under GTK-only frontend structure.
-- [ ] Ensure the library can still compile with default features.
-- [ ] Add a temporary compile check:
+- [x] Make GTK-related dependencies optional in `Cargo.toml`:
+  - [x] `gtk`
+  - [x] any direct `gio` dependency if added later
+  - [x] any direct `glib` dependency if added later
+- [x] Update `gtk-ui` feature to include GTK dependencies.
+- [x] Add optional egui dependencies:
+  - [x] `egui`
+  - [x] `eframe`
+- [x] Add `egui-ui` feature using egui dependencies.
+- [x] Keep default features as GTK desktop:
+  - [x] `gtk-ui`
+  - [x] `gstreamer-backend`
+- [x] Gate GTK-only modules with `#[cfg(feature = "gtk-ui")]`.
+- [x] Gate `src/skineditor.rs` with `#[cfg(feature = "gtk-ui")]` or move it under GTK-only frontend structure.
+- [x] Ensure the library can still compile with default features.
+- [x] Add a temporary compile check:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 ```
 
-- [ ] Validation:
+- [x] Validation:
 
 ```bash
 cargo check
@@ -201,7 +201,7 @@ cargo test --lib --bins
 cargo clippy --all-targets
 ```
 
-- [ ] Commit: `Gate GTK dependencies behind gtk-ui feature`
+- [x] Commit: `Gate GTK dependencies behind gtk-ui feature`
 
 ## Phase 2: Extend repo tool for frontend screenshot diffs
 

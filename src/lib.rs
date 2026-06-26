@@ -2,8 +2,10 @@ pub mod app;
 pub mod app_state;
 pub mod audio_model;
 pub mod config;
+#[cfg(feature = "gtk-ui")]
 pub mod e2e;
 pub mod equalizer;
+#[cfg(feature = "gtk-ui")]
 pub mod mpris;
 pub mod playback;
 pub mod player;
@@ -12,5 +14,7 @@ pub mod podcast;
 pub mod render;
 pub mod session;
 pub mod skin;
+#[cfg(feature = "gtk-ui")]
 pub mod skineditor;
+#[cfg(feature = "gtk-ui")]
 pub mod ui;

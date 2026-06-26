@@ -538,6 +538,7 @@ impl Playlist {
         Ok(changed)
     }
 
+    #[cfg(feature = "gstreamer-backend")]
     pub fn index_missing_durations_with_gstreamer(&mut self) -> Result<usize, String> {
         gstreamer::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
         let discoverer = gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
@@ -566,6 +567,11 @@ impl Playlist {
                 title,
             }))
         })
+    }
+
+    #[cfg(not(feature = "gstreamer-backend"))]
+    pub fn index_missing_durations_with_gstreamer(&mut self) -> Result<usize, String> {
+        Ok(0)
     }
 
     pub fn set_shuffle(&mut self, enabled: bool) {
@@ -901,6 +907,7 @@ fn compare_ascii_case_insensitive(left: &str, right: &str) -> Ordering {
     left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase())
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn title_from_tags(tags: &gstreamer::TagList) -> Option<String> {
     let artist = tags
         .get::<gstreamer::tags::Artist>()

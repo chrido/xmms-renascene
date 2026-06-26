@@ -1,6 +1,8 @@
 use xmms_renascene::app::preview::PreviewOptions;
+#[cfg(feature = "gtk-ui")]
 use xmms_renascene::ui;
 
+#[cfg(feature = "gtk-ui")]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -29,6 +31,12 @@ fn main() {
     }
 }
 
+#[cfg(not(feature = "gtk-ui"))]
+fn main() {
+    eprintln!("xmms-rs: this binary was built without the gtk-ui frontend");
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
     let mut options = PreviewOptions::default();
     let mut iter = args.iter().skip(1);

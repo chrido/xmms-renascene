@@ -4,7 +4,7 @@ use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use gtk::glib::{self, ChecksumType};
+use sha2::{Digest, Sha256};
 
 use crate::playlist::Playlist;
 
@@ -233,9 +233,8 @@ pub fn cache_dir(config_dir: &Path) -> PathBuf {
 }
 
 pub fn cache_path_for_url(config_dir: &Path, url: &str) -> PathBuf {
-    let hash = glib::compute_checksum_for_string(ChecksumType::Sha256, url)
-        .expect("GLib must support SHA-256 checksums");
-    cache_dir(config_dir).join(hash.as_str())
+    let hash = Sha256::digest(url.as_bytes());
+    cache_dir(config_dir).join(format!("{hash:x}"))
 }
 
 pub fn ensure_cache_dir(config_dir: &Path) -> io::Result<PathBuf> {
@@ -445,6 +444,7 @@ impl PodcastRefreshScheduler {
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 pub fn discover_cached_duration_ms(cache_path: &Path) -> Result<Option<i64>, String> {
     gstreamer::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
     let uri = file_uri_for_cache(cache_path);
@@ -457,6 +457,11 @@ pub fn discover_cached_duration_ms(cache_path: &Path) -> Result<Option<i64>, Str
         .duration()
         .map(|duration| duration.mseconds() as i64)
         .filter(|duration| *duration > 0))
+}
+
+#[cfg(not(feature = "gstreamer-backend"))]
+pub fn discover_cached_duration_ms(_cache_path: &Path) -> Result<Option<i64>, String> {
+    Ok(None)
 }
 
 pub fn mark_cache_ready(playlist: &mut Playlist, url: &str, length_ms: i64) -> usize {

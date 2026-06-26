@@ -30,6 +30,7 @@ impl PanelState {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PanelPlacement {
     pub(crate) visible: bool,
@@ -39,6 +40,7 @@ pub(crate) struct PanelPlacement {
     pub(crate) dragging_title: bool,
 }
 
+#[allow(dead_code)]
 impl PanelPlacement {
     pub(crate) fn from_config(visible: bool, detached: bool, shaded: bool) -> Self {
         Self {
