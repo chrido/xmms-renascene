@@ -1,3 +1,5 @@
+use crate::playlist::PlaylistMenuKind;
+
 use super::SkinPixmapKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,23 +162,7 @@ pub enum PanelTitleButton {
     Close,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistMenuButton {
-    Add,
-    Remove,
-    Select,
-    Misc,
-    List,
-}
-
-impl PlaylistMenuButton {
-    pub fn item_count(self) -> usize {
-        match self {
-            Self::Add | Self::Select | Self::Misc | Self::List => 3,
-            Self::Remove => 4,
-        }
-    }
-}
+pub type PlaylistMenuButton = PlaylistMenuKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistFooterButton {

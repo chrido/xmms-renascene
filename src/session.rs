@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use crate::app_state::AppState;
 use crate::config::Config;
-use crate::playlist::Playlist;
-use crate::ui::{PlaylistMenuKind, PreviewOptions};
+use crate::playlist::{Playlist, PlaylistMenuKind};
+use crate::ui::PreviewOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplicationLaunchFlags {

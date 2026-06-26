@@ -3,6 +3,7 @@ use cairo::Context;
 use super::core::{
     blit_surface_rect, render_text, set_rgb, surface_from_xpm, RenderError, RenderPass,
 };
+use crate::playlist::PlaylistMenuKind;
 use crate::skin::layout::{
     playlist_window_height, SkinRect, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT,
     PLAYLIST_MIN_WIDTH, PLAYLIST_WIDTH_STEP,
@@ -35,23 +36,7 @@ pub struct PlaylistRowsRenderState {
     pub height: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistMenuRenderKind {
-    Add,
-    Remove,
-    Select,
-    Misc,
-    List,
-}
-
-impl PlaylistMenuRenderKind {
-    pub fn item_count(self) -> usize {
-        match self {
-            Self::Add | Self::Select | Self::Misc | Self::List => 3,
-            Self::Remove => 4,
-        }
-    }
-}
+pub type PlaylistMenuRenderKind = PlaylistMenuKind;
 
 pub fn render_playlist_frame(
     cr: &Context,

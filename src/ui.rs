@@ -27,6 +27,8 @@ use crate::player::{
     group_output_devices, list_gstreamer_output_devices, GStreamerBackend, OutputDevice,
     OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlayerState,
 };
+pub use crate::playlist::PlaylistMenuKind;
+
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
     blit_surface_rect, docked_panel_size, equalizer_window_height, main_window_height,
@@ -5385,15 +5387,6 @@ impl PanelPlacement {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistMenuKind {
-    Add,
-    Remove,
-    Select,
-    Misc,
-    List,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum PlaylistMenu {
     #[default]
@@ -5548,17 +5541,7 @@ pub enum EqualizerPresetAction {
 
 impl PlaylistMenuKind {
     fn render_kind(self) -> PlaylistMenuRenderKind {
-        match self {
-            Self::Add => PlaylistMenuRenderKind::Add,
-            Self::Remove => PlaylistMenuRenderKind::Remove,
-            Self::Select => PlaylistMenuRenderKind::Select,
-            Self::Misc => PlaylistMenuRenderKind::Misc,
-            Self::List => PlaylistMenuRenderKind::List,
-        }
-    }
-
-    fn item_count(self) -> usize {
-        self.render_kind().item_count()
+        self
     }
 }
 

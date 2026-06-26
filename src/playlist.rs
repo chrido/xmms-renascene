@@ -9,6 +9,24 @@ const MEDIA_EXTENSIONS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistMenuKind {
+    Add,
+    Remove,
+    Select,
+    Misc,
+    List,
+}
+
+impl PlaylistMenuKind {
+    pub fn item_count(self) -> usize {
+        match self {
+            Self::Add | Self::Select | Self::Misc | Self::List => 3,
+            Self::Remove => 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistSortKey {
     Title,
     Filename,
