@@ -2,8 +2,11 @@
 
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
+use crate::app::effect::AppEffect;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
+#[cfg(feature = "gstreamer-backend")]
+use crate::player::GStreamerBackend;
 
 use super::preferences::{self, PreferencesPage};
 use super::runtime::EguiRuntime;
@@ -14,7 +17,6 @@ pub struct EguiTextureCache {
     pub generation: u64,
 }
 
-#[derive(Debug)]
 pub struct EguiFrontendState {
     pub preferences_open: bool,
     pub selected_preferences_page: PreferencesPage,
@@ -23,6 +25,8 @@ pub struct EguiFrontendState {
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
     controller: AppController,
+    #[cfg(feature = "gstreamer-backend")]
+    playback_backend: Option<GStreamerBackend>,
 }
 
 impl EguiFrontendState {
@@ -41,6 +45,8 @@ impl EguiFrontendState {
             dock_panels: true,
             runtime: EguiRuntime::default(),
             controller: AppController::new(app_state),
+            #[cfg(feature = "gstreamer-backend")]
+            playback_backend: GStreamerBackend::new().ok(),
         })
     }
 
@@ -54,12 +60,81 @@ impl EguiFrontendState {
 
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
         let effects = self.controller.handle_command(command.into());
-        self.runtime.apply_effects(effects);
+        self.apply_effects(effects);
+    }
+
+    pub fn poll_playback_backend(&mut self) {
+        #[cfg(feature = "gstreamer-backend")]
+        if let Some(backend) = &self.playback_backend {
+            match backend.poll_bus_events() {
+                Ok(events) => {
+                    for event in events {
+                        let effects = self.controller.handle_playback_event(event);
+                        self.runtime.apply_effects(effects);
+                    }
+                }
+                Err(err) => self.runtime.pending_messages.push(err),
+            }
+        }
+    }
+
+    fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
+        for effect in effects {
+            self.apply_effect(effect);
+        }
+    }
+
+    fn apply_effect(&mut self, effect: AppEffect) {
+        #[cfg(feature = "gstreamer-backend")]
+        if let Some(backend) = &self.playback_backend {
+            match &effect {
+                AppEffect::StartPlaybackUri { uri, position_ms } => {
+                    if let Err(err) = backend.play_uri(uri) {
+                        self.runtime.pending_messages.push(err);
+                    } else if *position_ms > 0 {
+                        let _ = backend.seek_to_ms(*position_ms);
+                    }
+                }
+                AppEffect::ResumePlayback => {
+                    if let Err(err) = backend.unpause() {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+                AppEffect::PausePlayback => {
+                    if let Err(err) = backend.pause() {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+                AppEffect::StopPlayback => {
+                    if let Err(err) = backend.stop() {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+                AppEffect::SeekPlayback(position_ms) => {
+                    if let Err(err) = backend.seek_to_ms(*position_ms) {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+                AppEffect::SetBackendVolume(volume) => backend.set_volume_percent(*volume),
+                AppEffect::SetBackendBalance(balance) => backend.set_balance_percent(*balance),
+                AppEffect::SetBackendEqualizer => {
+                    let config = &self.controller.state().config;
+                    backend.set_equalizer_from_positions(
+                        config.equalizer_active,
+                        config.equalizer_preamp_pos,
+                        config.equalizer_band_pos,
+                    );
+                }
+                _ => {}
+            }
+        }
+        self.runtime.apply_effect(effect);
     }
 }
 
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_playback_backend();
         egui::CentralPanel::default().show(ctx, |ui| {
             main_player::show_main_player(ui, self);
             ui.separator();

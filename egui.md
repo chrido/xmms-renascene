@@ -576,21 +576,21 @@ Make egui use the same effect model for playback and state updates.
 
 ### Tasks
 
-- [ ] Decide whether egui first milestone requires live playback.
-- [ ] If yes, instantiate the `PlaybackBackend` implementation under `gstreamer-backend`.
-- [ ] Interpret playback effects:
-  - [ ] `StartPlaybackUri`
-  - [ ] `ResumePlayback`
-  - [ ] `PausePlayback`
-  - [ ] `StopPlayback`
-  - [ ] `SeekPlayback`
-  - [ ] `SetBackendVolume`
-  - [ ] `SetBackendBalance`
-  - [ ] `SetBackendEqualizer`
-- [ ] Poll backend events in egui update loop.
-- [ ] Dispatch playback events into `AppController::handle_playback_event`.
-- [ ] Ensure egui-only builds can still compile without `gstreamer-backend` if desired.
-- [ ] Validation:
+- [x] Decide whether egui first milestone requires live playback.
+- [x] If yes, instantiate the `PlaybackBackend` implementation under `gstreamer-backend`.
+- [x] Interpret playback effects:
+  - [x] `StartPlaybackUri`
+  - [x] `ResumePlayback`
+  - [x] `PausePlayback`
+  - [x] `StopPlayback`
+  - [x] `SeekPlayback`
+  - [x] `SetBackendVolume`
+  - [x] `SetBackendBalance`
+  - [x] `SetBackendEqualizer`
+- [x] Poll backend events in egui update loop.
+- [x] Dispatch playback events into `AppController::handle_playback_event`.
+- [x] Ensure egui-only builds can still compile without `gstreamer-backend` if desired.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
@@ -598,7 +598,7 @@ cargo check --no-default-features --features egui-ui,gstreamer-backend
 cargo test --lib --bins
 ```
 
-- [ ] Commit: `Wire egui runtime playback effects`
+- [x] Commit: `Wire egui runtime playback effects`
 
 ## Phase 12: File dialogs without GTK
 
