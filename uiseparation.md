@@ -379,17 +379,17 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit service boundary documentation/types.
 
-- [ ] **Step 13: Separate playback backend from UI concerns**
-  - [ ] Split playback model types from GStreamer implementation where practical.
-  - [ ] Create `src/playback/model.rs` for frontend/backend-neutral playback data.
-  - [ ] Create `src/playback/backend.rs` for backend trait/interface.
-  - [ ] Move current GStreamer implementation toward `src/playback/gstreamer.rs`.
-  - [ ] Keep existing desktop behavior and tests green.
-  - [ ] Adapt `AppEffect` playback effects to the backend boundary.
-  - [ ] Add/update backend integration tests.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit playback backend separation.
+- [x] **Step 13: Separate playback backend from UI concerns**
+  - [x] Split playback model types from GStreamer implementation where practical.
+  - [x] Create `src/playback/model.rs` for frontend/backend-neutral playback data.
+  - [x] Create `src/playback/backend.rs` for backend trait/interface.
+  - [x] Move current GStreamer implementation toward `src/playback/gstreamer.rs`.
+  - [x] Keep existing desktop behavior and tests green.
+  - [x] Adapt `AppEffect` playback effects to the backend boundary.
+  - [x] Add/update backend integration tests.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit playback backend separation.
 
 - [ ] **Step 14: Decide rendering abstraction strategy**
   - [ ] Decide whether mobile should initially reuse the Cairo renderer as a bitmap renderer.

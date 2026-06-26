@@ -5,6 +5,7 @@ pub mod config;
 pub mod e2e;
 pub mod equalizer;
 pub mod mpris;
+pub mod playback;
 pub mod player;
 pub mod playlist;
 pub mod podcast;
