@@ -31,6 +31,8 @@ pub enum FileDialogRequest {
 pub enum AppEffect {
     StartPlayback,
     StartPlaybackFromCurrent,
+    StartPlaybackUri { uri: String, position_ms: i64 },
+    ResumePlayback,
     PausePlayback,
     StopPlayback,
     SeekPlayback(i64),

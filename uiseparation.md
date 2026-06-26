@@ -262,25 +262,25 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the controller shell.
 
-- [ ] **Step 6: Move playback-control state logic into `AppController`**
-  - [ ] Migrate Play handling.
-  - [ ] Migrate Pause handling.
-  - [ ] Migrate Stop handling.
-  - [ ] Migrate Toggle Pause handling.
-  - [ ] Migrate Previous Track handling.
-  - [ ] Migrate Next Track handling.
-  - [ ] Migrate seek behavior.
-  - [ ] Migrate changing-to-next-track-starts-from-beginning behavior.
-  - [ ] Migrate play-from-stopped-preserves-selected-position behavior.
-  - [ ] Migrate pause-between-songs behavior.
-  - [ ] Migrate EOF behavior.
-  - [ ] Migrate stale backend position sync blocking.
-  - [ ] Convert GTK playback handlers to emit `AppCommand` values.
-  - [ ] Interpret returned playback/render/save effects in GTK.
-  - [ ] Move existing playback behavior tests from `ui::tests` to controller tests where possible.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the playback controller migration.
+- [x] **Step 6: Move playback-control state logic into `AppController`**
+  - [x] Migrate Play handling.
+  - [x] Migrate Pause handling.
+  - [x] Migrate Stop handling.
+  - [x] Migrate Toggle Pause handling.
+  - [x] Migrate Previous Track handling.
+  - [x] Migrate Next Track handling.
+  - [x] Migrate seek behavior.
+  - [x] Migrate changing-to-next-track-starts-from-beginning behavior.
+  - [x] Migrate play-from-stopped-preserves-selected-position behavior.
+  - [x] Migrate pause-between-songs behavior.
+  - [x] Migrate EOF behavior.
+  - [x] Migrate stale backend position sync blocking.
+  - [x] Convert GTK playback handlers to emit `AppCommand` values.
+  - [x] Interpret returned playback/render/save effects in GTK.
+  - [x] Move existing playback behavior tests from `ui::tests` to controller tests where possible.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the playback controller migration.
 
 - [ ] **Step 7: Move playlist action logic into `AppController`**
   - [ ] Move add/remove/select/misc/list menu index mapping.
