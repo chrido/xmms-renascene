@@ -282,20 +282,20 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the playback controller migration.
 
-- [ ] **Step 7: Move playlist action logic into `AppController`**
-  - [ ] Move add/remove/select/misc/list menu index mapping.
-  - [ ] Move sort action mapping.
-  - [ ] Move playlist selection changes that are currently in GTK handlers.
-  - [ ] Move current-position preservation rules after playlist mutations where currently UI-owned.
-  - [ ] Move reverse/randomize/sort command handling.
-  - [ ] Move toolkit-independent playlist scroll row calculations.
-  - [ ] Convert GTK playlist menu handlers to `AppCommand` values.
-  - [ ] Add/move tests for playlist menu command mapping.
-  - [ ] Add/move tests for sort/current-entry preservation behavior.
-  - [ ] Add/move tests for remove/select menu behaviors.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the playlist action migration.
+- [x] **Step 7: Move playlist action logic into `AppController`**
+  - [x] Move add/remove/select/misc/list menu index mapping.
+  - [x] Move sort action mapping.
+  - [x] Move playlist selection changes that are currently in GTK handlers.
+  - [x] Move current-position preservation rules after playlist mutations where currently UI-owned.
+  - [x] Move reverse/randomize/sort command handling.
+  - [x] Move toolkit-independent playlist scroll row calculations.
+  - [x] Convert GTK playlist menu handlers to `AppCommand` values.
+  - [x] Add/move tests for playlist menu command mapping.
+  - [x] Add/move tests for sort/current-entry preservation behavior.
+  - [x] Add/move tests for remove/select menu behaviors.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the playlist action migration.
 
 - [ ] **Step 8: Move panel/window state logic into app modules**
   - [ ] Move main player shaded state toggling logic.

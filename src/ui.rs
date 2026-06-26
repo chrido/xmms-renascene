@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 
+use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
@@ -5412,47 +5413,6 @@ impl PlaylistMenu {
         *hover = Some(item);
         *pressed = true;
         true
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlaylistMenuCommand {
-    OpenLocationWindow,
-    OpenDirectoryDialog,
-    OpenFileDialog,
-    ShowSortMenu,
-    ShowFileInfo,
-    OpenOptions,
-    ClearList,
-    CropToSelection,
-    RemoveSelectedOrCurrent,
-    InvertSelection,
-    SelectNone,
-    SelectAll,
-    SavePlaylist,
-    LoadPlaylist,
-}
-
-impl PlaylistMenuCommand {
-    fn from_menu_item(menu: PlaylistMenuKind, item: usize) -> Option<Self> {
-        match (menu, item) {
-            (PlaylistMenuKind::Add, 0) => Some(Self::OpenLocationWindow),
-            (PlaylistMenuKind::Add, 1) => Some(Self::OpenDirectoryDialog),
-            (PlaylistMenuKind::Add, 2) => Some(Self::OpenFileDialog),
-            (PlaylistMenuKind::Misc, 0) => Some(Self::ShowSortMenu),
-            (PlaylistMenuKind::Misc, 1) => Some(Self::ShowFileInfo),
-            (PlaylistMenuKind::Misc, 2) => Some(Self::OpenOptions),
-            (PlaylistMenuKind::Remove, 1) => Some(Self::ClearList),
-            (PlaylistMenuKind::Remove, 2) => Some(Self::CropToSelection),
-            (PlaylistMenuKind::Remove, 3) => Some(Self::RemoveSelectedOrCurrent),
-            (PlaylistMenuKind::Select, 0) => Some(Self::InvertSelection),
-            (PlaylistMenuKind::Select, 1) => Some(Self::SelectNone),
-            (PlaylistMenuKind::Select, 2) => Some(Self::SelectAll),
-            (PlaylistMenuKind::List, 0) => Some(Self::ClearList),
-            (PlaylistMenuKind::List, 1) => Some(Self::SavePlaylist),
-            (PlaylistMenuKind::List, 2) => Some(Self::LoadPlaylist),
-            _ => None,
-        }
     }
 }
 

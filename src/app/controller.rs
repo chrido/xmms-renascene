@@ -4,7 +4,8 @@
 //! widgets, platform windows, and concrete backend objects.
 
 use crate::app::command::AppCommand;
-use crate::app::effect::{AppEffect, RenderTarget};
+use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
+use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app_state::AppState;
 use crate::player::{PlaybackEvent, PlayerState};
 
@@ -55,8 +56,97 @@ impl AppController {
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
             }
+            AppCommand::ExecutePlaylistMenu { kind, index } => self.execute_playlist_menu(kind, index),
+            AppCommand::SortPlaylist(key) => {
+                self.state.playlist.sort_by(key);
+                self.playlist_changed_effects()
+            }
+            AppCommand::ReversePlaylist => {
+                self.state.playlist.reverse();
+                self.playlist_changed_effects()
+            }
+            AppCommand::RandomizePlaylist => {
+                self.state.playlist.randomize();
+                self.playlist_changed_effects()
+            }
+            AppCommand::AddPlaylistUris(uris) => {
+                for uri in uris {
+                    self.state.playlist.add_uri(uri);
+                }
+                self.playlist_changed_effects()
+            }
+            AppCommand::AddPlaylistFiles(paths) => {
+                for path in paths {
+                    self.state.playlist.add_path(path);
+                }
+                self.playlist_changed_effects()
+            }
+            AppCommand::ClearPlaylist => {
+                self.state.playlist.clear();
+                self.playlist_changed_effects()
+            }
+            AppCommand::RemoveSelectedPlaylistEntries => {
+                self.state.playlist.remove_selected_or_current();
+                self.playlist_changed_effects()
+            }
+            AppCommand::SelectAllPlaylistEntries => {
+                self.state.playlist.select_all(true);
+                self.playlist_changed_effects()
+            }
+            AppCommand::InvertPlaylistSelection => {
+                self.state.playlist.invert_selection();
+                self.playlist_changed_effects()
+            }
             _ => Vec::new(),
         }
+    }
+
+    fn execute_playlist_menu(
+        &mut self,
+        kind: crate::playlist::PlaylistMenuKind,
+        index: usize,
+    ) -> Vec<AppEffect> {
+        let Some(command) = PlaylistMenuCommand::from_menu_item(kind, index) else {
+            return Vec::new();
+        };
+        match command {
+            PlaylistMenuCommand::OpenLocationWindow => vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles)],
+            PlaylistMenuCommand::OpenDirectoryDialog => vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioDirectory)],
+            PlaylistMenuCommand::OpenFileDialog => vec![AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles)],
+            PlaylistMenuCommand::ShowSortMenu => Vec::new(),
+            PlaylistMenuCommand::ShowFileInfo => vec![AppEffect::OpenFileInfoDialog],
+            PlaylistMenuCommand::OpenOptions => vec![AppEffect::OpenPreferences],
+            PlaylistMenuCommand::ClearList => {
+                self.state.playlist.clear();
+                self.playlist_changed_effects()
+            }
+            PlaylistMenuCommand::CropToSelection => {
+                self.state.playlist.crop_to_selected_or_current();
+                self.playlist_changed_effects()
+            }
+            PlaylistMenuCommand::RemoveSelectedOrCurrent => {
+                self.state.playlist.remove_selected_or_current();
+                self.playlist_changed_effects()
+            }
+            PlaylistMenuCommand::InvertSelection => {
+                self.state.playlist.invert_selection();
+                self.playlist_changed_effects()
+            }
+            PlaylistMenuCommand::SelectNone => {
+                self.state.playlist.select_all(false);
+                self.playlist_changed_effects()
+            }
+            PlaylistMenuCommand::SelectAll => {
+                self.state.playlist.select_all(true);
+                self.playlist_changed_effects()
+            }
+            PlaylistMenuCommand::SavePlaylist => vec![AppEffect::OpenFileDialog(FileDialogRequest::SavePlaylist)],
+            PlaylistMenuCommand::LoadPlaylist => vec![AppEffect::OpenFileDialog(FileDialogRequest::LoadPlaylist)],
+        }
+    }
+
+    fn playlist_changed_effects(&self) -> Vec<AppEffect> {
+        vec![AppEffect::SaveConfig, AppEffect::QueueRender(RenderTarget::Playlist)]
     }
 
     fn play(&mut self) -> Vec<AppEffect> {
@@ -223,5 +313,35 @@ mod tests {
         let resume_effects = controller.handle_command(AppCommand::TogglePause);
         assert_eq!(controller.state().player.state(), PlayerState::Playing);
         assert!(resume_effects.contains(&AppEffect::ResumePlayback));
+    }
+
+    #[test]
+    fn playlist_menu_commands_mutate_playlist_state() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///tmp/one.ogg");
+        state.playlist.add_uri("file:///tmp/two.ogg");
+        let mut controller = AppController::new(state);
+
+        let effects = controller.handle_command(AppCommand::ExecutePlaylistMenu {
+            kind: crate::playlist::PlaylistMenuKind::Select,
+            index: 0,
+        });
+
+        assert!(controller.state().playlist.entries().iter().all(|entry| entry.selected));
+        assert!(effects.contains(&AppEffect::SaveConfig));
+        assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::Playlist)));
+    }
+
+    #[test]
+    fn add_playlist_uris_command_preserves_current_position() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///tmp/one.ogg");
+        state.playlist.set_position(0);
+        let mut controller = AppController::new(state);
+
+        controller.handle_command(AppCommand::AddPlaylistUris(vec!["file:///tmp/two.ogg".to_string()]));
+
+        assert_eq!(controller.state().playlist.position(), Some(0));
+        assert_eq!(controller.state().playlist.len(), 2);
     }
 }
