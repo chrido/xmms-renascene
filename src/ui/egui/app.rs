@@ -3,7 +3,6 @@
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
-use crate::app::view_model::equalizer_view_model;
 use crate::app_state::AppState;
 
 use super::preferences::PreferencesPage;
@@ -66,11 +65,7 @@ impl eframe::App for EguiFrontendState {
             ui.separator();
             playlist::show_playlist(ui, self);
             ui.separator();
-            let equalizer_model = equalizer_view_model(self.controller.state());
-            ui.label(format!(
-                "Equalizer bands: {}",
-                equalizer::equalizer_band_count(&equalizer_model)
-            ));
+            equalizer::show_equalizer(ui, self);
             if self.preferences_open {
                 ui.separator();
                 ui.heading("Preferences");

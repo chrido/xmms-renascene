@@ -3,7 +3,9 @@
 //! The controller owns application state transitions. It remains free of GTK
 //! widgets, platform windows, and concrete backend objects.
 
-use crate::app::command::{AppCommand, AudioCommand, PanelCommand, PlayerCommand, PlaylistCommand};
+use crate::app::command::{
+    AppCommand, AudioCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
+};
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app_state::AppState;
@@ -36,7 +38,7 @@ impl AppController {
             AppCommand::Player(command) => self.handle_player_command(command),
             AppCommand::Audio(command) => self.handle_audio_command(command),
             AppCommand::Playlist(command) => self.handle_playlist_command(command),
-            AppCommand::Equalizer(_command) => Vec::new(),
+            AppCommand::Equalizer(command) => self.handle_equalizer_command(command),
             AppCommand::Panel(command) => self.handle_panel_command(command),
         }
     }
@@ -72,6 +74,32 @@ impl AppController {
                 ]
             }
         }
+    }
+
+    fn handle_equalizer_command(&mut self, command: EqualizerCommand) -> Vec<AppEffect> {
+        match command {
+            EqualizerCommand::SetActive(active) => self.state.config.equalizer_active = active,
+            EqualizerCommand::ToggleActive => {
+                self.state.config.equalizer_active = !self.state.config.equalizer_active;
+            }
+            EqualizerCommand::SetAuto(auto) => self.state.config.equalizer_auto = auto,
+            EqualizerCommand::ToggleAuto => {
+                self.state.config.equalizer_auto = !self.state.config.equalizer_auto;
+            }
+            EqualizerCommand::SetPreamp(position) => {
+                self.state.config.equalizer_preamp_pos = position.clamp(0, 100);
+            }
+            EqualizerCommand::SetBand { band, position } => {
+                if let Some(value) = self.state.config.equalizer_band_pos.get_mut(band) {
+                    *value = position.clamp(0, 100);
+                }
+            }
+        }
+        vec![
+            AppEffect::SetBackendEqualizer,
+            AppEffect::SaveConfig,
+            AppEffect::QueueRender(RenderTarget::Equalizer),
+        ]
     }
 
     fn handle_playlist_command(&mut self, command: PlaylistCommand) -> Vec<AppEffect> {
@@ -462,5 +490,24 @@ mod tests {
         assert!(controller.state().config.playlist_detached);
         assert!(effects.contains(&AppEffect::SaveConfig));
         assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::All)));
+    }
+
+    #[test]
+    fn equalizer_commands_update_config_and_backend_effects() {
+        let mut controller = AppController::new(AppState::default());
+
+        let effects = controller.handle_command(
+            EqualizerCommand::SetBand {
+                band: 2,
+                position: 150,
+            }
+            .into(),
+        );
+        controller.handle_command(EqualizerCommand::SetActive(true).into());
+
+        assert_eq!(controller.state().config.equalizer_band_pos[2], 100);
+        assert!(controller.state().config.equalizer_active);
+        assert!(effects.contains(&AppEffect::SetBackendEqualizer));
+        assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::Equalizer)));
     }
 }

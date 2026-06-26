@@ -505,17 +505,17 @@ Show and interact with the equalizer in egui.
 
 ### Tasks
 
-- [ ] Add `equalizer.rs` UI function.
-- [ ] Build from `equalizer_view_model(&AppState)`.
-- [ ] Display equalizer skin texture or egui-native controls.
-- [ ] Support active toggle.
-- [ ] Support auto toggle.
-- [ ] Support preamp slider.
-- [ ] Support ten band sliders.
-- [ ] Dispatch `EqualizerCommand` values.
-- [ ] Interpret resulting effects to update backend equalizer once backend wiring is active.
-- [ ] Add tests for equalizer slider command translation.
-- [ ] Validation:
+- [x] Add `equalizer.rs` UI function.
+- [x] Build from `equalizer_view_model(&AppState)`.
+- [x] Display equalizer skin texture or egui-native controls.
+- [x] Support active toggle.
+- [x] Support auto toggle.
+- [x] Support preamp slider.
+- [x] Support ten band sliders.
+- [x] Dispatch `EqualizerCommand` values.
+- [x] Interpret resulting effects to update backend equalizer once backend wiring is active.
+- [x] Add tests for equalizer slider command translation.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
@@ -523,7 +523,7 @@ cargo test --lib --bins
 cargo test --test render
 ```
 
-- [ ] Commit: `Implement egui equalizer UI`
+- [x] Commit: `Implement egui equalizer UI`
 
 ## Phase 10: Implement preferences egui dialog
 
