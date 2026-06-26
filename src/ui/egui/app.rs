@@ -1,6 +1,7 @@
 //! eframe application lifecycle for the egui frontend.
 
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::app::command::{AppCommand, PlaylistCommand};
 use crate::app::controller::AppController;
@@ -14,7 +15,8 @@ use crate::render::{
     MainSlider, MainToggleButton, PlaylistMenuRenderKind, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH,
 };
-use crate::skin::DefaultSkin;
+use crate::session::default_config_dir;
+use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 
 use super::file_info;
 use super::menu::{self, EguiPrompt};
@@ -32,6 +34,7 @@ pub struct EguiFrontendState {
     pub preferences_open: bool,
     pub skin_browser_open: bool,
     pub file_info_open: bool,
+    pub skin_entries: Vec<SkinEntry>,
     pub prompt_open: Option<EguiPrompt>,
     pub prompt_text: String,
     pub selected_preferences_page: PreferencesPage,
@@ -63,12 +66,14 @@ impl EguiFrontendState {
         }
         apply_preview_options_to_config(&mut app_state.config, &options)?;
         let active_skin = load_skin_from_config(&app_state)?;
+        let skin_entries = discover_runtime_skins();
         let scale_factor = app_state.config.scale_factor as f32;
         Ok(Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
             skin_browser_open: false,
             file_info_open: false,
+            skin_entries,
             prompt_open: None,
             prompt_text: String::new(),
             selected_preferences_page: PreferencesPage::default(),
@@ -303,11 +308,138 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
     egui::Window::new("Skin selector")
         .open(&mut open)
         .resizable(true)
+        .default_width(360.0)
         .show(ctx, |ui| {
-            ui.label("Skin browser parity is pending for egui.");
-            ui.label("Use --skin PATH or the GTK Skin Browser for now.");
+            if ui.button("Refresh").clicked() {
+                app.skin_entries = discover_runtime_skins();
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Default").clicked() {
+                    match DefaultSkin::load_bundled() {
+                        Ok(skin) => {
+                            app.active_skin = skin;
+                            app.controller_mut().state_mut().config.skin = None;
+                        }
+                        Err(err) => app.runtime.pending_messages.push(format!(
+                            "failed to load bundled default skin: {err}"
+                        )),
+                    }
+                }
+                if ui.button("Add...").clicked() {
+                    import_skin_from_dialog(app);
+                }
+                if ui.button("Close").clicked() {
+                    app.skin_browser_open = false;
+                }
+            });
+            ui.separator();
+            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                for entry in app.skin_entries.clone() {
+                    let selected = app
+                        .controller()
+                        .state()
+                        .config
+                        .skin
+                        .as_deref()
+                        == Some(entry.path.to_string_lossy().as_ref());
+                    if ui.selectable_label(selected, &entry.name).clicked() {
+                        select_skin_entry(app, &entry);
+                    }
+                }
+                if app.skin_entries.is_empty() {
+                    ui.label("No skins found in configured skin directories.");
+                }
+            });
         });
-    app.skin_browser_open = open;
+    app.skin_browser_open = open && app.skin_browser_open;
+}
+
+fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {
+    match DefaultSkin::load_from_path(&entry.path) {
+        Ok(skin) => {
+            app.active_skin = skin;
+            app.controller_mut().state_mut().config.skin = Some(entry.path.to_string_lossy().into_owned());
+        }
+        Err(err) => app.runtime.pending_messages.push(format!(
+            "failed to load skin '{}': {err}",
+            entry.path.display()
+        )),
+    }
+}
+
+fn import_skin_from_dialog(app: &mut EguiFrontendState) {
+    let Some(path) = rfd::FileDialog::new().set_title("Add skin").pick_file() else {
+        return;
+    };
+    match import_skin_to_user_dir(&path) {
+        Ok(imported) => {
+            app.skin_entries = discover_runtime_skins();
+            let entry = SkinEntry {
+                name: imported
+                    .file_stem()
+                    .or_else(|| imported.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Imported skin")
+                    .to_string(),
+                path: imported,
+            };
+            select_skin_entry(app, &entry);
+        }
+        Err(err) => app
+            .runtime
+            .pending_messages
+            .push(format!("failed to import skin '{}': {err}", path.display())),
+    }
+}
+
+fn import_skin_to_user_dir(source: &Path) -> std::io::Result<PathBuf> {
+    let user_skin_dir = default_config_dir().join("xmms").join("Skins");
+    fs::create_dir_all(&user_skin_dir)?;
+    let name = source.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("skin path has no file name: {}", source.display()),
+        )
+    })?;
+    let destination = user_skin_dir.join(name);
+    if source.is_dir() {
+        copy_dir_recursive(source, &destination)?;
+    } else {
+        fs::copy(source, &destination)?;
+    }
+    Ok(destination)
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else {
+            fs::copy(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn discover_runtime_skins() -> Vec<SkinEntry> {
+    let home_dir = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let system_skin_dir = std::env::var_os("XMMS_RS_SYSTEM_SKIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/share/xmms/Skins"));
+    let skinsdir = std::env::var("SKINSDIR").ok();
+    let dirs = skin_browser_search_dirs(
+        &default_config_dir(),
+        &home_dir,
+        &system_skin_dir,
+        skinsdir.as_deref(),
+    );
+    discover_skins_in_dirs(dirs).unwrap_or_default()
 }
 
 fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {
@@ -335,7 +467,10 @@ mod tests {
         let app = EguiFrontendState::new(options).unwrap();
 
         assert!(app.preferences_open);
-        assert_eq!(app.selected_preferences_page, PreferencesPage::Options);
+        assert_eq!(
+            app.selected_preferences_page,
+            PreferencesPage::AudioIoPlugins
+        );
     }
 
     #[test]

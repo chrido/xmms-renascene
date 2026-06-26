@@ -428,12 +428,12 @@ GTK has `build_skin_browser_window` with:
 
 ### egui status
 
-- [ ] No egui skin browser window yet.
-- [ ] No skin list/discovery UI.
-- [ ] No default skin row.
-- [ ] No Add/import skin workflow.
-- [ ] No live skin reload from egui selection.
-- [ ] No skin browser open action from preferences/main menu.
+- [x] No egui skin browser window yet.
+- [x] No skin list/discovery UI.
+- [x] No default skin row.
+- [x] No Add/import skin workflow.
+- [x] No live skin reload from egui selection.
+- [x] No skin browser open action from preferences/main menu.
 - [ ] No parity with GTK selection/reload tests.
 
 ---
@@ -592,6 +592,6 @@ GTK has `build_skin_browser_window` with:
 - [x] Equalizer presets popover.
 - [ ] Equalizer preset load/save/delete/configure dialogs.
 - [x] Preferences full control parity.
-- [ ] Skin Browser.
+- [x] Skin Browser.
 - [ ] Detached playlist/equalizer windows.
 - [ ] Live playback timer/visualization updates.
