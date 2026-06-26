@@ -356,7 +356,7 @@ impl Playlist {
         }
     }
 
-    pub fn next(&mut self) -> bool {
+    pub fn advance(&mut self) -> bool {
         if let Some(next) = self.next_position() {
             self.position = Some(next);
             true
@@ -378,7 +378,7 @@ impl Playlist {
         if self.no_advance {
             return false;
         }
-        self.next()
+        self.advance()
     }
 
     pub fn skip_failed_current(&mut self) -> bool {
@@ -1059,11 +1059,11 @@ mod tests {
         playlist.add_uri("file:///tmp/one.ogg");
         playlist.add_uri("file:///tmp/two.ogg");
 
-        assert!(playlist.next());
+        assert!(playlist.advance());
         assert_eq!(playlist.position(), Some(0));
-        assert!(playlist.next());
+        assert!(playlist.advance());
         assert_eq!(playlist.position(), Some(1));
-        assert!(!playlist.next());
+        assert!(!playlist.advance());
         assert_eq!(playlist.position(), Some(1));
         assert!(playlist.previous());
         assert_eq!(playlist.position(), Some(0));
@@ -1073,7 +1073,7 @@ mod tests {
         playlist.set_repeat(true);
         assert!(playlist.previous());
         assert_eq!(playlist.position(), Some(1));
-        assert!(playlist.next());
+        assert!(playlist.advance());
         assert_eq!(playlist.position(), Some(0));
     }
 

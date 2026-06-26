@@ -1273,7 +1273,7 @@ fn skin_browser_selects_default_and_installed_skin_paths() {
     let packed = skins.join("Packed.wsz");
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
-    app.scan_skin_browser_dirs(&[skins.clone()])
+    app.scan_skin_browser_dirs(std::slice::from_ref(&skins))
         .assert_skin_browser_entries(&["Classic", "Packed"])
         .select_skin_browser_index(1)
         .assert_selected_skin_index(1)

@@ -40,18 +40,12 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             options.main_shaded = Some(true);
         } else if arg == "--unshade-main" {
             options.main_shaded = Some(false);
-        } else if arg == "--playlist-shaded" {
-            options.show_playlist = true;
-            options.playlist_shaded = Some(true);
-        } else if arg == "--shade-playlist" {
+        } else if arg == "--playlist-shaded" || arg == "--shade-playlist" {
             options.show_playlist = true;
             options.playlist_shaded = Some(true);
         } else if arg == "--unshade-playlist" {
             options.playlist_shaded = Some(false);
-        } else if arg == "--equalizer-shaded" {
-            options.show_equalizer = true;
-            options.equalizer_shaded = Some(true);
-        } else if arg == "--shade-equalizer" {
+        } else if arg == "--equalizer-shaded" || arg == "--shade-equalizer" {
             options.show_equalizer = true;
             options.equalizer_shaded = Some(true);
         } else if arg == "--unshade-equalizer" {

@@ -8567,7 +8567,7 @@ impl MainWindowUiState {
                 true
             }
             PlaybackControlEvent::Next => {
-                if self.app_state.playlist.next() {
+                if self.app_state.playlist.advance() {
                     self.start_current_playlist_playback_from_beginning();
                 }
                 self.position_position = 0;

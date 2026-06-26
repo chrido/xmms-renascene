@@ -732,7 +732,7 @@ fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<[f32; SPECTRU
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
     use std::sync::{Mutex, MutexGuard};
 
     static GST_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -756,7 +756,7 @@ mod tests {
         path_to_uri(&path)
     }
 
-    fn path_to_uri(path: &PathBuf) -> String {
+    fn path_to_uri(path: &Path) -> String {
         format!("file://{}", path.to_string_lossy())
     }
 

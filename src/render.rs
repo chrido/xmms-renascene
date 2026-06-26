@@ -239,7 +239,7 @@ mod tests {
         let mut titlebar = titlebar;
         let titlebar_stride = titlebar.stride() as usize;
         let titlebar_data = titlebar.data().unwrap();
-        let focused_source_offset = titlebar_stride * 0 + 27 * 4;
+        let focused_source_offset = 27 * 4;
         let unfocused_source_offset = titlebar_stride * 15 + 27 * 4;
         let expected_focused = u32::from_ne_bytes(
             titlebar_data[focused_source_offset..focused_source_offset + 4]
