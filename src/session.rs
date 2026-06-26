@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::playlist::{Playlist, PlaylistMenuKind};
-use crate::ui::PreviewOptions;
+use crate::ui::{apply_preview_options_to_config, PreviewOptions};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplicationLaunchFlags {
@@ -113,21 +113,8 @@ pub fn apply_session_command(
         *app_state = AppState::from_config(Config::default());
     }
 
-    if command.options.show_playlist {
-        app_state.config.playlist_visible = true;
-    }
-    if command.options.show_equalizer {
-        app_state.config.equalizer_visible = true;
-    }
-    if let Some(detached) = command.options.playlist_detached {
-        app_state.config.playlist_detached = detached;
-    }
-    if let Some(detached) = command.options.equalizer_detached {
-        app_state.config.equalizer_detached = detached;
-    }
-    if let Some(skin) = command.options.skin_path.as_ref() {
-        app_state.config.skin = Some(skin.clone());
-    }
+    apply_preview_options_to_config(&mut app_state.config, &command.options)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
 
     let mut files_added = 0;
     for path in &command.positional_paths {

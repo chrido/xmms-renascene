@@ -690,6 +690,44 @@ fn preview_state_from_options(options: PreviewOptions) -> Result<MainWindowUiSta
     preview_state_from_app_state(AppState::default(), options)
 }
 
+pub fn apply_preview_options_to_config(
+    config: &mut Config,
+    options: &PreviewOptions,
+) -> Result<(), String> {
+    if options.show_playlist || options.playlist_size.is_some() {
+        config.playlist_visible = true;
+    }
+    if options.show_equalizer {
+        config.equalizer_visible = true;
+    }
+    if let Some(shaded) = options.main_shaded {
+        config.main_shaded = shaded;
+    }
+    if let Some(shaded) = options.playlist_shaded {
+        config.playlist_shaded = shaded;
+    }
+    if let Some(shaded) = options.equalizer_shaded {
+        config.equalizer_shaded = shaded;
+    }
+    if let Some(detached) = options.playlist_detached {
+        config.playlist_detached = detached;
+    }
+    if let Some(detached) = options.equalizer_detached {
+        config.equalizer_detached = detached;
+    }
+    if let Some(skin_path) = options.skin_path.as_ref() {
+        config.skin = Some(skin_path.clone());
+    }
+    if let Some(scale_factor) = options.scale_factor.as_ref() {
+        config.scale_factor = scale_factor
+            .parse::<f64>()
+            .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
+            .clamp(1.0, 5.0);
+        config.doublesize = config.scale_factor > 1.0;
+    }
+    Ok(())
+}
+
 fn preview_state_from_app_state(
     mut app_state: AppState,
     options: PreviewOptions,
@@ -697,37 +735,7 @@ fn preview_state_from_app_state(
     if options.reset {
         app_state = AppState::default();
     }
-    if options.show_playlist || options.playlist_size.is_some() {
-        app_state.config.playlist_visible = true;
-    }
-    if options.show_equalizer {
-        app_state.config.equalizer_visible = true;
-    }
-    if let Some(shaded) = options.main_shaded {
-        app_state.config.main_shaded = shaded;
-    }
-    if let Some(shaded) = options.playlist_shaded {
-        app_state.config.playlist_shaded = shaded;
-    }
-    if let Some(shaded) = options.equalizer_shaded {
-        app_state.config.equalizer_shaded = shaded;
-    }
-    if let Some(detached) = options.playlist_detached {
-        app_state.config.playlist_detached = detached;
-    }
-    if let Some(detached) = options.equalizer_detached {
-        app_state.config.equalizer_detached = detached;
-    }
-    if let Some(skin_path) = options.skin_path.as_ref() {
-        app_state.config.skin = Some(skin_path.clone());
-    }
-    if let Some(scale_factor) = options.scale_factor.as_ref() {
-        app_state.config.scale_factor = scale_factor
-            .parse::<f64>()
-            .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
-            .clamp(1.0, 5.0);
-        app_state.config.doublesize = app_state.config.scale_factor > 1.0;
-    }
+    apply_preview_options_to_config(&mut app_state.config, &options)?;
 
     let mut state = MainWindowUiState::from_app_state(app_state);
     if let Some((width, height)) = options.playlist_size {
