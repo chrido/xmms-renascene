@@ -1,10 +1,12 @@
 //! egui equalizer panel/window.
 
 use crate::app::command::EqualizerCommand;
+use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
-    balance_to_eq_shaded_position, equalizer_view_model, eq_slider_pixel_to_position,
+    balance_to_eq_shaded_position, eq_slider_pixel_to_position, equalizer_view_model,
     volume_to_eq_shaded_position, EqualizerViewModel,
 };
+use crate::equalizer::{winamp_original_presets, EqualizerPreset};
 use crate::render::{
     equalizer_slider_layout, EqualizerControl, EqualizerRenderState, EqualizerSlider,
     EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
@@ -46,6 +48,7 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_equalizer_hit_regions(ui, app, rect, &view_model);
+    show_equalizer_presets_popover(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -83,7 +86,11 @@ fn add_equalizer_hit_regions(
         return;
     }
 
-    for control in [EqualizerControl::On, EqualizerControl::Auto, EqualizerControl::Presets] {
+    for control in [
+        EqualizerControl::On,
+        EqualizerControl::Auto,
+        EqualizerControl::Presets,
+    ] {
         let rect = scale_skin_rect(base_rect, equalizer_control_rect(control), app.scale_factor);
         let response = ui.interact(
             rect,
@@ -132,10 +139,117 @@ fn dispatch_equalizer_control(app: &mut EguiFrontendState, control: EqualizerCon
     match control {
         EqualizerControl::On => app.dispatch(EqualizerCommand::ToggleActive),
         EqualizerControl::Auto => app.dispatch(EqualizerCommand::ToggleAuto),
-        EqualizerControl::Presets => app
-            .runtime
-            .pending_messages
-            .push("equalizer preset menu pending egui handler".to_string()),
+        EqualizerControl::Presets => app.equalizer_presets_open = true,
+    }
+}
+
+fn show_equalizer_presets_popover(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    if !app.equalizer_presets_open {
+        return;
+    }
+    let mut open = true;
+    let mut close_after_click = false;
+    egui::Window::new("Equalizer Presets")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .show(ctx, |ui| {
+            ui.menu_button("Load", |ui| {
+                if ui.button("Preset").clicked() {
+                    app.runtime.pending_messages.push("named equalizer preset picker pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("Auto-load preset").clicked() {
+                    app.runtime.pending_messages.push("auto equalizer preset picker pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("Default").clicked() {
+                    apply_equalizer_preset(app, &EqualizerPreset::zero("Default"));
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("Zero").clicked() {
+                    apply_equalizer_preset(app, &EqualizerPreset::zero("Zero"));
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("From file").clicked() {
+                    app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::LoadEqualizerPreset));
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("From WinAMP EQF file").clicked() {
+                    app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::LoadEqualizerPreset));
+                    close_after_click = true;
+                    ui.close();
+                }
+                ui.separator();
+                ui.label("Winamp original presets");
+                for preset in winamp_original_presets().into_iter().take(12) {
+                    if ui.button(&preset.name).clicked() {
+                        apply_equalizer_preset(app, &preset);
+                        close_after_click = true;
+                        ui.close();
+                    }
+                }
+            });
+            ui.menu_button("Import", |ui| {
+                if ui.button("WinAMP Presets").clicked() {
+                    app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::LoadEqualizerPreset));
+                    close_after_click = true;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Save", |ui| {
+                if ui.button("Preset").clicked() {
+                    app.runtime.pending_messages.push("save named equalizer preset pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("Auto-load preset").clicked() {
+                    app.runtime.pending_messages.push("save auto equalizer preset pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("Default").clicked() {
+                    app.runtime.pending_messages.push("save default equalizer preset pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("To file").clicked() || ui.button("To WinAMP EQF file").clicked() {
+                    app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::SaveEqualizerPreset));
+                    close_after_click = true;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Delete", |ui| {
+                if ui.button("Preset").clicked() {
+                    app.runtime.pending_messages.push("delete equalizer preset pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+                if ui.button("Auto-load preset").clicked() {
+                    app.runtime.pending_messages.push("delete auto equalizer preset pending egui handler".to_string());
+                    close_after_click = true;
+                    ui.close();
+                }
+            });
+            if ui.button("Configure Equalizer").clicked() {
+                app.runtime.pending_messages.push("configure equalizer preset paths pending egui handler".to_string());
+                close_after_click = true;
+            }
+        });
+    if !open || close_after_click {
+        app.equalizer_presets_open = false;
+    }
+}
+
+fn apply_equalizer_preset(app: &mut EguiFrontendState, preset: &EqualizerPreset) {
+    app.dispatch(EqualizerCommand::SetPreamp(preset.preamp_position()));
+    for (band, position) in preset.band_positions().into_iter().enumerate() {
+        app.dispatch(EqualizerCommand::SetBand { band, position });
     }
 }
 
@@ -148,7 +262,9 @@ fn dispatch_equalizer_slider(
     match slider {
         EqualizerSlider::Preamp => {
             let pixel = ((pointer.y - rect.top()) / app.scale_factor).round() as i32;
-            app.dispatch(EqualizerCommand::SetPreamp(eq_slider_pixel_to_position(pixel)));
+            app.dispatch(EqualizerCommand::SetPreamp(eq_slider_pixel_to_position(
+                pixel,
+            )));
         }
         EqualizerSlider::Band(band) => {
             let pixel = ((pointer.y - rect.top()) / app.scale_factor).round() as i32;

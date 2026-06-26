@@ -241,8 +241,8 @@ Legend:
 
 ### Missing / incomplete
 
-- [ ] Presets button does not open the GTK-equivalent nested presets popover. It currently only records a pending message.
-- [ ] Equalizer presets popover missing. GTK has `build_equalizer_presets_popover` with nested sections:
+- [x] Presets button does not open the GTK-equivalent nested presets popover. It now opens an egui presets popover.
+- [x] Equalizer presets popover missing. GTK has `build_equalizer_presets_popover` with nested sections:
   - Load;
   - Import;
   - Save;
@@ -589,7 +589,7 @@ GTK has `build_skin_browser_window` with:
 - [x] Playlist sort popover.
 - [x] Playlist context menu.
 - [x] File Info dialog.
-- [ ] Equalizer presets popover.
+- [x] Equalizer presets popover.
 - [ ] Equalizer preset load/save/delete/configure dialogs.
 - [ ] Preferences full control parity.
 - [ ] Skin Browser.
