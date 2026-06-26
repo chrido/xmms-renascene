@@ -3,7 +3,7 @@
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
-use crate::app::view_model::{equalizer_view_model, playlist_view_model};
+use crate::app::view_model::equalizer_view_model;
 use crate::app_state::AppState;
 
 use super::preferences::PreferencesPage;
@@ -49,6 +49,10 @@ impl EguiFrontendState {
         &self.controller
     }
 
+    pub fn controller_mut(&mut self) -> &mut AppController {
+        &mut self.controller
+    }
+
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
         let effects = self.controller.handle_command(command.into());
         self.runtime.apply_effects(effects);
@@ -60,8 +64,8 @@ impl eframe::App for EguiFrontendState {
         egui::CentralPanel::default().show(ctx, |ui| {
             main_player::show_main_player(ui, self);
             ui.separator();
-            let playlist_model = playlist_view_model(self.controller.state());
-            ui.label(format!("Playlist rows: {}", playlist::playlist_row_count(&playlist_model)));
+            playlist::show_playlist(ui, self);
+            ui.separator();
             let equalizer_model = equalizer_view_model(self.controller.state());
             ui.label(format!(
                 "Equalizer bands: {}",

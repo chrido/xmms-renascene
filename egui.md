@@ -476,26 +476,26 @@ Show and interact with the playlist in egui.
 
 ### Tasks
 
-- [ ] Add `playlist.rs` UI function.
-- [ ] Build from `playlist_view_model(&AppState)`.
-- [ ] Display playlist rows.
-- [ ] Show current row and selected rows.
-- [ ] Support row click selection.
-- [ ] Support double-click or enter to play selected/current row.
-- [ ] Support scroll wheel behavior.
-- [ ] Support playlist menu actions via `PlaylistCommand`.
-- [ ] Support sort/reverse/randomize commands.
-- [ ] Implement open/add/load/save effects as no-op/log initially or use a non-GTK file dialog only if already chosen.
-- [ ] Avoid GTK file chooser APIs.
-- [ ] Add unit tests for playlist command translation.
-- [ ] Validation:
+- [x] Add `playlist.rs` UI function.
+- [x] Build from `playlist_view_model(&AppState)`.
+- [x] Display playlist rows.
+- [x] Show current row and selected rows.
+- [x] Support row click selection.
+- [x] Support double-click or enter to play selected/current row.
+- [x] Support scroll wheel behavior.
+- [x] Support playlist menu actions via `PlaylistCommand`.
+- [x] Support sort/reverse/randomize commands.
+- [x] Implement open/add/load/save effects as no-op/log initially or use a non-GTK file dialog only if already chosen.
+- [x] Avoid GTK file chooser APIs.
+- [x] Add unit tests for playlist command translation.
+- [x] Validation:
 
 ```bash
 cargo check --no-default-features --features egui-ui
 cargo test --lib --bins
 ```
 
-- [ ] Commit: `Implement egui playlist UI`
+- [x] Commit: `Implement egui playlist UI`
 
 ## Phase 9: Implement equalizer egui UI
 
