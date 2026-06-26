@@ -8,16 +8,18 @@ use crate::app::view_model::{
 use crate::player::PlayerState;
 use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 use crate::render::{
-    PlaylistRowRenderEntry, PlaylistRowsRenderState, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH,
+    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::layout::{
-    playlist_footer_button_rect, playlist_menu_button_rect, PlaylistFooterButton,
-    PlaylistMenuButton, SkinRect,
+    playlist_footer_button_rect, playlist_menu_button_rect, playlist_menu_popup_rect,
+    PlaylistFooterButton, PlaylistMenuButton, SkinRect,
 };
 
 use super::app::EguiFrontendState;
-use super::skin_texture::{render_playlist_color_image, upload_color_image};
+use super::skin_texture::{
+    render_playlist_color_image, render_playlist_menu_color_image, upload_color_image,
+};
 
 pub fn playlist_row_count(view_model: &PlaylistViewModel) -> usize {
     view_model.rows.len()
@@ -63,7 +65,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_playlist_hit_regions(ui, app, rect, &view_model);
-    show_playlist_menu_popover(ui.ctx(), app);
+    add_playlist_menu_popover(ui, app, rect);
     show_playlist_sort_popover(ui.ctx(), app);
     show_physical_delete_confirmation(ui.ctx(), app);
     if response.hovered() {
@@ -158,7 +160,9 @@ fn add_playlist_hit_regions(
         return;
     }
 
-    add_playlist_rows_hit_region(ui, app, base_rect, view_model);
+    if app.playlist_menu_open.is_none() {
+        add_playlist_rows_hit_region(ui, app, base_rect, view_model);
+    }
     for menu in [
         PlaylistMenuButton::Add,
         PlaylistMenuButton::Remove,
@@ -312,67 +316,76 @@ fn show_physical_delete_confirmation(ctx: &egui::Context, app: &mut EguiFrontend
     }
 }
 
-fn show_playlist_menu_popover(ctx: &egui::Context, app: &mut EguiFrontendState) {
+fn add_playlist_menu_popover(
+    ui: &mut egui::Ui,
+    app: &mut EguiFrontendState,
+    base_rect: egui::Rect,
+) {
     let Some(kind) = app.playlist_menu_open else {
         return;
     };
-    let title = match kind {
-        PlaylistMenuKind::Add => "Add",
-        PlaylistMenuKind::Remove => "Remove",
-        PlaylistMenuKind::Select => "Select",
-        PlaylistMenuKind::Misc => "Misc",
-        PlaylistMenuKind::List => "List",
-    };
-    let mut open = true;
-    let mut close_after_click = false;
-    egui::Window::new(format!("Playlist {title}"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .show(ctx, |ui| match kind {
-            PlaylistMenuKind::Add => {
-                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Open Location...");
-                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Open Directory...");
-                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Open Files...");
-            }
-            PlaylistMenuKind::Remove => {
-                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Clear List");
-                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Crop to Selection");
-                close_after_click |= playlist_menu_item(ui, app, kind, 3, "Remove Selected");
-            }
-            PlaylistMenuKind::Select => {
-                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Invert Selection");
-                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Select None");
-                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Select All");
-            }
-            PlaylistMenuKind::Misc => {
-                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Sort List...");
-                close_after_click |= playlist_menu_item(ui, app, kind, 1, "File Info...");
-                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Options...");
-            }
-            PlaylistMenuKind::List => {
-                close_after_click |= playlist_menu_item(ui, app, kind, 0, "Clear List");
-                close_after_click |= playlist_menu_item(ui, app, kind, 1, "Save List...");
-                close_after_click |= playlist_menu_item(ui, app, kind, 2, "Load List...");
-            }
-        });
-    if !open || close_after_click {
+    let popup = playlist_menu_popup_rect(kind, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT);
+    let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor);
+    let item_height = 18.0 * app.scale_factor;
+    app.playlist_menu_hover = None;
+    let mut clicked_item = None;
+    for index in 0..kind.item_count() {
+        let item_rect = egui::Rect::from_min_size(
+            egui::pos2(popup_rect.left(), popup_rect.top() + index as f32 * item_height),
+            egui::vec2(popup_rect.width(), item_height),
+        );
+        let response = ui.interact(
+            item_rect,
+            ui.id().with(("playlist-skinned-menu", kind as u8, index)),
+            egui::Sense::click(),
+        );
+        if response.hovered() {
+            app.playlist_menu_hover = Some((kind, index));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            clicked_item = Some(index);
+        }
+    }
+
+    let hover = app
+        .playlist_menu_hover
+        .and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
+    let render_state = PlaylistMenuRenderState { kind, hover };
+    match render_playlist_menu_color_image(
+        &app.active_skin,
+        render_state,
+        popup.width,
+        popup.height,
+    ) {
+        Ok(image) => {
+            let texture = upload_color_image(
+                ui.ctx(),
+                format!("xmms-playlist-menu-{kind:?}-{hover:?}"),
+                image,
+            );
+            ui.painter().image(
+                texture.id(),
+                popup_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        }
+        Err(err) => {
+            ui.painter().text(
+                popup_rect.left_top(),
+                egui::Align2::LEFT_TOP,
+                format!("menu render error: {err}"),
+                egui::FontId::monospace(8.0 * app.scale_factor),
+                egui::Color32::WHITE,
+            );
+        }
+    }
+
+    if let Some(index) = clicked_item {
+        dispatch_playlist_menu_item(app, kind, index);
         app.playlist_menu_open = None;
     }
-}
-
-fn playlist_menu_item(
-    ui: &mut egui::Ui,
-    app: &mut EguiFrontendState,
-    kind: PlaylistMenuKind,
-    index: usize,
-    label: &str,
-) -> bool {
-    if !ui.button(label).clicked() {
-        return false;
-    }
-    dispatch_playlist_menu_item(app, kind, index);
-    true
 }
 
 fn dispatch_playlist_menu_item(app: &mut EguiFrontendState, kind: PlaylistMenuKind, index: usize) {
@@ -404,16 +417,24 @@ fn show_playlist_sort_popover(ctx: &egui::Context, app: &mut EguiFrontendState) 
         .resizable(false)
         .show(ctx, |ui| {
             ui.label("Sort List");
-            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Title, "By Title");
-            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Filename, "By Filename");
-            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Path, "By Path + Filename");
-            close_after_click |= playlist_sort_item(ui, app, false, PlaylistSortKey::Date, "By Date");
+            close_after_click |=
+                playlist_sort_item(ui, app, false, PlaylistSortKey::Title, "By Title");
+            close_after_click |=
+                playlist_sort_item(ui, app, false, PlaylistSortKey::Filename, "By Filename");
+            close_after_click |=
+                playlist_sort_item(ui, app, false, PlaylistSortKey::Path, "By Path + Filename");
+            close_after_click |=
+                playlist_sort_item(ui, app, false, PlaylistSortKey::Date, "By Date");
             ui.separator();
             ui.label("Sort Selection");
-            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Title, "By Title");
-            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Filename, "By Filename");
-            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Path, "By Path + Filename");
-            close_after_click |= playlist_sort_item(ui, app, true, PlaylistSortKey::Date, "By Date");
+            close_after_click |=
+                playlist_sort_item(ui, app, true, PlaylistSortKey::Title, "By Title");
+            close_after_click |=
+                playlist_sort_item(ui, app, true, PlaylistSortKey::Filename, "By Filename");
+            close_after_click |=
+                playlist_sort_item(ui, app, true, PlaylistSortKey::Path, "By Path + Filename");
+            close_after_click |=
+                playlist_sort_item(ui, app, true, PlaylistSortKey::Date, "By Date");
             ui.separator();
             if ui.button("Randomize List").clicked() {
                 app.dispatch(PlaylistCommand::Randomize);
@@ -454,9 +475,9 @@ fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: Playlist
         PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::TogglePause),
         PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Stop),
         PlaylistFooterButton::Next => app.dispatch(PlayerCommand::NextTrack),
-        PlaylistFooterButton::Eject => app.apply_effect(AppEffect::OpenFileDialog(
-            FileDialogRequest::AddAudioFiles,
-        )),
+        PlaylistFooterButton::Eject => {
+            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles))
+        }
         PlaylistFooterButton::ScrollUp => {
             app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(1);
         }

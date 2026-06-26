@@ -4,9 +4,10 @@ use cairo::{Context, Format, ImageSurface};
 
 use crate::render::{
     equalizer_window_height, playlist_window_height, render_equalizer_state,
-    render_main_player_state, render_playlist_frame, render_playlist_rows, EqualizerRenderState,
-    MainWindowRenderState, PlaylistRowsRenderState, RenderError, RenderPass,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
+    EqualizerRenderState, MainWindowRenderState, PlaylistMenuRenderState, PlaylistRowsRenderState,
+    RenderError, RenderPass, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH,
 };
 use crate::skin::DefaultSkin;
 
@@ -100,6 +101,19 @@ pub fn render_playlist_color_image(
     cairo_surface_to_color_image(&mut surface)
 }
 
+pub fn render_playlist_menu_color_image(
+    skin: &DefaultSkin,
+    state: PlaylistMenuRenderState,
+    width: i32,
+    height: i32,
+) -> Result<egui::ColorImage, RenderError> {
+    let mut surface = ImageSurface::create(Format::ARgb32, width, height)?;
+    let cr = Context::new(&surface)?;
+    render_playlist_menu(&cr, skin, state)?;
+    drop(cr);
+    cairo_surface_to_color_image(&mut surface)
+}
+
 pub fn upload_color_image(
     ctx: &egui::Context,
     name: impl Into<String>,
@@ -128,5 +142,22 @@ mod tests {
             image.size,
             [MAIN_WINDOW_WIDTH as usize, MAIN_WINDOW_HEIGHT as usize]
         );
+    }
+
+    #[test]
+    fn renders_playlist_menu_to_egui_color_image() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let image = render_playlist_menu_color_image(
+            &skin,
+            PlaylistMenuRenderState {
+                kind: crate::playlist::PlaylistMenuKind::Add,
+                hover: Some(1),
+            },
+            25,
+            54,
+        )
+        .unwrap();
+
+        assert_eq!(image.size, [25, 54]);
     }
 }
