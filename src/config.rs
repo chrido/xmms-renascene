@@ -3,6 +3,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::audio_model::{
+    db_to_equalizer_position, equalizer_position_to_db, EqualizerBandPositions,
+};
 use crate::equalizer::{default_preset_extension, default_preset_file};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
@@ -41,7 +44,7 @@ pub struct Config {
     pub equalizer_active: bool,
     pub equalizer_auto: bool,
     pub equalizer_preamp_pos: i32,
-    pub equalizer_band_pos: [i32; 10],
+    pub equalizer_band_pos: EqualizerBandPositions,
     pub eqpreset_default_file: String,
     pub eqpreset_extension: String,
     pub convert_underscore: bool,
@@ -497,16 +500,6 @@ fn push_string(out: &mut String, key: &str, value: &str) {
     out.push('=');
     out.push_str(value);
     out.push('\n');
-}
-
-fn equalizer_position_to_db(position: i32) -> f64 {
-    (50 - position.clamp(0, 100)) as f64 * 20.0 / 50.0
-}
-
-fn db_to_equalizer_position(db: f64) -> i32 {
-    (50.0 - (db.clamp(-20.0, 20.0) * 50.0 / 20.0))
-        .round()
-        .clamp(0.0, 100.0) as i32
 }
 
 fn trim_leading_dots(value: String) -> String {

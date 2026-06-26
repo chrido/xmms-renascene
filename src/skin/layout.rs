@@ -1,3 +1,5 @@
+use crate::playlist::PlaylistMenuKind;
+
 use super::SkinPixmapKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,36 @@ impl SkinRect {
 
     pub fn center(self) -> (i32, i32) {
         (self.x + self.width / 2, self.y + self.height / 2)
+    }
+
+    pub fn right(self) -> i32 {
+        self.x + self.width
+    }
+
+    pub fn bottom(self) -> i32 {
+        self.y + self.height
+    }
+
+    pub fn intersects(self, other: Self) -> bool {
+        self.x < other.right()
+            && self.right() > other.x
+            && self.y < other.bottom()
+            && self.bottom() > other.y
+    }
+
+    pub fn translate(self, dx: i32, dy: i32) -> Self {
+        Self::new(self.x + dx, self.y + dy, self.width, self.height)
+    }
+
+    pub fn clamp_to(self, width: i32, height: i32) -> Option<Self> {
+        if self.width <= 0 || self.height <= 0 || width <= 0 || height <= 0 {
+            return None;
+        }
+        let x1 = self.x.clamp(0, width);
+        let y1 = self.y.clamp(0, height);
+        let x2 = self.right().clamp(0, width);
+        let y2 = self.bottom().clamp(0, height);
+        (x2 > x1 && y2 > y1).then_some(Self::new(x1, y1, x2 - x1, y2 - y1))
     }
 }
 
@@ -130,23 +162,7 @@ pub enum PanelTitleButton {
     Close,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistMenuButton {
-    Add,
-    Remove,
-    Select,
-    Misc,
-    List,
-}
-
-impl PlaylistMenuButton {
-    pub fn item_count(self) -> usize {
-        match self {
-            Self::Add | Self::Select | Self::Misc | Self::List => 3,
-            Self::Remove => 4,
-        }
-    }
-}
+pub type PlaylistMenuButton = PlaylistMenuKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistFooterButton {

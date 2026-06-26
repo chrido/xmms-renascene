@@ -3,9 +3,10 @@ use cairo::Context;
 use super::core::{
     blit_surface_rect, render_text, set_rgb, surface_from_xpm, RenderError, RenderPass,
 };
+use crate::playlist::PlaylistMenuKind;
 use crate::skin::layout::{
-    playlist_window_height, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
-    PLAYLIST_WIDTH_STEP,
+    playlist_window_height, SkinRect, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH, PLAYLIST_WIDTH_STEP,
 };
 use crate::skin::{DefaultSkin, SkinPixmapKind};
 
@@ -35,23 +36,7 @@ pub struct PlaylistRowsRenderState {
     pub height: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistMenuRenderKind {
-    Add,
-    Remove,
-    Select,
-    Misc,
-    List,
-}
-
-impl PlaylistMenuRenderKind {
-    pub fn item_count(self) -> usize {
-        match self {
-            Self::Add | Self::Select | Self::Misc | Self::List => 3,
-            Self::Remove => 4,
-        }
-    }
-}
+pub type PlaylistMenuRenderKind = PlaylistMenuKind;
 
 pub fn render_playlist_frame(
     cr: &Context,
@@ -73,23 +58,19 @@ pub fn render_playlist_frame(
     let pledit = surface_from_xpm(pledit)?;
 
     if shaded {
-        blit_surface_rect(cr, &pledit, 72, 42, 0, 0, 25, 14)?;
+        blit_surface_rect(cr, &pledit, SkinRect::new(72, 42, 25, 14), (0, 0))?;
         let mut x = 25;
         let right_cap_x = width - 50;
         while x < right_cap_x {
             let tile_width = (right_cap_x - x).min(25);
-            blit_surface_rect(cr, &pledit, 72, 57, x, 0, tile_width, 14)?;
+            blit_surface_rect(cr, &pledit, SkinRect::new(72, 57, tile_width, 14), (x, 0))?;
             x += tile_width;
         }
         blit_surface_rect(
             cr,
             &pledit,
-            99,
-            if focused { 42 } else { 57 },
-            width - 50,
-            0,
-            50,
-            14,
+            SkinRect::new(99, if focused { 42 } else { 57 }, 50, 14),
+            (width - 50, 0),
         )?;
         draw_playlist_shaded_info(cr, skin, width, shaded_info.unwrap_or(""))?;
         return Ok(true);
@@ -106,72 +87,86 @@ pub fn render_playlist_frame(
     cr.rectangle(0.0, 0.0, f64::from(width), f64::from(height));
     cr.fill()?;
 
-    blit_surface_rect(cr, &pledit, 0, title_y, 0, 0, 25, 20)?;
+    blit_surface_rect(cr, &pledit, SkinRect::new(0, title_y, 25, 20), (0, 0))?;
     let mut count = (width - 150) / 25;
     for i in 0..count / 2 {
-        blit_surface_rect(cr, &pledit, 127, title_y, (i * 25) + 25, 0, 25, 20)?;
         blit_surface_rect(
             cr,
             &pledit,
-            127,
-            title_y,
-            (i * 25) + (width / 2) + 50,
-            0,
-            25,
-            20,
+            SkinRect::new(127, title_y, 25, 20),
+            ((i * 25) + 25, 0),
+        )?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            SkinRect::new(127, title_y, 25, 20),
+            ((i * 25) + (width / 2) + 50, 0),
         )?;
     }
     if count & 1 == 1 {
         blit_surface_rect(
             cr,
             &pledit,
-            127,
-            title_y,
-            ((count / 2) * 25) + 25,
-            0,
-            12,
-            20,
+            SkinRect::new(127, title_y, 12, 20),
+            (((count / 2) * 25) + 25, 0),
         )?;
         blit_surface_rect(
             cr,
             &pledit,
-            127,
-            title_y,
-            (width / 2) + ((count / 2) * 25) + 50,
-            0,
-            13,
-            20,
+            SkinRect::new(127, title_y, 13, 20),
+            ((width / 2) + ((count / 2) * 25) + 50, 0),
         )?;
     }
-    blit_surface_rect(cr, &pledit, 26, title_y, (width / 2) - 50, 0, 100, 20)?;
-    blit_surface_rect(cr, &pledit, 153, title_y, width - 25, 0, 25, 20)?;
+    blit_surface_rect(
+        cr,
+        &pledit,
+        SkinRect::new(26, title_y, 100, 20),
+        ((width / 2) - 50, 0),
+    )?;
+    blit_surface_rect(
+        cr,
+        &pledit,
+        SkinRect::new(153, title_y, 25, 20),
+        (width - 25, 0),
+    )?;
 
     for i in 0..(height - 58) / 29 {
         let ydest = (i * 29) + 20;
-        blit_surface_rect(cr, &pledit, 0, 42, 0, ydest, 12, 29)?;
-        blit_surface_rect(cr, &pledit, 32, 42, width - 19, ydest, 19, 29)?;
+        blit_surface_rect(cr, &pledit, SkinRect::new(0, 42, 12, 29), (0, ydest))?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            SkinRect::new(32, 42, 19, 29),
+            (width - 19, ydest),
+        )?;
     }
 
-    blit_surface_rect(cr, &pledit, 0, 72, 0, height - 38, 125, 38)?;
+    blit_surface_rect(cr, &pledit, SkinRect::new(0, 72, 125, 38), (0, height - 38))?;
 
     count = (width - PLAYLIST_MIN_WIDTH) / PLAYLIST_WIDTH_STEP;
     if count >= 3 {
         count -= 3;
-        blit_surface_rect(cr, &pledit, 205, 0, width - 225, height - 38, 75, 38)?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            SkinRect::new(205, 0, 75, 38),
+            (width - 225, height - 38),
+        )?;
     }
     for i in 0..count {
         blit_surface_rect(
             cr,
             &pledit,
-            179,
-            0,
-            (i * PLAYLIST_WIDTH_STEP) + 125,
-            height - 38,
-            PLAYLIST_WIDTH_STEP,
-            38,
+            SkinRect::new(179, 0, PLAYLIST_WIDTH_STEP, 38),
+            ((i * PLAYLIST_WIDTH_STEP) + 125, height - 38),
         )?;
     }
-    blit_surface_rect(cr, &pledit, 126, 72, width - 150, height - 38, 150, 38)?;
+    blit_surface_rect(
+        cr,
+        &pledit,
+        SkinRect::new(126, 72, 150, 38),
+        (width - 150, height - 38),
+    )?;
 
     draw_playlist_footer_info(cr, skin, width, height, footer_info.unwrap_or(""))?;
     draw_playlist_footer_time(
@@ -274,12 +269,13 @@ pub fn render_playlist_rows(
                 blit_surface_rect(
                     cr,
                     &pledit,
-                    if state.scrollbar_dragging { 52 } else { 61 },
-                    53,
-                    width - 15,
-                    thumb_y,
-                    8,
-                    thumb_h,
+                    SkinRect::new(
+                        if state.scrollbar_dragging { 52 } else { 61 },
+                        53,
+                        8,
+                        thumb_h,
+                    ),
+                    (width - 15, thumb_y),
                 )?;
             }
         }
@@ -445,18 +441,19 @@ pub fn render_playlist_menu(
         } else {
             (item.normal_x, item.normal_y)
         };
-        blit_surface_rect(cr, &pledit, src_x, src_y, 3, idx as i32 * 18, 22, 18)?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            SkinRect::new(src_x, src_y, 22, 18),
+            (3, idx as i32 * 18),
+        )?;
     }
     let (border_x, border_y) = playlist_menu_border_source(state.kind);
     blit_surface_rect(
         cr,
         &pledit,
-        border_x,
-        border_y,
-        0,
-        0,
-        3,
-        items.len() as i32 * 18,
+        SkinRect::new(border_x, border_y, 3, items.len() as i32 * 18),
+        (0, 0),
     )
 }
 

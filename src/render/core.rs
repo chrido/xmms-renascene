@@ -2,7 +2,7 @@ use std::fmt;
 
 use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
 
-use crate::skin::layout::SpriteSpec;
+use crate::skin::layout::{SkinRect, SpriteSpec};
 use crate::skin::widget::TextBox;
 use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
@@ -77,50 +77,42 @@ pub fn surface_from_xpm(image: &XpmImage) -> Result<ImageSurface, RenderError> {
 pub fn blit_surface_rect(
     cr: &Context,
     source: &ImageSurface,
-    mut xsrc: i32,
-    mut ysrc: i32,
-    mut xdest: i32,
-    mut ydest: i32,
-    mut width: i32,
-    mut height: i32,
+    mut source_rect: SkinRect,
+    mut dest: (i32, i32),
 ) -> Result<bool, RenderError> {
-    if xsrc < 0 {
-        xdest -= xsrc;
-        width += xsrc;
-        xsrc = 0;
+    if source_rect.x < 0 {
+        dest.0 -= source_rect.x;
+        source_rect.width += source_rect.x;
+        source_rect.x = 0;
     }
-    if ysrc < 0 {
-        ydest -= ysrc;
-        height += ysrc;
-        ysrc = 0;
+    if source_rect.y < 0 {
+        dest.1 -= source_rect.y;
+        source_rect.height += source_rect.y;
+        source_rect.y = 0;
     }
 
     let surface_width = source.width();
     let surface_height = source.height();
-    if xsrc >= surface_width || ysrc >= surface_height {
+    let Some(source_rect) = source_rect.clamp_to(surface_width, surface_height) else {
         return Ok(false);
-    }
-    if xsrc + width > surface_width {
-        width = surface_width - xsrc;
-    }
-    if ysrc + height > surface_height {
-        height = surface_height - ysrc;
-    }
-    if width <= 0 || height <= 0 {
-        return Ok(false);
-    }
+    };
 
-    let source_rect = source.create_for_rectangle(Rectangle::new(
-        xsrc as f64,
-        ysrc as f64,
-        width as f64,
-        height as f64,
+    let cairo_source_rect = source.create_for_rectangle(Rectangle::new(
+        source_rect.x as f64,
+        source_rect.y as f64,
+        source_rect.width as f64,
+        source_rect.height as f64,
     ))?;
 
     cr.save()?;
-    cr.rectangle(xdest as f64, ydest as f64, width as f64, height as f64);
+    cr.rectangle(
+        dest.0 as f64,
+        dest.1 as f64,
+        source_rect.width as f64,
+        source_rect.height as f64,
+    );
     cr.clip();
-    cr.set_source_surface(&source_rect, xdest as f64, ydest as f64)?;
+    cr.set_source_surface(&cairo_source_rect, dest.0 as f64, dest.1 as f64)?;
     let pattern = cr.source();
     pattern.set_extend(Extend::Pad);
     pattern.set_filter(Filter::Nearest);
@@ -290,17 +282,7 @@ pub(super) fn render_sprite_spec(
     skin: &DefaultSkin,
     spec: SpriteSpec,
 ) -> Result<bool, RenderError> {
-    blit_skin_rect(
-        cr,
-        skin,
-        spec.kind,
-        spec.source.x,
-        spec.source.y,
-        spec.dest.x,
-        spec.dest.y,
-        spec.source.width,
-        spec.source.height,
-    )
+    blit_skin_rect(cr, skin, spec.kind, spec.source, (spec.dest.x, spec.dest.y))
 }
 
 pub(super) fn render_surface_sprite_spec(
@@ -308,16 +290,7 @@ pub(super) fn render_surface_sprite_spec(
     source: &ImageSurface,
     spec: SpriteSpec,
 ) -> Result<bool, RenderError> {
-    blit_surface_rect(
-        cr,
-        source,
-        spec.source.x,
-        spec.source.y,
-        spec.dest.x,
-        spec.dest.y,
-        spec.source.width,
-        spec.source.height,
-    )
+    blit_surface_rect(cr, source, spec.source, (spec.dest.x, spec.dest.y))
 }
 
 pub(super) struct SliderRenderSpec {
@@ -345,23 +318,28 @@ pub(super) fn render_horizontal_slider(
         cr,
         skin,
         spec.kind,
-        spec.frame_offset,
-        spec.frame * spec.frame_height,
-        spec.x,
-        spec.y,
-        spec.width,
-        spec.height,
+        SkinRect::new(
+            spec.frame_offset,
+            spec.frame * spec.frame_height,
+            spec.width,
+            spec.height,
+        ),
+        (spec.x, spec.y),
     )?;
     rendered |= blit_skin_rect(
         cr,
         skin,
         spec.kind,
-        spec.knob_source_x,
-        spec.knob_source_y,
-        spec.x + spec.position,
-        spec.y + ((spec.height - spec.knob_height) / 2),
-        spec.knob_width,
-        spec.knob_height,
+        SkinRect::new(
+            spec.knob_source_x,
+            spec.knob_source_y,
+            spec.knob_width,
+            spec.knob_height,
+        ),
+        (
+            spec.x + spec.position,
+            spec.y + ((spec.height - spec.knob_height) / 2),
+        ),
     )?;
     Ok(rendered)
 }
@@ -370,18 +348,14 @@ pub(super) fn blit_skin_rect(
     cr: &Context,
     skin: &DefaultSkin,
     kind: SkinPixmapKind,
-    xsrc: i32,
-    ysrc: i32,
-    xdest: i32,
-    ydest: i32,
-    width: i32,
-    height: i32,
+    source_rect: SkinRect,
+    dest: (i32, i32),
 ) -> Result<bool, RenderError> {
     let Some(image) = skin.get(kind) else {
         return Ok(false);
     };
     let surface = surface_from_xpm(image)?;
-    blit_surface_rect(cr, &surface, xsrc, ysrc, xdest, ydest, width, height)
+    blit_surface_rect(cr, &surface, source_rect, dest)
 }
 
 pub(super) fn render_text(
@@ -415,12 +389,8 @@ pub(super) fn render_text(
         blit_surface_rect(
             cr,
             &surface,
-            sx,
-            sy,
-            dx,
-            ydest,
-            TextBox::CHAR_WIDTH,
-            TextBox::CHAR_HEIGHT,
+            SkinRect::new(sx, sy, TextBox::CHAR_WIDTH, TextBox::CHAR_HEIGHT),
+            (dx, ydest),
         )?;
     }
     cr.restore()?;

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 
 use crate::app_state::AppState;
+use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
 use crate::config::{Config, TimerMode};
 use crate::equalizer::{
     default_equalizer_presets, find_preset, import_winamp_eqf, load_preset_store,
@@ -23,10 +24,11 @@ use crate::mpris::{
     MprisMetadata, MprisPlayerProperties, MprisRootProperties,
 };
 use crate::player::{
-    equalizer_position_to_db, group_output_devices, list_gstreamer_output_devices,
-    GStreamerBackend, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
-    PlayerState,
+    group_output_devices, list_gstreamer_output_devices, GStreamerBackend, OutputDevice,
+    OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlayerState,
 };
+pub use crate::playlist::PlaylistMenuKind;
+
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
     blit_surface_rect, docked_panel_size, equalizer_window_height, main_window_height,
@@ -688,6 +690,44 @@ fn preview_state_from_options(options: PreviewOptions) -> Result<MainWindowUiSta
     preview_state_from_app_state(AppState::default(), options)
 }
 
+pub fn apply_preview_options_to_config(
+    config: &mut Config,
+    options: &PreviewOptions,
+) -> Result<(), String> {
+    if options.show_playlist || options.playlist_size.is_some() {
+        config.playlist_visible = true;
+    }
+    if options.show_equalizer {
+        config.equalizer_visible = true;
+    }
+    if let Some(shaded) = options.main_shaded {
+        config.main_shaded = shaded;
+    }
+    if let Some(shaded) = options.playlist_shaded {
+        config.playlist_shaded = shaded;
+    }
+    if let Some(shaded) = options.equalizer_shaded {
+        config.equalizer_shaded = shaded;
+    }
+    if let Some(detached) = options.playlist_detached {
+        config.playlist_detached = detached;
+    }
+    if let Some(detached) = options.equalizer_detached {
+        config.equalizer_detached = detached;
+    }
+    if let Some(skin_path) = options.skin_path.as_ref() {
+        config.skin = Some(skin_path.clone());
+    }
+    if let Some(scale_factor) = options.scale_factor.as_ref() {
+        config.scale_factor = scale_factor
+            .parse::<f64>()
+            .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
+            .clamp(1.0, 5.0);
+        config.doublesize = config.scale_factor > 1.0;
+    }
+    Ok(())
+}
+
 fn preview_state_from_app_state(
     mut app_state: AppState,
     options: PreviewOptions,
@@ -695,37 +735,7 @@ fn preview_state_from_app_state(
     if options.reset {
         app_state = AppState::default();
     }
-    if options.show_playlist || options.playlist_size.is_some() {
-        app_state.config.playlist_visible = true;
-    }
-    if options.show_equalizer {
-        app_state.config.equalizer_visible = true;
-    }
-    if let Some(shaded) = options.main_shaded {
-        app_state.config.main_shaded = shaded;
-    }
-    if let Some(shaded) = options.playlist_shaded {
-        app_state.config.playlist_shaded = shaded;
-    }
-    if let Some(shaded) = options.equalizer_shaded {
-        app_state.config.equalizer_shaded = shaded;
-    }
-    if let Some(detached) = options.playlist_detached {
-        app_state.config.playlist_detached = detached;
-    }
-    if let Some(detached) = options.equalizer_detached {
-        app_state.config.equalizer_detached = detached;
-    }
-    if let Some(skin_path) = options.skin_path.as_ref() {
-        app_state.config.skin = Some(skin_path.clone());
-    }
-    if let Some(scale_factor) = options.scale_factor.as_ref() {
-        app_state.config.scale_factor = scale_factor
-            .parse::<f64>()
-            .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
-            .clamp(1.0, 5.0);
-        app_state.config.doublesize = app_state.config.scale_factor > 1.0;
-    }
+    apply_preview_options_to_config(&mut app_state.config, &options)?;
 
     let mut state = MainWindowUiState::from_app_state(app_state);
     if let Some((width, height)) = options.playlist_size {
@@ -4842,8 +4852,13 @@ fn draw_skin_editor_canvas(cr: &cairo::Context, state: &MainWindowUiState) -> Re
 
         if let Some(image) = state.active_skin().get(slot.kind) {
             let surface = surface_from_xpm(image).map_err(|err| err.to_string())?;
-            blit_surface_rect(cr, &surface, 0, 0, slot.x, slot.y, slot.width, slot.height)
-                .map_err(|err| err.to_string())?;
+            blit_surface_rect(
+                cr,
+                &surface,
+                SkinRect::new(0, 0, slot.width, slot.height),
+                (slot.x, slot.y),
+            )
+            .map_err(|err| err.to_string())?;
         }
     }
 
@@ -5380,15 +5395,6 @@ impl PanelPlacement {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistMenuKind {
-    Add,
-    Remove,
-    Select,
-    Misc,
-    List,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum PlaylistMenu {
     #[default]
@@ -5543,17 +5549,7 @@ pub enum EqualizerPresetAction {
 
 impl PlaylistMenuKind {
     fn render_kind(self) -> PlaylistMenuRenderKind {
-        match self {
-            Self::Add => PlaylistMenuRenderKind::Add,
-            Self::Remove => PlaylistMenuRenderKind::Remove,
-            Self::Select => PlaylistMenuRenderKind::Select,
-            Self::Misc => PlaylistMenuRenderKind::Misc,
-            Self::List => PlaylistMenuRenderKind::List,
-        }
-    }
-
-    fn item_count(self) -> usize {
-        self.render_kind().item_count()
+        self
     }
 }
 
@@ -6762,7 +6758,7 @@ struct EqualizerUiState {
     pointer: EqualizerPointer,
     keyboard_slider: Option<EqualizerSlider>,
     preamp_position: i32,
-    band_positions: [i32; 10],
+    band_positions: EqualizerBandPositions,
     preset_dir: PathBuf,
     presets: Vec<EqualizerPreset>,
     auto_presets: Vec<EqualizerPreset>,
@@ -8567,7 +8563,7 @@ impl MainWindowUiState {
                 true
             }
             PlaybackControlEvent::Next => {
-                if self.app_state.playlist.next() {
+                if self.app_state.playlist.advance() {
                     self.start_current_playlist_playback_from_beginning();
                 }
                 self.position_position = 0;
@@ -8933,11 +8929,11 @@ impl MainWindowUiState {
             .map(|position| equalizer_position_to_db(*position))
     }
 
-    pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> [f64; 10] {
+    pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> EqualizerBandDb {
         if self.equalizer.active {
             self.equalizer.band_positions.map(equalizer_position_to_db)
         } else {
-            [0.0; 10]
+            [0.0; crate::audio_model::EQUALIZER_BANDS]
         }
     }
 

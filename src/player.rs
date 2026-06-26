@@ -2,8 +2,10 @@ use gst::prelude::*;
 use gstreamer as gst;
 use std::cell::{Cell, RefCell};
 
-const SPECTRUM_BANDS: usize = 75;
-const EQUALIZER_BANDS: usize = 10;
+use crate::audio_model::{
+    equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions, SpectrumData,
+    EQUALIZER_BANDS, SPECTRUM_BANDS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
@@ -21,7 +23,7 @@ pub struct Player {
     channels: i32,
     volume: i32,
     balance: i32,
-    vis_data: [f32; 75],
+    vis_data: SpectrumData,
     vis_data_valid: bool,
 }
 
@@ -67,7 +69,7 @@ pub enum PlaybackEvent {
     DurationChanged(Option<i64>),
     Tags(PlaybackTags),
     StreamInfo(StreamInfo),
-    Spectrum([f32; SPECTRUM_BANDS]),
+    Spectrum(SpectrumData),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -271,7 +273,7 @@ impl GStreamerBackend {
         amplification_to_db(f64::from(self.preamp.property::<f32>("amplification")))
     }
 
-    pub fn set_equalizer_bands_db(&self, bands: [f64; EQUALIZER_BANDS]) {
+    pub fn set_equalizer_bands_db(&self, bands: EqualizerBandDb) {
         for (index, db) in bands.into_iter().enumerate() {
             let _ = self.set_equalizer_band_db(index, db);
         }
@@ -281,7 +283,7 @@ impl GStreamerBackend {
         &self,
         active: bool,
         preamp_position: i32,
-        positions: [i32; EQUALIZER_BANDS],
+        positions: EqualizerBandPositions,
     ) {
         self.set_equalizer_preamp_db(if active {
             equalizer_position_to_db(preamp_position)
@@ -405,7 +407,7 @@ impl Default for Player {
             channels: 0,
             volume: 100,
             balance: 0,
-            vis_data: [0.0; 75],
+            vis_data: [0.0; SPECTRUM_BANDS],
             vis_data_valid: false,
         }
     }
@@ -489,7 +491,7 @@ impl Player {
         self.channels
     }
 
-    pub fn set_visualization_data(&mut self, data: [f32; SPECTRUM_BANDS]) {
+    pub fn set_visualization_data(&mut self, data: SpectrumData) {
         self.vis_data = data;
         self.vis_data_valid = true;
     }
@@ -499,7 +501,7 @@ impl Player {
         self.vis_data_valid = false;
     }
 
-    pub fn visualization_data(&self) -> &[f32; SPECTRUM_BANDS] {
+    pub fn visualization_data(&self) -> &SpectrumData {
         &self.vis_data
     }
 
@@ -543,7 +545,7 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
         sink.set_property("device", device);
     }
 
-    spectrum.set_property("bands", 75u32);
+    spectrum.set_property("bands", SPECTRUM_BANDS as u32);
     spectrum.set_property("threshold", -80i32);
     spectrum.set_property("post-messages", true);
     spectrum.set_property("interval", 50_000_000u64);
@@ -625,10 +627,6 @@ fn equalizer_band_property(band: usize) -> Result<&'static str, String> {
     }
 }
 
-pub fn equalizer_position_to_db(position: i32) -> f64 {
-    (50 - position.clamp(0, 100)) as f64 * 20.0 / 50.0
-}
-
 fn db_to_amplification(db: f64) -> f64 {
     10.0_f64.powf(db / 20.0)
 }
@@ -702,7 +700,7 @@ where
         .filter(|value| !value.is_empty())
 }
 
-fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<[f32; SPECTRUM_BANDS]> {
+fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<SpectrumData> {
     if structure.name() != "spectrum" {
         return None;
     }
@@ -716,7 +714,7 @@ fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<[f32; SPECTR
     None
 }
 
-fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<[f32; SPECTRUM_BANDS]> {
+fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<SpectrumData> {
     let mut bands = [0.0; SPECTRUM_BANDS];
     for (index, value) in values.iter().take(SPECTRUM_BANDS).enumerate() {
         let magnitude = value
@@ -732,7 +730,7 @@ fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<[f32; SPECTRU
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
     use std::sync::{Mutex, MutexGuard};
 
     static GST_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -756,7 +754,7 @@ mod tests {
         path_to_uri(&path)
     }
 
-    fn path_to_uri(path: &PathBuf) -> String {
+    fn path_to_uri(path: &Path) -> String {
         format!("file://{}", path.to_string_lossy())
     }
 
