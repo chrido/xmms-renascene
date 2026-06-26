@@ -3,7 +3,7 @@
 //! The controller owns application state transitions. It remains free of GTK
 //! widgets, platform windows, and concrete backend objects.
 
-use crate::app::command::AppCommand;
+use crate::app::command::{AppCommand, AudioCommand, PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app_state::AppState;
@@ -33,14 +33,29 @@ impl AppController {
 
     pub fn handle_command(&mut self, command: AppCommand) -> Vec<AppEffect> {
         match command {
-            AppCommand::Play => self.play(),
-            AppCommand::Pause => self.pause(),
-            AppCommand::TogglePause => self.toggle_pause(),
-            AppCommand::Stop => self.stop(),
-            AppCommand::PreviousTrack => self.previous_track(),
-            AppCommand::NextTrack => self.next_track(),
-            AppCommand::SeekToMs(position_ms) => self.seek_to(position_ms),
-            AppCommand::SetVolume(volume) => {
+            AppCommand::Player(command) => self.handle_player_command(command),
+            AppCommand::Audio(command) => self.handle_audio_command(command),
+            AppCommand::Playlist(command) => self.handle_playlist_command(command),
+            AppCommand::Equalizer(_command) => Vec::new(),
+            AppCommand::Panel(command) => self.handle_panel_command(command),
+        }
+    }
+
+    fn handle_player_command(&mut self, command: PlayerCommand) -> Vec<AppEffect> {
+        match command {
+            PlayerCommand::Play => self.play(),
+            PlayerCommand::Pause => self.pause(),
+            PlayerCommand::TogglePause => self.toggle_pause(),
+            PlayerCommand::Stop => self.stop(),
+            PlayerCommand::PreviousTrack => self.previous_track(),
+            PlayerCommand::NextTrack => self.next_track(),
+            PlayerCommand::SeekToMs(position_ms) => self.seek_to(position_ms),
+        }
+    }
+
+    fn handle_audio_command(&mut self, command: AudioCommand) -> Vec<AppEffect> {
+        match command {
+            AudioCommand::SetVolume(volume) => {
                 self.state.player.set_volume(volume);
                 vec![
                     AppEffect::SetBackendVolume(self.state.player.volume()),
@@ -48,7 +63,7 @@ impl AppController {
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
             }
-            AppCommand::SetBalance(balance) => {
+            AudioCommand::SetBalance(balance) => {
                 self.state.player.set_balance(balance);
                 vec![
                     AppEffect::SetBackendBalance(self.state.player.balance()),
@@ -56,104 +71,128 @@ impl AppController {
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
             }
-            AppCommand::ToggleMainShade => {
-                self.state.config.main_shaded = !self.state.config.main_shaded;
-                self.panel_changed_effects()
+        }
+    }
+
+    fn handle_playlist_command(&mut self, command: PlaylistCommand) -> Vec<AppEffect> {
+        match command {
+            PlaylistCommand::ToggleShuffle => {
+                self.state.playlist.set_shuffle(!self.state.playlist.shuffle());
+                self.playlist_changed_effects()
             }
-            AppCommand::SetMainShade(shaded) => {
-                self.state.config.main_shaded = shaded;
-                self.panel_changed_effects()
+            PlaylistCommand::ToggleRepeat => {
+                self.state.playlist.set_repeat(!self.state.playlist.repeat());
+                self.playlist_changed_effects()
             }
-            AppCommand::TogglePlaylistVisibility => {
-                self.state.config.playlist_visible = !self.state.config.playlist_visible;
-                self.panel_changed_effects()
+            PlaylistCommand::ToggleNoAdvance => {
+                self.state
+                    .playlist
+                    .set_no_advance(!self.state.playlist.no_advance());
+                self.playlist_changed_effects()
             }
-            AppCommand::SetPlaylistVisibility(visible) => {
-                self.state.config.playlist_visible = visible;
-                self.panel_changed_effects()
-            }
-            AppCommand::TogglePlaylistShade => {
-                self.state.config.playlist_shaded = !self.state.config.playlist_shaded;
-                self.panel_changed_effects()
-            }
-            AppCommand::SetPlaylistShade(shaded) => {
-                self.state.config.playlist_shaded = shaded;
-                self.panel_changed_effects()
-            }
-            AppCommand::TogglePlaylistDetached => {
-                self.state.config.playlist_detached = !self.state.config.playlist_detached;
-                self.panel_changed_effects()
-            }
-            AppCommand::SetPlaylistDetached(detached) => {
-                self.state.config.playlist_detached = detached;
-                self.panel_changed_effects()
-            }
-            AppCommand::ToggleEqualizerVisibility => {
-                self.state.config.equalizer_visible = !self.state.config.equalizer_visible;
-                self.panel_changed_effects()
-            }
-            AppCommand::SetEqualizerVisibility(visible) => {
-                self.state.config.equalizer_visible = visible;
-                self.panel_changed_effects()
-            }
-            AppCommand::ToggleEqualizerShade => {
-                self.state.config.equalizer_shaded = !self.state.config.equalizer_shaded;
-                self.panel_changed_effects()
-            }
-            AppCommand::SetEqualizerShade(shaded) => {
-                self.state.config.equalizer_shaded = shaded;
-                self.panel_changed_effects()
-            }
-            AppCommand::ToggleEqualizerDetached => {
-                self.state.config.equalizer_detached = !self.state.config.equalizer_detached;
-                self.panel_changed_effects()
-            }
-            AppCommand::SetEqualizerDetached(detached) => {
-                self.state.config.equalizer_detached = detached;
-                self.panel_changed_effects()
-            }
-            AppCommand::ExecutePlaylistMenu { kind, index } => self.execute_playlist_menu(kind, index),
-            AppCommand::SortPlaylist(key) => {
+            PlaylistCommand::SetSize { .. } => Vec::new(),
+            PlaylistCommand::ExecuteMenu { kind, index } => self.execute_playlist_menu(kind, index),
+            PlaylistCommand::Sort(key) => {
                 self.state.playlist.sort_by(key);
                 self.playlist_changed_effects()
             }
-            AppCommand::ReversePlaylist => {
+            PlaylistCommand::Reverse => {
                 self.state.playlist.reverse();
                 self.playlist_changed_effects()
             }
-            AppCommand::RandomizePlaylist => {
+            PlaylistCommand::Randomize => {
                 self.state.playlist.randomize();
                 self.playlist_changed_effects()
             }
-            AppCommand::AddPlaylistUris(uris) => {
+            PlaylistCommand::AddUris(uris) => {
                 for uri in uris {
                     self.state.playlist.add_uri(uri);
                 }
                 self.playlist_changed_effects()
             }
-            AppCommand::AddPlaylistFiles(paths) => {
+            PlaylistCommand::AddFiles(paths) => {
                 for path in paths {
                     self.state.playlist.add_path(path);
                 }
                 self.playlist_changed_effects()
             }
-            AppCommand::ClearPlaylist => {
+            PlaylistCommand::Clear => {
                 self.state.playlist.clear();
                 self.playlist_changed_effects()
             }
-            AppCommand::RemoveSelectedPlaylistEntries => {
+            PlaylistCommand::RemoveSelectedOrCurrent => {
                 self.state.playlist.remove_selected_or_current();
                 self.playlist_changed_effects()
             }
-            AppCommand::SelectAllPlaylistEntries => {
+            PlaylistCommand::SelectAll => {
                 self.state.playlist.select_all(true);
                 self.playlist_changed_effects()
             }
-            AppCommand::InvertPlaylistSelection => {
+            PlaylistCommand::InvertSelection => {
                 self.state.playlist.invert_selection();
                 self.playlist_changed_effects()
             }
-            _ => Vec::new(),
+        }
+    }
+
+    fn handle_panel_command(&mut self, command: PanelCommand) -> Vec<AppEffect> {
+        match command {
+            PanelCommand::ToggleMainShade => {
+                self.state.config.main_shaded = !self.state.config.main_shaded;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetMainShade(shaded) => {
+                self.state.config.main_shaded = shaded;
+                self.panel_changed_effects()
+            }
+            PanelCommand::TogglePlaylistVisibility => {
+                self.state.config.playlist_visible = !self.state.config.playlist_visible;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetPlaylistVisibility(visible) => {
+                self.state.config.playlist_visible = visible;
+                self.panel_changed_effects()
+            }
+            PanelCommand::TogglePlaylistShade => {
+                self.state.config.playlist_shaded = !self.state.config.playlist_shaded;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetPlaylistShade(shaded) => {
+                self.state.config.playlist_shaded = shaded;
+                self.panel_changed_effects()
+            }
+            PanelCommand::TogglePlaylistDetached => {
+                self.state.config.playlist_detached = !self.state.config.playlist_detached;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetPlaylistDetached(detached) => {
+                self.state.config.playlist_detached = detached;
+                self.panel_changed_effects()
+            }
+            PanelCommand::ToggleEqualizerVisibility => {
+                self.state.config.equalizer_visible = !self.state.config.equalizer_visible;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetEqualizerVisibility(visible) => {
+                self.state.config.equalizer_visible = visible;
+                self.panel_changed_effects()
+            }
+            PanelCommand::ToggleEqualizerShade => {
+                self.state.config.equalizer_shaded = !self.state.config.equalizer_shaded;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetEqualizerShade(shaded) => {
+                self.state.config.equalizer_shaded = shaded;
+                self.panel_changed_effects()
+            }
+            PanelCommand::ToggleEqualizerDetached => {
+                self.state.config.equalizer_detached = !self.state.config.equalizer_detached;
+                self.panel_changed_effects()
+            }
+            PanelCommand::SetEqualizerDetached(detached) => {
+                self.state.config.equalizer_detached = detached;
+                self.panel_changed_effects()
+            }
         }
     }
 
@@ -305,7 +344,7 @@ mod tests {
     fn controller_volume_command_clamps_and_returns_backend_effects() {
         let mut controller = AppController::new(AppState::default());
 
-        let effects = controller.handle_command(AppCommand::SetVolume(150));
+        let effects = controller.handle_command(AudioCommand::SetVolume(150).into());
 
         assert_eq!(controller.state().player.volume(), 100);
         assert_eq!(effects[0], AppEffect::SetBackendVolume(100));
@@ -317,7 +356,7 @@ mod tests {
     fn controller_balance_command_clamps_and_returns_backend_effects() {
         let mut controller = AppController::new(AppState::default());
 
-        let effects = controller.handle_command(AppCommand::SetBalance(-150));
+        let effects = controller.handle_command(AudioCommand::SetBalance(-150).into());
 
         assert_eq!(controller.state().player.balance(), -100);
         assert_eq!(effects[0], AppEffect::SetBackendBalance(-100));
@@ -331,7 +370,7 @@ mod tests {
         state.playlist.add_uri("file:///tmp/one.ogg");
         let mut controller = AppController::new(state);
 
-        let effects = controller.handle_command(AppCommand::Play);
+        let effects = controller.handle_command(PlayerCommand::Play.into());
 
         assert_eq!(controller.state().playlist.position(), Some(0));
         assert_eq!(controller.state().player.state(), PlayerState::Playing);
@@ -349,7 +388,7 @@ mod tests {
         state.playlist.set_position(0);
         let mut controller = AppController::new(state);
 
-        let effects = controller.handle_command(AppCommand::NextTrack);
+        let effects = controller.handle_command(PlayerCommand::NextTrack.into());
 
         assert_eq!(controller.state().playlist.position(), Some(1));
         assert_eq!(controller.state().player.state(), PlayerState::Playing);
@@ -364,13 +403,13 @@ mod tests {
         let mut state = AppState::default();
         state.playlist.add_uri("file:///tmp/one.ogg");
         let mut controller = AppController::new(state);
-        controller.handle_command(AppCommand::Play);
+        controller.handle_command(PlayerCommand::Play.into());
 
-        let pause_effects = controller.handle_command(AppCommand::Pause);
+        let pause_effects = controller.handle_command(PlayerCommand::Pause.into());
         assert_eq!(controller.state().player.state(), PlayerState::Paused);
         assert!(pause_effects.contains(&AppEffect::PausePlayback));
 
-        let resume_effects = controller.handle_command(AppCommand::TogglePause);
+        let resume_effects = controller.handle_command(PlayerCommand::TogglePause.into());
         assert_eq!(controller.state().player.state(), PlayerState::Playing);
         assert!(resume_effects.contains(&AppEffect::ResumePlayback));
     }
@@ -382,10 +421,13 @@ mod tests {
         state.playlist.add_uri("file:///tmp/two.ogg");
         let mut controller = AppController::new(state);
 
-        let effects = controller.handle_command(AppCommand::ExecutePlaylistMenu {
-            kind: crate::playlist::PlaylistMenuKind::Select,
-            index: 0,
-        });
+        let effects = controller.handle_command(
+            PlaylistCommand::ExecuteMenu {
+                kind: crate::playlist::PlaylistMenuKind::Select,
+                index: 0,
+            }
+            .into(),
+        );
 
         assert!(controller.state().playlist.entries().iter().all(|entry| entry.selected));
         assert!(effects.contains(&AppEffect::SaveConfig));
@@ -399,7 +441,9 @@ mod tests {
         state.playlist.set_position(0);
         let mut controller = AppController::new(state);
 
-        controller.handle_command(AppCommand::AddPlaylistUris(vec!["file:///tmp/two.ogg".to_string()]));
+        controller.handle_command(
+            PlaylistCommand::AddUris(vec!["file:///tmp/two.ogg".to_string()]).into(),
+        );
 
         assert_eq!(controller.state().playlist.position(), Some(0));
         assert_eq!(controller.state().playlist.len(), 2);
@@ -409,9 +453,9 @@ mod tests {
     fn panel_commands_update_config_and_request_redraw() {
         let mut controller = AppController::new(AppState::default());
 
-        let effects = controller.handle_command(AppCommand::SetPlaylistVisibility(true));
-        controller.handle_command(AppCommand::ToggleEqualizerShade);
-        controller.handle_command(AppCommand::SetPlaylistDetached(true));
+        let effects = controller.handle_command(PanelCommand::SetPlaylistVisibility(true).into());
+        controller.handle_command(PanelCommand::ToggleEqualizerShade.into());
+        controller.handle_command(PanelCommand::SetPlaylistDetached(true).into());
 
         assert!(controller.state().config.playlist_visible);
         assert!(controller.state().config.equalizer_shaded);

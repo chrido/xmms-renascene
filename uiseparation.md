@@ -127,11 +127,11 @@ GTK code should own:
 UI event handlers should translate frontend events into command values, for example:
 
 ```rust
-AppCommand::Play
-AppCommand::Pause
-AppCommand::SetVolume(80)
-AppCommand::TogglePlaylistVisibility
-AppCommand::ExecutePlaylistMenu { kind, index }
+AppCommand::Player(PlayerCommand::Play)
+AppCommand::Player(PlayerCommand::Pause)
+AppCommand::Audio(AudioCommand::SetVolume(80))
+AppCommand::Panel(PanelCommand::TogglePlaylistVisibility)
+AppCommand::Playlist(PlaylistCommand::ExecuteMenu { kind, index })
 ```
 
 The command handler should update application state and return effects.
@@ -843,7 +843,9 @@ GTK before:
 GTK after:
 
 ```rust
-let effects = controller.borrow_mut().handle_command(AppCommand::Play);
+let effects = controller
+    .borrow_mut()
+    .handle_command(PlayerCommand::Play.into());
 gtk_runtime.apply_effects(effects);
 ```
 
@@ -887,7 +889,7 @@ src/app/playlist_actions.rs
 
 or keep initially in `src/app/controller.rs` if small.
 
-Convert GTK menu handlers into `AppCommand::ExecutePlaylistMenu { kind, index }` or more specific commands.
+Convert GTK menu handlers into `PlaylistCommand::ExecuteMenu { kind, index }.into()` or more specific commands.
 
 ### Expected outcome
 

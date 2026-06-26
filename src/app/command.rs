@@ -10,6 +10,15 @@ use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppCommand {
+    Player(PlayerCommand),
+    Audio(AudioCommand),
+    Playlist(PlaylistCommand),
+    Equalizer(EqualizerCommand),
+    Panel(PanelCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerCommand {
     Play,
     Pause,
     Stop,
@@ -17,17 +26,44 @@ pub enum AppCommand {
     PreviousTrack,
     NextTrack,
     SeekToMs(i64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioCommand {
     SetVolume(i32),
     SetBalance(i32),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlaylistCommand {
     ToggleShuffle,
     ToggleRepeat,
-    ToggleNoPlaylistAdvance,
-    SetEqualizerActive(bool),
-    ToggleEqualizerActive,
-    SetEqualizerAuto(bool),
-    ToggleEqualizerAuto,
-    SetEqualizerPreamp(i32),
-    SetEqualizerBand { band: usize, position: i32 },
+    ToggleNoAdvance,
+    SetSize { width: i32, height: i32 },
+    ExecuteMenu { kind: PlaylistMenuKind, index: usize },
+    Sort(PlaylistSortKey),
+    Reverse,
+    Randomize,
+    AddUris(Vec<String>),
+    AddFiles(Vec<PathBuf>),
+    Clear,
+    RemoveSelectedOrCurrent,
+    SelectAll,
+    InvertSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EqualizerCommand {
+    SetActive(bool),
+    ToggleActive,
+    SetAuto(bool),
+    ToggleAuto,
+    SetPreamp(i32),
+    SetBand { band: usize, position: i32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanelCommand {
     ToggleMainShade,
     SetMainShade(bool),
     TogglePlaylistVisibility,
@@ -42,15 +78,34 @@ pub enum AppCommand {
     SetEqualizerShade(bool),
     ToggleEqualizerDetached,
     SetEqualizerDetached(bool),
-    SetPlaylistSize { width: i32, height: i32 },
-    ExecutePlaylistMenu { kind: PlaylistMenuKind, index: usize },
-    SortPlaylist(PlaylistSortKey),
-    ReversePlaylist,
-    RandomizePlaylist,
-    AddPlaylistUris(Vec<String>),
-    AddPlaylistFiles(Vec<PathBuf>),
-    ClearPlaylist,
-    RemoveSelectedPlaylistEntries,
-    SelectAllPlaylistEntries,
-    InvertPlaylistSelection,
+}
+
+impl From<PlayerCommand> for AppCommand {
+    fn from(command: PlayerCommand) -> Self {
+        Self::Player(command)
+    }
+}
+
+impl From<AudioCommand> for AppCommand {
+    fn from(command: AudioCommand) -> Self {
+        Self::Audio(command)
+    }
+}
+
+impl From<PlaylistCommand> for AppCommand {
+    fn from(command: PlaylistCommand) -> Self {
+        Self::Playlist(command)
+    }
+}
+
+impl From<EqualizerCommand> for AppCommand {
+    fn from(command: EqualizerCommand) -> Self {
+        Self::Equalizer(command)
+    }
+}
+
+impl From<PanelCommand> for AppCommand {
+    fn from(command: PanelCommand) -> Self {
+        Self::Panel(command)
+    }
 }
