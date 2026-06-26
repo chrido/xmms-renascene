@@ -103,7 +103,7 @@ Legend:
   - Missing Skin Browser
   - Missing Skin Editor entry/GTK-only notice
   - Missing Quit
-- [ ] Eject button parity. GTK opens file dialog; egui currently routes through playlist Add menu index 0 and may not produce the same UX.
+- [x] Eject button parity. GTK opens file dialog; egui now opens the Add Audio Files dialog from main and playlist eject buttons.
 - [x] Proper Open Location prompt from main menu / keyboard shortcut.
 - [x] Jump to Time prompt from keyboard shortcut.
 - [ ] Titlebar dragging / easy-move behavior.

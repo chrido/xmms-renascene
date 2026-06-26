@@ -281,10 +281,9 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
         MainPushButton::Pause => app.dispatch(PlayerCommand::TogglePause),
         MainPushButton::Stop => app.dispatch(PlayerCommand::Stop),
         MainPushButton::Next => app.dispatch(PlayerCommand::NextTrack),
-        MainPushButton::Eject => app.dispatch(PlaylistCommand::ExecuteMenu {
-            kind: crate::playlist::PlaylistMenuKind::Add,
-            index: 0,
-        }),
+        MainPushButton::Eject => app.apply_effect(crate::app::effect::AppEffect::OpenFileDialog(
+            crate::app::effect::FileDialogRequest::AddAudioFiles,
+        )),
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
         MainPushButton::Menu => app.main_menu_open = true,
         MainPushButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),

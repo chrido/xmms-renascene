@@ -403,10 +403,9 @@ fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: Playlist
         PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::TogglePause),
         PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Stop),
         PlaylistFooterButton::Next => app.dispatch(PlayerCommand::NextTrack),
-        PlaylistFooterButton::Eject => app.dispatch(PlaylistCommand::ExecuteMenu {
-            kind: PlaylistMenuKind::Add,
-            index: 0,
-        }),
+        PlaylistFooterButton::Eject => app.apply_effect(AppEffect::OpenFileDialog(
+            FileDialogRequest::AddAudioFiles,
+        )),
         PlaylistFooterButton::ScrollUp => {
             app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(1);
         }
