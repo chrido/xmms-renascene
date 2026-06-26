@@ -1,5 +1,7 @@
 //! eframe application lifecycle for the egui frontend.
 
+use std::path::Path;
+
 use crate::app::command::{AppCommand, PlaylistCommand};
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, FileDialogRequest};
@@ -7,6 +9,8 @@ use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app_state::AppState;
 #[cfg(feature = "gstreamer-backend")]
 use crate::player::GStreamerBackend;
+use crate::render::{main_window_height, MAIN_WINDOW_WIDTH};
+use crate::skin::DefaultSkin;
 
 use super::preferences::{self, PreferencesPage};
 use super::runtime::EguiRuntime;
@@ -24,6 +28,7 @@ pub struct EguiFrontendState {
     pub scale_factor: f32,
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
+    pub active_skin: DefaultSkin,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
@@ -36,6 +41,7 @@ impl EguiFrontendState {
             app_state = AppState::default();
         }
         apply_preview_options_to_config(&mut app_state.config, &options)?;
+        let active_skin = load_skin_from_config(&app_state)?;
         let scale_factor = app_state.config.scale_factor as f32;
         Ok(Self {
             preferences_open: options.open_preferences,
@@ -44,6 +50,7 @@ impl EguiFrontendState {
             scale_factor,
             dock_panels: true,
             runtime: EguiRuntime::default(),
+            active_skin,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
@@ -137,27 +144,41 @@ impl EguiFrontendState {
     fn handle_file_dialog(&mut self, request: FileDialogRequest) {
         match request {
             FileDialogRequest::AddAudioFiles => {
-                if let Some(files) = rfd::FileDialog::new().set_title("Add audio files").pick_files() {
+                if let Some(files) = rfd::FileDialog::new()
+                    .set_title("Add audio files")
+                    .pick_files()
+                {
                     self.dispatch(PlaylistCommand::AddFiles(files));
                 }
             }
             FileDialogRequest::AddAudioDirectory => {
-                if let Some(folder) = rfd::FileDialog::new().set_title("Add audio directory").pick_folder() {
+                if let Some(folder) = rfd::FileDialog::new()
+                    .set_title("Add audio directory")
+                    .pick_folder()
+                {
                     self.dispatch(PlaylistCommand::AddFiles(vec![folder]));
                 }
             }
             FileDialogRequest::LoadPlaylist => {
-                if let Some(path) = rfd::FileDialog::new().set_title("Load playlist").pick_file() {
-                    self.runtime
-                        .pending_messages
-                        .push(format!("playlist loading pending egui handler: {}", path.display()));
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Load playlist")
+                    .pick_file()
+                {
+                    self.runtime.pending_messages.push(format!(
+                        "playlist loading pending egui handler: {}",
+                        path.display()
+                    ));
                 }
             }
             FileDialogRequest::SavePlaylist => {
-                if let Some(path) = rfd::FileDialog::new().set_title("Save playlist").save_file() {
-                    self.runtime
-                        .pending_messages
-                        .push(format!("playlist saving pending egui handler: {}", path.display()));
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Save playlist")
+                    .save_file()
+                {
+                    self.runtime.pending_messages.push(format!(
+                        "playlist saving pending egui handler: {}",
+                        path.display()
+                    ));
                 }
             }
             FileDialogRequest::LoadEqualizerPreset
@@ -174,13 +195,20 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_playback_backend();
-        egui::CentralPanel::default().show(ctx, |ui| {
-            main_player::show_main_player(ui, self);
-            ui.separator();
-            playlist::show_playlist(ui, self);
-            ui.separator();
-            equalizer::show_equalizer(ui, self);
-        });
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                main_player::show_main_player(ui, self);
+                if self.controller.state().config.playlist_visible {
+                    ui.separator();
+                    playlist::show_playlist(ui, self);
+                }
+                if self.controller.state().config.equalizer_visible {
+                    ui.separator();
+                    equalizer::show_equalizer(ui, self);
+                }
+            });
         if self.preferences_open {
             preferences::show_preferences(ctx, self);
         }
@@ -189,12 +217,32 @@ impl eframe::App for EguiFrontendState {
 
 pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
     let app = EguiFrontendState::new(options)?;
+    let window_size = egui::vec2(
+        MAIN_WINDOW_WIDTH as f32 * app.scale_factor,
+        main_window_height(app.controller.state().config.main_shaded) as f32 * app.scale_factor,
+    );
     eframe::run_native(
         "XMMS Renascene egui",
-        eframe::NativeOptions::default(),
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size(window_size)
+                .with_decorations(false)
+                .with_resizable(false),
+            ..eframe::NativeOptions::default()
+        },
         Box::new(|_cc| Ok(Box::new(app))),
     )
     .map_err(|err| format!("failed to start egui frontend: {err}"))
+}
+
+fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {
+    match app_state.config.skin.as_deref() {
+        Some(path) => DefaultSkin::load_from_path(Path::new(path))
+            .map_err(|err| format!("failed to load skin '{}': {err}", path)),
+        None => {
+            DefaultSkin::load_bundled().map_err(|err| format!("failed to load bundled skin: {err}"))
+        }
+    }
 }
 
 #[cfg(test)]
