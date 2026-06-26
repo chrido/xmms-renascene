@@ -19,6 +19,7 @@ pub enum PreferencesPage {
 }
 
 pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let before = app.controller().state().config.clone();
     let mut open = app.preferences_open;
     egui::Window::new("Preferences")
         .open(&mut open)
@@ -62,6 +63,12 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
             });
         });
     app.preferences_open = open;
+    if app.controller().state().config != before {
+        app.runtime.apply_effect(crate::app::effect::AppEffect::SaveConfig);
+        app.runtime.apply_effect(crate::app::effect::AppEffect::QueueRender(
+            crate::app::effect::RenderTarget::All,
+        ));
+    }
 }
 
 impl PreferencesPage {

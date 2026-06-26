@@ -351,8 +351,8 @@ Legend:
 - [x] Title page is partial:
   - needs exact token help text parity;
   - save/apply semantics and config persistence parity.
-- [ ] Preferences changes do not consistently trigger redraw/window resize/config save exactly like GTK.
-- [ ] Preferences open/close visibility state persistence missing.
+- [x] Preferences changes do not consistently trigger redraw/window resize/config save exactly like GTK.
+- [x] Preferences open/close visibility state persistence missing.
 
 ---
 
