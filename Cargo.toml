@@ -12,6 +12,12 @@ path = "src/lib.rs"
 name = "xmms-rs"
 path = "src/main.rs"
 
+[features]
+default = ["gtk-ui", "gstreamer-backend"]
+gtk-ui = []
+gstreamer-backend = []
+mobile-ui = []
+
 [dependencies]
 bzip2 = "0.6.1"
 cairo = { version = "0.22.0", package = "cairo-rs" }

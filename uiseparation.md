@@ -401,18 +401,18 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo test --test render` if code changes are made.
   - [x] Commit rendering strategy documentation or initial abstraction.
 
-- [ ] **Step 15: Introduce feature-gated frontends**
-  - [ ] Confirm app/core modules compile without GTK imports.
-  - [ ] Confirm GTK code lives under `src/ui/gtk/`.
-  - [ ] Confirm playback backend effects are isolated.
-  - [ ] Confirm core tests do not require GTK setup.
-  - [ ] Add `gtk-ui` feature.
-  - [ ] Add `gstreamer-backend` feature.
-  - [ ] Consider a placeholder `mobile-ui` feature only if useful.
-  - [ ] Keep current defaults preserving desktop behavior.
-  - [ ] Add/check `cargo check --no-default-features` or a documented equivalent target once feasible.
-  - [ ] Run full default validation.
-  - [ ] Commit frontend feature gates.
+- [x] **Step 15: Introduce feature-gated frontends**
+  - [x] Confirm app/core modules compile without GTK imports.
+  - [x] Confirm GTK code lives under `src/ui/gtk/`.
+  - [x] Confirm playback backend effects are isolated.
+  - [x] Confirm core tests do not require GTK setup.
+  - [x] Add `gtk-ui` feature.
+  - [x] Add `gstreamer-backend` feature.
+  - [x] Consider a placeholder `mobile-ui` feature only if useful.
+  - [x] Keep current defaults preserving desktop behavior.
+  - [x] Add/check `cargo check --no-default-features` or a documented equivalent target once feasible.
+  - [x] Run full default validation.
+  - [x] Commit frontend feature gates.
 
 ## Milestone Checklist
 
