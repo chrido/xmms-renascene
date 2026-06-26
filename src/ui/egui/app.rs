@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::app::command::{AppCommand, PlaylistCommand};
+use crate::app::command::{AppCommand, PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
@@ -260,6 +260,7 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_playback_backend();
+        handle_global_shortcuts(ctx, self);
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -284,6 +285,54 @@ impl eframe::App for EguiFrontendState {
         }
         menu::show_pending_messages(ctx, self);
     }
+}
+
+fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    ctx.input(|input| {
+        if input.key_pressed(egui::Key::Z) {
+            app.dispatch(PlayerCommand::PreviousTrack);
+        }
+        if input.key_pressed(egui::Key::X) {
+            app.dispatch(PlayerCommand::Play);
+        }
+        if input.key_pressed(egui::Key::C) {
+            app.dispatch(PlayerCommand::TogglePause);
+        }
+        if input.key_pressed(egui::Key::V) {
+            app.dispatch(PlayerCommand::Stop);
+        }
+        if input.key_pressed(egui::Key::B) {
+            app.dispatch(PlayerCommand::NextTrack);
+        }
+        if input.key_pressed(egui::Key::L) && input.modifiers.ctrl {
+            app.prompt_open = Some(EguiPrompt::OpenLocation);
+            app.prompt_text.clear();
+        } else if input.key_pressed(egui::Key::L) {
+            app.dispatch(PanelCommand::TogglePlaylistVisibility);
+        }
+        if input.key_pressed(egui::Key::E) {
+            app.dispatch(PanelCommand::ToggleEqualizerVisibility);
+        }
+        if input.key_pressed(egui::Key::P) && input.modifiers.ctrl {
+            app.preferences_open = true;
+        }
+        if input.key_pressed(egui::Key::J) {
+            app.prompt_open = Some(EguiPrompt::JumpToTime);
+            app.prompt_text.clear();
+        }
+        if input.key_pressed(egui::Key::O) && input.modifiers.ctrl {
+            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
+        }
+        if input.key_pressed(egui::Key::S) && input.modifiers.ctrl {
+            app.skin_browser_open = true;
+        }
+        if input.key_pressed(egui::Key::N) {
+            app.dispatch(PlaylistCommand::ToggleNoAdvance);
+        }
+        if input.key_pressed(egui::Key::M) {
+            app.dispatch(PanelCommand::ToggleMainShade);
+        }
+    });
 }
 
 pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
@@ -320,9 +369,10 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                             app.active_skin = skin;
                             app.controller_mut().state_mut().config.skin = None;
                         }
-                        Err(err) => app.runtime.pending_messages.push(format!(
-                            "failed to load bundled default skin: {err}"
-                        )),
+                        Err(err) => app
+                            .runtime
+                            .pending_messages
+                            .push(format!("failed to load bundled default skin: {err}")),
                     }
                 }
                 if ui.button("Add...").clicked() {
@@ -333,23 +383,20 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                 }
             });
             ui.separator();
-            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                for entry in app.skin_entries.clone() {
-                    let selected = app
-                        .controller()
-                        .state()
-                        .config
-                        .skin
-                        .as_deref()
-                        == Some(entry.path.to_string_lossy().as_ref());
-                    if ui.selectable_label(selected, &entry.name).clicked() {
-                        select_skin_entry(app, &entry);
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for entry in app.skin_entries.clone() {
+                        let selected = app.controller().state().config.skin.as_deref()
+                            == Some(entry.path.to_string_lossy().as_ref());
+                        if ui.selectable_label(selected, &entry.name).clicked() {
+                            select_skin_entry(app, &entry);
+                        }
                     }
-                }
-                if app.skin_entries.is_empty() {
-                    ui.label("No skins found in configured skin directories.");
-                }
-            });
+                    if app.skin_entries.is_empty() {
+                        ui.label("No skins found in configured skin directories.");
+                    }
+                });
         });
     app.skin_browser_open = open && app.skin_browser_open;
 }
@@ -358,7 +405,8 @@ fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {
     match DefaultSkin::load_from_path(&entry.path) {
         Ok(skin) => {
             app.active_skin = skin;
-            app.controller_mut().state_mut().config.skin = Some(entry.path.to_string_lossy().into_owned());
+            app.controller_mut().state_mut().config.skin =
+                Some(entry.path.to_string_lossy().into_owned());
         }
         Err(err) => app.runtime.pending_messages.push(format!(
             "failed to load skin '{}': {err}",

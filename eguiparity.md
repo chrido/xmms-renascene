@@ -62,7 +62,7 @@ Legend:
 - [ ] Multi-window state visibility persistence for preferences, prompts, skin browser, and panel windows.
 - [ ] GTK-style skinned window borders/CSS for non-skin texture dialogs in egui.
 - [ ] Cross-window focus semantics: GTK tracks focused main/playlist/equalizer panels and renders focused titlebar variants.
-- [ ] Full keyboard shortcut parity across main, playlist, equalizer, prompts, and dialogs.
+- [x] Full keyboard shortcut parity across main, playlist, equalizer, prompts, and dialogs.
 - [ ] Full mouse wheel parity across main sliders, shaded sliders, playlist rows, equalizer sliders.
 - [ ] Drag/drop parity for files, directories, URLs, and playlist replacement/append modes.
 
@@ -128,7 +128,7 @@ Legend:
   - shaded volume/balance behavior through equalizer shade strip;
   - shaded title text/time behavior.
 - [ ] Mouse wheel over main sliders and position seek.
-- [ ] Full keyboard shortcut parity for playback/menu/preferences/skin browser/jump/open location/no-advance.
+- [x] Full keyboard shortcut parity for playback/menu/preferences/skin browser/jump/open location/no-advance.
 - [ ] Stop-with-fadeout behavior parity in egui runtime.
 - [ ] Pause-between-songs behavior parity in egui runtime.
 
@@ -468,7 +468,7 @@ GTK has `build_skin_browser_window` with:
 
 ### Missing / incomplete
 
-- [ ] Global keyboard shortcuts matching GTK/XMMS:
+- [x] Global keyboard shortcuts matching GTK/XMMS:
   - playback control shortcuts;
   - playlist toggle;
   - equalizer toggle;
