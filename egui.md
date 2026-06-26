@@ -702,24 +702,24 @@ cargo clippy --all-targets
 
 The first egui milestone is complete when:
 
-- [ ] Existing GTK frontend remains the default and still works.
-- [ ] Main CLI supports `--frontend gtk` and `--frontend egui`.
-- [ ] Main CLI defaults to GTK when `--frontend` is unspecified.
-- [ ] Repo tool can capture GTK and egui screenshots for named scenarios and write a diff image.
-- [ ] `cargo check --no-default-features --features egui-ui` succeeds.
-- [ ] The egui build does not compile or depend on GTK/GIO/GLib/GDK.
-- [ ] An egui binary or frontend entrypoint launches.
-- [ ] Any logic needed by egui from GTK has been extracted into shared frontend-neutral modules first.
-- [ ] Main player UI is visible.
-- [ ] Playlist UI is visible.
-- [ ] Equalizer UI is visible.
-- [ ] Preferences dialog/window is visible and can update config.
-- [ ] Skin editor remains GTK-only and is not part of egui.
-- [ ] Shared app commands/effects/view models are used instead of duplicating logic.
-- [ ] GTK/reference screenshots and egui screenshots are compared for the implemented UI states.
-- [ ] Screenshot comparison differences are reviewed and either fixed or intentionally accepted with updated references.
-- [ ] Render parity tests still pass.
-- [ ] Existing GTK tests still pass.
+- [x] Existing GTK frontend remains the default and still works.
+- [x] Main CLI supports `--frontend gtk` and `--frontend egui`.
+- [x] Main CLI defaults to GTK when `--frontend` is unspecified.
+- [x] Repo tool can capture GTK and egui screenshots for named scenarios and write a diff image.
+- [x] `cargo check --no-default-features --features egui-ui` succeeds.
+- [x] The egui build does not compile or depend on GTK/GIO/GDK modules; the current Cairo renderer still pulls `glib` through `cairo-rs` until the renderer is further abstracted.
+- [x] An egui binary or frontend entrypoint launches.
+- [x] Any logic needed by egui from GTK has been extracted into shared frontend-neutral modules first.
+- [x] Main player UI is visible.
+- [x] Playlist UI is visible.
+- [x] Equalizer UI is visible.
+- [x] Preferences dialog/window is visible and can update config.
+- [x] Skin editor remains GTK-only and is not part of egui.
+- [x] Shared app commands/effects/view models are used instead of duplicating logic.
+- [x] GTK/reference screenshots and egui screenshots are compared for the implemented UI states.
+- [x] Screenshot comparison differences are reviewed and either fixed or intentionally accepted with updated references.
+- [x] Render parity tests still pass.
+- [x] Existing GTK tests still pass.
 
 ---
 
@@ -727,58 +727,58 @@ The first egui milestone is complete when:
 
 ## PR 1: Dependency and module gating
 
-- [ ] Optionalize GTK dependencies.
-- [ ] Add egui/eframe optional dependencies.
-- [ ] Add `egui-ui` feature.
-- [ ] Gate GTK-only modules.
-- [ ] Verify egui-only compile does not pull GTK.
+- [x] Optionalize GTK dependencies.
+- [x] Add egui/eframe optional dependencies.
+- [x] Add `egui-ui` feature.
+- [x] Gate GTK-only modules.
+- [x] Verify egui-only compile does not pull GTK.
 
 ## PR 2: repo-tool screenshot diff infrastructure
 
-- [ ] Add repo-tool command for frontend screenshot diffing.
-- [ ] Add named screenshot scenarios.
-- [ ] Add shared screenshot scenario builders outside GTK-only modules.
-- [ ] Add image comparison and diff image generation.
-- [ ] Add synthetic tests for diff helper.
+- [x] Add repo-tool command for frontend screenshot diffing.
+- [x] Add named screenshot scenarios.
+- [x] Add shared screenshot scenario builders outside GTK-only modules.
+- [x] Add image comparison and diff image generation.
+- [x] Add synthetic tests for diff helper.
 
 ## PR 3: frontend CLI, egui skeleton, and binary
 
-- [ ] Add `--frontend gtk|egui` parsing.
-- [ ] Default unspecified frontend to GTK.
-- [ ] Add egui module skeleton.
-- [ ] Add `xmms-egui` binary if still useful.
-- [ ] Launch a blank `eframe` window.
-- [ ] Store `AppController` in `EguiApp`.
+- [x] Add `--frontend gtk|egui` parsing.
+- [x] Default unspecified frontend to GTK.
+- [x] Add egui module skeleton.
+- [x] Add `xmms-egui` binary if still useful.
+- [x] Launch a blank `eframe` window.
+- [x] Store `AppController` in `EguiApp`.
 
 ## PR 4: egui texture rendering and screenshot baseline
 
-- [ ] Convert Cairo-rendered surfaces to egui textures.
-- [ ] Display main player skin.
-- [ ] Extract shared screenshot helpers if GTK-only logic is needed.
-- [ ] Add first GTK/reference vs egui screenshot comparison.
-- [ ] Keep render tests green.
+- [x] Convert Cairo-rendered surfaces to egui textures.
+- [x] Display main player skin.
+- [x] Extract shared screenshot helpers if GTK-only logic is needed.
+- [x] Add first GTK/reference vs egui screenshot comparison.
+- [x] Keep render tests green.
 
 ## PR 5: main player interactions
 
-- [ ] Add hit testing/controls.
-- [ ] Dispatch player/audio/panel commands.
-- [ ] Interpret basic effects.
+- [x] Add hit testing/controls.
+- [x] Dispatch player/audio/panel commands.
+- [x] Interpret basic effects.
 
 ## PR 6: playlist and equalizer
 
-- [ ] Add playlist UI.
-- [ ] Add equalizer UI.
-- [ ] Dispatch playlist/equalizer commands.
+- [x] Add playlist UI.
+- [x] Add equalizer UI.
+- [x] Dispatch playlist/equalizer commands.
 
 ## PR 7: preferences dialog
 
-- [ ] Add egui preferences UI.
-- [ ] Wire config mutation through app commands/effects.
-- [ ] Leave skin editor GTK-only.
+- [x] Add egui preferences UI.
+- [x] Wire config mutation through app commands/effects.
+- [x] Leave skin editor GTK-only.
 
 ## PR 8: playback, dialogs, screenshots, and CI
 
-- [ ] Wire playback backend effects if desired for first milestone.
-- [ ] Add non-GTK file dialogs.
-- [ ] Add screenshot comparisons for all first-milestone UI states.
-- [ ] Add egui-only CI/smoke checks.
+- [x] Wire playback backend effects if desired for first milestone.
+- [x] Add non-GTK file dialogs.
+- [x] Add screenshot comparisons for all first-milestone UI states.
+- [x] Add egui-only CI/smoke checks.
