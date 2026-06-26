@@ -1,3 +1,5 @@
+use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
+
 use super::SkinPixmapKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -682,9 +684,9 @@ pub struct Visualization {
     peaks_enabled: bool,
     analyzer_falloff: VisFalloffSpeed,
     peaks_falloff: VisFalloffSpeed,
-    data: [f32; 75],
-    peak: [f32; 75],
-    peak_speed: [f32; 75],
+    data: SpectrumData,
+    peak: SpectrumData,
+    peak_speed: SpectrumData,
     milkdrop_energy: f32,
     milkdrop_phase: f32,
 }
@@ -712,9 +714,9 @@ impl Visualization {
             peaks_enabled: true,
             analyzer_falloff: VisFalloffSpeed::Medium,
             peaks_falloff: VisFalloffSpeed::Slow,
-            data: [0.0; 75],
-            peak: [0.0; 75],
-            peak_speed: [0.0; 75],
+            data: [0.0; SPECTRUM_BANDS],
+            peak: [0.0; SPECTRUM_BANDS],
+            peak_speed: [0.0; SPECTRUM_BANDS],
             milkdrop_energy: 0.0,
             milkdrop_phase: 0.0,
         }
@@ -744,11 +746,11 @@ impl Visualization {
         self.peaks_enabled
     }
 
-    pub fn data(&self) -> &[f32; 75] {
+    pub fn data(&self) -> &SpectrumData {
         &self.data
     }
 
-    pub fn peak(&self) -> &[f32; 75] {
+    pub fn peak(&self) -> &SpectrumData {
         &self.peak
     }
 
@@ -761,7 +763,7 @@ impl Visualization {
     }
 
     pub fn set_data(&mut self, data: &[f32]) {
-        for (index, value) in data.iter().take(75).enumerate() {
+        for (index, value) in data.iter().take(SPECTRUM_BANDS).enumerate() {
             let value = value.clamp(0.0, 1.0);
             if value > self.data[index] {
                 self.data[index] = value;
@@ -774,9 +776,9 @@ impl Visualization {
     }
 
     pub fn clear_data(&mut self) {
-        self.data = [0.0; 75];
-        self.peak = [0.0; 75];
-        self.peak_speed = [0.0; 75];
+        self.data = [0.0; SPECTRUM_BANDS];
+        self.peak = [0.0; SPECTRUM_BANDS];
+        self.peak_speed = [0.0; SPECTRUM_BANDS];
         self.milkdrop_energy = 0.0;
         self.milkdrop_phase = 0.0;
         self.widget.queue_draw();
@@ -817,7 +819,7 @@ impl Visualization {
     pub fn set_peaks_enabled(&mut self, enabled: bool) {
         self.peaks_enabled = enabled;
         if !enabled {
-            self.peak = [0.0; 75];
+            self.peak = [0.0; SPECTRUM_BANDS];
         }
         self.widget.queue_draw();
     }
@@ -835,7 +837,7 @@ impl Visualization {
     fn decay(&mut self) {
         let analyzer_falloff = self.analyzer_falloff as usize;
         let peaks_falloff = self.peaks_falloff as usize;
-        for index in 0..75 {
+        for index in 0..SPECTRUM_BANDS {
             if self.data[index] > 0.0 {
                 self.data[index] =
                     (self.data[index] - Self::ANALYZER_FALLOFF_SPEEDS[analyzer_falloff]).max(0.0);

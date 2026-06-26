@@ -4,6 +4,7 @@ use super::core::{
     blit_skin_rect, blit_surface_rect, render_horizontal_slider, render_sprite_spec, render_text,
     set_rgb, surface_from_xpm, RenderError, SliderRenderSpec,
 };
+use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 use crate::skin::layout::{
     main_push_button_spec, main_slider_layout, main_toggle_button_spec, MainPushButton, MainSlider,
     MainToggleButton, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
@@ -70,8 +71,8 @@ pub struct VisualizationRenderState {
     pub scope_mode: VisScopeMode,
     pub peaks_enabled: bool,
     pub vu_mode: VisVuMode,
-    pub data: [f32; 75],
-    pub peak: [f32; 75],
+    pub data: SpectrumData,
+    pub peak: SpectrumData,
     pub milkdrop_energy: f32,
     pub milkdrop_phase: f32,
 }
@@ -85,8 +86,8 @@ impl Default for VisualizationRenderState {
             scope_mode: VisScopeMode::Line,
             peaks_enabled: true,
             vu_mode: VisVuMode::Normal,
-            data: [0.0; 75],
-            peak: [0.0; 75],
+            data: [0.0; SPECTRUM_BANDS],
+            peak: [0.0; SPECTRUM_BANDS],
             milkdrop_energy: 0.0,
             milkdrop_phase: 0.0,
         }
@@ -435,7 +436,7 @@ pub fn render_visualization(
         return Ok(());
     }
 
-    let mut levels = [0; 75];
+    let mut levels = [0; SPECTRUM_BANDS];
     for (index, value) in state.data.iter().enumerate() {
         levels[index] = visualization_level(*value);
     }
@@ -526,12 +527,12 @@ fn render_scope_visualization(
     xdest: i32,
     ydest: i32,
     width: i32,
-    levels: &[i32; 75],
+    levels: &[i32; SPECTRUM_BANDS],
     state: &VisualizationRenderState,
 ) -> Result<(), RenderError> {
     const SCOPE_COLORS: [usize; 13] = [21, 21, 20, 20, 19, 19, 18, 19, 19, 20, 20, 21, 21];
     let colors = skin.vis_colors();
-    for x in 0..75.min(width) {
+    for x in 0..(SPECTRUM_BANDS as i32).min(width) {
         let h = levels[x as usize].clamp(0, 15);
         match state.scope_mode {
             VisScopeMode::Dot => draw_vis_pixel(
@@ -582,11 +583,11 @@ fn render_analyzer_visualization(
     xdest: i32,
     ydest: i32,
     width: i32,
-    levels: &[i32; 75],
+    levels: &[i32; SPECTRUM_BANDS],
     state: &VisualizationRenderState,
 ) -> Result<(), RenderError> {
     let colors = skin.vis_colors();
-    for x in 0..75.min(width) {
+    for x in 0..(SPECTRUM_BANDS as i32).min(width) {
         let h = if state.analyzer_style == VisAnalyzerStyle::Bars {
             if x % 4 == 3 {
                 continue;
@@ -664,7 +665,7 @@ fn render_milkdrop_visualization(
         }
     }
 
-    for x in 0..width.min(75) {
+    for x in 0..width.min(SPECTRUM_BANDS as i32) {
         let sample = state.data[x as usize];
         let y = (7.5 + (x as f32 * 0.19 + phase * 2.0).sin() * 3.0 - sample * 6.0).clamp(0.0, 15.0)
             as i32;

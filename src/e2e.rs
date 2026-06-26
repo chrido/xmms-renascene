@@ -2,6 +2,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::app_state::AppState;
+use crate::audio_model::{EqualizerBandDb, SPECTRUM_BANDS};
 use crate::config::Config;
 use crate::mpris::{
     gio_service::introspection_interfaces, MprisCommand, MprisEvent, BUS_NAME, OBJECT_PATH,
@@ -1875,8 +1876,8 @@ impl UiE2e {
     }
 
     pub fn feed_visualization_data(&mut self, band: usize, value: f32) -> &mut Self {
-        let mut data = [0.0; 75];
-        data[band.min(74)] = value;
+        let mut data = [0.0; SPECTRUM_BANDS];
+        data[band.min(SPECTRUM_BANDS - 1)] = value;
         self.state
             .app_state_mut()
             .player
@@ -1976,7 +1977,7 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_equalizer_gstreamer_band_db_values(&mut self, expected: [f64; 10]) -> &mut Self {
+    pub fn assert_equalizer_gstreamer_band_db_values(&mut self, expected: EqualizerBandDb) -> &mut Self {
         assert_eq!(self.state.equalizer_gstreamer_band_db_values(), expected);
         self
     }

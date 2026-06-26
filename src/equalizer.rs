@@ -2,6 +2,11 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::audio_model::{
+    db_to_equalizer_position, equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions,
+    EQUALIZER_BANDS,
+};
+
 mod presets;
 
 pub use presets::winamp_original_presets;
@@ -10,11 +15,11 @@ pub use presets::winamp_original_presets;
 pub struct EqualizerPreset {
     pub name: String,
     pub preamp: f64,
-    pub bands: [f64; 10],
+    pub bands: EqualizerBandDb,
 }
 
 impl EqualizerPreset {
-    pub fn new(name: impl Into<String>, preamp: f64, bands: [f64; 10]) -> Self {
+    pub fn new(name: impl Into<String>, preamp: f64, bands: EqualizerBandDb) -> Self {
         Self {
             name: name.into(),
             preamp,
@@ -23,27 +28,27 @@ impl EqualizerPreset {
     }
 
     pub fn zero(name: impl Into<String>) -> Self {
-        Self::new(name, 0.0, [0.0; 10])
+        Self::new(name, 0.0, [0.0; EQUALIZER_BANDS])
     }
 
     pub fn from_positions(
         name: impl Into<String>,
         preamp_position: i32,
-        band_positions: [i32; 10],
+        band_positions: EqualizerBandPositions,
     ) -> Self {
         Self::new(
             name,
-            position_to_db(preamp_position),
-            band_positions.map(position_to_db),
+            equalizer_position_to_db(preamp_position),
+            band_positions.map(equalizer_position_to_db),
         )
     }
 
     pub fn preamp_position(&self) -> i32 {
-        db_to_position(self.preamp)
+        db_to_equalizer_position(self.preamp)
     }
 
-    pub fn band_positions(&self) -> [i32; 10] {
-        self.bands.map(db_to_position)
+    pub fn band_positions(&self) -> EqualizerBandPositions {
+        self.bands.map(db_to_equalizer_position)
     }
 }
 
@@ -301,14 +306,6 @@ fn read_section_f64(contents: &str, section: &str, key: &str) -> Option<f64> {
         }
     }
     None
-}
-
-fn position_to_db(position: i32) -> f64 {
-    (50 - position.clamp(0, 100)) as f64 * 20.0 / 50.0
-}
-
-fn db_to_position(db: f64) -> i32 {
-    (50.0 - (db.clamp(-20.0, 20.0) * 50.0 / 20.0)).round() as i32
 }
 
 fn db_to_winamp_byte(db: f64) -> u8 {

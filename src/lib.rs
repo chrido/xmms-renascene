@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod audio_model;
 pub mod config;
 pub mod e2e;
 pub mod equalizer;

@@ -4,6 +4,9 @@ use super::core::{
     blit_surface_rect, render_horizontal_slider, render_surface_sprite_spec, surface_from_xpm,
     RenderError, SliderRenderSpec,
 };
+use crate::audio_model::{
+    equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions, EQUALIZER_BANDS,
+};
 use crate::skin::layout::{
     equalizer_control_spec, equalizer_slider_layout, EqualizerControl, EqualizerSlider,
     SliderLayout, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
@@ -20,7 +23,7 @@ pub struct EqualizerRenderState {
     pub pressed_control: Option<EqualizerControl>,
     pub pressed_slider: Option<EqualizerSlider>,
     pub preamp_position: i32,
-    pub band_positions: [i32; 10],
+    pub band_positions: EqualizerBandPositions,
     pub volume_position: i32,
     pub balance_position: i32,
 }
@@ -35,7 +38,7 @@ impl Default for EqualizerRenderState {
             pressed_control: None,
             pressed_slider: None,
             preamp_position: 50,
-            band_positions: [50; 10],
+            band_positions: [50; EQUALIZER_BANDS],
             volume_position: 94,
             balance_position: 19,
         }
@@ -279,7 +282,7 @@ fn draw_eq_graph(
     eqmain_surface: &ImageSurface,
     eqmain: &XpmImage,
     preamp_position: i32,
-    band_positions: &[i32; 10],
+    band_positions: &EqualizerBandPositions,
 ) -> Result<(), RenderError> {
     blit_surface_rect(cr, eqmain_surface, 0, 294, 86, 17, 113, 19)?;
     blit_surface_rect(
@@ -294,7 +297,7 @@ fn draw_eq_graph(
     )?;
 
     let x_values = [0.0, 11.0, 23.0, 35.0, 47.0, 59.0, 71.0, 83.0, 97.0, 109.0];
-    let y_values = band_positions.map(position_to_db);
+    let y_values = band_positions.map(equalizer_position_to_db);
     let y2 = spline_second_derivatives(&x_values, &y_values);
     let mut previous_y = 0;
     for x in 0..109 {
@@ -323,33 +326,29 @@ fn eq_slider_pixel_position(position: i32) -> i32 {
     }
 }
 
-fn position_to_db(position: i32) -> f64 {
-    f64::from(50 - position.clamp(0, 100)) * 20.0 / 50.0
-}
-
 fn preamp_line_y(position: i32) -> i32 {
-    9 + ((position_to_db(position) * 9.0) / 20.0) as i32
+    9 + ((equalizer_position_to_db(position) * 9.0) / 20.0) as i32
 }
 
-fn spline_second_derivatives(x: &[f64; 10], y: &[f64; 10]) -> [f64; 10] {
-    let mut y2 = [0.0; 10];
-    let mut u = [0.0; 10];
-    for i in 1..9 {
+fn spline_second_derivatives(x: &EqualizerBandDb, y: &EqualizerBandDb) -> EqualizerBandDb {
+    let mut y2 = [0.0; EQUALIZER_BANDS];
+    let mut u = [0.0; EQUALIZER_BANDS];
+    for i in 1..EQUALIZER_BANDS - 1 {
         let sig = (x[i] - x[i - 1]) / (x[i + 1] - x[i - 1]);
         let p = sig * y2[i - 1] + 2.0;
         y2[i] = (sig - 1.0) / p;
         u[i] = ((y[i + 1] - y[i]) / (x[i + 1] - x[i])) - ((y[i] - y[i - 1]) / (x[i] - x[i - 1]));
         u[i] = ((6.0 * u[i]) / (x[i + 1] - x[i - 1]) - sig * u[i - 1]) / p;
     }
-    for k in (0..9).rev() {
+    for k in (0..EQUALIZER_BANDS - 1).rev() {
         y2[k] = y2[k] * y2[k + 1] + u[k];
     }
     y2
 }
 
-fn eval_spline(xa: &[f64; 10], ya: &[f64; 10], y2a: &[f64; 10], x: f64) -> f64 {
+fn eval_spline(xa: &EqualizerBandDb, ya: &EqualizerBandDb, y2a: &EqualizerBandDb, x: f64) -> f64 {
     let mut klo = 0;
-    let mut khi = 9;
+    let mut khi = EQUALIZER_BANDS - 1;
     while khi - klo > 1 {
         let k = (khi + klo) >> 1;
         if xa[k] > x {

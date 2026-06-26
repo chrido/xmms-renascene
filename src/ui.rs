@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 
 use crate::app_state::AppState;
+use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
 use crate::config::{Config, TimerMode};
 use crate::equalizer::{
     default_equalizer_presets, find_preset, import_winamp_eqf, load_preset_store,
@@ -23,9 +24,8 @@ use crate::mpris::{
     MprisMetadata, MprisPlayerProperties, MprisRootProperties,
 };
 use crate::player::{
-    equalizer_position_to_db, group_output_devices, list_gstreamer_output_devices,
-    GStreamerBackend, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
-    PlayerState,
+    group_output_devices, list_gstreamer_output_devices, GStreamerBackend, OutputDevice,
+    OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlayerState,
 };
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
@@ -6762,7 +6762,7 @@ struct EqualizerUiState {
     pointer: EqualizerPointer,
     keyboard_slider: Option<EqualizerSlider>,
     preamp_position: i32,
-    band_positions: [i32; 10],
+    band_positions: EqualizerBandPositions,
     preset_dir: PathBuf,
     presets: Vec<EqualizerPreset>,
     auto_presets: Vec<EqualizerPreset>,
@@ -8933,11 +8933,11 @@ impl MainWindowUiState {
             .map(|position| equalizer_position_to_db(*position))
     }
 
-    pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> [f64; 10] {
+    pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> EqualizerBandDb {
         if self.equalizer.active {
             self.equalizer.band_positions.map(equalizer_position_to_db)
         } else {
-            [0.0; 10]
+            [0.0; crate::audio_model::EQUALIZER_BANDS]
         }
     }
 
