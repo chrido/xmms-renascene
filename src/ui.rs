@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 
+use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
+pub use crate::app::panel::PanelKind;
 use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
@@ -5264,12 +5266,6 @@ fn append_skin_browser_row(list: &gtk::ListBox, label: &str) {
     list.append(&row_label);
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelKind {
-    Equalizer,
-    Playlist,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum KeyboardFocus {
     #[default]
@@ -5284,67 +5280,6 @@ impl From<PanelKind> for KeyboardFocus {
             PanelKind::Equalizer => Self::Equalizer,
             PanelKind::Playlist => Self::Playlist,
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PanelState {
-    Hidden,
-    Docked { shaded: bool },
-    Detached { shaded: bool },
-}
-
-impl PanelState {
-    fn is_detached_visible(self) -> bool {
-        matches!(self, PanelState::Detached { .. })
-    }
-
-    fn is_docked_visible(self) -> bool {
-        matches!(self, PanelState::Docked { .. })
-    }
-
-    fn shaded(self) -> bool {
-        match self {
-            PanelState::Hidden => false,
-            PanelState::Docked { shaded } | PanelState::Detached { shaded } => shaded,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PanelPlacement {
-    visible: bool,
-    detached: bool,
-    shaded: bool,
-    focused: bool,
-    dragging_title: bool,
-}
-
-impl PanelPlacement {
-    fn from_config(visible: bool, detached: bool, shaded: bool) -> Self {
-        Self {
-            visible,
-            detached,
-            shaded,
-            focused: false,
-            dragging_title: false,
-        }
-    }
-
-    fn state(self) -> PanelState {
-        match (self.visible, self.detached) {
-            (false, _) => PanelState::Hidden,
-            (true, true) => PanelState::Detached {
-                shaded: self.shaded,
-            },
-            (true, false) => PanelState::Docked {
-                shaded: self.shaded,
-            },
-        }
-    }
-
-    fn focused(self) -> bool {
-        self.focused || self.dragging_title
     }
 }
 
@@ -10831,12 +10766,6 @@ impl MainWindowUiState {
     fn slider_rect(&self, slider: MainSlider) -> ControlRect {
         main_slider_layout(slider, self.shaded).rect
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PanelVisibility {
-    pub(crate) equalizer: bool,
-    pub(crate) playlist: bool,
 }
 
 type ControlRect = SkinRect;

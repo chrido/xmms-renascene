@@ -297,21 +297,21 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Run `cargo clippy --all-targets`.
   - [x] Commit the playlist action migration.
 
-- [ ] **Step 8: Move panel/window state logic into app modules**
-  - [ ] Move main player shaded state toggling logic.
-  - [ ] Move playlist visible/shaded/detached state logic.
-  - [ ] Move equalizer visible/shaded/detached state logic.
-  - [ ] Move panel state mapping.
-  - [ ] Move docking relationship logic.
-  - [ ] Move toolkit-independent desired panel size calculations.
-  - [ ] Keep actual GTK window show/hide/resize/move/present code in GTK.
-  - [ ] Add/move tests for panel state mapping.
-  - [ ] Add/move tests for shade/close titlebar action mapping.
-  - [ ] Add/move tests for docked panel size behavior.
-  - [ ] Run `cargo test --lib --bins`.
-  - [ ] Run `cargo test --test render`.
-  - [ ] Run `cargo clippy --all-targets`.
-  - [ ] Commit the panel state migration.
+- [x] **Step 8: Move panel/window state logic into app modules**
+  - [x] Move main player shaded state toggling logic.
+  - [x] Move playlist visible/shaded/detached state logic.
+  - [x] Move equalizer visible/shaded/detached state logic.
+  - [x] Move panel state mapping.
+  - [x] Move docking relationship logic.
+  - [x] Move toolkit-independent desired panel size calculations.
+  - [x] Keep actual GTK window show/hide/resize/move/present code in GTK.
+  - [x] Add/move tests for panel state mapping.
+  - [x] Add/move tests for shade/close titlebar action mapping.
+  - [x] Add/move tests for docked panel size behavior.
+  - [x] Run `cargo test --lib --bins`.
+  - [x] Run `cargo test --test render`.
+  - [x] Run `cargo clippy --all-targets`.
+  - [x] Commit the panel state migration.
 
 - [ ] **Step 9: Extract view-model builders**
   - [ ] Define `MainPlayerViewModel`.
@@ -436,13 +436,13 @@ Use this checklist to track implementation. Keep the boxes unchecked until the c
   - [x] Validate with `cargo test --lib --bins`.
   - [x] Validate with `cargo clippy --all-targets`.
 
-- [ ] **Milestone 4: Migrate playlist and panel state logic**
-  - [ ] Complete Step 7.
-  - [ ] Complete Step 8.
-  - [ ] GTK handlers dispatch commands instead of owning the migrated behavior.
-  - [ ] Validate with `cargo test --lib --bins`.
-  - [ ] Validate with `cargo test --test render`.
-  - [ ] Validate with `cargo clippy --all-targets`.
+- [x] **Milestone 4: Migrate playlist and panel state logic**
+  - [x] Complete Step 7.
+  - [x] Complete Step 8.
+  - [x] GTK handlers dispatch commands instead of owning the migrated behavior.
+  - [x] Validate with `cargo test --lib --bins`.
+  - [x] Validate with `cargo test --test render`.
+  - [x] Validate with `cargo clippy --all-targets`.
 
 - [ ] **Milestone 5: Split GTK modules**
   - [ ] Complete Step 10.

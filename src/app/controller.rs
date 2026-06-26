@@ -56,6 +56,62 @@ impl AppController {
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
             }
+            AppCommand::ToggleMainShade => {
+                self.state.config.main_shaded = !self.state.config.main_shaded;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetMainShade(shaded) => {
+                self.state.config.main_shaded = shaded;
+                self.panel_changed_effects()
+            }
+            AppCommand::TogglePlaylistVisibility => {
+                self.state.config.playlist_visible = !self.state.config.playlist_visible;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetPlaylistVisibility(visible) => {
+                self.state.config.playlist_visible = visible;
+                self.panel_changed_effects()
+            }
+            AppCommand::TogglePlaylistShade => {
+                self.state.config.playlist_shaded = !self.state.config.playlist_shaded;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetPlaylistShade(shaded) => {
+                self.state.config.playlist_shaded = shaded;
+                self.panel_changed_effects()
+            }
+            AppCommand::TogglePlaylistDetached => {
+                self.state.config.playlist_detached = !self.state.config.playlist_detached;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetPlaylistDetached(detached) => {
+                self.state.config.playlist_detached = detached;
+                self.panel_changed_effects()
+            }
+            AppCommand::ToggleEqualizerVisibility => {
+                self.state.config.equalizer_visible = !self.state.config.equalizer_visible;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetEqualizerVisibility(visible) => {
+                self.state.config.equalizer_visible = visible;
+                self.panel_changed_effects()
+            }
+            AppCommand::ToggleEqualizerShade => {
+                self.state.config.equalizer_shaded = !self.state.config.equalizer_shaded;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetEqualizerShade(shaded) => {
+                self.state.config.equalizer_shaded = shaded;
+                self.panel_changed_effects()
+            }
+            AppCommand::ToggleEqualizerDetached => {
+                self.state.config.equalizer_detached = !self.state.config.equalizer_detached;
+                self.panel_changed_effects()
+            }
+            AppCommand::SetEqualizerDetached(detached) => {
+                self.state.config.equalizer_detached = detached;
+                self.panel_changed_effects()
+            }
             AppCommand::ExecutePlaylistMenu { kind, index } => self.execute_playlist_menu(kind, index),
             AppCommand::SortPlaylist(key) => {
                 self.state.playlist.sort_by(key);
@@ -147,6 +203,10 @@ impl AppController {
 
     fn playlist_changed_effects(&self) -> Vec<AppEffect> {
         vec![AppEffect::SaveConfig, AppEffect::QueueRender(RenderTarget::Playlist)]
+    }
+
+    fn panel_changed_effects(&self) -> Vec<AppEffect> {
+        vec![AppEffect::SaveConfig, AppEffect::QueueRender(RenderTarget::All)]
     }
 
     fn play(&mut self) -> Vec<AppEffect> {
@@ -343,5 +403,20 @@ mod tests {
 
         assert_eq!(controller.state().playlist.position(), Some(0));
         assert_eq!(controller.state().playlist.len(), 2);
+    }
+
+    #[test]
+    fn panel_commands_update_config_and_request_redraw() {
+        let mut controller = AppController::new(AppState::default());
+
+        let effects = controller.handle_command(AppCommand::SetPlaylistVisibility(true));
+        controller.handle_command(AppCommand::ToggleEqualizerShade);
+        controller.handle_command(AppCommand::SetPlaylistDetached(true));
+
+        assert!(controller.state().config.playlist_visible);
+        assert!(controller.state().config.equalizer_shaded);
+        assert!(controller.state().config.playlist_detached);
+        assert!(effects.contains(&AppEffect::SaveConfig));
+        assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::All)));
     }
 }
