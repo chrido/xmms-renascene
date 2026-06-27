@@ -50,6 +50,7 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_equalizer_hit_regions(ui, app, rect, &view_model);
+    add_equalizer_titlebar_drag_region(ui, app, rect, &view_model);
     show_equalizer_presets_popover(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -113,6 +114,45 @@ fn add_equalizer_hit_regions(
     for band in 0..crate::audio_model::EQUALIZER_BANDS {
         add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::Band(band));
     }
+}
+
+fn add_equalizer_titlebar_drag_region(
+    ui: &mut egui::Ui,
+    app: &EguiFrontendState,
+    base_rect: egui::Rect,
+    view_model: &EqualizerViewModel,
+) {
+    let titlebar = scale_skin_rect(
+        base_rect,
+        SkinRect::new(0, 0, EQUALIZER_WINDOW_WIDTH, crate::render::MAIN_TITLEBAR_HEIGHT),
+        app.scale_factor,
+    );
+    let response = ui.interact(
+        titlebar,
+        ui.id().with("eq-titlebar-drag"),
+        egui::Sense::click_and_drag(),
+    );
+    if response.drag_started() {
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        let x = ((pointer.x - base_rect.left()) / app.scale_factor).floor() as i32;
+        let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
+        if equalizer_titlebar_drag_excluded(x, y, view_model.shaded) {
+            return;
+        }
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+fn equalizer_titlebar_drag_excluded(x: i32, y: i32, shaded: bool) -> bool {
+    [PanelTitleButton::Shade, PanelTitleButton::Close]
+        .into_iter()
+        .any(|button| panel_title_button_rect(LayoutPanelKind::Equalizer, button, EQUALIZER_WINDOW_WIDTH).contains(x, y))
+        || (shaded
+            && [EqualizerSlider::ShadedVolume, EqualizerSlider::ShadedBalance]
+                .into_iter()
+                .any(|slider| equalizer_slider_layout(slider).rect.contains(x, y)))
 }
 
 fn add_equalizer_title_button_hits(

@@ -57,6 +57,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_main_hit_regions(ui, app, rect, &view_model);
+    add_main_titlebar_drag_region(ui, app, rect, &view_model);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -144,6 +145,44 @@ fn blank_zero(text: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+fn add_main_titlebar_drag_region(
+    ui: &mut egui::Ui,
+    app: &EguiFrontendState,
+    base_rect: egui::Rect,
+    view_model: &MainPlayerViewModel,
+) {
+    let titlebar = scale_skin_rect(
+        base_rect,
+        SkinRect::new(0, 0, MAIN_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT),
+        app.scale_factor,
+    );
+    let response = ui.interact(
+        titlebar,
+        ui.id().with("main-titlebar-drag"),
+        egui::Sense::click_and_drag(),
+    );
+    if response.drag_started() {
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        let x = ((pointer.x - base_rect.left()) / app.scale_factor).floor() as i32;
+        let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
+        if main_titlebar_drag_excluded(x, y, view_model.shaded) {
+            return;
+        }
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+    }
+}
+
+fn main_titlebar_drag_excluded(x: i32, y: i32, shaded: bool) -> bool {
+    main_push_buttons(shaded)
+        .iter()
+        .any(|button| main_push_button_rect(*button, shaded).contains(x, y))
+        || main_sliders(shaded)
+            .iter()
+            .any(|slider| main_slider_layout(*slider, shaded).rect.contains(x, y))
 }
 
 fn add_main_hit_regions(

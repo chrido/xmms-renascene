@@ -717,7 +717,7 @@ fn show_detached_snapshot(
         snapshot.width as f32 * snapshot.scale_factor,
         snapshot.height as f32 * snapshot.scale_factor,
     );
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
     let texture = ui.ctx().load_texture(
         format!("xmms-detached-{:?}", snapshot.panel),
         snapshot.image.clone(),
@@ -729,11 +729,30 @@ fn show_detached_snapshot(
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
-    if response.clicked() {
-        if let Some(pos) = response.interact_pointer_pos() {
+    if let Some(pos) = response.interact_pointer_pos() {
+        if response.drag_started() && detached_panel_titlebar_drag_region(snapshot, rect, pos) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            return;
+        }
+        if response.clicked() {
             handle_detached_panel_click(shared, snapshot, rect, pos);
         }
     }
+}
+
+fn detached_panel_titlebar_drag_region(
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+    pos: egui::Pos2,
+) -> bool {
+    let x = ((pos.x - base_rect.left()) / snapshot.scale_factor).floor() as i32;
+    let y = ((pos.y - base_rect.top()) / snapshot.scale_factor).floor() as i32;
+    if y < 0 || y >= crate::render::MAIN_TITLEBAR_HEIGHT {
+        return false;
+    }
+    ![PanelTitleButton::Shade, PanelTitleButton::Close]
+        .into_iter()
+        .any(|button| panel_title_button_rect(snapshot.panel, button, snapshot.width).contains(x, y))
 }
 
 fn handle_detached_panel_click(

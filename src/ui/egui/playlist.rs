@@ -66,6 +66,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_playlist_hit_regions(ui, app, rect, &view_model);
+    add_playlist_titlebar_drag_region(ui, app, rect);
     add_playlist_menu_popover(ui, app, rect);
     show_playlist_sort_popover(ui.ctx(), app);
     show_physical_delete_confirmation(ui.ctx(), app);
@@ -210,6 +211,37 @@ fn add_playlist_hit_regions(
         if response.clicked() {
             dispatch_playlist_footer_button(app, button);
         }
+    }
+}
+
+fn add_playlist_titlebar_drag_region(
+    ui: &mut egui::Ui,
+    app: &EguiFrontendState,
+    base_rect: egui::Rect,
+) {
+    let titlebar = scale_skin_rect(
+        base_rect,
+        SkinRect::new(0, 0, PLAYLIST_DEFAULT_WIDTH, crate::render::MAIN_TITLEBAR_HEIGHT),
+        app.scale_factor,
+    );
+    let response = ui.interact(
+        titlebar,
+        ui.id().with("playlist-titlebar-drag"),
+        egui::Sense::click_and_drag(),
+    );
+    if response.drag_started() {
+        let Some(pointer) = response.interact_pointer_pos() else {
+            return;
+        };
+        let x = ((pointer.x - base_rect.left()) / app.scale_factor).floor() as i32;
+        let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
+        if [PanelTitleButton::Shade, PanelTitleButton::Close]
+            .into_iter()
+            .any(|button| panel_title_button_rect(LayoutPanelKind::Playlist, button, PLAYLIST_DEFAULT_WIDTH).contains(x, y))
+        {
+            return;
+        }
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
 }
 
