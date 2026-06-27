@@ -1,0 +1,148 @@
+"""Shared helpers for Python GUI E2E tests."""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import shutil
+import subprocess
+import time
+from collections.abc import Iterator
+from importlib import import_module
+from pathlib import Path
+from typing import Any
+
+pytest: Any = import_module("pytest")
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_BINARY = REPO_ROOT / "target" / "debug" / "xmms-rs"
+MAIN_WINDOW_TITLE = "XMMS Renascene Rust Preview"
+BASE_MAIN_WIDTH = 275
+
+
+def command_exists(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def build_gtk_frontend() -> None:
+    if os.environ.get("XMMS_E2E_SKIP_BUILD") == "1":
+        if not APP_BINARY.exists():
+            pytest.skip(f"{APP_BINARY} does not exist and XMMS_E2E_SKIP_BUILD=1")
+        return
+    if not command_exists("cargo"):
+        pytest.skip("cargo is required to build the GTK frontend")
+    subprocess.run(
+        ["cargo", "build", "--manifest-path", "Cargo.toml", "--quiet"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def require_x11_tools() -> None:
+    if not os.environ.get("DISPLAY"):
+        pytest.skip("DISPLAY is not set; run with xvfb-run, e.g. xvfb-run -a python -m pytest e2e")
+    if not command_exists("xdotool"):
+        pytest.skip("xdotool is required for coordinate-based GUI E2E tests")
+
+
+@pytest.fixture
+def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+    log_path = tmp_path / "xmms-gtk.log"
+    log = log_path.open("wb")
+    env = os.environ.copy()
+    env.pop("WAYLAND_DISPLAY", None)
+    env.update(
+        {
+            "GDK_BACKEND": "x11",
+            "GSK_RENDERER": env.get("GSK_RENDERER", "cairo"),
+            "GDK_DISABLE": env.get("GDK_DISABLE", "gl"),
+            "NO_AT_BRIDGE": "1",
+            "XMMS_NON_UNIQUE": "1",
+            "XMMS_RS_CONFIG_DIR": str(tmp_path / "config"),
+        }
+    )
+    process = subprocess.Popen(
+        [str(APP_BINARY), "--frontend", "gtk", "--reset"],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+        log.close()
+
+
+def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["xdotool", *args],
+        text=True,
+        capture_output=True,
+        check=check,
+    )
+
+
+def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float = 10.0) -> str:
+    deadline = time.monotonic() + timeout
+    last_error = ""
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise AssertionError(f"application exited before window appeared: {process.returncode}")
+        result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
+        if result.returncode == 0:
+            windows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+            if windows:
+                return windows[0]
+        last_error = (result.stderr or result.stdout).strip()
+        time.sleep(0.1)
+    raise TimeoutError(f"window named {title!r} did not appear; last xdotool output: {last_error}")
+
+
+def parse_xdotool_int(value: str, source_line: str) -> int:
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise AssertionError(f"invalid integer value in xdotool geometry: {source_line!r}") from exc
+
+
+def window_geometry(window_id: str) -> dict[str, int]:
+    result = run_xdotool("getwindowgeometry", "--shell", window_id)
+    geometry: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in {"X", "Y", "WIDTH", "HEIGHT", "SCREEN"}:
+            geometry[key] = parse_xdotool_int(value, line)
+    missing = {"X", "Y", "WIDTH", "HEIGHT"} - set(geometry)
+    if missing:
+        raise AssertionError(f"missing geometry keys {missing} from: {result.stdout!r}")
+    return geometry
+
+
+def click_window_coordinate(window_id: str, x: int, y: int) -> None:
+    # Some Xvfb setups have no window manager, so activation may fail; the click
+    # itself uses coordinates relative to the target window and is the important part.
+    run_xdotool("windowactivate", "--sync", window_id, check=False)
+    run_xdotool("mousemove", "--window", window_id, str(x), str(y), "click", "1")
+
+
+def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        return_code = process.poll()
+        if return_code is not None:
+            return return_code
+        time.sleep(0.05)
+    raise TimeoutError("application did not exit after coordinate click")
