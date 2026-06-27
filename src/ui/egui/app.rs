@@ -11,33 +11,56 @@ use crate::app::command::{
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
+use crate::app::view_model::{
+    balance_to_eq_shaded_position, equalizer_view_model, format_playlist_footer_duration,
+    playlist_view_model, volume_to_eq_shaded_position,
+};
 use crate::app_state::AppState;
 use crate::equalizer::{
     load_winamp_eqf_first, load_xmms_preset_file, save_winamp_eqf, save_xmms_preset_file,
     EqualizerPreset,
 };
-#[cfg(feature = "gstreamer-backend")]
-use crate::player::{GStreamerBackend, PlayerState};
-use crate::render::{
-    docked_panel_size, DockedPanelState, EqualizerControl, EqualizerSlider, MainPushButton,
-    MainSlider, MainToggleButton, PlaylistMenuRenderKind, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
-};
-use crate::playlist::Playlist;
 #[cfg(not(feature = "gstreamer-backend"))]
 use crate::player::PlayerState;
+#[cfg(feature = "gstreamer-backend")]
+use crate::player::{GStreamerBackend, PlayerState};
+use crate::playlist::Playlist;
+use crate::render::{
+    docked_panel_size, DockedPanelState, EqualizerControl, EqualizerRenderState, EqualizerSlider,
+    MainPushButton, MainSlider, MainToggleButton, PlaylistMenuRenderKind, PlaylistRowRenderEntry,
+    PlaylistRowsRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+};
 use crate::session::default_config_dir;
+use crate::skin::layout::{panel_title_button_rect, LayoutPanelKind, PanelTitleButton};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 
 use super::file_info;
 use super::menu::{self, EguiPrompt};
 use super::preferences::{self, PreferencesPage, PreferencesViewportState};
 use super::runtime::EguiRuntime;
+use super::skin_texture::{render_equalizer_color_image, render_playlist_color_image};
 use super::{equalizer, main_player, playlist};
 
 #[derive(Debug, Default)]
 pub struct EguiTextureCache {
     pub generation: u64,
+}
+
+#[derive(Debug, Clone)]
+struct DetachedPanelSnapshot {
+    panel: LayoutPanelKind,
+    image: egui::ColorImage,
+    width: i32,
+    height: i32,
+    scale_factor: f32,
+}
+
+#[derive(Debug, Default)]
+struct DetachedViewportState {
+    equalizer: Option<DetachedPanelSnapshot>,
+    playlist: Option<DetachedPanelSnapshot>,
+    commands: Vec<PanelCommand>,
 }
 
 pub struct EguiFrontendState {
@@ -50,6 +73,7 @@ pub struct EguiFrontendState {
     pub prompt_text: String,
     pub selected_preferences_page: PreferencesPage,
     pub preferences_viewport: Arc<Mutex<PreferencesViewportState>>,
+    detached_viewports: Arc<Mutex<DetachedViewportState>>,
     pub texture_cache: EguiTextureCache,
     pub last_tick: Instant,
     pub scale_factor: f32,
@@ -88,6 +112,7 @@ impl EguiFrontendState {
             PreferencesPage::default(),
             options.open_preferences,
         )));
+        let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
         Ok(Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
@@ -98,6 +123,7 @@ impl EguiFrontendState {
             prompt_text: String::new(),
             selected_preferences_page: PreferencesPage::default(),
             preferences_viewport,
+            detached_viewports,
             texture_cache: EguiTextureCache::default(),
             last_tick: Instant::now(),
             scale_factor,
@@ -168,7 +194,8 @@ impl EguiFrontendState {
         if let Some(duration) = duration_ms {
             config.playback_position_ms = config.playback_position_ms.min(duration);
         }
-        self.runtime.apply_effect(AppEffect::QueueRender(RenderTarget::All));
+        self.runtime
+            .apply_effect(AppEffect::QueueRender(RenderTarget::All));
     }
 
     fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
@@ -296,7 +323,8 @@ impl EguiFrontendState {
             Ok(playlist) => {
                 self.controller.state_mut().playlist = playlist;
                 self.playlist_scroll_offset = 0;
-                self.runtime.apply_effect(AppEffect::QueueRender(RenderTarget::Playlist));
+                self.runtime
+                    .apply_effect(AppEffect::QueueRender(RenderTarget::Playlist));
             }
             Err(err) => self.runtime.pending_messages.push(format!(
                 "failed to load playlist '{}': {err}",
@@ -322,10 +350,10 @@ impl EguiFrontendState {
         };
         match loaded {
             Ok(Some(preset)) => self.apply_equalizer_preset(&preset),
-            Ok(None) => self.runtime.pending_messages.push(format!(
-                "no equalizer preset found in '{}'",
-                path.display()
-            )),
+            Ok(None) => self
+                .runtime
+                .pending_messages
+                .push(format!("no equalizer preset found in '{}'", path.display())),
             Err(err) => self.runtime.pending_messages.push(format!(
                 "failed to load equalizer preset '{}': {err}",
                 path.display()
@@ -334,7 +362,11 @@ impl EguiFrontendState {
     }
 
     fn save_equalizer_preset_file(&mut self, path: &Path) {
-        let preset = self.current_equalizer_preset(if is_winamp_eqf(path) { "Entry1" } else { "File" });
+        let preset = self.current_equalizer_preset(if is_winamp_eqf(path) {
+            "Entry1"
+        } else {
+            "File"
+        });
         let saved = if is_winamp_eqf(path) {
             save_winamp_eqf(path, &preset)
         } else {
@@ -361,7 +393,8 @@ impl EguiFrontendState {
         let config = &mut self.controller.state_mut().config;
         config.equalizer_preamp_pos = preset.preamp_position();
         config.equalizer_band_pos = preset.band_positions();
-        self.runtime.apply_effect(AppEffect::QueueRender(RenderTarget::Equalizer));
+        self.runtime
+            .apply_effect(AppEffect::QueueRender(RenderTarget::Equalizer));
         self.apply_effect(AppEffect::SetBackendEqualizer);
     }
 }
@@ -446,112 +479,336 @@ fn handle_dropped_files(ctx: &egui::Context, app: &mut EguiFrontendState) {
 }
 
 fn show_detached_panels(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    apply_detached_panel_commands(app);
+    update_detached_panel_snapshots(app);
+    let shared = Arc::clone(&app.detached_viewports);
     let config = app.controller().state().config.clone();
     if config.equalizer_visible && config.equalizer_detached {
-        show_detached_equalizer(ctx, app);
+        show_detached_panel_viewport(
+            ctx,
+            shared.clone(),
+            "xmms-egui-detached-equalizer",
+            "Equalizer",
+            true,
+        );
     }
     if config.playlist_visible && config.playlist_detached {
-        show_detached_playlist(ctx, app);
+        show_detached_panel_viewport(
+            ctx,
+            shared,
+            "xmms-egui-detached-playlist",
+            "Playlist",
+            false,
+        );
     }
 }
 
-fn show_detached_equalizer(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    let size = egui::vec2(
-        EQUALIZER_WINDOW_WIDTH as f32 * app.scale_factor,
-        if app.controller().state().config.equalizer_shaded {
-            crate::render::MAIN_TITLEBAR_HEIGHT as f32 * app.scale_factor
-        } else {
-            EQUALIZER_WINDOW_HEIGHT as f32 * app.scale_factor
-        },
-    );
-    let builder = egui::ViewportBuilder::default()
-        .with_title("Equalizer")
-        .with_inner_size(size)
-        .with_resizable(false)
-        .with_decorations(false);
-    ctx.show_viewport_immediate(
-        egui::ViewportId::from_hash_of("xmms-egui-detached-equalizer"),
-        builder,
-        |ctx, class| {
-            if ctx.input(|input| input.viewport().close_requested()) {
-                app.dispatch(PanelCommand::SetEqualizerVisibility(false));
-                return;
-            }
-            match class {
-                egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
-                    show_embedded_detached_panel(ctx, "Equalizer", false, |ui, app| {
-                        equalizer::show_equalizer(ui, app)
-                    }, app);
-                }
-                egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
-                    egui::CentralPanel::default()
-                        .frame(egui::Frame::NONE)
-                        .show(ctx, |ui| equalizer::show_equalizer(ui, app));
-                }
-            }
-        },
-    );
+fn apply_detached_panel_commands(app: &mut EguiFrontendState) {
+    let commands = {
+        let mut state = app
+            .detached_viewports
+            .lock()
+            .expect("detached viewport state poisoned");
+        std::mem::take(&mut state.commands)
+    };
+    for command in commands {
+        app.dispatch(command);
+    }
 }
 
-fn show_detached_playlist(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    let size = egui::vec2(
-        PLAYLIST_DEFAULT_WIDTH as f32 * app.scale_factor,
-        if app.controller().state().config.playlist_shaded {
-            crate::render::MAIN_TITLEBAR_HEIGHT as f32 * app.scale_factor
+fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
+    let config = app.controller().state().config.clone();
+    let equalizer = (config.equalizer_visible && config.equalizer_detached)
+        .then(|| detached_equalizer_snapshot(app))
+        .flatten();
+    let playlist = (config.playlist_visible && config.playlist_detached)
+        .then(|| detached_playlist_snapshot(app))
+        .flatten();
+    let mut state = app
+        .detached_viewports
+        .lock()
+        .expect("detached viewport state poisoned");
+    state.equalizer = equalizer;
+    state.playlist = playlist;
+}
+
+fn detached_equalizer_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSnapshot> {
+    let view_model = equalizer_view_model(app.controller().state());
+    let render_state = EqualizerRenderState {
+        focused: true,
+        shaded: view_model.shaded,
+        active: view_model.active,
+        automatic: view_model.auto,
+        pressed_control: app.equalizer_pressed_control,
+        pressed_slider: app.equalizer_pressed_slider,
+        preamp_position: view_model.preamp_position,
+        band_positions: view_model.band_positions,
+        volume_position: volume_to_eq_shaded_position(app.controller().state().player.volume()),
+        balance_position: balance_to_eq_shaded_position(app.controller().state().player.balance()),
+    };
+    let image = render_equalizer_color_image(&app.active_skin, &render_state).ok()?;
+    Some(DetachedPanelSnapshot {
+        panel: LayoutPanelKind::Equalizer,
+        width: EQUALIZER_WINDOW_WIDTH,
+        height: if view_model.shaded {
+            crate::render::MAIN_TITLEBAR_HEIGHT
         } else {
-            PLAYLIST_DEFAULT_HEIGHT as f32 * app.scale_factor
+            EQUALIZER_WINDOW_HEIGHT
         },
+        scale_factor: app.scale_factor,
+        image,
+    })
+}
+
+fn detached_playlist_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSnapshot> {
+    let view_model = playlist_view_model(app.controller().state());
+    let rows = PlaylistRowsRenderState {
+        entries: view_model
+            .rows
+            .iter()
+            .map(|row| PlaylistRowRenderEntry {
+                title: row.title.clone(),
+                length_ms: app
+                    .controller()
+                    .state()
+                    .playlist
+                    .entries()
+                    .get(row.index)
+                    .map(|entry| entry.length_ms)
+                    .unwrap_or(-1),
+                selected: row.selected,
+                current: row.current,
+            })
+            .collect(),
+        scroll_offset: app.playlist_scroll_offset,
+        scrollbar_dragging: false,
+        search_query: None,
+        show_numbers: app.controller().state().config.show_numbers_in_pl,
+        font_family: app.controller().state().config.playlist_font.clone(),
+        width: PLAYLIST_DEFAULT_WIDTH,
+        height: PLAYLIST_DEFAULT_HEIGHT,
+    };
+    let footer_info = detached_playlist_footer_info(app);
+    let (footer_min, footer_sec) = detached_playlist_footer_time_parts(app);
+    let image = render_playlist_color_image(
+        &app.active_skin,
+        true,
+        view_model.shaded,
+        PLAYLIST_DEFAULT_WIDTH,
+        PLAYLIST_DEFAULT_HEIGHT,
+        &rows,
+        Some(&footer_info),
+        Some(&footer_min),
+        Some(&footer_sec),
+    )
+    .ok()?;
+    Some(DetachedPanelSnapshot {
+        panel: LayoutPanelKind::Playlist,
+        width: PLAYLIST_DEFAULT_WIDTH,
+        height: if view_model.shaded {
+            crate::render::MAIN_TITLEBAR_HEIGHT
+        } else {
+            PLAYLIST_DEFAULT_HEIGHT
+        },
+        scale_factor: app.scale_factor,
+        image,
+    })
+}
+
+fn show_detached_panel_viewport(
+    ctx: &egui::Context,
+    shared: Arc<Mutex<DetachedViewportState>>,
+    id: &'static str,
+    title: &'static str,
+    equalizer_panel: bool,
+) {
+    let snapshot = {
+        let state = shared.lock().expect("detached viewport state poisoned");
+        if equalizer_panel {
+            state.equalizer.clone()
+        } else {
+            state.playlist.clone()
+        }
+    };
+    let Some(snapshot) = snapshot else {
+        return;
+    };
+    let size = egui::vec2(
+        snapshot.width as f32 * snapshot.scale_factor,
+        snapshot.height as f32 * snapshot.scale_factor,
     );
     let builder = egui::ViewportBuilder::default()
-        .with_title("Playlist")
+        .with_title(title)
         .with_inner_size(size)
         .with_min_inner_size(size)
-        .with_resizable(true)
+        .with_resizable(!equalizer_panel)
         .with_decorations(false);
-    ctx.show_viewport_immediate(
-        egui::ViewportId::from_hash_of("xmms-egui-detached-playlist"),
+    ctx.show_viewport_deferred(
+        egui::ViewportId::from_hash_of(id),
         builder,
-        |ctx, class| {
+        move |ctx, class| {
             if ctx.input(|input| input.viewport().close_requested()) {
-                app.dispatch(PanelCommand::SetPlaylistVisibility(false));
+                push_detached_command(
+                    &shared,
+                    if equalizer_panel {
+                        PanelCommand::SetEqualizerVisibility(false)
+                    } else {
+                        PanelCommand::SetPlaylistVisibility(false)
+                    },
+                );
                 return;
             }
             match class {
                 egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
-                    show_embedded_detached_panel(ctx, "Playlist", true, |ui, app| {
-                        playlist::show_playlist(ui, app)
-                    }, app);
+                    show_embedded_detached_snapshot(ctx, &shared, title, equalizer_panel);
                 }
                 egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE)
-                        .show(ctx, |ui| playlist::show_playlist(ui, app));
+                        .show(ctx, |ui| show_detached_snapshot(ui, &shared, &snapshot));
                 }
             }
         },
     );
 }
 
-fn show_embedded_detached_panel(
+fn show_embedded_detached_snapshot(
     ctx: &egui::Context,
+    shared: &Arc<Mutex<DetachedViewportState>>,
     title: &str,
-    resizable: bool,
-    add_contents: impl FnOnce(&mut egui::Ui, &mut EguiFrontendState),
-    app: &mut EguiFrontendState,
+    equalizer_panel: bool,
 ) {
+    let snapshot = {
+        let state = shared.lock().expect("detached viewport state poisoned");
+        if equalizer_panel {
+            state.equalizer.clone()
+        } else {
+            state.playlist.clone()
+        }
+    };
+    let Some(snapshot) = snapshot else {
+        return;
+    };
     let mut open = true;
     egui::Window::new(title)
         .open(&mut open)
-        .resizable(resizable)
+        .resizable(!equalizer_panel)
         .constrain(false)
-        .show(ctx, |ui| add_contents(ui, app));
+        .show(ctx, |ui| show_detached_snapshot(ui, shared, &snapshot));
     if !open {
-        match title {
-            "Equalizer" => app.dispatch(PanelCommand::SetEqualizerVisibility(false)),
-            "Playlist" => app.dispatch(PanelCommand::SetPlaylistVisibility(false)),
-            _ => {}
+        push_detached_command(
+            shared,
+            if equalizer_panel {
+                PanelCommand::SetEqualizerVisibility(false)
+            } else {
+                PanelCommand::SetPlaylistVisibility(false)
+            },
+        );
+    }
+}
+
+fn show_detached_snapshot(
+    ui: &mut egui::Ui,
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+) {
+    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+    let size = egui::vec2(
+        snapshot.width as f32 * snapshot.scale_factor,
+        snapshot.height as f32 * snapshot.scale_factor,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let texture = ui.ctx().load_texture(
+        format!("xmms-detached-{:?}", snapshot.panel),
+        snapshot.image.clone(),
+        egui::TextureOptions::NEAREST,
+    );
+    ui.painter().image(
+        texture.id(),
+        rect,
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    if response.clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            handle_detached_panel_click(shared, snapshot, rect, pos);
         }
     }
+}
+
+fn handle_detached_panel_click(
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+    pos: egui::Pos2,
+) {
+    let x = ((pos.x - base_rect.left()) / snapshot.scale_factor).floor() as i32;
+    let y = ((pos.y - base_rect.top()) / snapshot.scale_factor).floor() as i32;
+    for button in [PanelTitleButton::Shade, PanelTitleButton::Close] {
+        if panel_title_button_rect(snapshot.panel, button, snapshot.width).contains(x, y) {
+            let command = match (snapshot.panel, button) {
+                (LayoutPanelKind::Equalizer, PanelTitleButton::Shade) => {
+                    PanelCommand::ToggleEqualizerShade
+                }
+                (LayoutPanelKind::Equalizer, PanelTitleButton::Close) => {
+                    PanelCommand::SetEqualizerVisibility(false)
+                }
+                (LayoutPanelKind::Playlist, PanelTitleButton::Shade) => {
+                    PanelCommand::TogglePlaylistShade
+                }
+                (LayoutPanelKind::Playlist, PanelTitleButton::Close) => {
+                    PanelCommand::SetPlaylistVisibility(false)
+                }
+            };
+            push_detached_command(shared, command);
+            return;
+        }
+    }
+}
+
+fn push_detached_command(shared: &Arc<Mutex<DetachedViewportState>>, command: PanelCommand) {
+    shared
+        .lock()
+        .expect("detached viewport state poisoned")
+        .commands
+        .push(command);
+}
+
+fn detached_playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
+    if app.controller().state().player.state() == PlayerState::Stopped {
+        return ("   ".to_string(), "  ".to_string());
+    }
+    let total_seconds = app.controller().state().config.playback_position_ms.max(0) / 1_000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    (format!("{minutes:>3}"), format!("{seconds:02}"))
+}
+
+fn detached_playlist_footer_info(app: &EguiFrontendState) -> String {
+    let mut selected_ms = 0_i64;
+    let mut total_ms = 0_i64;
+    let mut selected_more = false;
+    let mut total_more = false;
+    let current = app.controller().state().playlist.position();
+    for (index, entry) in app.controller().state().playlist.entries().iter().enumerate() {
+        if entry.length_ms >= 0 {
+            total_ms += entry.length_ms;
+        } else {
+            total_more = true;
+        }
+        if entry.selected || current == Some(index) {
+            if entry.length_ms >= 0 {
+                selected_ms += entry.length_ms;
+            } else {
+                selected_more = true;
+            }
+        }
+    }
+    format!(
+        "{}/{}",
+        format_playlist_footer_duration(selected_ms, selected_more),
+        format_playlist_footer_duration(total_ms, total_more)
+    )
 }
 
 fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -717,11 +974,13 @@ fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendSta
     let current = app.controller().state().playlist.position().unwrap_or(0);
     let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
     let next = if input.key_pressed(egui::Key::ArrowDown)
-        || (app.controller().state().config.vim_playlist_navigation && input.key_pressed(egui::Key::J))
+        || (app.controller().state().config.vim_playlist_navigation
+            && input.key_pressed(egui::Key::J))
     {
         Some((current + 1).min(len - 1))
     } else if input.key_pressed(egui::Key::ArrowUp)
-        || (app.controller().state().config.vim_playlist_navigation && input.key_pressed(egui::Key::K))
+        || (app.controller().state().config.vim_playlist_navigation
+            && input.key_pressed(egui::Key::K))
     {
         Some(current.saturating_sub(1))
     } else if input.key_pressed(egui::Key::PageDown) {
@@ -736,7 +995,10 @@ fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendSta
         None
     };
     if let Some(position) = next {
-        app.controller_mut().state_mut().playlist.set_position(position);
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .set_position(position);
         app.playlist_scroll_offset = app.playlist_scroll_offset.min(position);
     }
 }
@@ -939,10 +1201,8 @@ mod tests {
 
     #[test]
     fn playlist_load_and_save_use_m3u_files() {
-        let root = std::env::temp_dir().join(format!(
-            "xmms-rs-egui-playlist-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("xmms-rs-egui-playlist-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let input = root.join("in.m3u");
@@ -968,10 +1228,7 @@ mod tests {
 
     #[test]
     fn equalizer_preset_load_and_save_use_shared_formats() {
-        let root = std::env::temp_dir().join(format!(
-            "xmms-rs-egui-eq-{}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("xmms-rs-egui-eq-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("custom.preset");
