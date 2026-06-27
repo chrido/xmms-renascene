@@ -10,13 +10,24 @@ Install the system tools used by the first GTK smoke test:
 
 ```bash
 sudo apt-get install -y xvfb xdotool
-python -m pip install pytest
+```
+
+Create/update the local test virtualenv:
+
+```bash
+python e2e/create_venv.py
 ```
 
 Run the tests under Xvfb so GTK has an X11 display:
 
 ```bash
-xvfb-run -a -s "-screen 0 1024x768x24" python -m pytest e2e
+xvfb-run -a -s "-screen 0 1024x768x24" ./repo pye2e
+```
+
+`./repo pye2e` creates `e2e/.venv` from `e2e/requirements.txt` when needed and then runs `python -m pytest e2e` from that virtualenv. Extra arguments are passed to pytest, for example:
+
+```bash
+xvfb-run -a ./repo pye2e -q -k gtk
 ```
 
 If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message.

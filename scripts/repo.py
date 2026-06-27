@@ -19,6 +19,10 @@ from .flatpak import FlatpakInstaller
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 RUST_BIN = REPO_DIR / "target" / "debug" / "xmms-rs"
+E2E_DIR = REPO_DIR / "e2e"
+E2E_VENV = E2E_DIR / ".venv"
+E2E_REQUIREMENTS = E2E_DIR / "requirements.txt"
+E2E_CREATE_VENV = E2E_DIR / "create_venv.py"
 SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
     "main-player-default": ("--reset", "--screenshot-scenario", "main-player-default"),
     "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
@@ -472,6 +476,39 @@ class RepoTool:
             return 1
         logging.info("frontend screenshot diff self-test passed")
         return 0
+
+    def _e2e_venv_python(self) -> Path:
+        if sys.platform == "win32":
+            return E2E_VENV / "Scripts" / "python.exe"
+        return E2E_VENV / "bin" / "python"
+
+    def _ensure_e2e_venv(self) -> Path:
+        if not E2E_REQUIREMENTS.is_file():
+            raise RuntimeError(f"missing Python E2E requirements file: {E2E_REQUIREMENTS}")
+        if not E2E_CREATE_VENV.is_file():
+            raise RuntimeError(f"missing Python E2E virtualenv script: {E2E_CREATE_VENV}")
+        python = self._e2e_venv_python()
+        if not python.is_file():
+            logging.info("Creating Python E2E virtualenv...")
+            [sys.executable, str(E2E_CREATE_VENV)] @ cli_follow | raise_on_error
+        return python
+
+    async def pye2e(self, *args: str) -> int:
+        """Run Python GUI E2E tests inside e2e/.venv.
+
+        Creates/updates the virtualenv from e2e/requirements.txt when needed.
+        Extra args are passed to pytest, e.g. `./repo pye2e -q -k gtk`.
+        """
+        os.chdir(REPO_DIR)
+        try:
+            python = self._ensure_e2e_venv()
+        except Exception as err:
+            logging.error("failed to prepare Python E2E virtualenv: %s", err)
+            return 1
+        command = [str(python), "-m", "pytest", "e2e", *args]
+        logging.info("Running Python E2E tests: %s", " ".join(shlex.quote(part) for part in command))
+        result = subprocess.run(command, cwd=REPO_DIR, check=False)
+        return result.returncode
 
 
 def dispatch_args(argv: list[str]) -> int:
