@@ -11,6 +11,19 @@ from gui import MainButton, MainWindow, screenshot_tool_available, wait_for_proc
 
 pytest: Any = import_module("pytest")
 
+MAIN_PLAYER_BUTTONS = [
+    MainButton.MENU,
+    MainButton.MINIMIZE,
+    MainButton.SHADE,
+    MainButton.CLOSE,
+    MainButton.PREVIOUS,
+    MainButton.PLAY,
+    MainButton.PAUSE,
+    MainButton.STOP,
+    MainButton.NEXT,
+    MainButton.EJECT,
+]
+
 
 def test_gtk_main_close_button_accepts_coordinate_click(
     gtk_main_window: MainWindow,
@@ -23,23 +36,20 @@ def test_gtk_main_close_button_accepts_coordinate_click(
     assert return_code == 0
 
 
-def test_gtk_main_pause_button_pressed_screenshot(
+@pytest.mark.parametrize("button", MAIN_PLAYER_BUTTONS, ids=[button.value for button in MAIN_PLAYER_BUTTONS])
+def test_gtk_main_button_pressed_screenshot(
     gtk_main_window: MainWindow,
     test_output: Any,
-    gtk_app: subprocess.Popen[bytes],
+    button: MainButton,
 ) -> None:
-    """Hold the skinned Pause button down and capture that pressed state."""
+    """Hold each skinned main-player button down and capture that pressed state."""
     if not screenshot_tool_available():
         pytest.skip("Install ImageMagick 'import' or xwd to capture E2E screenshots")
 
     screenshot = gtk_main_window.press_main_button_and_screenshot(
-        MainButton.PAUSE,
+        button,
         test_output.screenshot_path(),
     )
 
     assert screenshot.is_file()
     assert screenshot.stat().st_size > 0
-
-    gtk_main_window.click_main_button(MainButton.CLOSE)
-    return_code = wait_for_process_exit(gtk_app)
-    assert return_code == 0
