@@ -20,7 +20,7 @@ from .flatpak import FlatpakInstaller
 REPO_DIR = Path(__file__).resolve().parent.parent
 RUST_BIN = REPO_DIR / "target" / "debug" / "xmms-rs"
 E2E_DIR = REPO_DIR / "e2e"
-E2E_VENV = E2E_DIR / ".venv"
+E2E_VENV = Path(os.environ.get("XMMS_E2E_VENV_DIR", str(E2E_DIR / ".venv")))
 E2E_REQUIREMENTS = E2E_DIR / "requirements.txt"
 E2E_CREATE_VENV = E2E_DIR / "create_venv.py"
 E2E_DOCKERFILE = E2E_DIR / "Dockerfile"
@@ -554,6 +554,8 @@ class RepoTool:
             f"{REPO_DIR}:/workspace",
             "-e",
             "XMMS_E2E_SCREENSHOT_DIR=/workspace/target/e2e-screenshots",
+            "-e",
+            "XMMS_E2E_VENV_DIR=/tmp/xmms-renascene-pye2e-venv",
         ]
         if hasattr(os, "getuid") and hasattr(os, "getgid"):
             command.extend(

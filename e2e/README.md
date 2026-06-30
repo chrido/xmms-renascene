@@ -26,7 +26,7 @@ Run the tests under Xvfb so GTK has an X11 display:
 xvfb-run -a -s "-screen 0 1024x768x24" ./repo pye2e
 ```
 
-`./repo pye2e` creates `e2e/.venv` from `e2e/requirements.txt` when needed and then runs `python -m pytest e2e` from that virtualenv. Extra arguments are passed to pytest, for example:
+`./repo pye2e` creates `e2e/.venv` from `e2e/requirements.txt` when needed and then runs `python -m pytest e2e` from that virtualenv. Set `XMMS_E2E_VENV_DIR` to use a different virtualenv path. Extra arguments are passed to pytest, for example:
 
 ```bash
 xvfb-run -a ./repo pye2e -q -k gtk
@@ -49,7 +49,7 @@ docker build -f e2e/Dockerfile -t xmms-renascene-pye2e .
 docker run --rm -v "$PWD:/workspace" xmms-renascene-pye2e ./repo pye2e -q
 ```
 
-Set `XMMS_E2E_DOCKER_IMAGE` to override the image tag or `XMMS_E2E_DOCKER_SKIP_BUILD=1` to reuse an existing image without rebuilding.
+Set `XMMS_E2E_DOCKER_IMAGE` to override the image tag or `XMMS_E2E_DOCKER_SKIP_BUILD=1` to reuse an existing image without rebuilding. The Docker runner uses `/tmp/xmms-renascene-pye2e-venv` for its Python virtualenv so it does not accidentally reuse a host-created `e2e/.venv` with incompatible Python shared libraries.
 
 If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message. Screenshot-specific tests also skip when neither ImageMagick `import` nor `xwd` is available.
 
