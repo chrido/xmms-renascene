@@ -14,6 +14,8 @@ from typing import Any
 
 pytest: Any = import_module("pytest")
 
+from gui import MainWindow
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_BINARY = REPO_ROOT / "target" / "debug" / "xmms-rs"
@@ -82,6 +84,18 @@ def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
                 process.kill()
                 process.wait(timeout=5)
         log.close()
+
+
+@pytest.fixture
+def gtk_main_window(gtk_app: subprocess.Popen[bytes]) -> MainWindow:
+    return MainWindow.wait(MAIN_WINDOW_TITLE, gtk_app)
+
+
+@pytest.fixture
+def e2e_screenshot_dir() -> Path:
+    path = Path(os.environ.get("XMMS_E2E_SCREENSHOT_DIR", str(REPO_ROOT / "target" / "e2e-screenshots")))
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

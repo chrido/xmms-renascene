@@ -6,11 +6,13 @@ The tests are intentionally black-box: they build/start the real application, fi
 
 ## Requirements
 
-Install the system tools used by the first GTK smoke test:
+Install the system tools used by the GTK smoke tests:
 
 ```bash
-sudo apt-get install -y xvfb xdotool
+sudo apt-get install -y xvfb xdotool imagemagick
 ```
+
+The screenshot helper prefers ImageMagick's `import` command for PNG output. If `import` is not installed but `xwd` is available, pressed-button screenshots are saved as `.xwd` files instead.
 
 Create/update the local test virtualenv:
 
@@ -30,7 +32,9 @@ xvfb-run -a -s "-screen 0 1024x768x24" ./repo pye2e
 xvfb-run -a ./repo pye2e -q -k gtk
 ```
 
-If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message.
+If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message. Screenshot-specific tests also skip when neither ImageMagick `import` nor `xwd` is available.
+
+Pressed-button screenshots are written to `target/e2e-screenshots` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`.
 
 ## Build behavior
 
