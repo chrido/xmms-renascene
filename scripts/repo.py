@@ -499,7 +499,7 @@ class RepoTool:
         """Run Python GUI E2E tests inside e2e/.venv.
 
         Creates/updates the virtualenv from e2e/requirements.txt when needed.
-        Extra args are passed to pytest, e.g. `./repo pye2e -q -k gtk`.
+        Extra args are passed to pytest, e.g. `./repo pye2e -k gtk`.
         """
         os.chdir(REPO_DIR)
         try:

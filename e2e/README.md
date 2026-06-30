@@ -29,7 +29,7 @@ xvfb-run -a -s "-screen 0 1024x768x24" ./repo pye2e
 `./repo pye2e` creates `e2e/.venv` from `e2e/requirements.txt` when needed and then runs `python -m pytest e2e` from that virtualenv. Set `XMMS_E2E_VENV_DIR` to use a different virtualenv path. Extra arguments are passed to pytest, for example:
 
 ```bash
-xvfb-run -a ./repo pye2e -q -k gtk
+xvfb-run -a ./repo pye2e -k gtk
 ```
 
 ## Docker/X server image
@@ -37,7 +37,7 @@ xvfb-run -a ./repo pye2e -q -k gtk
 For machines or CI jobs without a local X server, build and run the Docker image. It contains Rust, GTK/GStreamer build dependencies, Xvfb, `xdotool`, ImageMagick `import`, `xwd`, and `ffmpeg`:
 
 ```bash
-./repo pye2e-docker -q
+./repo pye2e-docker
 ```
 
 `./repo pye2e-docker` builds the image when needed, starts the container with the repository mounted at `/workspace`, mounts `./testoutput` at `/testoutput`, and uses the container entrypoint to start Xvfb automatically when `DISPLAY` is not already reachable. It then runs `./repo pye2e` inside the container. Extra arguments are passed through to pytest.
@@ -47,7 +47,7 @@ Equivalent raw Docker commands:
 ```bash
 docker build -f e2e/Dockerfile -t xmms-renascene-pye2e .
 mkdir -p testoutput
-docker run --rm -v "$PWD:/workspace" -v "$PWD/testoutput:/testoutput" -e XMMS_E2E_SCREENSHOT_DIR=/testoutput xmms-renascene-pye2e ./repo pye2e -q
+docker run --rm -v "$PWD:/workspace" -v "$PWD/testoutput:/testoutput" -e XMMS_E2E_SCREENSHOT_DIR=/testoutput xmms-renascene-pye2e ./repo pye2e
 ```
 
 Set `XMMS_E2E_DOCKER_IMAGE` to override the image tag or `XMMS_E2E_DOCKER_SKIP_BUILD=1` to reuse an existing image without rebuilding. The Docker runner uses `/tmp/xmms-renascene-pye2e-venv` for its Python virtualenv so it does not accidentally reuse a host-created `e2e/.venv` with incompatible Python shared libraries.

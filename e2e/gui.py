@@ -112,6 +112,25 @@ class ToggleOpenCloseScreenshots:
     closed: Path
 
 
+@dataclass(frozen=True)
+class WindowOpenCloseScreenshots:
+    """Screenshots for a top-level window open/close interaction."""
+
+    before: Path
+    opened: Path
+    closed: Path
+
+
+@dataclass(frozen=True)
+class MenuWindowOpenCloseScreenshots:
+    """Screenshots for opening a window through the main menu."""
+
+    before: Path
+    menu_open: Path
+    opened: Path
+    closed: Path
+
+
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
@@ -154,6 +173,17 @@ def wait_for_visible_window(
     raise TimeoutError(f"window named {title!r} did not appear; last xdotool output: {last_error}")
 
 
+def wait_for_no_visible_window(title: str, *, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
+        windows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        if result.returncode != 0 or not windows:
+            return
+        time.sleep(0.1)
+    raise TimeoutError(f"window named {title!r} remained visible")
+
+
 def parse_xdotool_int(value: str, source_line: str) -> int:
     try:
         return int(value)
@@ -181,6 +211,10 @@ def click_window_coordinate(window_id: str, x: int, y: int) -> None:
     # itself uses coordinates relative to the target window and is the important part.
     run_xdotool("windowactivate", "--sync", window_id, check=False)
     run_xdotool("mousemove", "--window", window_id, str(x), str(y), "click", "1")
+
+
+def click_screen_coordinate(x: int, y: int) -> None:
+    run_xdotool("mousemove", str(x), str(y), "click", "1")
 
 
 def screenshot_window(window_id: str, requested_path: Path) -> Path:
@@ -252,6 +286,12 @@ class MainWindow:
 
     def screenshot_screen(self, path: Path) -> Path:
         return screenshot_screen(path)
+
+    def focus_main_window(self, settle_delay: float = 0.2) -> None:
+        run_xdotool("windowmap", self.window_id, check=False)
+        run_xdotool("windowraise", self.window_id, check=False)
+        run_xdotool("windowactivate", "--sync", self.window_id, check=False)
+        time.sleep(settle_delay)
 
     def press_main_button_and_screenshot(
         self,
@@ -351,6 +391,62 @@ class MainWindow:
             return self.screenshot_screen(path)
         finally:
             run_xdotool("mouseup", "1", check=False)
+
+    def preferences_with_screenshots(
+        self,
+        next_screenshot_path: Callable[[], Path],
+        *,
+        transition_delay: float = 0.3,
+    ) -> WindowOpenCloseScreenshots:
+        """Open preferences via Ctrl+P, close it, and screenshot every state."""
+        self.focus_main_window(transition_delay)
+        before = self.screenshot_screen(next_screenshot_path())
+        run_xdotool("key", "ctrl+p")
+        preferences_window = wait_for_visible_window("Preferences", timeout=3.0)
+        time.sleep(transition_delay)
+        opened = self.screenshot_screen(next_screenshot_path())
+        self.close_window(preferences_window)
+        self.focus_main_window(transition_delay)
+        closed = self.screenshot_screen(next_screenshot_path())
+        return WindowOpenCloseScreenshots(before=before, opened=opened, closed=closed)
+
+    def preferences_via_menu_with_screenshots(
+        self,
+        next_screenshot_path: Callable[[], Path],
+        *,
+        transition_delay: float = 0.3,
+    ) -> MenuWindowOpenCloseScreenshots:
+        """Open preferences by clicking the player menu, then close it."""
+        self.focus_main_window(transition_delay)
+        before = self.screenshot_screen(next_screenshot_path())
+        self.click_main_button(MainButton.MENU)
+        time.sleep(transition_delay)
+        menu_open = self.screenshot_screen(next_screenshot_path())
+        x, y = self.main_menu_preferences_point()
+        click_screen_coordinate(x, y)
+        preferences_window = wait_for_visible_window("Preferences", timeout=3.0)
+        time.sleep(transition_delay)
+        opened = self.screenshot_screen(next_screenshot_path())
+        self.close_window(preferences_window)
+        self.focus_main_window(transition_delay)
+        closed = self.screenshot_screen(next_screenshot_path())
+        return MenuWindowOpenCloseScreenshots(
+            before=before,
+            menu_open=menu_open,
+            opened=opened,
+            closed=closed,
+        )
+
+    def main_menu_preferences_point(self) -> tuple[int, int]:
+        geometry = self.geometry()
+        scale = geometry.width / BASE_MAIN_WIDTH
+        # GTK positions the popover below the skinned menu button. Preferences
+        # is the third menu item; these are base-skin-relative root coordinates.
+        return (geometry.x + round(36 * scale), geometry.y + round(39 * scale))
+
+    def close_window(self, window_id: str) -> None:
+        run_xdotool("windowclose", window_id)
+        wait_for_no_visible_window("Preferences", timeout=3.0)
 
 
 def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:

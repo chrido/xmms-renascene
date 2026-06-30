@@ -85,3 +85,33 @@ def test_gtk_panel_toggle_opens_and_closes_with_screenshots(
     ]:
         assert screenshot.is_file()
         assert screenshot.stat().st_size > 0
+
+
+def test_gtk_preferences_opens_and_closes_with_screenshots(
+    gtk_main_window: MainWindow,
+    test_output: Any,
+) -> None:
+    """Open and close GTK preferences and screenshot every state."""
+    if not screenshot_tool_available():
+        pytest.skip("Install ImageMagick 'import' or xwd to capture E2E screenshots")
+
+    screenshots = gtk_main_window.preferences_with_screenshots(test_output.screenshot_path)
+
+    for screenshot in [screenshots.before, screenshots.opened, screenshots.closed]:
+        assert screenshot.is_file()
+        assert screenshot.stat().st_size > 0
+
+
+def test_gtk_preferences_opens_from_player_menu_with_screenshots(
+    gtk_main_window: MainWindow,
+    test_output: Any,
+) -> None:
+    """Open GTK preferences by clicking the player menu item and screenshot every state."""
+    if not screenshot_tool_available():
+        pytest.skip("Install ImageMagick 'import' or xwd to capture E2E screenshots")
+
+    screenshots = gtk_main_window.preferences_via_menu_with_screenshots(test_output.screenshot_path)
+
+    for screenshot in [screenshots.before, screenshots.menu_open, screenshots.opened, screenshots.closed]:
+        assert screenshot.is_file()
+        assert screenshot.stat().st_size > 0

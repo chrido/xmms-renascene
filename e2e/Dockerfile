@@ -48,4 +48,4 @@ COPY e2e/docker-entrypoint.sh /usr/local/bin/xmms-e2e-entrypoint
 RUN chmod +x /usr/local/bin/xmms-e2e-entrypoint
 
 ENTRYPOINT ["/usr/local/bin/xmms-e2e-entrypoint"]
-CMD ["./repo", "pye2e", "-q"]
+CMD ["./repo", "pye2e"]
