@@ -752,7 +752,9 @@ fn detached_panel_titlebar_drag_region(
     }
     ![PanelTitleButton::Shade, PanelTitleButton::Close]
         .into_iter()
-        .any(|button| panel_title_button_rect(snapshot.panel, button, snapshot.width).contains(x, y))
+        .any(|button| {
+            panel_title_button_rect(snapshot.panel, button, snapshot.width).contains(x, y)
+        })
 }
 
 fn handle_detached_panel_click(
@@ -809,7 +811,14 @@ fn detached_playlist_footer_info(app: &EguiFrontendState) -> String {
     let mut selected_more = false;
     let mut total_more = false;
     let current = app.controller().state().playlist.position();
-    for (index, entry) in app.controller().state().playlist.entries().iter().enumerate() {
+    for (index, entry) in app
+        .controller()
+        .state()
+        .playlist
+        .entries()
+        .iter()
+        .enumerate()
+    {
         if entry.length_ms >= 0 {
             total_ms += entry.length_ms;
         } else {

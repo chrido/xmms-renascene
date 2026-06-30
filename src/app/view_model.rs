@@ -10,9 +10,7 @@ use crate::audio_model::EqualizerBandPositions;
 use crate::config::Config;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistMenuKind;
-use crate::skin::layout::{
-    playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton,
-};
+use crate::skin::layout::{playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MainPlayerViewModel {
@@ -397,8 +395,12 @@ mod tests {
     #[test]
     fn playlist_view_model_marks_current_and_selected_rows() {
         let mut state = AppState::default();
-        state.playlist.add_timed_uri("file:///tmp/one.ogg", "One", 83_000);
-        state.playlist.add_timed_uri("file:///tmp/two.ogg", "Two", -1);
+        state
+            .playlist
+            .add_timed_uri("file:///tmp/one.ogg", "One", 83_000);
+        state
+            .playlist
+            .add_timed_uri("file:///tmp/two.ogg", "Two", -1);
         state.playlist.set_position(0);
         state.playlist.entries_mut()[1].selected = true;
 

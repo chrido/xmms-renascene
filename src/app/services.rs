@@ -72,7 +72,10 @@ mod tests {
 
     #[test]
     fn frontend_service_boundary_lists_mobile_relevant_services() {
-        let kinds: Vec<_> = service_boundaries().iter().map(|boundary| boundary.kind).collect();
+        let kinds: Vec<_> = service_boundaries()
+            .iter()
+            .map(|boundary| boundary.kind)
+            .collect();
 
         assert!(kinds.contains(&FrontendServiceKind::FileDialog));
         assert!(kinds.contains(&FrontendServiceKind::DirectoryDialog));

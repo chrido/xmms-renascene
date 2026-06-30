@@ -39,7 +39,11 @@ impl PlaybackBackend for GStreamerBackend {
     }
 
     fn set_equalizer(&self, state: EqualizerBackendState) -> Result<(), String> {
-        self.set_equalizer_from_positions(state.active, state.preamp_position, state.band_positions);
+        self.set_equalizer_from_positions(
+            state.active,
+            state.preamp_position,
+            state.band_positions,
+        );
         Ok(())
     }
 }

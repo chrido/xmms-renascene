@@ -65,6 +65,9 @@ mod tests {
             PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::List, 1),
             Some(PlaylistMenuCommand::SavePlaylist)
         );
-        assert_eq!(PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Misc, 99), None);
+        assert_eq!(
+            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Misc, 99),
+            None
+        );
     }
 }

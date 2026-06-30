@@ -221,7 +221,12 @@ fn add_playlist_titlebar_drag_region(
 ) {
     let titlebar = scale_skin_rect(
         base_rect,
-        SkinRect::new(0, 0, PLAYLIST_DEFAULT_WIDTH, crate::render::MAIN_TITLEBAR_HEIGHT),
+        SkinRect::new(
+            0,
+            0,
+            PLAYLIST_DEFAULT_WIDTH,
+            crate::render::MAIN_TITLEBAR_HEIGHT,
+        ),
         app.scale_factor,
     );
     let response = ui.interact(
@@ -237,7 +242,10 @@ fn add_playlist_titlebar_drag_region(
         let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
         if [PanelTitleButton::Shade, PanelTitleButton::Close]
             .into_iter()
-            .any(|button| panel_title_button_rect(LayoutPanelKind::Playlist, button, PLAYLIST_DEFAULT_WIDTH).contains(x, y))
+            .any(|button| {
+                panel_title_button_rect(LayoutPanelKind::Playlist, button, PLAYLIST_DEFAULT_WIDTH)
+                    .contains(x, y)
+            })
         {
             return;
         }
@@ -392,7 +400,10 @@ fn add_playlist_menu_popover(
     let mut clicked_item = None;
     for index in 0..kind.item_count() {
         let item_rect = egui::Rect::from_min_size(
-            egui::pos2(popup_rect.left(), popup_rect.top() + index as f32 * item_height),
+            egui::pos2(
+                popup_rect.left(),
+                popup_rect.top() + index as f32 * item_height,
+            ),
             egui::vec2(popup_rect.width(), item_height),
         );
         let response = ui.interact(

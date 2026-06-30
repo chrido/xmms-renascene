@@ -19,7 +19,10 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
                 ui.horizontal(|ui| {
                     ui.label("Filename:");
                     let mut filename = entry.filename.clone();
-                    ui.add_enabled(false, egui::TextEdit::singleline(&mut filename).desired_width(f32::INFINITY));
+                    ui.add_enabled(
+                        false,
+                        egui::TextEdit::singleline(&mut filename).desired_width(f32::INFINITY),
+                    );
                 });
                 ui.separator();
                 ui.columns(2, |columns| {
@@ -70,7 +73,11 @@ fn selected_or_current_entry(app: &EguiFrontendState) -> Option<PlaylistEntry> {
         .entries()
         .iter()
         .find(|entry| entry.selected)
-        .or_else(|| playlist.position().and_then(|position| playlist.entries().get(position)))
+        .or_else(|| {
+            playlist
+                .position()
+                .and_then(|position| playlist.entries().get(position))
+        })
         .cloned()
 }
 
@@ -83,7 +90,10 @@ fn labelled_value(ui: &mut egui::Ui, label: &str, value: &str) {
 
 fn basename(uri: &str) -> String {
     file_uri_to_path(uri)
-        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
         .or_else(|| uri.rsplit('/').next().map(str::to_string))
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| uri.to_string())

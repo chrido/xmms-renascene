@@ -26,17 +26,28 @@ impl EguiRuntime {
                 self.pending_messages.push(message);
             }
             AppEffect::OpenFileDialog(request) => {
-                self.pending_messages
-                    .push(format!("file dialog effect pending egui handler: {request:?}"));
+                self.pending_messages.push(format!(
+                    "file dialog effect pending egui handler: {request:?}"
+                ));
             }
             AppEffect::OpenPath(path) => {
-                self.pending_messages
-                    .push(format!("open path effect pending egui handler: {}", path.display()));
+                self.pending_messages.push(format!(
+                    "open path effect pending egui handler: {}",
+                    path.display()
+                ));
             }
-            AppEffect::OpenFileInfoDialog => self.pending_messages.push("file info dialog pending egui handler".to_string()),
-            AppEffect::OpenPreferences => self.pending_messages.push("preferences effect pending egui handler".to_string()),
-            AppEffect::OpenSkinBrowser => self.pending_messages.push("skin browser effect pending egui handler".to_string()),
-            AppEffect::OpenSkinEditor => self.pending_messages.push("skin editor is GTK-only".to_string()),
+            AppEffect::OpenFileInfoDialog => self
+                .pending_messages
+                .push("file info dialog pending egui handler".to_string()),
+            AppEffect::OpenPreferences => self
+                .pending_messages
+                .push("preferences effect pending egui handler".to_string()),
+            AppEffect::OpenSkinBrowser => self
+                .pending_messages
+                .push("skin browser effect pending egui handler".to_string()),
+            AppEffect::OpenSkinEditor => self
+                .pending_messages
+                .push("skin editor is GTK-only".to_string()),
             AppEffect::StartPlayback
             | AppEffect::StartPlaybackFromCurrent
             | AppEffect::StartPlaybackUri { .. }

@@ -50,7 +50,10 @@ impl<'a> GtkEffectInterpreter<'a> {
                 eprintln!("xmms-rs: file dialog effect pending GTK handler: {request:?}");
             }
             AppEffect::OpenPath(path) => {
-                eprintln!("xmms-rs: open path effect pending GTK handler: {}", path.display());
+                eprintln!(
+                    "xmms-rs: open path effect pending GTK handler: {}",
+                    path.display()
+                );
             }
             AppEffect::OpenFileInfoDialog
             | AppEffect::OpenPreferences

@@ -43,6 +43,9 @@ mod tests {
 
     #[test]
     fn mobile_rendering_strategy_starts_with_cairo_bitmap_parity() {
-        assert_eq!(selected_rendering_strategy(), RenderingStrategy::CairoBitmapFirst);
+        assert_eq!(
+            selected_rendering_strategy(),
+            RenderingStrategy::CairoBitmapFirst
+        );
     }
 }
