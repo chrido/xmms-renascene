@@ -21,6 +21,7 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         dbus-x11 \
+        ffmpeg \
         imagemagick \
         libasound2-dev \
         libcairo2-dev \

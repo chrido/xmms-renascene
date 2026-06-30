@@ -42,6 +42,43 @@ class TestOutput:
         normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
         return self.directory / f"{self.screenshot_count}{normalized_suffix}"
 
+    def create_video(self) -> Path | None:
+        pngs = sorted(
+            self.directory.glob("*.png"),
+            key=lambda path: parse_xdotool_int(path.stem, path.name) if path.stem.isdigit() else 0,
+        )
+        if not pngs:
+            return None
+        if not command_exists("ffmpeg"):
+            return None
+        video = self.directory / "screenshots.mp4"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-framerate",
+                "1",
+                "-start_number",
+                "1",
+                "-i",
+                str(self.directory / "%d.png"),
+                "-vf",
+                "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                str(video),
+            ],
+            check=True,
+        )
+        if not video.is_file() or video.stat().st_size == 0:
+            raise AssertionError(f"ffmpeg did not create {video}")
+        return video
+
 
 
 def command_exists(name: str) -> bool:
@@ -113,11 +150,13 @@ def gtk_main_window(gtk_app: subprocess.Popen[bytes]) -> MainWindow:
 
 
 @pytest.fixture
-def test_output(request: Any) -> TestOutput:
+def test_output(request: Any) -> Iterator[TestOutput]:
     output_root = Path(os.environ.get("XMMS_E2E_SCREENSHOT_DIR", str(REPO_ROOT / "testoutput")))
     output_dir = output_root / sanitize_output_name(request.node.name)
     output_dir.mkdir(parents=True, exist_ok=True)
-    return TestOutput(output_dir)
+    output = TestOutput(output_dir)
+    yield output
+    output.create_video()
 
 
 @pytest.fixture

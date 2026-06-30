@@ -9,7 +9,7 @@ The tests are intentionally black-box: they build/start the real application, fi
 Install the system tools used by the GTK smoke tests:
 
 ```bash
-sudo apt-get install -y xvfb xdotool imagemagick
+sudo apt-get install -y xvfb xdotool imagemagick ffmpeg
 ```
 
 The screenshot helper prefers ImageMagick's `import` command for PNG output. If `import` is not installed but `xwd` is available, pressed-button screenshots are saved as `.xwd` files instead.
@@ -34,7 +34,7 @@ xvfb-run -a ./repo pye2e -q -k gtk
 
 ## Docker/X server image
 
-For machines or CI jobs without a local X server, build and run the Docker image. It contains Rust, GTK/GStreamer build dependencies, Xvfb, `xdotool`, ImageMagick `import`, and `xwd`:
+For machines or CI jobs without a local X server, build and run the Docker image. It contains Rust, GTK/GStreamer build dependencies, Xvfb, `xdotool`, ImageMagick `import`, `xwd`, and `ffmpeg`:
 
 ```bash
 ./repo pye2e-docker -q
@@ -54,7 +54,7 @@ Set `XMMS_E2E_DOCKER_IMAGE` to override the image tag or `XMMS_E2E_DOCKER_SKIP_B
 
 If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message. Screenshot-specific tests also skip when neither ImageMagick `import` nor `xwd` is available.
 
-Pressed-button screenshots are written to `testoutput` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`. Each test invocation gets its own sanitized folder name, including pytest parameter text when present, and screenshots are numbered in capture order. Player button tests capture before, pressed, and after states, for example `test_gtk_main_button_pressed_screenshot_pause/1.png`, `2.png`, and `3.png`.
+Pressed-button screenshots are written to `testoutput` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`. Each test invocation gets its own sanitized folder name, including pytest parameter text when present, and screenshots are numbered in capture order. Player button tests capture before, pressed, and after states, for example `test_gtk_main_button_pressed_screenshot_pause/1.png`, `2.png`, and `3.png`. After each test, numbered PNG screenshots in that test folder are encoded to `screenshots.mp4` with `ffmpeg`.
 
 ## Build behavior
 
