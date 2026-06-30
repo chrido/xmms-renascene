@@ -23,6 +23,8 @@ E2E_DIR = REPO_DIR / "e2e"
 E2E_VENV = E2E_DIR / ".venv"
 E2E_REQUIREMENTS = E2E_DIR / "requirements.txt"
 E2E_CREATE_VENV = E2E_DIR / "create_venv.py"
+E2E_DOCKERFILE = E2E_DIR / "Dockerfile"
+E2E_DOCKER_IMAGE = "xmms-renascene-pye2e"
 SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
     "main-player-default": ("--reset", "--screenshot-scenario", "main-player-default"),
     "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
@@ -509,6 +511,64 @@ class RepoTool:
         logging.info("Running Python E2E tests: %s", " ".join(shlex.quote(part) for part in command))
         result = subprocess.run(command, cwd=REPO_DIR, check=False)
         return result.returncode
+
+    def _build_pye2e_docker_image(self, image: str = E2E_DOCKER_IMAGE) -> int:
+        """Build the Docker image that contains Xvfb and screenshot tools for Python E2E."""
+        os.chdir(REPO_DIR)
+        required_command("docker")
+        command = ["docker", "build", "-f", str(E2E_DOCKERFILE), "-t", image, "."]
+        logging.info("Building Python E2E Docker image: %s", " ".join(shlex.quote(part) for part in command))
+        return subprocess.run(command, cwd=REPO_DIR, check=False).returncode
+
+    def _docker_image_exists(self, image: str) -> bool:
+        result = subprocess.run(
+            ["docker", "image", "inspect", image],
+            cwd=REPO_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+
+    async def pye2e_docker(self, *args: str) -> int:
+        """Run Python E2E tests in Docker with an in-container Xvfb server.
+
+        The image includes GTK/GStreamer build dependencies, Xvfb, xdotool,
+        ImageMagick `import`, and xwd. Extra args are passed through to pytest.
+        Set XMMS_E2E_DOCKER_IMAGE to override the image tag, or
+        XMMS_E2E_DOCKER_SKIP_BUILD=1 to reuse an existing image.
+        """
+        os.chdir(REPO_DIR)
+        required_command("docker")
+        image = os.environ.get("XMMS_E2E_DOCKER_IMAGE", E2E_DOCKER_IMAGE)
+        if os.environ.get("XMMS_E2E_DOCKER_SKIP_BUILD") != "1" or not self._docker_image_exists(image):
+            build_result = self._build_pye2e_docker_image(image)
+            if build_result != 0:
+                return build_result
+
+        command = [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{REPO_DIR}:/workspace",
+            "-e",
+            "XMMS_E2E_SCREENSHOT_DIR=/workspace/target/e2e-screenshots",
+        ]
+        if hasattr(os, "getuid") and hasattr(os, "getgid"):
+            command.extend(
+                [
+                    "--user",
+                    f"{os.getuid()}:{os.getgid()}",
+                    "-e",
+                    "HOME=/tmp/xmms-e2e-home",
+                    "-e",
+                    "CARGO_HOME=/tmp/xmms-e2e-cargo",
+                ]
+            )
+        command.extend([image, "./repo", "pye2e", *args])
+        logging.info("Running Python E2E tests in Docker: %s", " ".join(shlex.quote(part) for part in command))
+        return subprocess.run(command, cwd=REPO_DIR, check=False).returncode
 
 
 def dispatch_args(argv: list[str]) -> int:
