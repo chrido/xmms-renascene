@@ -12,8 +12,6 @@ from pathlib import Path
 
 
 BASE_MAIN_WIDTH = 275
-BASE_MAIN_HEIGHT = 116
-BASE_MAIN_SHADED_HEIGHT = 14
 
 
 class MainButton(str, Enum):
@@ -29,6 +27,15 @@ class MainButton(str, Enum):
     STOP = "stop"
     NEXT = "next"
     EJECT = "eject"
+
+
+class MainToggleButton(str, Enum):
+    """Skinned main-window toggle buttons addressed by base-skin geometry."""
+
+    SHUFFLE = "shuffle"
+    REPEAT = "repeat"
+    EQUALIZER = "equalizer"
+    PLAYLIST = "playlist"
 
 
 @dataclass(frozen=True)
@@ -73,6 +80,13 @@ MAIN_SHADED_BUTTON_RECTS: dict[MainButton, SkinRect] = {
     MainButton.EJECT: SkinRect(216, 4, 9, 7),
 }
 
+MAIN_TOGGLE_RECTS: dict[MainToggleButton, SkinRect] = {
+    MainToggleButton.SHUFFLE: SkinRect(164, 89, 46, 15),
+    MainToggleButton.REPEAT: SkinRect(210, 89, 28, 15),
+    MainToggleButton.EQUALIZER: SkinRect(219, 58, 23, 12),
+    MainToggleButton.PLAYLIST: SkinRect(242, 58, 23, 12),
+}
+
 
 class ScreenshotToolUnavailable(RuntimeError):
     """Raised when no supported X11 screenshot tool is installed."""
@@ -85,6 +99,17 @@ class ButtonPressScreenshots:
     before: Path
     pressed: Path
     after: Path
+
+
+@dataclass(frozen=True)
+class ToggleOpenCloseScreenshots:
+    """Screenshots for opening and closing a panel through a toggle."""
+
+    before: Path
+    opening_pressed: Path
+    opened: Path
+    closing_pressed: Path
+    closed: Path
 
 
 def command_exists(name: str) -> bool:
@@ -105,10 +130,19 @@ def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[s
 
 
 def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float = 10.0) -> str:
+    return wait_for_visible_window(title, timeout=timeout, process=process)
+
+
+def wait_for_visible_window(
+    title: str,
+    *,
+    timeout: float = 10.0,
+    process: subprocess.Popen[bytes] | None = None,
+) -> str:
     deadline = time.monotonic() + timeout
     last_error = ""
     while time.monotonic() < deadline:
-        if process.poll() is not None:
+        if process is not None and process.poll() is not None:
             raise AssertionError(f"application exited before window appeared: {process.returncode}")
         result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
         if result.returncode == 0:
@@ -150,16 +184,28 @@ def click_window_coordinate(window_id: str, x: int, y: int) -> None:
 
 
 def screenshot_window(window_id: str, requested_path: Path) -> Path:
+    return _screenshot_x11_target(window_id, requested_path)
+
+
+def screenshot_screen(requested_path: Path) -> Path:
+    return _screenshot_x11_target("root", requested_path, root=True)
+
+
+def _screenshot_x11_target(window_id: str, requested_path: Path, root: bool = False) -> Path:
     requested_path.parent.mkdir(parents=True, exist_ok=True)
     if command_exists("import"):
-        subprocess.run(["import", "-window", window_id, str(requested_path)], check=True)
+        import_args = ["import", "-window", window_id]
+        if root:
+            import_args.append("-screen")
+        subprocess.run([*import_args, str(requested_path)], check=True)
         if requested_path.is_file() and requested_path.stat().st_size > 0:
             return requested_path
         raise AssertionError(f"screenshot command did not create {requested_path}")
 
     if command_exists("xwd"):
         actual_path = requested_path if requested_path.suffix == ".xwd" else requested_path.with_suffix(".xwd")
-        subprocess.run(["xwd", "-silent", "-id", window_id, "-out", str(actual_path)], check=True)
+        xwd_target = ["-root"] if root else ["-id", window_id]
+        subprocess.run(["xwd", "-silent", *xwd_target, "-out", str(actual_path)], check=True)
         if actual_path.is_file() and actual_path.stat().st_size > 0:
             return actual_path
         raise AssertionError(f"screenshot command did not create {actual_path}")
@@ -182,21 +228,30 @@ class MainWindow:
 
     def main_button_point(self, button: MainButton, shaded: bool = False) -> tuple[int, int]:
         rects = MAIN_SHADED_BUTTON_RECTS if shaded else MAIN_BUTTON_RECTS
-        base_height = BASE_MAIN_SHADED_HEIGHT if shaded else BASE_MAIN_HEIGHT
-        rect = rects[button]
+        return self.scale_skin_point(rects[button])
+
+    def main_toggle_point(self, toggle: MainToggleButton) -> tuple[int, int]:
+        return self.scale_skin_point(MAIN_TOGGLE_RECTS[toggle])
+
+    def scale_skin_point(self, rect: SkinRect) -> tuple[int, int]:
         center_x, center_y = rect.center()
         geometry = self.geometry()
-        return (
-            round(center_x * geometry.width / BASE_MAIN_WIDTH),
-            round(center_y * geometry.height / base_height),
-        )
+        scale = geometry.width / BASE_MAIN_WIDTH
+        return (round(center_x * scale), round(center_y * scale))
 
     def click_main_button(self, button: MainButton, shaded: bool = False) -> None:
         x, y = self.main_button_point(button, shaded)
         click_window_coordinate(self.window_id, x, y)
 
+    def click_main_toggle(self, toggle: MainToggleButton) -> None:
+        x, y = self.main_toggle_point(toggle)
+        click_window_coordinate(self.window_id, x, y)
+
     def screenshot(self, path: Path) -> Path:
         return screenshot_window(self.window_id, path)
+
+    def screenshot_screen(self, path: Path) -> Path:
+        return screenshot_screen(path)
 
     def press_main_button_and_screenshot(
         self,
@@ -246,6 +301,56 @@ class MainWindow:
         time.sleep(after_delay)
         after = self.screenshot(next_screenshot_path())
         return ButtonPressScreenshots(before=before, pressed=pressed, after=after)
+
+    def toggle_panel_with_screenshots(
+        self,
+        toggle: MainToggleButton,
+        next_screenshot_path: Callable[[], Path],
+        *,
+        settle_delay: float = 0.1,
+        transition_delay: float = 0.3,
+    ) -> ToggleOpenCloseScreenshots:
+        """Open and close a panel through its main toggle with root screenshots."""
+        before = self.screenshot_screen(next_screenshot_path())
+        opening_pressed = self.press_main_toggle_for_activation_screenshot(
+            toggle,
+            next_screenshot_path(),
+            settle_delay=settle_delay,
+        )
+        time.sleep(transition_delay)
+        opened = self.screenshot_screen(next_screenshot_path())
+        closing_pressed = self.press_main_toggle_for_activation_screenshot(
+            toggle,
+            next_screenshot_path(),
+            settle_delay=settle_delay,
+        )
+        time.sleep(transition_delay)
+        closed = self.screenshot_screen(next_screenshot_path())
+        return ToggleOpenCloseScreenshots(
+            before=before,
+            opening_pressed=opening_pressed,
+            opened=opened,
+            closing_pressed=closing_pressed,
+            closed=closed,
+        )
+
+    def press_main_toggle_for_activation_screenshot(
+        self,
+        toggle: MainToggleButton,
+        path: Path,
+        *,
+        settle_delay: float = 0.1,
+    ) -> Path:
+        """Hold a toggle, screenshot the root, then release on-toggle to activate."""
+        x, y = self.main_toggle_point(toggle)
+        run_xdotool("windowactivate", "--sync", self.window_id, check=False)
+        run_xdotool("mousemove", "--window", self.window_id, str(x), str(y))
+        run_xdotool("mousedown", "1")
+        try:
+            time.sleep(settle_delay)
+            return self.screenshot_screen(path)
+        finally:
+            run_xdotool("mouseup", "1", check=False)
 
 
 def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:
