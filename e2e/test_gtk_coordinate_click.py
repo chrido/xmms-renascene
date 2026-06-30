@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
 from gui import MainButton, MainWindow, screenshot_tool_available, wait_for_process_exit
@@ -26,7 +25,7 @@ def test_gtk_main_close_button_accepts_coordinate_click(
 
 def test_gtk_main_pause_button_pressed_screenshot(
     gtk_main_window: MainWindow,
-    e2e_screenshot_dir: Path,
+    test_output: Any,
     gtk_app: subprocess.Popen[bytes],
 ) -> None:
     """Hold the skinned Pause button down and capture that pressed state."""
@@ -35,7 +34,7 @@ def test_gtk_main_pause_button_pressed_screenshot(
 
     screenshot = gtk_main_window.press_main_button_and_screenshot(
         MainButton.PAUSE,
-        e2e_screenshot_dir / "gtk-main-pause-pressed.png",
+        test_output.screenshot_path(),
     )
 
     assert screenshot.is_file()

@@ -546,14 +546,18 @@ class RepoTool:
             if build_result != 0:
                 return build_result
 
+        output_dir = REPO_DIR / "testoutput"
+        output_dir.mkdir(parents=True, exist_ok=True)
         command = [
             "docker",
             "run",
             "--rm",
             "-v",
             f"{REPO_DIR}:/workspace",
+            "-v",
+            f"{output_dir}:/testoutput",
             "-e",
-            "XMMS_E2E_SCREENSHOT_DIR=/workspace/target/e2e-screenshots",
+            "XMMS_E2E_SCREENSHOT_DIR=/testoutput",
             "-e",
             "XMMS_E2E_VENV_DIR=/tmp/xmms-renascene-pye2e-venv",
         ]

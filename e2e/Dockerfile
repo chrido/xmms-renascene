@@ -14,7 +14,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     GDK_DISABLE=gl \
     GSK_RENDERER=cairo \
     NO_AT_BRIDGE=1 \
-    XMMS_E2E_SCREENSHOT_DIR=/workspace/target/e2e-screenshots
+    XMMS_E2E_SCREENSHOT_DIR=/testoutput
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -38,6 +38,8 @@ RUN apt-get update \
         xdotool \
         xvfb \
     && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /testoutput && chmod 0777 /testoutput
 
 WORKDIR /workspace
 

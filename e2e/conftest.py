@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import time
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_BINARY = REPO_ROOT / "target" / "debug" / "xmms-rs"
 MAIN_WINDOW_TITLE = "XMMS Renascene Rust Preview"
 BASE_MAIN_WIDTH = 275
+
+
+def sanitize_output_name(name: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
+    return sanitized or "unnamed"
+
+
+@dataclass
+class TestOutput:
+    """Per-test output folder with numbered screenshot paths."""
+
+    directory: Path
+    screenshot_count: int = field(default=0, init=False)
+
+    def screenshot_path(self, suffix: str = ".png") -> Path:
+        self.screenshot_count += 1
+        normalized_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        return self.directory / f"{self.screenshot_count}{normalized_suffix}"
+
 
 
 def command_exists(name: str) -> bool:
@@ -92,10 +113,16 @@ def gtk_main_window(gtk_app: subprocess.Popen[bytes]) -> MainWindow:
 
 
 @pytest.fixture
-def e2e_screenshot_dir() -> Path:
-    path = Path(os.environ.get("XMMS_E2E_SCREENSHOT_DIR", str(REPO_ROOT / "target" / "e2e-screenshots")))
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+def test_output(request: Any) -> TestOutput:
+    output_root = Path(os.environ.get("XMMS_E2E_SCREENSHOT_DIR", str(REPO_ROOT / "testoutput")))
+    output_dir = output_root / sanitize_output_name(request.node.name)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return TestOutput(output_dir)
+
+
+@pytest.fixture
+def e2e_screenshot_dir(test_output: TestOutput) -> Path:
+    return test_output.directory
 
 
 def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

@@ -1,4 +1,5 @@
 target/
+testoutput/
 dist/
 build-flatpak/
 .flatpak-builder/

@@ -1,5 +1,6 @@
 .git/
 target/
+testoutput/
 e2e/.venv/
 e2e/__pycache__/
 e2e/.pytest_cache/
