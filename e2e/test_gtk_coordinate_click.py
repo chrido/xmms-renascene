@@ -46,10 +46,11 @@ def test_gtk_main_button_pressed_screenshot(
     if not screenshot_tool_available():
         pytest.skip("Install ImageMagick 'import' or xwd to capture E2E screenshots")
 
-    screenshot = gtk_main_window.press_main_button_and_screenshot(
+    screenshots = gtk_main_window.press_main_button_with_screenshots(
         button,
-        test_output.screenshot_path(),
+        test_output.screenshot_path,
     )
 
-    assert screenshot.is_file()
-    assert screenshot.stat().st_size > 0
+    for screenshot in [screenshots.before, screenshots.pressed, screenshots.after]:
+        assert screenshot.is_file()
+        assert screenshot.stat().st_size > 0

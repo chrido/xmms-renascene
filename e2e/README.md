@@ -54,7 +54,7 @@ Set `XMMS_E2E_DOCKER_IMAGE` to override the image tag or `XMMS_E2E_DOCKER_SKIP_B
 
 If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message. Screenshot-specific tests also skip when neither ImageMagick `import` nor `xwd` is available.
 
-Pressed-button screenshots are written to `testoutput` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`. Each test invocation gets its own sanitized folder name, including pytest parameter text when present, and screenshots are numbered in capture order, for example `test_gtk_main_pause_button_pressed_screenshot/1.png`.
+Pressed-button screenshots are written to `testoutput` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`. Each test invocation gets its own sanitized folder name, including pytest parameter text when present, and screenshots are numbered in capture order. Player button tests capture before, pressed, and after states, for example `test_gtk_main_button_pressed_screenshot_pause/1.png`, `2.png`, and `3.png`.
 
 ## Build behavior
 

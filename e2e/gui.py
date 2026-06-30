@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -75,6 +76,15 @@ MAIN_SHADED_BUTTON_RECTS: dict[MainButton, SkinRect] = {
 
 class ScreenshotToolUnavailable(RuntimeError):
     """Raised when no supported X11 screenshot tool is installed."""
+
+
+@dataclass(frozen=True)
+class ButtonPressScreenshots:
+    """Screenshot triplet for a visual button-press interaction."""
+
+    before: Path
+    pressed: Path
+    after: Path
 
 
 def command_exists(name: str) -> bool:
@@ -206,6 +216,36 @@ class MainWindow:
             return self.screenshot(path)
         finally:
             run_xdotool("mouseup", "1", check=False)
+
+    def press_main_button_with_screenshots(
+        self,
+        button: MainButton,
+        next_screenshot_path: Callable[[], Path],
+        *,
+        shaded: bool = False,
+        settle_delay: float = 0.1,
+        after_delay: float = 0.1,
+    ) -> ButtonPressScreenshots:
+        """Capture before, pressed, and after screenshots for a main button.
+
+        The mouse is released outside the button so visual-state tests can cover
+        destructive or disruptive controls such as Close, Minimize, Shade, and
+        Eject without closing, hiding, resizing, or opening dialogs.
+        """
+        before = self.screenshot(next_screenshot_path())
+        x, y = self.main_button_point(button, shaded)
+        run_xdotool("windowactivate", "--sync", self.window_id, check=False)
+        run_xdotool("mousemove", "--window", self.window_id, str(x), str(y))
+        run_xdotool("mousedown", "1")
+        try:
+            time.sleep(settle_delay)
+            pressed = self.screenshot(next_screenshot_path())
+        finally:
+            run_xdotool("mousemove", "--window", self.window_id, "0", "0", check=False)
+            run_xdotool("mouseup", "1", check=False)
+        time.sleep(after_delay)
+        after = self.screenshot(next_screenshot_path())
+        return ButtonPressScreenshots(before=before, pressed=pressed, after=after)
 
 
 def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:
