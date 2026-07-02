@@ -19,5 +19,6 @@ pub mod session;
 pub mod skin;
 #[cfg(feature = "gtk-ui")]
 pub mod skineditor;
+pub mod socket_control;
 #[cfg(feature = "gtk-ui")]
 pub mod ui;

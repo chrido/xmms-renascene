@@ -34,6 +34,9 @@ use crate::render::{
 use crate::session::default_config_dir;
 use crate::skin::layout::{panel_title_button_rect, LayoutPanelKind, PanelTitleButton};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
+use crate::socket_control::{
+    start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
+};
 
 use super::file_info;
 use super::menu::{self, EguiPrompt};
@@ -92,6 +95,7 @@ pub struct EguiFrontendState {
     pub playlist_sort_menu_open: bool,
     pub confirm_physical_delete_open: bool,
     pub playlist_scroll_offset: usize,
+    socket_control: Option<SocketControl>,
     controller: AppController,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
@@ -113,6 +117,7 @@ impl EguiFrontendState {
             options.open_preferences,
         )));
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
+        let socket_control = options.socket_port.map(start_socket_control).transpose()?;
         Ok(Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
@@ -142,6 +147,7 @@ impl EguiFrontendState {
             playlist_sort_menu_open: false,
             confirm_physical_delete_open: false,
             playlist_scroll_offset: 0,
+            socket_control,
             controller: AppController::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
@@ -159,6 +165,46 @@ impl EguiFrontendState {
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
         let effects = self.controller.handle_command(command.into());
         self.apply_effects(effects);
+    }
+
+    fn poll_socket_control(&mut self, ctx: &egui::Context) {
+        loop {
+            let Some(request) = self
+                .socket_control
+                .as_ref()
+                .and_then(SocketControl::try_recv)
+            else {
+                break;
+            };
+            self.handle_socket_request(ctx, request);
+        }
+    }
+
+    fn handle_socket_request(&mut self, ctx: &egui::Context, request: SocketRequest) {
+        match request.command.clone() {
+            SocketCommand::App(command) => {
+                self.dispatch(command);
+                request.accept();
+            }
+            SocketCommand::Ui(command) => {
+                self.handle_socket_ui_command(command);
+                request.accept();
+            }
+            SocketCommand::Quit => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                request.accept();
+            }
+        }
+    }
+
+    fn handle_socket_ui_command(&mut self, command: SocketUiCommand) {
+        match command {
+            SocketUiCommand::SetPreferencesVisible(visible) => self.preferences_open = visible,
+            SocketUiCommand::TogglePreferences => self.preferences_open = !self.preferences_open,
+            SocketUiCommand::SetMainMenuVisible(visible) => self.main_menu_open = visible,
+            SocketUiCommand::SetSkinBrowserVisible(visible) => self.skin_browser_open = visible,
+            SocketUiCommand::ToggleSkinBrowser => self.skin_browser_open = !self.skin_browser_open,
+        }
     }
 
     pub fn poll_playback_backend(&mut self) {
@@ -429,6 +475,7 @@ impl EguiFrontendState {
 
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_socket_control(ctx);
         self.poll_playback_backend();
         self.tick_playback_position(ctx);
         handle_dropped_files(ctx, self);

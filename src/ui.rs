@@ -10,6 +10,9 @@ use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
 
+use crate::app::command::{
+    AppCommand, AudioCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
+};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
 use crate::app::playlist_actions::PlaylistMenuCommand;
@@ -72,6 +75,9 @@ use crate::skin::{
 use crate::skineditor::{
     ElementSlot, SkinEditorState, SkinGradient, Tool, COLOR_SHELF_SIZE, GRADIENT_SHELF_SIZE,
     MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
+};
+use crate::socket_control::{
+    start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
 
 pub(crate) mod file_info;
@@ -181,6 +187,7 @@ fn build_preview_window(
     };
     let open_preferences = options.open_preferences;
     let open_skin_editor = options.open_skin_editor;
+    let socket_port = options.socket_port;
     let mut state = preview_state_from_app_state(app_state, options)?;
     if let Some(config_dir) = config_path.parent() {
         state.set_equalizer_preset_dir(config_dir.to_path_buf());
@@ -238,6 +245,8 @@ fn build_preview_window(
         .focusable(true)
         .build();
     let panel_windows = Rc::new(PanelWindows::new(app, &main_state, &drawing_area, &window));
+    let socket_control = socket_port.map(start_socket_control).transpose()?;
+    let socket_control = Rc::new(socket_control);
     let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
     resize_main_window(&window, &drawing_area, &main_state.borrow());
@@ -575,11 +584,31 @@ fn build_preview_window(
     }
 
     {
+        let app = app.clone();
         let drawing_area = drawing_area.clone();
+        let window = window.clone();
         let panel_windows = Rc::clone(&panel_windows);
+        let menu_popover = Rc::clone(&menu_popover);
         let main_state = Rc::clone(&main_state);
         let mpris_service = Rc::clone(&mpris_service);
+        let socket_control = Rc::clone(&socket_control);
         gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+            let socket_redraw = poll_socket_control_gtk(
+                &socket_control,
+                &app,
+                &window,
+                &drawing_area,
+                &panel_windows,
+                &menu_popover,
+                &main_state,
+            );
+            if socket_redraw {
+                drawing_area.queue_draw();
+                panel_windows.playlist_area.queue_draw();
+                panel_windows.equalizer_area.queue_draw();
+                sync_panel_windows(&panel_windows, &main_state.borrow());
+                resize_main_window(&window, &drawing_area, &main_state.borrow());
+            }
             let (redraw, mpris_events, mpris_properties) = {
                 let mut state = main_state.borrow_mut();
                 let redraw = state.update_timer_tick(100);
@@ -609,6 +638,393 @@ fn build_preview_window(
         panel_windows.skin_editor.present();
     }
     Ok(())
+}
+
+fn poll_socket_control_gtk(
+    socket_control: &Option<SocketControl>,
+    app: &gtk::Application,
+    window: &gtk::ApplicationWindow,
+    drawing_area: &gtk::DrawingArea,
+    panel_windows: &PanelWindows,
+    menu_popover: &gtk::Popover,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) -> bool {
+    let Some(socket_control) = socket_control else {
+        return false;
+    };
+    let mut redraw = false;
+    while let Some(request) = socket_control.try_recv() {
+        redraw |= handle_socket_request_gtk(
+            app,
+            window,
+            drawing_area,
+            panel_windows,
+            menu_popover,
+            main_state,
+            request,
+        );
+    }
+    redraw
+}
+
+fn handle_socket_request_gtk(
+    app: &gtk::Application,
+    window: &gtk::ApplicationWindow,
+    drawing_area: &gtk::DrawingArea,
+    panel_windows: &PanelWindows,
+    menu_popover: &gtk::Popover,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+    request: SocketRequest,
+) -> bool {
+    let command = request.command.clone();
+    let redraw = match command {
+        SocketCommand::App(command) => {
+            apply_socket_app_command_gtk(command, panel_windows, main_state);
+            true
+        }
+        SocketCommand::Ui(command) => {
+            apply_socket_ui_command_gtk(
+                command,
+                panel_windows,
+                menu_popover,
+                drawing_area,
+                main_state,
+            );
+            true
+        }
+        SocketCommand::Quit => {
+            app.quit();
+            false
+        }
+    };
+    request.accept();
+    if redraw {
+        sync_panel_windows(panel_windows, &main_state.borrow());
+        resize_main_window(window, drawing_area, &main_state.borrow());
+    }
+    redraw
+}
+
+fn apply_socket_app_command_gtk(
+    command: AppCommand,
+    panel_windows: &PanelWindows,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    match command {
+        AppCommand::Player(command) => apply_socket_player_command_gtk(command, main_state),
+        AppCommand::Audio(command) => apply_socket_audio_command_gtk(command, main_state),
+        AppCommand::Playlist(command) => apply_socket_playlist_command_gtk(command, main_state),
+        AppCommand::Equalizer(command) => apply_socket_equalizer_command_gtk(command, main_state),
+        AppCommand::Panel(command) => apply_socket_panel_command_gtk(command, main_state),
+    }
+    sync_panel_windows(panel_windows, &main_state.borrow());
+}
+
+fn apply_socket_player_command_gtk(
+    command: PlayerCommand,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let button = match command {
+        PlayerCommand::Play => Some(MainPushButton::Play),
+        PlayerCommand::Pause | PlayerCommand::TogglePause => Some(MainPushButton::Pause),
+        PlayerCommand::Stop => Some(MainPushButton::Stop),
+        PlayerCommand::PreviousTrack => Some(MainPushButton::Previous),
+        PlayerCommand::NextTrack => Some(MainPushButton::Next),
+        PlayerCommand::SeekToMs(position_ms) => {
+            main_state
+                .borrow_mut()
+                .set_playback_position_ms(position_ms);
+            None
+        }
+    };
+    if let Some(button) = button {
+        main_state.borrow_mut().activate_push(button);
+    }
+}
+
+fn apply_socket_audio_command_gtk(
+    command: AudioCommand,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let mut state = main_state.borrow_mut();
+    match command {
+        AudioCommand::SetVolume(volume) => {
+            let volume = volume.clamp(0, 100);
+            state.app_state.config.volume = volume;
+            state.app_state.player.set_volume(volume);
+            if let Some(backend) = &state.playback_backend {
+                backend.borrow().set_volume_percent(volume);
+            }
+        }
+        AudioCommand::SetBalance(balance) => {
+            let balance = balance.clamp(-100, 100);
+            state.app_state.config.balance = balance;
+            state.app_state.player.set_balance(balance);
+            if let Some(backend) = &state.playback_backend {
+                backend.borrow().set_balance_percent(balance);
+            }
+        }
+    }
+}
+
+fn apply_socket_playlist_command_gtk(
+    command: PlaylistCommand,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let mut state = main_state.borrow_mut();
+    match command {
+        PlaylistCommand::ToggleShuffle => state.activate_toggle(MainToggleButton::Shuffle),
+        PlaylistCommand::ToggleRepeat => state.activate_toggle(MainToggleButton::Repeat),
+        PlaylistCommand::ToggleNoAdvance => {
+            let enabled = !state.no_advance();
+            state.set_no_advance(enabled);
+            state.app_state.config.no_playlist_advance = enabled;
+        }
+        PlaylistCommand::SetSize { width, height } => {
+            state.set_playlist_size(width, height);
+        }
+        PlaylistCommand::Clear => state.app_state.playlist.clear(),
+        PlaylistCommand::SelectAll => state.app_state.playlist.select_all(true),
+        PlaylistCommand::SelectNone => state.app_state.playlist.select_all(false),
+        PlaylistCommand::InvertSelection => state.app_state.playlist.invert_selection(),
+        PlaylistCommand::Reverse => state.app_state.playlist.reverse(),
+        PlaylistCommand::Randomize => state.app_state.playlist.randomize(),
+        PlaylistCommand::Sort(key) => state.app_state.playlist.sort_by(key),
+        PlaylistCommand::SortSelected(key) => state.app_state.playlist.sort_selected_by(key),
+        PlaylistCommand::RemoveSelectedOrCurrent => {
+            state.app_state.playlist.remove_selected_or_current();
+        }
+        PlaylistCommand::RemoveDead => {
+            state.app_state.playlist.remove_dead_files();
+        }
+        PlaylistCommand::PhysicallyDeleteSelected => {
+            let _ = state.app_state.playlist.physically_delete_selected();
+        }
+        PlaylistCommand::AddUris(uris) => {
+            for uri in uris {
+                state.app_state.playlist.add_uri(uri);
+            }
+        }
+        PlaylistCommand::AddFiles(paths) => {
+            for path in paths {
+                let _ = state.app_state.playlist.add_path_or_directory(&path);
+            }
+        }
+        PlaylistCommand::ExecuteMenu { .. } => {}
+    }
+}
+
+fn apply_socket_equalizer_command_gtk(
+    command: EqualizerCommand,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let mut state = main_state.borrow_mut();
+    match command {
+        EqualizerCommand::SetActive(active) => state.equalizer.active = active,
+        EqualizerCommand::ToggleActive => state.equalizer.active = !state.equalizer.active,
+        EqualizerCommand::SetAuto(auto) => state.equalizer.automatic = auto,
+        EqualizerCommand::ToggleAuto => state.equalizer.automatic = !state.equalizer.automatic,
+        EqualizerCommand::SetPreamp(position) => {
+            state.equalizer.preamp_position = position.clamp(0, 100)
+        }
+        EqualizerCommand::SetBand { band, position } => {
+            if let Some(value) = state.equalizer.band_positions.get_mut(band) {
+                *value = position.clamp(0, 100);
+            }
+        }
+    }
+    state.sync_equalizer_to_backend();
+}
+
+/// Toggle vs. explicit set operation for a boolean piece of UI state.
+#[derive(Copy, Clone, Debug)]
+enum SocketBoolAction {
+    Toggle,
+    Set(bool),
+}
+
+impl SocketBoolAction {
+    fn resolve(self, current: bool) -> bool {
+        match self {
+            SocketBoolAction::Toggle => !current,
+            SocketBoolAction::Set(value) => value,
+        }
+    }
+}
+
+/// Which boolean facet of a panel a socket command is addressing.
+#[derive(Copy, Clone, Debug)]
+enum PanelAspect {
+    Visibility,
+    Shade,
+    Detached,
+}
+
+impl PanelAspect {
+    fn current(self, state: &MainWindowUiState, kind: PanelKind) -> bool {
+        let panel = state.panel_state(kind);
+        match self {
+            PanelAspect::Visibility => panel.is_docked_visible() || panel.is_detached_visible(),
+            PanelAspect::Shade => panel.shaded(),
+            PanelAspect::Detached => panel.is_detached_visible(),
+        }
+    }
+
+    fn apply(self, state: &mut MainWindowUiState, kind: PanelKind, target: bool) {
+        match (self, kind) {
+            (PanelAspect::Visibility, PanelKind::Playlist) => state.set_playlist_visible(target),
+            (PanelAspect::Visibility, PanelKind::Equalizer) => {
+                state.equalizer.panel.visible = target;
+            }
+            (PanelAspect::Shade, PanelKind::Playlist) => state.toggle_playlist_shaded(),
+            (PanelAspect::Shade, PanelKind::Equalizer) => state.toggle_equalizer_shaded(),
+            (PanelAspect::Detached, kind) => state.set_panel_detached(kind, target),
+        }
+    }
+}
+
+/// Expand a `(Toggle*, Set*, PanelKind, PanelAspect)` table into a match arm
+/// pair per row, routing everything through `apply_panel_bool_gtk`. This keeps
+/// the twelve near-identical `Playlist`/`Equalizer` panel-command variants
+/// declared once as data rather than duplicated boilerplate.
+macro_rules! panel_bool_arms {
+    (
+        $cmd:expr, $state:expr;
+        $( ($toggle:ident, $set:ident, $kind:ident, $aspect:ident) ),* $(,)?
+    ) => {
+        match $cmd {
+            $(
+                PanelCommand::$toggle => apply_panel_bool_gtk(
+                    &mut $state,
+                    PanelKind::$kind,
+                    PanelAspect::$aspect,
+                    SocketBoolAction::Toggle,
+                ),
+                PanelCommand::$set(value) => apply_panel_bool_gtk(
+                    &mut $state,
+                    PanelKind::$kind,
+                    PanelAspect::$aspect,
+                    SocketBoolAction::Set(value),
+                ),
+            )*
+            PanelCommand::ToggleMainShade => {
+                apply_main_shade_gtk(&mut $state, SocketBoolAction::Toggle)
+            }
+            PanelCommand::SetMainShade(value) => {
+                apply_main_shade_gtk(&mut $state, SocketBoolAction::Set(value))
+            }
+        }
+    };
+}
+
+fn apply_socket_panel_command_gtk(
+    command: PanelCommand,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    let mut state = main_state.borrow_mut();
+    panel_bool_arms!(
+        command, state;
+        (TogglePlaylistVisibility,  SetPlaylistVisibility,  Playlist,  Visibility),
+        (TogglePlaylistShade,       SetPlaylistShade,       Playlist,  Shade),
+        (TogglePlaylistDetached,    SetPlaylistDetached,    Playlist,  Detached),
+        (ToggleEqualizerVisibility, SetEqualizerVisibility, Equalizer, Visibility),
+        (ToggleEqualizerShade,      SetEqualizerShade,      Equalizer, Shade),
+        (ToggleEqualizerDetached,   SetEqualizerDetached,   Equalizer, Detached),
+    );
+    state.sync_panel_config_from_placement();
+}
+
+fn apply_main_shade_gtk(state: &mut MainWindowUiState, action: SocketBoolAction) {
+    let target = action.resolve(state.shaded);
+    if state.shaded != target {
+        state.activate_push(MainPushButton::Shade);
+    }
+}
+
+/// Apply a boolean visibility / shade / detached change to a single panel,
+/// skipping the work if the current value already matches the target.
+fn apply_panel_bool_gtk(
+    state: &mut MainWindowUiState,
+    kind: PanelKind,
+    aspect: PanelAspect,
+    action: SocketBoolAction,
+) {
+    let current = aspect.current(state, kind);
+    let target = action.resolve(current);
+    if current == target {
+        return;
+    }
+    aspect.apply(state, kind, target);
+}
+
+/// Which top-level GTK window/popover a `SocketUiCommand` addresses.
+#[derive(Copy, Clone, Debug)]
+enum UiTarget {
+    Preferences,
+    SkinBrowser,
+    MainMenu,
+}
+
+fn apply_socket_ui_command_gtk(
+    command: SocketUiCommand,
+    panel_windows: &PanelWindows,
+    menu_popover: &gtk::Popover,
+    drawing_area: &gtk::DrawingArea,
+    main_state: &Rc<RefCell<MainWindowUiState>>,
+) {
+    // Resolve the target and desired visibility while briefly holding the state
+    // borrow, then RELEASE it before touching any GTK widget. Popovers and
+    // dialog windows have `connect_closed` / `connect_hide` handlers that call
+    // `main_state.borrow_mut()`; keeping our borrow across `.popdown()` /
+    // `.hide()` / `.present()` would reenter and panic with "already borrowed".
+    let (target, visible) = {
+        let mut state = main_state.borrow_mut();
+        match command {
+            SocketUiCommand::SetPreferencesVisible(v) => {
+                state.set_preferences_visible(v);
+                (UiTarget::Preferences, v)
+            }
+            SocketUiCommand::TogglePreferences => {
+                let v = !state.dialogs.preferences;
+                state.set_preferences_visible(v);
+                (UiTarget::Preferences, v)
+            }
+            SocketUiCommand::SetSkinBrowserVisible(v) => {
+                state.set_skin_browser_visible(v);
+                (UiTarget::SkinBrowser, v)
+            }
+            SocketUiCommand::ToggleSkinBrowser => {
+                let v = !state.dialogs.skin_browser;
+                state.set_skin_browser_visible(v);
+                (UiTarget::SkinBrowser, v)
+            }
+            SocketUiCommand::SetMainMenuVisible(v) => {
+                state.set_menu_visible(v);
+                (UiTarget::MainMenu, v)
+            }
+        }
+    };
+
+    match target {
+        UiTarget::Preferences => set_window_visible_gtk(&panel_windows.preferences, visible),
+        UiTarget::SkinBrowser => set_window_visible_gtk(&panel_windows.skin_browser, visible),
+        UiTarget::MainMenu => {
+            if visible {
+                show_main_menu(menu_popover, drawing_area, &main_state.borrow());
+            } else {
+                menu_popover.popdown();
+            }
+        }
+    }
+}
+
+/// Toggle a `gtk::ApplicationWindow` between presented and hidden.
+fn set_window_visible_gtk(window: &gtk::ApplicationWindow, visible: bool) {
+    if visible {
+        window.present();
+    } else {
+        window.hide();
+    }
 }
 
 fn apply_skinned_window_chrome(

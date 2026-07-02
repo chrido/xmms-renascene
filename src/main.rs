@@ -76,8 +76,9 @@ fn run_egui_frontend(_preview_options: PreviewOptions) {
 }
 
 fn print_help() {
-    println!("Usage: xmms-rs [--frontend gtk|egui] [preview options]");
+    println!("Usage: xmms-rs [--frontend gtk|egui] [--socket PORT] [preview options]");
     println!("If --frontend is omitted, gtk is used for compatibility.");
+    println!("--socket PORT starts a JSON-lines TCP control socket on 127.0.0.1:PORT.");
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -167,6 +168,13 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
                 return Err(format!("{arg} requires SCALE"));
             };
             options.scale_factor = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--socket=") {
+            options.socket_port = Some(parse_socket_port(value)?);
+        } else if arg == "--socket" {
+            let Some(value) = iter.next() else {
+                return Err("--socket requires PORT".to_string());
+            };
+            options.socket_port = Some(parse_socket_port(value)?);
         } else if let Some(value) = arg.strip_prefix("--playlist-size=") {
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
@@ -179,6 +187,16 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
         }
     }
     Ok(options)
+}
+
+fn parse_socket_port(value: &str) -> Result<u16, String> {
+    let port = value
+        .parse::<u16>()
+        .map_err(|_| format!("invalid socket port '{value}'"))?;
+    if port == 0 {
+        return Err("--socket requires a non-zero TCP port".to_string());
+    }
+    Ok(port)
 }
 
 fn parse_playlist_size(value: &str) -> Result<(i32, i32), String> {
@@ -260,6 +278,17 @@ mod tests {
     fn parses_scale_factor_preview_option() {
         let options = parse_preview_options(&args(&["--gtk", "--scale=1.7"])).unwrap();
         assert_eq!(options.scale_factor.as_deref(), Some("1.7"));
+    }
+
+    #[test]
+    fn parses_socket_preview_option() {
+        let options = parse_preview_options(&args(&["--socket", "48155"])).unwrap();
+        assert_eq!(options.socket_port, Some(48155));
+    }
+
+    #[test]
+    fn rejects_zero_socket_port() {
+        assert!(parse_preview_options(&args(&["--socket=0"])).is_err());
     }
 
     #[test]

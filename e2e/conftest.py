@@ -16,6 +16,7 @@ from typing import Any
 
 pytest: Any = import_module("pytest")
 
+control_socket: Any = import_module("control_socket")
 from gui import MainWindow
 
 
@@ -108,10 +109,7 @@ def require_x11_tools() -> None:
         pytest.skip("xdotool is required for coordinate-based GUI E2E tests")
 
 
-@pytest.fixture
-def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
-    log_path = tmp_path / "xmms-gtk.log"
-    log = log_path.open("wb")
+def gtk_environment(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("WAYLAND_DISPLAY", None)
     env.update(
@@ -124,6 +122,14 @@ def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
             "XMMS_RS_CONFIG_DIR": str(tmp_path / "config"),
         }
     )
+    return env
+
+
+@pytest.fixture
+def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+    log_path = tmp_path / "xmms-gtk.log"
+    log = log_path.open("wb")
+    env = gtk_environment(tmp_path)
     process = subprocess.Popen(
         [str(APP_BINARY), "--frontend", "gtk", "--reset"],
         cwd=REPO_ROOT,
@@ -142,6 +148,48 @@ def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
                 process.kill()
                 process.wait(timeout=5)
         log.close()
+
+
+@pytest.fixture
+def gtk_socket_port() -> int:
+    return control_socket.unused_tcp_port()
+
+
+@pytest.fixture
+def gtk_socket_app(tmp_path: Path, gtk_socket_port: int) -> Iterator[subprocess.Popen[bytes]]:
+    log_path = tmp_path / "xmms-gtk-socket.log"
+    log = log_path.open("wb")
+    process = subprocess.Popen(
+        [str(APP_BINARY), "--frontend", "gtk", "--reset", "--socket", str(gtk_socket_port)],
+        cwd=REPO_ROOT,
+        env=gtk_environment(tmp_path),
+        stdout=log,
+        stderr=subprocess.STDOUT,
+    )
+    try:
+        control_socket.wait_for_socket(gtk_socket_port, timeout=10.0)
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+        log.close()
+
+
+@pytest.fixture
+def gtk_socket_main_window(gtk_socket_app: subprocess.Popen[bytes]) -> MainWindow:
+    return MainWindow.wait(MAIN_WINDOW_TITLE, gtk_socket_app)
+
+
+@pytest.fixture
+def control_client(gtk_socket_app: subprocess.Popen[bytes], gtk_socket_port: int) -> Iterator[Any]:
+    del gtk_socket_app
+    with control_socket.XmmsControlClient(gtk_socket_port) as client:
+        yield client
 
 
 @pytest.fixture

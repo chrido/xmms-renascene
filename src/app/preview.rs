@@ -41,6 +41,7 @@ pub struct PreviewOptions {
     pub screenshot_path: Option<String>,
     pub screenshot_scenario: Option<ScreenshotScenario>,
     pub scale_factor: Option<String>,
+    pub socket_port: Option<u16>,
     pub frontend: FrontendKind,
 }
 
