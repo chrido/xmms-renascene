@@ -24,7 +24,7 @@ use crate::equalizer::{
 #[cfg(not(feature = "gstreamer-backend"))]
 use crate::player::PlayerState;
 #[cfg(feature = "gstreamer-backend")]
-use crate::player::{GStreamerBackend, PlayerState};
+use crate::player::{GStreamerBackend, PlaybackEvent, PlayerState};
 use crate::playlist::Playlist;
 use crate::render::{
     docked_panel_size, DockedPanelState, EqualizerControl, EqualizerRenderState, EqualizerSlider,
@@ -100,6 +100,7 @@ pub struct EguiFrontendState {
     controller: AppStore,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
+    pending_backend_seek_ms: Option<i64>,
 }
 
 impl EguiFrontendState {
@@ -153,6 +154,7 @@ impl EguiFrontendState {
             controller: AppStore::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
+            pending_backend_seek_ms: None,
         })
     }
 
@@ -228,12 +230,34 @@ impl EguiFrontendState {
         if let Some(backend) = &self.playback_backend {
             match backend.poll_bus_events() {
                 Ok(events) => {
+                    let mut backend_ready = false;
                     for event in events {
+                        if matches!(
+                            event,
+                            PlaybackEvent::AsyncDone | PlaybackEvent::DurationChanged(_)
+                        ) {
+                            backend_ready = true;
+                        }
                         let result = self.controller.handle_playback_event(event);
                         self.sync_frontend_state_from_store();
                         self.runtime.apply_effects(result.effects);
                     }
+                    if backend_ready {
+                        self.apply_pending_backend_seek();
+                    }
                 }
+                Err(err) => self.runtime.pending_messages.push(err),
+            }
+        }
+    }
+
+    fn apply_pending_backend_seek(&mut self) {
+        #[cfg(feature = "gstreamer-backend")]
+        if let (Some(backend), Some(position_ms)) =
+            (&self.playback_backend, self.pending_backend_seek_ms)
+        {
+            match backend.seek_to_ms(position_ms) {
+                Ok(()) => self.pending_backend_seek_ms = None,
                 Err(err) => self.runtime.pending_messages.push(err),
             }
         }
@@ -270,7 +294,9 @@ impl EguiFrontendState {
                     if let Err(err) = backend.play_uri(uri) {
                         self.runtime.pending_messages.push(err);
                     } else if *position_ms > 0 {
-                        let _ = backend.seek_to_ms(*position_ms);
+                        self.pending_backend_seek_ms = Some(*position_ms);
+                    } else {
+                        self.pending_backend_seek_ms = None;
                     }
                 }
                 AppEffect::ResumePlayback => {

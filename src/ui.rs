@@ -728,15 +728,7 @@ fn apply_store_effects_gtk(
         let mut state = main_state.borrow_mut();
         match effect {
             AppEffect::StartPlaybackUri { uri, position_ms } => {
-                state.load_equalizer_auto_preset_for_uri(&uri);
-                state.playback_requests.push(uri.clone());
-                if let Some(backend) = &state.playback_backend {
-                    if let Err(err) = backend.borrow().play_uri(&uri) {
-                        eprintln!("xmms-rs: failed to play {uri}: {err}");
-                    } else if position_ms > 0 {
-                        let _ = backend.borrow().seek_to_ms(position_ms);
-                    }
-                }
+                state.start_backend_playback_uri(&uri, position_ms);
             }
             AppEffect::ResumePlayback => state.unpause_playback(),
             AppEffect::PausePlayback => state.pause_playback(),
@@ -7050,18 +7042,28 @@ impl MainWindowUiState {
         self.mark_preferences_saved();
     }
 
+    fn start_backend_playback_uri(&mut self, uri: &str, position_ms: i64) {
+        self.load_equalizer_auto_preset_for_uri(uri);
+        self.playback_requests.push(uri.to_string());
+        self.playback_position_ms = position_ms.max(0);
+        self.position_position = self.position_slider_position();
+        self.playback_transition = if position_ms > 0 {
+            PlaybackTransitionState::request_backend_seek(position_ms)
+        } else {
+            PlaybackTransitionState::Idle
+        };
+        if let Some(backend) = &self.playback_backend {
+            if let Err(err) = backend.borrow().play_uri(uri) {
+                eprintln!("xmms-rs: failed to play {uri}: {err}");
+                self.playback_transition = PlaybackTransitionState::Idle;
+            }
+        }
+    }
+
     fn apply_store_effect_local(&mut self, effect: AppEffect) {
         match effect {
             AppEffect::StartPlaybackUri { uri, position_ms } => {
-                self.load_equalizer_auto_preset_for_uri(&uri);
-                self.playback_requests.push(uri.clone());
-                if let Some(backend) = &self.playback_backend {
-                    if let Err(err) = backend.borrow().play_uri(&uri) {
-                        eprintln!("xmms-rs: failed to play {uri}: {err}");
-                    } else if position_ms > 0 {
-                        let _ = backend.borrow().seek_to_ms(position_ms);
-                    }
-                }
+                self.start_backend_playback_uri(&uri, position_ms);
             }
             AppEffect::ResumePlayback => self.unpause_playback(),
             AppEffect::PausePlayback => self.pause_playback(),
@@ -11744,7 +11746,10 @@ mod tests {
 
         assert_eq!(state.app_state.player.state(), PlayerState::Playing);
         assert_eq!(state.playback_position_ms, 42_000);
-        assert_eq!(state.playback_position_ms, 42_000);
+        assert_eq!(
+            state.playback_transition,
+            PlaybackTransitionState::PendingBackendSeek(42_000)
+        );
     }
 
     #[test]
