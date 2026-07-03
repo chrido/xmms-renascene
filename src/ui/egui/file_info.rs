@@ -1,5 +1,6 @@
 //! Lightweight egui File Info dialog.
 
+use crate::app::command::UiCommand;
 use crate::playlist::{file_uri_to_path, PlaylistEntry};
 
 use super::app::EguiFrontendState;
@@ -39,7 +40,7 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
                             ui.add_enabled(false, egui::Button::new("Save"));
                             ui.add_enabled(false, egui::Button::new("Remove Tag"));
                             if ui.button("Close").clicked() {
-                                app.file_info_open = false;
+                                app.dispatch(UiCommand::SetFileInfoVisible(false));
                             }
                         });
                     });
@@ -54,11 +55,11 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
             } else {
                 ui.label("No current or selected playlist entry.");
                 if ui.button("Close").clicked() {
-                    app.file_info_open = false;
+                    app.dispatch(UiCommand::SetFileInfoVisible(false));
                 }
             }
         });
-    app.file_info_open = open;
+    app.dispatch(UiCommand::SetFileInfoVisible(open));
 }
 
 fn file_info_title(app: &EguiFrontendState) -> String {

@@ -1,6 +1,6 @@
 //! egui main menu and lightweight prompt/dialog windows.
 
-use crate::app::command::PlaylistCommand;
+use crate::app::command::{PlaylistCommand, UiCommand};
 
 use super::app::EguiFrontendState;
 
@@ -53,11 +53,11 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
             }
             if ui.button("Preferences").clicked() {
                 close_after_click = true;
-                app.preferences_open = true;
+                app.dispatch(UiCommand::SetPreferencesVisible(true));
             }
             if ui.button("Skin Browser").clicked() {
                 close_after_click = true;
-                app.skin_browser_open = true;
+                app.dispatch(UiCommand::SetSkinBrowserVisible(true));
             }
             if ui.button("Skin Editor").clicked() {
                 close_after_click = true;
@@ -69,7 +69,7 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         });
-    app.main_menu_open = open && !close_after_click;
+    app.dispatch(UiCommand::SetMainMenuVisible(open && !close_after_click));
 }
 
 pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -108,7 +108,7 @@ fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
     }
     match prompt {
         EguiPrompt::OpenLocation => {
-            app.controller_mut().state_mut().playlist.add_uri(text);
+            app.dispatch(PlaylistCommand::AddUris(vec![text]));
             app.dispatch(crate::app::command::PlayerCommand::Play);
         }
         EguiPrompt::JumpToTime => {

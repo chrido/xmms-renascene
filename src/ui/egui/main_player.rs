@@ -1,6 +1,6 @@
 //! egui main player panel/window.
 
-use crate::app::command::{AudioCommand, PanelCommand, PlayerCommand, PlaylistCommand};
+use crate::app::command::{AudioCommand, PanelCommand, PlayerCommand, PlaylistCommand, UiCommand};
 use crate::app::view_model::{
     balance_to_position, main_player_view_model, position_to_balance, position_to_volume,
     volume_to_position, MainPlayerViewModel,
@@ -324,7 +324,7 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
             crate::app::effect::FileDialogRequest::AddAudioFiles,
         )),
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
-        MainPushButton::Menu => app.main_menu_open = true,
+        MainPushButton::Menu => app.dispatch(UiCommand::SetMainMenuVisible(true)),
         MainPushButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
         MainPushButton::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
     }

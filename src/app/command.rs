@@ -15,11 +15,13 @@ pub enum AppCommand {
     Playlist(PlaylistCommand),
     Equalizer(EqualizerCommand),
     Panel(PanelCommand),
+    Ui(UiCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlayerCommand {
     Play,
+    StartCurrentTrack,
     Pause,
     Stop,
     TogglePause,
@@ -52,14 +54,33 @@ pub enum PlaylistCommand {
     Reverse,
     Randomize,
     AddUris(Vec<String>),
+    AddLocations(Vec<String>),
+    AddPodcastEntry {
+        uri: String,
+        title: Option<String>,
+        feed: Option<String>,
+        guid: Option<String>,
+    },
     AddFiles(Vec<PathBuf>),
     Clear,
     RemoveSelectedOrCurrent,
+    RemoveSelected,
+    CropToSelection,
     RemoveDead,
     PhysicallyDeleteSelected,
     SelectAll,
     SelectNone,
     InvertSelection,
+    SetPosition(usize),
+    ToggleEntrySelection(usize),
+    MoveEntry {
+        from: usize,
+        to: usize,
+    },
+    UpdateTitleForUri {
+        uri: String,
+        title: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +111,17 @@ pub enum PanelCommand {
     SetEqualizerDetached(bool),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UiCommand {
+    SetPreferencesVisible(bool),
+    TogglePreferences,
+    SetMainMenuVisible(bool),
+    SetSkinBrowserVisible(bool),
+    ToggleSkinBrowser,
+    SetFileInfoVisible(bool),
+    ToggleFileInfo,
+}
+
 impl From<PlayerCommand> for AppCommand {
     fn from(command: PlayerCommand) -> Self {
         Self::Player(command)
@@ -117,5 +149,11 @@ impl From<EqualizerCommand> for AppCommand {
 impl From<PanelCommand> for AppCommand {
     fn from(command: PanelCommand) -> Self {
         Self::Panel(command)
+    }
+}
+
+impl From<UiCommand> for AppCommand {
+    fn from(command: UiCommand) -> Self {
+        Self::Ui(command)
     }
 }

@@ -7,6 +7,15 @@ pub struct AppState {
     pub config: Config,
     pub player: Player,
     pub playlist: Playlist,
+    pub ui: AppUiState,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppUiState {
+    pub preferences_visible: bool,
+    pub main_menu_visible: bool,
+    pub skin_browser_visible: bool,
+    pub file_info_visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +50,7 @@ impl AppState {
             config,
             player,
             playlist,
+            ui: AppUiState::default(),
         }
     }
 

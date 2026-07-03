@@ -11,4 +11,5 @@ pub mod playlist_actions;
 pub mod preview;
 pub mod screenshot_scenarios;
 pub mod services;
+pub mod store;
 pub mod view_model;

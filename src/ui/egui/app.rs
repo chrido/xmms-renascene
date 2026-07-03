@@ -6,11 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::app::command::{
-    AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
+    AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand, UiCommand,
 };
-use crate::app::controller::AppController;
-use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
+use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
+use crate::app::store::AppStore;
 use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model, format_playlist_footer_duration,
     playlist_view_model, volume_to_eq_shaded_position,
@@ -96,7 +96,7 @@ pub struct EguiFrontendState {
     pub confirm_physical_delete_open: bool,
     pub playlist_scroll_offset: usize,
     socket_control: Option<SocketControl>,
-    controller: AppController,
+    controller: AppStore,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
 }
@@ -108,6 +108,7 @@ impl EguiFrontendState {
             app_state = AppState::default();
         }
         apply_preview_options_to_config(&mut app_state.config, &options)?;
+        app_state.ui.preferences_visible = options.open_preferences;
         let active_skin = load_skin_from_config(&app_state)?;
         let skin_entries = discover_runtime_skins();
         let scale_factor = app_state.config.scale_factor as f32;
@@ -148,23 +149,32 @@ impl EguiFrontendState {
             confirm_physical_delete_open: false,
             playlist_scroll_offset: 0,
             socket_control,
-            controller: AppController::new(app_state),
+            controller: AppStore::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
         })
     }
 
-    pub fn controller(&self) -> &AppController {
+    pub fn controller(&self) -> &AppStore {
         &self.controller
     }
 
-    pub fn controller_mut(&mut self) -> &mut AppController {
+    pub fn controller_mut(&mut self) -> &mut AppStore {
         &mut self.controller
     }
 
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
-        let effects = self.controller.handle_command(command.into());
-        self.apply_effects(effects);
+        let result = self.controller.dispatch(command.into());
+        self.sync_frontend_state_from_store();
+        self.apply_effects(result.effects);
+    }
+
+    fn sync_frontend_state_from_store(&mut self) {
+        let ui = &self.controller.state().ui;
+        self.preferences_open = ui.preferences_visible;
+        self.main_menu_open = ui.main_menu_visible;
+        self.skin_browser_open = ui.skin_browser_visible;
+        self.file_info_open = ui.file_info_visible;
     }
 
     fn poll_socket_control(&mut self, ctx: &egui::Context) {
@@ -198,13 +208,18 @@ impl EguiFrontendState {
     }
 
     fn handle_socket_ui_command(&mut self, command: SocketUiCommand) {
-        match command {
-            SocketUiCommand::SetPreferencesVisible(visible) => self.preferences_open = visible,
-            SocketUiCommand::TogglePreferences => self.preferences_open = !self.preferences_open,
-            SocketUiCommand::SetMainMenuVisible(visible) => self.main_menu_open = visible,
-            SocketUiCommand::SetSkinBrowserVisible(visible) => self.skin_browser_open = visible,
-            SocketUiCommand::ToggleSkinBrowser => self.skin_browser_open = !self.skin_browser_open,
-        }
+        let command = match command {
+            SocketUiCommand::SetPreferencesVisible(visible) => {
+                UiCommand::SetPreferencesVisible(visible)
+            }
+            SocketUiCommand::TogglePreferences => UiCommand::TogglePreferences,
+            SocketUiCommand::SetMainMenuVisible(visible) => UiCommand::SetMainMenuVisible(visible),
+            SocketUiCommand::SetSkinBrowserVisible(visible) => {
+                UiCommand::SetSkinBrowserVisible(visible)
+            }
+            SocketUiCommand::ToggleSkinBrowser => UiCommand::ToggleSkinBrowser,
+        };
+        self.dispatch(command);
     }
 
     pub fn poll_playback_backend(&mut self) {
@@ -213,8 +228,9 @@ impl EguiFrontendState {
             match backend.poll_bus_events() {
                 Ok(events) => {
                     for event in events {
-                        let effects = self.controller.handle_playback_event(event);
-                        self.runtime.apply_effects(effects);
+                        let result = self.controller.handle_playback_event(event);
+                        self.sync_frontend_state_from_store();
+                        self.runtime.apply_effects(result.effects);
                     }
                 }
                 Err(err) => self.runtime.pending_messages.push(err),
@@ -234,17 +250,12 @@ impl EguiFrontendState {
         if elapsed_ms == 0 {
             return;
         }
-        let duration_ms = self.controller.state().player.duration_ms();
-        let config = &mut self.controller.state_mut().config;
-        config.playback_position_ms = config.playback_position_ms.saturating_add(elapsed_ms);
-        if let Some(duration) = duration_ms {
-            config.playback_position_ms = config.playback_position_ms.min(duration);
-        }
-        self.runtime
-            .apply_effect(AppEffect::QueueRender(RenderTarget::All));
+        let result = self.controller.tick_playback_position(elapsed_ms);
+        self.sync_frontend_state_from_store();
+        self.apply_effects(result.effects);
     }
 
-    fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
+    pub(crate) fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
         for effect in effects {
             self.apply_effect(effect);
         }
@@ -276,6 +287,11 @@ impl EguiFrontendState {
                         self.runtime.pending_messages.push(err);
                     }
                 }
+                AppEffect::BeginStopFade { .. } => {
+                    if let Err(err) = backend.stop() {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
                 AppEffect::SeekPlayback(position_ms) => {
                     if let Err(err) = backend.seek_to_ms(*position_ms) {
                         self.runtime.pending_messages.push(err);
@@ -296,8 +312,9 @@ impl EguiFrontendState {
         }
         match effect {
             AppEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
-            AppEffect::OpenFileInfoDialog => self.file_info_open = true,
-            AppEffect::OpenPreferences => self.preferences_open = true,
+            AppEffect::OpenFileInfoDialog => self.dispatch(UiCommand::SetFileInfoVisible(true)),
+            AppEffect::OpenPreferences => self.dispatch(UiCommand::SetPreferencesVisible(true)),
+            AppEffect::OpenSkinBrowser => self.dispatch(UiCommand::SetSkinBrowserVisible(true)),
             other => self.runtime.apply_effect(other),
         }
     }
@@ -367,10 +384,10 @@ impl EguiFrontendState {
     fn load_playlist_file(&mut self, path: &Path) {
         match Playlist::load_m3u_file(path) {
             Ok(playlist) => {
-                self.controller.state_mut().playlist = playlist;
+                let result = self.controller.replace_playlist_for_file_load(playlist);
                 self.playlist_scroll_offset = 0;
-                self.runtime
-                    .apply_effect(AppEffect::QueueRender(RenderTarget::Playlist));
+                self.sync_frontend_state_from_store();
+                self.apply_effects(result.effects);
             }
             Err(err) => self.runtime.pending_messages.push(format!(
                 "failed to load playlist '{}': {err}",
@@ -436,12 +453,11 @@ impl EguiFrontendState {
     }
 
     fn apply_equalizer_preset(&mut self, preset: &EqualizerPreset) {
-        let config = &mut self.controller.state_mut().config;
-        config.equalizer_preamp_pos = preset.preamp_position();
-        config.equalizer_band_pos = preset.band_positions();
-        self.runtime
-            .apply_effect(AppEffect::QueueRender(RenderTarget::Equalizer));
-        self.apply_effect(AppEffect::SetBackendEqualizer);
+        let result = self
+            .controller
+            .apply_equalizer_preset_positions(preset.preamp_position(), preset.band_positions());
+        self.sync_frontend_state_from_store();
+        self.apply_effects(result.effects);
     }
 }
 
@@ -913,7 +929,7 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
             app.dispatch(PanelCommand::ToggleEqualizerVisibility);
         }
         if input.key_pressed(egui::Key::P) && input.modifiers.ctrl {
-            app.preferences_open = true;
+            app.dispatch(UiCommand::SetPreferencesVisible(true));
         }
         if input.key_pressed(egui::Key::J) {
             app.prompt_open = Some(EguiPrompt::JumpToTime);
@@ -923,7 +939,7 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
         }
         if input.key_pressed(egui::Key::S) && input.modifiers.ctrl {
-            app.skin_browser_open = true;
+            app.dispatch(UiCommand::SetSkinBrowserVisible(true));
         }
         if input.key_pressed(egui::Key::N) {
             app.dispatch(PlaylistCommand::ToggleNoAdvance);
@@ -1029,10 +1045,7 @@ fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendSta
     }
     if input.key_pressed(egui::Key::Delete) {
         if input.modifiers.ctrl {
-            app.controller_mut()
-                .state_mut()
-                .playlist
-                .crop_to_selected_or_current();
+            app.dispatch(PlaylistCommand::CropToSelection);
         } else {
             app.dispatch(PlaylistCommand::RemoveSelectedOrCurrent);
         }
@@ -1070,10 +1083,7 @@ fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendSta
         None
     };
     if let Some(position) = next {
-        app.controller_mut()
-            .state_mut()
-            .playlist
-            .set_position(position);
+        app.dispatch(PlaylistCommand::SetPosition(position));
         app.playlist_scroll_offset = app.playlist_scroll_offset.min(position);
     }
 }
@@ -1110,7 +1120,10 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                     match DefaultSkin::load_bundled() {
                         Ok(skin) => {
                             app.active_skin = skin;
-                            app.controller_mut().state_mut().config.skin = None;
+                            let mut config = app.controller().state().config.clone();
+                            config.skin = None;
+                            let result = app.controller_mut().apply_config_from_preferences(config);
+                            app.apply_effects(result.effects);
                         }
                         Err(err) => app
                             .runtime
@@ -1122,7 +1135,7 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                     import_skin_from_dialog(app);
                 }
                 if ui.button("Close").clicked() {
-                    app.skin_browser_open = false;
+                    app.dispatch(UiCommand::SetSkinBrowserVisible(false));
                 }
             });
             ui.separator();
@@ -1141,15 +1154,17 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                     }
                 });
         });
-    app.skin_browser_open = open && app.skin_browser_open;
+    app.dispatch(UiCommand::SetSkinBrowserVisible(open && app.skin_browser_open));
 }
 
 fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {
     match DefaultSkin::load_from_path(&entry.path) {
         Ok(skin) => {
             app.active_skin = skin;
-            app.controller_mut().state_mut().config.skin =
-                Some(entry.path.to_string_lossy().into_owned());
+            let mut config = app.controller().state().config.clone();
+            config.skin = Some(entry.path.to_string_lossy().into_owned());
+            let result = app.controller_mut().apply_config_from_preferences(config);
+            app.apply_effects(result.effects);
         }
         Err(err) => app.runtime.pending_messages.push(format!(
             "failed to load skin '{}': {err}",

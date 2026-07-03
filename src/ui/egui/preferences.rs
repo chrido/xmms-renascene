@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::app::command::UiCommand;
 use crate::app::view_model::format_title_for_preferences;
 use crate::config::{Config, TimerMode};
 use crate::skin::widget::{
@@ -129,15 +130,14 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
         }
     }
 
-    app.preferences_open = next_open;
+    app.dispatch(UiCommand::SetPreferencesVisible(next_open));
     app.selected_preferences_page = next_page;
     if let Some(config) = next_config {
-        let state = app.controller_mut().state_mut();
-        state.config = config;
-        state.apply_config_to_runtime();
+        let result = app.controller_mut().apply_config_from_preferences(config);
+        app.apply_effects(result.effects);
     }
     if open_skin_browser {
-        app.skin_browser_open = true;
+        app.dispatch(UiCommand::SetSkinBrowserVisible(true));
     }
     if save_config {
         app.runtime

@@ -5,6 +5,7 @@
 
 use crate::app::command::{
     AppCommand, AudioCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
+    UiCommand,
 };
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::playlist_actions::PlaylistMenuCommand;
@@ -40,12 +41,14 @@ impl AppController {
             AppCommand::Playlist(command) => self.handle_playlist_command(command),
             AppCommand::Equalizer(command) => self.handle_equalizer_command(command),
             AppCommand::Panel(command) => self.handle_panel_command(command),
+            AppCommand::Ui(command) => self.handle_ui_command(command),
         }
     }
 
     fn handle_player_command(&mut self, command: PlayerCommand) -> Vec<AppEffect> {
         match command {
             PlayerCommand::Play => self.play(),
+            PlayerCommand::StartCurrentTrack => self.start_current_playlist_playback(0),
             PlayerCommand::Pause => self.pause(),
             PlayerCommand::TogglePause => self.toggle_pause(),
             PlayerCommand::Stop => self.stop(),
@@ -146,6 +149,35 @@ impl AppController {
                 }
                 self.playlist_changed_effects()
             }
+            PlaylistCommand::AddLocations(locations) => {
+                let mut added = false;
+                for location in locations {
+                    match self.state.playlist.add_location(&location) {
+                        Ok(count) => added |= count > 0,
+                        Err(err) => {
+                            return vec![AppEffect::ShowError(format!(
+                                "failed to add playlist location {location}: {err}"
+                            ))];
+                        }
+                    }
+                }
+                if added {
+                    self.playlist_changed_effects()
+                } else {
+                    Vec::new()
+                }
+            }
+            PlaylistCommand::AddPodcastEntry {
+                uri,
+                title,
+                feed,
+                guid,
+            } => {
+                self.state
+                    .playlist
+                    .add_podcast_entry(&uri, title, feed, guid);
+                self.playlist_changed_effects()
+            }
             PlaylistCommand::AddFiles(paths) => {
                 for path in paths {
                     let _ = self.state.playlist.add_path_or_directory(&path);
@@ -158,6 +190,17 @@ impl AppController {
             }
             PlaylistCommand::RemoveSelectedOrCurrent => {
                 self.state.playlist.remove_selected_or_current();
+                self.playlist_changed_effects()
+            }
+            PlaylistCommand::RemoveSelected => {
+                if self.state.playlist.remove_selected() {
+                    self.playlist_changed_effects()
+                } else {
+                    Vec::new()
+                }
+            }
+            PlaylistCommand::CropToSelection => {
+                self.state.playlist.crop_to_selected_or_current();
                 self.playlist_changed_effects()
             }
             PlaylistCommand::RemoveDead => {
@@ -183,6 +226,43 @@ impl AppController {
             PlaylistCommand::InvertSelection => {
                 self.state.playlist.invert_selection();
                 self.playlist_changed_effects()
+            }
+            PlaylistCommand::SetPosition(index) => {
+                self.state.playlist.set_position(index);
+                self.playlist_changed_effects()
+            }
+            PlaylistCommand::ToggleEntrySelection(index) => {
+                if let Some(entry) = self.state.playlist.entries_mut().get_mut(index) {
+                    entry.selected = !entry.selected;
+                    self.playlist_changed_effects()
+                } else {
+                    Vec::new()
+                }
+            }
+            PlaylistCommand::MoveEntry { from, to } => {
+                if self.state.playlist.move_entry(from, to) {
+                    self.playlist_changed_effects()
+                } else {
+                    Vec::new()
+                }
+            }
+            PlaylistCommand::UpdateTitleForUri { uri, title } => {
+                let title = title.trim();
+                if title.is_empty() {
+                    return Vec::new();
+                }
+                let mut changed = false;
+                for entry in self.state.playlist.entries_mut() {
+                    if entry.filename == uri && entry.title != title {
+                        entry.title = title.to_string();
+                        changed = true;
+                    }
+                }
+                if changed {
+                    self.playlist_changed_effects()
+                } else {
+                    Vec::new()
+                }
             }
         }
     }
@@ -246,6 +326,33 @@ impl AppController {
                 self.panel_changed_effects()
             }
         }
+    }
+
+    fn handle_ui_command(&mut self, command: UiCommand) -> Vec<AppEffect> {
+        match command {
+            UiCommand::SetPreferencesVisible(visible) => {
+                self.state.ui.preferences_visible = visible;
+            }
+            UiCommand::TogglePreferences => {
+                self.state.ui.preferences_visible = !self.state.ui.preferences_visible;
+            }
+            UiCommand::SetMainMenuVisible(visible) => {
+                self.state.ui.main_menu_visible = visible;
+            }
+            UiCommand::SetSkinBrowserVisible(visible) => {
+                self.state.ui.skin_browser_visible = visible;
+            }
+            UiCommand::ToggleSkinBrowser => {
+                self.state.ui.skin_browser_visible = !self.state.ui.skin_browser_visible;
+            }
+            UiCommand::SetFileInfoVisible(visible) => {
+                self.state.ui.file_info_visible = visible;
+            }
+            UiCommand::ToggleFileInfo => {
+                self.state.ui.file_info_visible = !self.state.ui.file_info_visible;
+            }
+        }
+        vec![AppEffect::QueueRender(RenderTarget::All)]
     }
 
     fn execute_playlist_menu(
@@ -325,7 +432,9 @@ impl AppController {
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
             }
-            PlayerState::Stopped => self.start_current_playlist_playback(0),
+            PlayerState::Stopped => {
+                self.start_current_playlist_playback(self.state.config.playback_position_ms.max(0))
+            }
             PlayerState::Playing => Vec::new(),
         }
     }
@@ -350,6 +459,16 @@ impl AppController {
     }
 
     fn stop(&mut self) -> Vec<AppEffect> {
+        if self.state.config.stop_with_fadeout && self.state.player.state() != PlayerState::Stopped
+        {
+            let start_volume = self.state.player.volume().max(0);
+            if start_volume > 0 {
+                return vec![
+                    AppEffect::BeginStopFade { start_volume },
+                    AppEffect::QueueRender(RenderTarget::All),
+                ];
+            }
+        }
         self.state.player.stop();
         self.state.player.clear_visualization_data();
         vec![
@@ -359,20 +478,30 @@ impl AppController {
     }
 
     fn previous_track(&mut self) -> Vec<AppEffect> {
+        self.state.config.playback_position_ms = 0;
         let advanced = self.state.playlist.previous();
         if advanced {
             self.start_current_playlist_playback(0)
         } else {
-            vec![AppEffect::QueueRender(RenderTarget::All)]
+            vec![
+                AppEffect::SeekPlayback(0),
+                AppEffect::SaveConfig,
+                AppEffect::QueueRender(RenderTarget::All),
+            ]
         }
     }
 
     fn next_track(&mut self) -> Vec<AppEffect> {
+        self.state.config.playback_position_ms = 0;
         let advanced = self.state.playlist.advance();
         if advanced {
             self.start_current_playlist_playback(0)
         } else {
-            vec![AppEffect::QueueRender(RenderTarget::All)]
+            vec![
+                AppEffect::SeekPlayback(0),
+                AppEffect::SaveConfig,
+                AppEffect::QueueRender(RenderTarget::All),
+            ]
         }
     }
 
@@ -405,12 +534,11 @@ impl AppController {
             ];
         };
         let uri = entry.filename.clone();
+        let position_ms = position_ms.max(0);
+        self.state.config.playback_position_ms = position_ms;
         self.state.player.mark_playing();
         vec![
-            AppEffect::StartPlaybackUri {
-                uri,
-                position_ms: position_ms.max(0),
-            },
+            AppEffect::StartPlaybackUri { uri, position_ms },
             AppEffect::QueueRender(RenderTarget::All),
         ]
     }
@@ -418,6 +546,14 @@ impl AppController {
     pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> Vec<AppEffect> {
         self.state.player.apply_playback_event(&event);
         vec![AppEffect::QueueRender(RenderTarget::All)]
+    }
+
+    pub fn handle_playlist_eof(&mut self) -> Vec<AppEffect> {
+        if self.state.playlist.eof_reached() {
+            self.start_current_playlist_playback(0)
+        } else {
+            self.stop()
+        }
     }
 }
 
@@ -478,6 +614,25 @@ mod tests {
 
         assert_eq!(controller.state().playlist.position(), Some(1));
         assert_eq!(controller.state().player.state(), PlayerState::Playing);
+        assert!(effects.contains(&AppEffect::StartPlaybackUri {
+            uri: "file:///tmp/two.ogg".to_string(),
+            position_ms: 0,
+        }));
+    }
+
+    #[test]
+    fn start_current_track_restarts_selected_entry_while_playing() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///tmp/one.ogg");
+        state.playlist.add_uri("file:///tmp/two.ogg");
+        state.playlist.set_position(0);
+        let mut controller = AppController::new(state);
+        controller.handle_command(PlayerCommand::Play.into());
+        controller.handle_command(PlaylistCommand::SetPosition(1).into());
+
+        let effects = controller.handle_command(PlayerCommand::StartCurrentTrack.into());
+
+        assert_eq!(controller.state().playlist.position(), Some(1));
         assert!(effects.contains(&AppEffect::StartPlaybackUri {
             uri: "file:///tmp/two.ogg".to_string(),
             position_ms: 0,

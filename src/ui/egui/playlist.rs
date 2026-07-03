@@ -327,19 +327,10 @@ fn add_playlist_rows_hit_region(
         let index = app.playlist_scroll_offset.saturating_add(row);
         if let Some(model) = view_model.rows.get(index) {
             if response.double_clicked() {
-                app.controller_mut()
-                    .state_mut()
-                    .playlist
-                    .set_position(model.index);
-                app.dispatch(PlayerCommand::Play);
-            } else if let Some(entry) = app
-                .controller_mut()
-                .state_mut()
-                .playlist
-                .entries_mut()
-                .get_mut(model.index)
-            {
-                entry.selected = !entry.selected;
+                app.dispatch(PlaylistCommand::SetPosition(model.index));
+                app.dispatch(PlayerCommand::StartCurrentTrack);
+            } else {
+                app.dispatch(PlaylistCommand::ToggleEntrySelection(model.index));
             }
         }
     }
