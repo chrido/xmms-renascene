@@ -9,6 +9,7 @@ use crate::app::command::{
     AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand, UiCommand,
 };
 use crate::app::effect::{AppEffect, FileDialogRequest};
+use crate::app::input::AppShortcut;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
@@ -904,53 +905,103 @@ fn detached_playlist_footer_info(app: &EguiFrontendState) -> String {
 
 fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
     ctx.input(|input| {
-        if input.key_pressed(egui::Key::Z) {
-            app.dispatch(PlayerCommand::PreviousTrack);
-        }
-        if input.key_pressed(egui::Key::X) {
-            app.dispatch(PlayerCommand::Play);
-        }
-        if input.key_pressed(egui::Key::C) {
-            app.dispatch(PlayerCommand::TogglePause);
-        }
-        if input.key_pressed(egui::Key::V) {
-            app.dispatch(PlayerCommand::Stop);
-        }
-        if input.key_pressed(egui::Key::B) {
-            app.dispatch(PlayerCommand::NextTrack);
-        }
-        if input.key_pressed(egui::Key::L) && input.modifiers.ctrl {
-            app.prompt_open = Some(EguiPrompt::OpenLocation);
-            app.prompt_text.clear();
-        } else if input.key_pressed(egui::Key::L) {
-            app.dispatch(PanelCommand::TogglePlaylistVisibility);
-        }
-        if input.key_pressed(egui::Key::E) {
-            app.dispatch(PanelCommand::ToggleEqualizerVisibility);
-        }
-        if input.key_pressed(egui::Key::P) && input.modifiers.ctrl {
-            app.dispatch(UiCommand::SetPreferencesVisible(true));
-        }
-        if input.key_pressed(egui::Key::J) {
-            app.prompt_open = Some(EguiPrompt::JumpToTime);
-            app.prompt_text.clear();
-        }
-        if input.key_pressed(egui::Key::O) && input.modifiers.ctrl {
-            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
-        }
-        if input.key_pressed(egui::Key::S) && input.modifiers.ctrl {
-            app.dispatch(UiCommand::SetSkinBrowserVisible(true));
-        }
-        if input.key_pressed(egui::Key::N) {
-            app.dispatch(PlaylistCommand::ToggleNoAdvance);
-        }
-        if input.key_pressed(egui::Key::M) {
-            app.dispatch(PanelCommand::ToggleMainShade);
+        for shortcut in egui_shortcuts_from_input(input) {
+            dispatch_app_shortcut(ctx, app, shortcut);
         }
         handle_playlist_shortcuts(input, app);
         handle_equalizer_shortcuts(input, app);
         handle_mouse_wheel(input, app);
     });
+}
+
+fn egui_shortcuts_from_input(input: &egui::InputState) -> Vec<AppShortcut> {
+    let mut shortcuts = Vec::new();
+    if input.key_pressed(egui::Key::Z) {
+        shortcuts.push(AppShortcut::Previous);
+    }
+    if input.key_pressed(egui::Key::X) {
+        shortcuts.push(AppShortcut::Play);
+    }
+    if input.key_pressed(egui::Key::C) {
+        shortcuts.push(AppShortcut::Pause);
+    }
+    if input.key_pressed(egui::Key::V) {
+        shortcuts.push(AppShortcut::Stop);
+    }
+    if input.key_pressed(egui::Key::B) {
+        shortcuts.push(AppShortcut::Next);
+    }
+    if input.key_pressed(egui::Key::L) && input.modifiers.ctrl {
+        shortcuts.push(AppShortcut::OpenLocation);
+    } else if input.key_pressed(egui::Key::L) {
+        shortcuts.push(AppShortcut::TogglePlaylist);
+    }
+    if input.key_pressed(egui::Key::E) {
+        shortcuts.push(AppShortcut::ToggleEqualizer);
+    }
+    if input.key_pressed(egui::Key::P) && input.modifiers.ctrl {
+        shortcuts.push(AppShortcut::Preferences);
+    }
+    if input.key_pressed(egui::Key::J) {
+        shortcuts.push(AppShortcut::JumpTime);
+    }
+    if input.key_pressed(egui::Key::O) && input.modifiers.ctrl {
+        shortcuts.push(AppShortcut::OpenFiles);
+    }
+    if input.key_pressed(egui::Key::S) && input.modifiers.ctrl {
+        shortcuts.push(AppShortcut::SkinBrowser);
+    }
+    if input.key_pressed(egui::Key::N) {
+        shortcuts.push(AppShortcut::ToggleNoAdvance);
+    }
+    if input.key_pressed(egui::Key::M) {
+        shortcuts.push(AppShortcut::ShadeMain);
+    }
+    shortcuts
+}
+
+fn dispatch_app_shortcut(_ctx: &egui::Context, app: &mut EguiFrontendState, shortcut: AppShortcut) {
+    if let Some(command) = shortcut.command() {
+        app.dispatch(command);
+        return;
+    }
+    match shortcut {
+        AppShortcut::OpenFiles => {
+            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
+        }
+        AppShortcut::OpenLocation => {
+            app.prompt_open = Some(EguiPrompt::OpenLocation);
+            app.prompt_text.clear();
+        }
+        AppShortcut::JumpTime => {
+            app.prompt_open = Some(EguiPrompt::JumpToTime);
+            app.prompt_text.clear();
+        }
+        AppShortcut::OpenDirectory
+        | AppShortcut::PresentMain
+        | AppShortcut::ToggleTimerRemaining
+        | AppShortcut::ToggleSticky
+        | AppShortcut::DoubleScale
+        | AppShortcut::HalfScale
+        | AppShortcut::ToggleEasyMove
+        | AppShortcut::StartOfList
+        | AppShortcut::Previous
+        | AppShortcut::Play
+        | AppShortcut::Pause
+        | AppShortcut::Stop
+        | AppShortcut::Next
+        | AppShortcut::ToggleRepeat
+        | AppShortcut::ToggleShuffle
+        | AppShortcut::Preferences
+        | AppShortcut::ToggleNoAdvance
+        | AppShortcut::ShadeMain
+        | AppShortcut::SkinBrowser
+        | AppShortcut::TogglePlaylist
+        | AppShortcut::ToggleEqualizer
+        | AppShortcut::ShadePlaylist
+        | AppShortcut::ShadeEqualizer
+        | AppShortcut::FileInfo => {}
+    }
 }
 
 fn handle_equalizer_shortcuts(input: &egui::InputState, app: &mut EguiFrontendState) {
@@ -1154,7 +1205,9 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                     }
                 });
         });
-    app.dispatch(UiCommand::SetSkinBrowserVisible(open && app.skin_browser_open));
+    app.dispatch(UiCommand::SetSkinBrowserVisible(
+        open && app.skin_browser_open,
+    ));
 }
 
 fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {

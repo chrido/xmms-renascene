@@ -15,6 +15,7 @@ use crate::app::command::{
     UiCommand,
 };
 use crate::app::effect::AppEffect;
+use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
 use crate::app::playlist_actions::PlaylistMenuCommand;
@@ -998,36 +999,34 @@ fn xmms_menu_button(label: &str) -> gtk::Button {
     button
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MainKeyboardShortcut {
-    Previous,
-    Play,
-    Pause,
-    Stop,
-    Next,
-    OpenFiles,
-    ToggleRepeat,
-    ToggleShuffle,
-    Preferences,
-    OpenLocation,
-    ToggleNoAdvance,
-    ShadeMain,
-    JumpTime,
-    SkinBrowser,
-    OpenDirectory,
-    PresentMain,
-    TogglePlaylist,
-    ToggleEqualizer,
-    ShadePlaylist,
-    ShadeEqualizer,
-    ToggleTimerRemaining,
-    ToggleSticky,
-    DoubleScale,
-    HalfScale,
-    ToggleEasyMove,
-    StartOfList,
-    FileInfo,
+macro_rules! bind_visibility_window {
+    ($window:expr, $main_state:expr, $setter:ident) => {{
+        {
+            let main_state = Rc::clone($main_state);
+            $window.connect_close_request(move |window| {
+                main_state.borrow_mut().$setter(false);
+                window.hide();
+                gtk::glib::Propagation::Stop
+            });
+        }
+        {
+            let main_state = Rc::clone($main_state);
+            $window.connect_hide(move |_| {
+                main_state.borrow_mut().$setter(false);
+            });
+        }
+    }};
 }
+
+macro_rules! connect_clicked_cloned {
+    ($button:expr, clone [$($clone:ident),* $(,)?], rc [$($rc:ident),* $(,)?], move |_| $body:block) => {{
+        $(let $clone = $clone.clone();)*
+        $(let $rc = Rc::clone($rc);)*
+        $button.connect_clicked(move |_| $body);
+    }};
+}
+
+type MainKeyboardShortcut = AppShortcut;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArrowKey {
@@ -1160,42 +1159,9 @@ fn keyboard_shortcut_from_event(
     key: gtk::gdk::Key,
     state: gtk::gdk::ModifierType,
 ) -> Option<MainKeyboardShortcut> {
-    [
-        ("z", MainKeyboardShortcut::Previous),
-        ("x", MainKeyboardShortcut::Play),
-        ("c", MainKeyboardShortcut::Pause),
-        ("v", MainKeyboardShortcut::Stop),
-        ("b", MainKeyboardShortcut::Next),
-        ("l", MainKeyboardShortcut::OpenFiles),
-        ("r", MainKeyboardShortcut::ToggleRepeat),
-        ("s", MainKeyboardShortcut::ToggleShuffle),
-        ("<Control>p", MainKeyboardShortcut::Preferences),
-        ("<Control>l", MainKeyboardShortcut::OpenLocation),
-        ("<Control>n", MainKeyboardShortcut::ToggleNoAdvance),
-        ("<Control>w", MainKeyboardShortcut::ShadeMain),
-        ("<Control>j", MainKeyboardShortcut::JumpTime),
-        ("<Alt>s", MainKeyboardShortcut::SkinBrowser),
-        ("<Shift>l", MainKeyboardShortcut::OpenDirectory),
-        ("<Alt>w", MainKeyboardShortcut::PresentMain),
-        ("<Alt>e", MainKeyboardShortcut::TogglePlaylist),
-        ("<Alt>g", MainKeyboardShortcut::ToggleEqualizer),
-        ("<Control><Shift>w", MainKeyboardShortcut::ShadePlaylist),
-        ("<Control><Alt>w", MainKeyboardShortcut::ShadeEqualizer),
-        ("<Control>r", MainKeyboardShortcut::ToggleTimerRemaining),
-        ("<Control>a", MainKeyboardShortcut::ToggleSticky),
-        ("<Control>d", MainKeyboardShortcut::DoubleScale),
-        ("<Control>m", MainKeyboardShortcut::HalfScale),
-        ("<Control>e", MainKeyboardShortcut::ToggleEasyMove),
-        ("<Control>z", MainKeyboardShortcut::StartOfList),
-        ("<Control>3", MainKeyboardShortcut::FileInfo),
-        ("Insert", MainKeyboardShortcut::OpenFiles),
-        ("<Shift>Insert", MainKeyboardShortcut::OpenDirectory),
-        ("<Alt>Insert", MainKeyboardShortcut::OpenLocation),
-    ]
-    .into_iter()
-    .find_map(|(accelerator, shortcut)| {
-        shortcut_matches(key, state, accelerator).then_some(shortcut)
-    })
+    APP_SHORTCUTS
+        .iter()
+        .find_map(|spec| shortcut_matches(key, state, spec.accelerator).then_some(spec.shortcut))
 }
 
 fn handle_main_playlist_key_pressed(
@@ -1527,97 +1493,67 @@ fn build_main_menu_popover(
 
     let menu_box = xmms_menu_box(0);
     let open_files = xmms_menu_button("Open Files...");
-    {
-        let parent_window = parent_window.clone();
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        open_files.connect_clicked(move |_| {
-            main_state.borrow_mut().set_menu_visible(false);
-            popover.popdown();
-            show_open_file_dialog(&parent_window, Rc::clone(&main_state));
-        });
-    }
+    connect_clicked_cloned!(open_files, clone [parent_window, popover], rc [main_state], move |_| {
+        main_state.borrow_mut().set_menu_visible(false);
+        popover.popdown();
+        show_open_file_dialog(&parent_window, Rc::clone(&main_state));
+    });
     menu_box.append(&open_files);
 
     let open_location = xmms_menu_button("Open Location...");
-    {
-        let open_location_window = open_location_window.clone();
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        open_location.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.set_open_location_visible(true);
-            }
-            popover.popdown();
-            open_location_window.present();
-        });
-    }
+    connect_clicked_cloned!(open_location, clone [open_location_window, popover], rc [main_state], move |_| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_menu_visible(false);
+            state.set_open_location_visible(true);
+        }
+        popover.popdown();
+        open_location_window.present();
+    });
     menu_box.append(&open_location);
 
     let preferences = xmms_menu_button("Preferences");
-    {
-        let preferences_window = preferences_window.clone();
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        preferences.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.set_preferences_visible(true);
-            }
-            popover.popdown();
-            preferences_window.present();
-        });
-    }
+    connect_clicked_cloned!(preferences, clone [preferences_window, popover], rc [main_state], move |_| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_menu_visible(false);
+            state.set_preferences_visible(true);
+        }
+        popover.popdown();
+        preferences_window.present();
+    });
     menu_box.append(&preferences);
 
     let skin_browser = xmms_menu_button("Skin Browser");
-    {
-        let skin_browser_window = skin_browser_window.clone();
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        skin_browser.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.set_skin_browser_visible(true);
-            }
-            popover.popdown();
-            skin_browser_window.present();
-        });
-    }
+    connect_clicked_cloned!(skin_browser, clone [skin_browser_window, popover], rc [main_state], move |_| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_menu_visible(false);
+            state.set_skin_browser_visible(true);
+        }
+        popover.popdown();
+        skin_browser_window.present();
+    });
     menu_box.append(&skin_browser);
 
     let skin_editor = xmms_menu_button("Skin Editor");
-    {
-        let skin_editor_window = skin_editor_window.clone();
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        skin_editor.connect_clicked(move |_| {
-            {
-                let mut state = main_state.borrow_mut();
-                state.set_menu_visible(false);
-                state.set_skin_editor_visible(true);
-            }
-            popover.popdown();
-            skin_editor_window.present();
-        });
-    }
+    connect_clicked_cloned!(skin_editor, clone [skin_editor_window, popover], rc [main_state], move |_| {
+        {
+            let mut state = main_state.borrow_mut();
+            state.set_menu_visible(false);
+            state.set_skin_editor_visible(true);
+        }
+        popover.popdown();
+        skin_editor_window.present();
+    });
     menu_box.append(&skin_editor);
 
     let quit = xmms_menu_button("Quit");
-    {
-        let app = app.clone();
-        let popover = popover.clone();
-        let main_state = Rc::clone(main_state);
-        quit.connect_clicked(move |_| {
-            main_state.borrow_mut().set_menu_visible(false);
-            popover.popdown();
-            app.quit();
-        });
-    }
+    connect_clicked_cloned!(quit, clone [app, popover], rc [main_state], move |_| {
+        main_state.borrow_mut().set_menu_visible(false);
+        popover.popdown();
+        app.quit();
+    });
     menu_box.append(&quit);
 
     popover.set_child(Some(&menu_box));
@@ -2599,14 +2535,7 @@ fn build_preferences_window(
     root.append(&buttons);
     window.set_child(Some(&root));
 
-    {
-        let main_state = Rc::clone(main_state);
-        window.connect_close_request(move |window| {
-            main_state.borrow_mut().set_preferences_visible(false);
-            window.hide();
-            gtk::glib::Propagation::Stop
-        });
-    }
+    bind_visibility_window!(&window, main_state, set_preferences_visible);
 
     window
 }
@@ -3623,20 +3552,7 @@ fn build_skin_browser_window(
         playlist_area,
         &populating,
     );
-    {
-        let main_state = Rc::clone(main_state);
-        window.connect_close_request(move |window| {
-            main_state.borrow_mut().set_skin_browser_visible(false);
-            window.hide();
-            gtk::glib::Propagation::Stop
-        });
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        window.connect_hide(move |_| {
-            main_state.borrow_mut().set_skin_browser_visible(false);
-        });
-    }
+    bind_visibility_window!(&window, main_state, set_skin_browser_visible);
     window
 }
 
@@ -3861,20 +3777,7 @@ fn build_skin_editor_window(
     }
     canvas.add_controller(scroll);
 
-    {
-        let main_state = Rc::clone(main_state);
-        window.connect_close_request(move |window| {
-            main_state.borrow_mut().set_skin_editor_visible(false);
-            window.hide();
-            gtk::glib::Propagation::Stop
-        });
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        window.connect_hide(move |_| {
-            main_state.borrow_mut().set_skin_editor_visible(false);
-        });
-    }
+    bind_visibility_window!(&window, main_state, set_skin_editor_visible);
 
     window.set_child(Some(&root));
     window
@@ -5663,6 +5566,102 @@ pub(crate) enum PanelAction {
     ShowEqualizerPresets,
 }
 
+struct GtkPanelActionContext<'a> {
+    window: &'a gtk::ApplicationWindow,
+    area: &'a gtk::DrawingArea,
+    main_state: &'a Rc<RefCell<MainWindowUiState>>,
+    open_location_window: Option<&'a gtk::ApplicationWindow>,
+    playlist_sort_menu: Option<&'a gtk::Popover>,
+    equalizer_presets_menu: Option<&'a gtk::Popover>,
+    equalizer_presets_docked: bool,
+}
+
+fn apply_panel_action(
+    action: PanelAction,
+    context: GtkPanelActionContext<'_>,
+    on_changed: impl FnOnce(),
+) {
+    match action {
+        PanelAction::None => {}
+        PanelAction::Changed => on_changed(),
+        PanelAction::OpenDirectoryDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_directory_dialog_visible(true);
+            show_playlist_add_directory_dialog(
+                context.window,
+                Rc::clone(context.main_state),
+                context.area.clone(),
+            );
+        }
+        PanelAction::OpenFileDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_file_dialog_visible(true);
+            show_playlist_add_file_dialog(
+                context.window,
+                Rc::clone(context.main_state),
+                context.area.clone(),
+            );
+        }
+        PanelAction::OpenLocationWindow => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_open_location_visible(true);
+            if let Some(open_location_window) = context.open_location_window {
+                open_location_window.present();
+            }
+        }
+        PanelAction::OpenPlaylistLoadDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_playlist_load_dialog_visible(true);
+            show_playlist_load_dialog(
+                context.window,
+                Rc::clone(context.main_state),
+                context.area.clone(),
+            );
+        }
+        PanelAction::OpenPlaylistSaveDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_playlist_save_dialog_visible(true);
+            show_playlist_save_dialog(context.window, Rc::clone(context.main_state));
+        }
+        PanelAction::ShowFileInfo => {
+            show_file_info_dialog(context.window, Rc::clone(context.main_state));
+        }
+        PanelAction::ShowPlaylistSortMenu => {
+            if let Some(popover) = context.playlist_sort_menu {
+                show_playlist_sort_menu(popover, context.area);
+            }
+            context.area.queue_draw();
+        }
+        PanelAction::ShowPlaylistMenu(_) => {
+            context.area.queue_draw();
+        }
+        PanelAction::ShowEqualizerPresets => {
+            if let Some(popover) = context.equalizer_presets_menu {
+                if context.equalizer_presets_docked {
+                    show_docked_equalizer_presets_menu(
+                        popover,
+                        context.area,
+                        &context.main_state.borrow(),
+                    );
+                } else {
+                    show_equalizer_presets_menu(popover, context.area);
+                }
+            }
+            context.area.queue_draw();
+        }
+    }
+}
+
 fn add_panel_click_controller(
     window: &gtk::ApplicationWindow,
     area: &gtk::DrawingArea,
@@ -5797,62 +5796,22 @@ fn add_panel_click_controller(
             } else {
                 main_state.borrow_mut().panel_click(kind, x, y)
             };
-            match action {
-                PanelAction::None => {}
-                PanelAction::Changed => {
+            apply_panel_action(
+                action,
+                GtkPanelActionContext {
+                    window: &window,
+                    area: &area,
+                    main_state: &main_state,
+                    open_location_window: open_location_window.as_ref(),
+                    playlist_sort_menu: playlist_sort_menu.as_ref(),
+                    equalizer_presets_menu: equalizer_presets_menu.as_ref(),
+                    equalizer_presets_docked: false,
+                },
+                || {
                     sync_single_panel_window_from_state(kind, &window, &area, &main_state);
                     main_area.queue_draw();
-                }
-                PanelAction::OpenDirectoryDialog => {
-                    main_state.borrow_mut().set_directory_dialog_visible(true);
-                    show_playlist_add_directory_dialog(
-                        &window,
-                        Rc::clone(&main_state),
-                        area.clone(),
-                    );
-                }
-                PanelAction::OpenFileDialog => {
-                    main_state.borrow_mut().set_file_dialog_visible(true);
-                    show_playlist_add_file_dialog(&window, Rc::clone(&main_state), area.clone());
-                }
-                PanelAction::OpenLocationWindow => {
-                    main_state.borrow_mut().set_open_location_visible(true);
-                    if let Some(open_location_window) = open_location_window.as_ref() {
-                        open_location_window.present();
-                    }
-                }
-                PanelAction::OpenPlaylistLoadDialog => {
-                    main_state
-                        .borrow_mut()
-                        .set_playlist_load_dialog_visible(true);
-                    show_playlist_load_dialog(&window, Rc::clone(&main_state), area.clone());
-                }
-                PanelAction::OpenPlaylistSaveDialog => {
-                    main_state
-                        .borrow_mut()
-                        .set_playlist_save_dialog_visible(true);
-                    show_playlist_save_dialog(&window, Rc::clone(&main_state));
-                }
-                PanelAction::ShowFileInfo => {
-                    show_file_info_dialog(&window, Rc::clone(&main_state));
-                }
-                PanelAction::ShowPlaylistSortMenu => {
-                    if let Some(popover) = playlist_sort_menu.as_ref() {
-                        show_playlist_sort_menu(popover, &area);
-                    }
-                    area.queue_draw();
-                }
-                PanelAction::ShowPlaylistMenu(menu) => {
-                    let _ = menu;
-                    area.queue_draw();
-                }
-                PanelAction::ShowEqualizerPresets => {
-                    if let Some(popover) = equalizer_presets_menu.as_ref() {
-                        show_equalizer_presets_menu(popover, &area);
-                    }
-                    area.queue_draw();
-                }
-            }
+                },
+            );
         });
     }
     window.add_controller(click);
@@ -6387,51 +6346,22 @@ fn handle_panel_action_for_main_window(
     playlist_sort_menu: &gtk::Popover,
     equalizer_presets_menu: &gtk::Popover,
 ) {
-    match action {
-        PanelAction::None => {}
-        PanelAction::Changed => {
+    apply_panel_action(
+        action,
+        GtkPanelActionContext {
+            window,
+            area,
+            main_state,
+            open_location_window: Some(&panel_windows.open_location),
+            playlist_sort_menu: Some(playlist_sort_menu),
+            equalizer_presets_menu: Some(equalizer_presets_menu),
+            equalizer_presets_docked: true,
+        },
+        || {
             sync_panel_windows(panel_windows, &main_state.borrow());
             resize_main_window(window, area, &main_state.borrow());
-        }
-        PanelAction::OpenDirectoryDialog => {
-            main_state.borrow_mut().set_directory_dialog_visible(true);
-            show_playlist_add_directory_dialog(window, Rc::clone(main_state), area.clone());
-        }
-        PanelAction::OpenFileDialog => {
-            main_state.borrow_mut().set_file_dialog_visible(true);
-            show_playlist_add_file_dialog(window, Rc::clone(main_state), area.clone());
-        }
-        PanelAction::OpenLocationWindow => {
-            main_state.borrow_mut().set_open_location_visible(true);
-            panel_windows.open_location.present();
-        }
-        PanelAction::OpenPlaylistLoadDialog => {
-            main_state
-                .borrow_mut()
-                .set_playlist_load_dialog_visible(true);
-            show_playlist_load_dialog(window, Rc::clone(main_state), area.clone());
-        }
-        PanelAction::OpenPlaylistSaveDialog => {
-            main_state
-                .borrow_mut()
-                .set_playlist_save_dialog_visible(true);
-            show_playlist_save_dialog(window, Rc::clone(main_state));
-        }
-        PanelAction::ShowFileInfo => {
-            show_file_info_dialog(window, Rc::clone(main_state));
-        }
-        PanelAction::ShowPlaylistSortMenu => {
-            show_playlist_sort_menu(playlist_sort_menu, area);
-            area.queue_draw();
-        }
-        PanelAction::ShowPlaylistMenu(_) => {
-            area.queue_draw();
-        }
-        PanelAction::ShowEqualizerPresets => {
-            show_docked_equalizer_presets_menu(equalizer_presets_menu, area, &main_state.borrow());
-            area.queue_draw();
-        }
-    }
+        },
+    );
 }
 
 fn sync_single_panel_window_from_state(

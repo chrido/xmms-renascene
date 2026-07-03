@@ -6,6 +6,7 @@
 pub mod command;
 pub mod controller;
 pub mod effect;
+pub mod input;
 pub mod panel;
 pub mod playlist_actions;
 pub mod preview;
