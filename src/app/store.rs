@@ -5,6 +5,7 @@
 //! `dispatch`, then update their widgets/windows from the returned change set
 //! and immutable state/view-model reads.
 
+use std::fmt;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use crate::app::command::AppCommand;
@@ -57,6 +58,55 @@ impl StateChangeSet {
     pub fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    fn known_bits() -> u64 {
+        Self::PLAYER.0
+            | Self::PLAYLIST.0
+            | Self::EQUALIZER.0
+            | Self::PANELS.0
+            | Self::DIALOGS.0
+            | Self::SKIN.0
+            | Self::PREFERENCES.0
+            | Self::CONFIG.0
+            | Self::RENDER_MAIN.0
+            | Self::RENDER_PLAYLIST.0
+            | Self::RENDER_EQUALIZER.0
+    }
+}
+
+impl fmt::Display for StateChangeSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            return f.write_str("none");
+        }
+
+        let flags = [
+            (Self::PLAYER, "player"),
+            (Self::PLAYLIST, "playlist"),
+            (Self::EQUALIZER, "equalizer"),
+            (Self::PANELS, "panels"),
+            (Self::DIALOGS, "dialogs"),
+            (Self::SKIN, "skin"),
+            (Self::PREFERENCES, "preferences"),
+            (Self::CONFIG, "config"),
+            (Self::RENDER_MAIN, "render-main"),
+            (Self::RENDER_PLAYLIST, "render-playlist"),
+            (Self::RENDER_EQUALIZER, "render-equalizer"),
+        ];
+        let mut separator = "";
+        for (flag, label) in flags {
+            if self.intersects(flag) {
+                write!(f, "{separator}{label}")?;
+                separator = "|";
+            }
+        }
+
+        let unknown_bits = self.0 & !Self::known_bits();
+        if unknown_bits != 0 {
+            write!(f, "{separator}unknown({unknown_bits:#x})")?;
+        }
+        Ok(())
+    }
 }
 
 impl std::ops::BitOr for StateChangeSet {
@@ -84,6 +134,35 @@ pub struct DispatchResult {
 pub struct StoreUpdate {
     pub revision: u64,
     pub changes: StateChangeSet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConsoleEventLog {
+    event: String,
+    revision: u64,
+    changes: StateChangeSet,
+    effects: String,
+}
+
+impl ConsoleEventLog {
+    fn new(event: impl Into<String>, result: &DispatchResult) -> Self {
+        Self {
+            event: event.into(),
+            revision: result.revision,
+            changes: result.changes,
+            effects: format!("{:?}", result.effects),
+        }
+    }
+}
+
+impl fmt::Display for ConsoleEventLog {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "xmms-rs event: {}; revision={}; changes={}; effects={}",
+            self.event, self.revision, self.changes, self.effects
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,24 +316,27 @@ impl AppStore {
     }
 
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) -> DispatchResult {
+        let command = command.into();
+        let event = format!("command {command:?}");
         let before = StoreSnapshot::from_state(self.state());
-        let effects = self.controller.handle_command(command.into());
+        let effects = self.controller.handle_command(command);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(before.diff(&after), effects)
+        self.finish_dispatch_logged(event, before.diff(&after), effects)
     }
 
     pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> DispatchResult {
+        let event_label = format!("playback {event:?}");
         let before = StoreSnapshot::from_state(self.state());
         let effects = self.controller.handle_playback_event(event);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(before.diff(&after), effects)
+        self.finish_dispatch_logged(event_label, before.diff(&after), effects)
     }
 
     pub fn handle_playlist_eof(&mut self) -> DispatchResult {
         let before = StoreSnapshot::from_state(self.state());
         let effects = self.controller.handle_playlist_eof();
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(before.diff(&after), effects)
+        self.finish_dispatch_logged("playlist-eof", before.diff(&after), effects)
     }
 
     pub fn tick_playback_position(&mut self, elapsed_ms: i64) -> DispatchResult {
@@ -270,18 +352,23 @@ impl AppStore {
             }
         }
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            format!("playback-position-tick elapsed_ms={elapsed_ms}"),
             before.diff(&after) | StateChangeSet::PLAYER | StateChangeSet::RENDER_MAIN,
             vec![AppEffect::QueueRender(RenderTarget::All)],
         )
     }
 
     pub fn set_runtime_volume_for_transition(&mut self, volume: i32) -> DispatchResult {
+        let requested_volume = volume;
         let before = StoreSnapshot::from_state(self.state());
         let volume = volume.clamp(0, 100);
         self.controller.state_mut().player.set_volume(volume);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            format!(
+                "runtime-volume-transition requested_volume={requested_volume} volume={volume}"
+            ),
             before.diff(&after) | StateChangeSet::PLAYER | StateChangeSet::RENDER_MAIN,
             vec![
                 AppEffect::SetBackendVolume(volume),
@@ -291,19 +378,24 @@ impl AppStore {
     }
 
     pub fn complete_stop_fade(&mut self, restore_volume: i32) -> DispatchResult {
+        let requested_restore_volume = restore_volume;
         let before = StoreSnapshot::from_state(self.state());
+        let restore_volume = restore_volume.clamp(0, 100);
         {
             let state = self.controller.state_mut();
             state.player.stop();
             state.player.clear_visualization_data();
-            state.player.set_volume(restore_volume.clamp(0, 100));
+            state.player.set_volume(restore_volume);
         }
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            format!(
+                "complete-stop-fade requested_restore_volume={requested_restore_volume} restore_volume={restore_volume}"
+            ),
             before.diff(&after) | StateChangeSet::PLAYER | StateChangeSet::RENDER_ALL,
             vec![
                 AppEffect::StopPlayback,
-                AppEffect::SetBackendVolume(restore_volume.clamp(0, 100)),
+                AppEffect::SetBackendVolume(restore_volume),
                 AppEffect::QueueRender(RenderTarget::All),
             ],
         )
@@ -317,7 +409,8 @@ impl AppStore {
             state.apply_config_to_runtime();
         }
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            "preferences-config-applied",
             before.diff(&after),
             vec![
                 AppEffect::SaveConfig,
@@ -327,6 +420,7 @@ impl AppStore {
     }
 
     pub fn apply_duration_index_result(&mut self, result: DurationIndexResult) -> DispatchResult {
+        let event = format!("duration-index-result {result:?}");
         let before = StoreSnapshot::from_state(self.state());
         let changed = self
             .controller
@@ -334,7 +428,8 @@ impl AppStore {
             .playlist
             .apply_duration_index_result(result);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            event,
             if changed {
                 before.diff(&after) | StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST
             } else {
@@ -355,10 +450,12 @@ impl AppStore {
         &mut self,
         playlist: crate::playlist::Playlist,
     ) -> DispatchResult {
+        let entry_count = playlist.entries().len();
         let before = StoreSnapshot::from_state(self.state());
         self.controller.state_mut().playlist = playlist;
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            format!("playlist-file-loaded entries={entry_count}"),
             before.diff(&after),
             vec![
                 AppEffect::SaveConfig,
@@ -372,6 +469,9 @@ impl AppStore {
         preamp_position: i32,
         band_positions: crate::audio_model::EqualizerBandPositions,
     ) -> DispatchResult {
+        let event = format!(
+            "equalizer-preset preamp_position={preamp_position} band_positions={band_positions:?}"
+        );
         let before = StoreSnapshot::from_state(self.state());
         {
             let config = &mut self.controller.state_mut().config;
@@ -379,7 +479,8 @@ impl AppStore {
             config.equalizer_band_pos = band_positions;
         }
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch(
+        self.finish_dispatch_logged(
+            event,
             before.diff(&after),
             vec![
                 AppEffect::SetBackendEqualizer,
@@ -390,7 +491,22 @@ impl AppStore {
     }
 
     pub fn notify_external_mutation(&mut self, changes: StateChangeSet) -> DispatchResult {
-        self.finish_dispatch(changes, Vec::new())
+        self.finish_dispatch_logged(
+            format!("external-mutation changes={changes}"),
+            changes,
+            Vec::new(),
+        )
+    }
+
+    fn finish_dispatch_logged(
+        &mut self,
+        event: impl Into<String>,
+        changes: StateChangeSet,
+        effects: Vec<AppEffect>,
+    ) -> DispatchResult {
+        let result = self.finish_dispatch(changes, effects);
+        eprintln!("{}", ConsoleEventLog::new(event, &result));
+        result
     }
 
     fn finish_dispatch(
@@ -453,5 +569,29 @@ mod tests {
 
         assert!(store.state().ui.preferences_visible);
         assert!(result.changes.contains(StateChangeSet::DIALOGS));
+    }
+
+    #[test]
+    fn state_change_set_displays_named_flags() {
+        let changes = StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN;
+
+        assert_eq!(changes.to_string(), "player|config|render-main");
+        assert_eq!(StateChangeSet::empty().to_string(), "none");
+    }
+
+    #[test]
+    fn console_event_log_formats_event_result() {
+        let result = DispatchResult {
+            revision: 7,
+            changes: StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST,
+            effects: vec![AppEffect::QueueRender(RenderTarget::Playlist)],
+        };
+
+        let line = ConsoleEventLog::new("command Playlist(Clear)", &result).to_string();
+
+        assert_eq!(
+            line,
+            "xmms-rs event: command Playlist(Clear); revision=7; changes=playlist|render-playlist; effects=[QueueRender(Playlist)]"
+        );
     }
 }
