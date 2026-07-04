@@ -6,7 +6,7 @@ The tests are intentionally black-box: they build/start the real application, fi
 
 ## Requirements
 
-Install the system tools used by the GTK smoke tests:
+Install the system tools used by the GTK/egui smoke tests:
 
 ```bash
 sudo apt-get install -y xvfb xdotool imagemagick ffmpeg
@@ -34,7 +34,7 @@ xvfb-run -a ./repo pye2e -k gtk
 
 ## Docker/X server image
 
-For machines or CI jobs without a local X server, build and run the Docker image. It contains Rust, GTK/GStreamer build dependencies, Xvfb, `xdotool`, ImageMagick `import`, `xwd`, and `ffmpeg`:
+For machines or CI jobs without a local X server, build and run the Docker image. It contains Rust, GTK/GStreamer/egui X11 runtime dependencies, Xvfb, `xdotool`, ImageMagick `import`, `xwd`, and `ffmpeg`:
 
 ```bash
 ./repo pye2e-docker
@@ -54,14 +54,14 @@ Set `XMMS_E2E_DOCKER_IMAGE` to override the image tag or `XMMS_E2E_DOCKER_SKIP_B
 
 If `DISPLAY` is not set, or `xdotool` is unavailable, the tests skip with an explanatory message. Screenshot-specific tests also skip when neither ImageMagick `import` nor `xwd` is available.
 
-Pressed-button screenshots are written to `testoutput` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`. Each test invocation gets its own sanitized folder name, including pytest parameter text when present, and screenshots are numbered in capture order. Player button tests capture before, pressed, and after states, for example `test_gtk_main_button_pressed_screenshot_pause/1.png`, `2.png`, and `3.png`. Full-control GTK tests additionally use `ffmpeg` to synthesize temporary WAV tracks, click the player transport/toggle/slider controls plus equalizer and playlist controls, and assert the application's console log contains the corresponding command/action entries. After each test, numbered PNG screenshots in that test folder are encoded to `screenshots.mp4` with `ffmpeg`.
+Pressed-button screenshots are written to `testoutput` by default. Override that location with `XMMS_E2E_SCREENSHOT_DIR`. Each test invocation gets its own sanitized folder name, including pytest parameter text when present, and screenshots are numbered in capture order. Player button tests are parameterized over `gtk` and `egui` and capture before, pressed, and after states, for example `test_gui_main_button_pressed_screenshot_gtk_pause/1.png`, `2.png`, and `3.png`. Full-control tests are also parameterized over `gtk` and `egui`; they use `ffmpeg` to synthesize temporary WAV tracks, click the player transport/toggle/slider controls plus equalizer and playlist controls, and assert the application's console log contains the corresponding command/action entries. GTK-only tests remain for GTK-specific Preferences/menu behavior and socket smoke coverage. After each test, numbered PNG screenshots in that test folder are encoded to `screenshots.mp4` with `ffmpeg`.
 
 ## Build behavior
 
-By default the test session builds the GTK frontend with:
+By default the test session builds one binary with both GTK and egui frontends enabled:
 
 ```bash
-cargo build --manifest-path Cargo.toml --quiet
+cargo build --manifest-path Cargo.toml --features egui-ui --quiet
 ```
 
 Set `XMMS_E2E_SKIP_BUILD=1` to reuse an existing `target/debug/xmms-rs` binary.

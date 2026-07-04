@@ -5,6 +5,7 @@ use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
     format_playlist_footer_duration, playlist_view_model, PlaylistViewModel,
 };
+use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 use crate::render::{
@@ -65,8 +66,8 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
-    add_playlist_hit_regions(ui, app, rect, &view_model);
     add_playlist_titlebar_drag_region(ui, app, rect);
+    add_playlist_hit_regions(ui, app, rect, &view_model);
     add_playlist_menu_popover(ui, app, rect);
     show_playlist_sort_popover(ui.ctx(), app);
     show_physical_delete_confirmation(ui.ctx(), app);
@@ -337,6 +338,8 @@ fn add_playlist_rows_hit_region(
 }
 
 fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
+    let menu_name = format!("{menu:?}");
+    app_log_info!(playlist, "menu opened", menu_name);
     app.playlist_menu_open = Some(menu);
 }
 
@@ -532,6 +535,8 @@ fn playlist_sort_item(
 }
 
 fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: PlaylistFooterButton) {
+    let button_name = format!("{button:?}");
+    app_log_info!(playlist, "footer button", button_name);
     match button {
         PlaylistFooterButton::Previous => app.dispatch(PlayerCommand::PreviousTrack),
         PlaylistFooterButton::Play => app.dispatch(PlayerCommand::Play),

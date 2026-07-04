@@ -1,4 +1,4 @@
-"""Full GTK skinned-control E2E coverage with screenshots and console-log assertions."""
+"""Full GTK/egui skinned-control E2E coverage with screenshots and console-log assertions."""
 
 from __future__ import annotations
 
@@ -97,19 +97,19 @@ def open_panel(main_window: MainWindow, toggle: MainToggleButton, title: str, te
     raise AssertionError("unreachable: wait_for_visible_window should raise on timeout")
 
 
-def test_gtk_player_transport_toggles_and_sliders_with_tracks_screenshots_and_logs(
-    gtk_tracked_main_window: MainWindow,
-    gtk_app_with_tracks: subprocess.Popen[bytes],
+def test_gui_player_transport_toggles_and_sliders_with_tracks_screenshots_and_logs(
+    gui_tracked_main_window: MainWindow,
+    gui_app_with_tracks: subprocess.Popen[bytes],
     test_output: Any,
 ) -> None:
     """Click core player controls/sliders on ffmpeg tracks and confirm app logs."""
     require_screenshots()
 
     capture(test_output)
-    gtk_tracked_main_window.focus_main_window()
+    gui_tracked_main_window.focus_main_window()
 
     for toggle in [MainToggleButton.SHUFFLE, MainToggleButton.REPEAT]:
-        gtk_tracked_main_window.click_main_toggle(toggle)
+        gui_tracked_main_window.click_main_toggle(toggle)
         time.sleep(0.2)
         capture(test_output)
 
@@ -120,33 +120,33 @@ def test_gtk_player_transport_toggles_and_sliders_with_tracks_screenshots_and_lo
         MainButton.NEXT,
         MainButton.PREVIOUS,
     ]:
-        gtk_tracked_main_window.click_main_button(button)
+        gui_tracked_main_window.click_main_button(button)
         time.sleep(0.4)
         capture(test_output)
 
-    gtk_tracked_main_window.click_main_button(MainButton.PLAY)
+    gui_tracked_main_window.click_main_button(MainButton.PLAY)
     time.sleep(0.8)
     capture(test_output)
 
-    gtk_tracked_main_window.drag_main_slider(MainSlider.VOLUME, 0.85)
+    gui_tracked_main_window.drag_main_slider(MainSlider.VOLUME, 0.85)
     time.sleep(0.2)
     capture(test_output)
 
-    gtk_tracked_main_window.drag_main_slider(MainSlider.BALANCE, 0.85)
+    gui_tracked_main_window.drag_main_slider(MainSlider.BALANCE, 0.85)
     time.sleep(0.2)
     capture(test_output)
 
-    gtk_tracked_main_window.drag_main_slider(MainSlider.POSITION, 0.55)
+    gui_tracked_main_window.drag_main_slider(MainSlider.POSITION, 0.55)
     time.sleep(0.4)
     capture(test_output)
 
     assert_app_log_contains(
-        gtk_app_with_tracks,
+        gui_app_with_tracks,
         "command Playlist(ToggleShuffle)",
         "command Playlist(ToggleRepeat)",
         "command Player(Play)",
         "StartPlaybackUri",
-        "gtk-e2e-track-",
+        "xmms-e2e-track-",
         "command Player(TogglePause)",
         "command Player(Stop)",
         "command Player(NextTrack)",
@@ -159,16 +159,16 @@ def test_gtk_player_transport_toggles_and_sliders_with_tracks_screenshots_and_lo
     )
 
 
-def test_gtk_equalizer_controls_and_sliders_screenshots_and_logs(
-    gtk_tracked_main_window: MainWindow,
-    gtk_app_with_tracks: subprocess.Popen[bytes],
+def test_gui_equalizer_controls_and_sliders_screenshots_and_logs(
+    gui_tracked_main_window: MainWindow,
+    gui_app_with_tracks: subprocess.Popen[bytes],
     test_output: Any,
 ) -> None:
-    """Click every GTK equalizer button and every equalizer slider."""
+    """Click every equalizer button and every equalizer slider."""
     require_screenshots()
 
     equalizer_window, equalizer_y = open_panel(
-        gtk_tracked_main_window,
+        gui_tracked_main_window,
         MainToggleButton.EQUALIZER,
         EQUALIZER_WINDOW_TITLE,
         test_output,
@@ -203,7 +203,7 @@ def test_gtk_equalizer_controls_and_sliders_screenshots_and_logs(
     capture(test_output)
 
     assert_app_log_contains(
-        gtk_app_with_tracks,
+        gui_app_with_tracks,
         "equalizer: control activated, control_name=On",
         "equalizer: control activated, control_name=Auto",
         "equalizer: control activated, control_name=Presets",
@@ -215,16 +215,16 @@ def test_gtk_equalizer_controls_and_sliders_screenshots_and_logs(
     )
 
 
-def test_gtk_playlist_buttons_menus_and_scrollbar_screenshots_and_logs(
-    gtk_tracked_main_window: MainWindow,
-    gtk_app_with_tracks: subprocess.Popen[bytes],
+def test_gui_playlist_buttons_menus_and_scrollbar_screenshots_and_logs(
+    gui_tracked_main_window: MainWindow,
+    gui_app_with_tracks: subprocess.Popen[bytes],
     test_output: Any,
 ) -> None:
-    """Click every GTK playlist bottom/menu button and drag the playlist scrollbar."""
+    """Click every playlist bottom/menu button and drag the playlist scrollbar."""
     require_screenshots()
 
     playlist_window, playlist_y = open_panel(
-        gtk_tracked_main_window,
+        gui_tracked_main_window,
         MainToggleButton.PLAYLIST,
         PLAYLIST_WINDOW_TITLE,
         test_output,
@@ -275,7 +275,7 @@ def test_gtk_playlist_buttons_menus_and_scrollbar_screenshots_and_logs(
     capture(test_output)
 
     assert_app_log_contains(
-        gtk_app_with_tracks,
+        gui_app_with_tracks,
         "playlist: menu opened, menu_name=Add",
         "playlist: menu opened, menu_name=Remove",
         "playlist: menu opened, menu_name=Select",

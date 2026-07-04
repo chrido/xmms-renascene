@@ -6,6 +6,7 @@ use crate::app::view_model::{
     balance_to_eq_shaded_position, eq_slider_pixel_to_position, equalizer_view_model,
     volume_to_eq_shaded_position, EqualizerViewModel,
 };
+use crate::app_log_info;
 use crate::equalizer::{winamp_original_presets, EqualizerPreset};
 use crate::render::{
     equalizer_slider_layout, EqualizerControl, EqualizerRenderState, EqualizerSlider,
@@ -49,8 +50,8 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
-    add_equalizer_hit_regions(ui, app, rect, &view_model);
     add_equalizer_titlebar_drag_region(ui, app, rect, &view_model);
+    add_equalizer_hit_regions(ui, app, rect, &view_model);
     show_equalizer_presets_popover(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -217,6 +218,8 @@ fn add_equalizer_slider_hit(
 }
 
 fn dispatch_equalizer_control(app: &mut EguiFrontendState, control: EqualizerControl) {
+    let control_name = format!("{control:?}");
+    app_log_info!(equalizer, "control activated", control_name);
     match control {
         EqualizerControl::On => app.dispatch(EqualizerCommand::ToggleActive),
         EqualizerControl::Auto => app.dispatch(EqualizerCommand::ToggleAuto),

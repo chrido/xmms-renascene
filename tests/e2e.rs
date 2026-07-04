@@ -1,3 +1,5 @@
+#![cfg(feature = "gtk-ui")]
+
 use image::GenericImageView;
 use std::fs;
 use std::fs::File;

@@ -5,6 +5,7 @@ use crate::app::view_model::{
     balance_to_position, main_player_view_model, position_to_balance, position_to_volume,
     volume_to_position, MainPlayerViewModel,
 };
+use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::render::{
     MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState, MAIN_TITLEBAR_HEIGHT,
@@ -56,8 +57,8 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
-    add_main_hit_regions(ui, app, rect, &view_model);
     add_main_titlebar_drag_region(ui, app, rect, &view_model);
+    add_main_hit_regions(ui, app, rect, &view_model);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -340,6 +341,8 @@ fn dispatch_toggle(app: &mut EguiFrontendState, toggle: MainToggleButton) {
 }
 
 fn dispatch_slider(app: &mut EguiFrontendState, slider: MainSlider, position: i32, shaded: bool) {
+    let slider_name = format!("{slider:?}");
+    app_log_info!(player, "slider changed", slider_name, position);
     match slider {
         MainSlider::Volume => app.dispatch(AudioCommand::SetVolume(position_to_volume(position))),
         MainSlider::Balance => {

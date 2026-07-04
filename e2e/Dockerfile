@@ -9,6 +9,7 @@
 FROM rust:1-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    PATH="/usr/local/cargo/bin:${PATH}" \
     DISPLAY=:99 \
     GDK_BACKEND=x11 \
     GDK_DISABLE=gl \
@@ -30,6 +31,7 @@ RUN apt-get update \
         libgstreamer-plugins-base1.0-dev \
         libgstreamer1.0-dev \
         libgtk-4-dev \
+        libxkbcommon-x11-0 \
         pkg-config \
         python3 \
         python3-venv \

@@ -1,4 +1,4 @@
-"""GTK frontend coordinate-click smoke tests."""
+"""Coordinate-click smoke tests for GTK and egui frontends."""
 
 from __future__ import annotations
 
@@ -30,20 +30,20 @@ PANEL_TOGGLES = [
 ]
 
 
-def test_gtk_main_close_button_accepts_coordinate_click(
-    gtk_main_window: MainWindow,
-    gtk_app: subprocess.Popen[bytes],
+def test_gui_main_close_button_accepts_coordinate_click(
+    gui_main_window: MainWindow,
+    gui_app: subprocess.Popen[bytes],
 ) -> None:
-    """Start GTK and click the skinned close button using window coordinates."""
-    gtk_main_window.click_main_button(MainButton.CLOSE)
+    """Start a frontend and click the skinned close button using window coordinates."""
+    gui_main_window.click_main_button(MainButton.CLOSE)
 
-    return_code = wait_for_process_exit(gtk_app)
+    return_code = wait_for_process_exit(gui_app)
     assert return_code == 0
 
 
 @pytest.mark.parametrize("button", MAIN_PLAYER_BUTTONS, ids=[button.value for button in MAIN_PLAYER_BUTTONS])
-def test_gtk_main_button_pressed_screenshot(
-    gtk_main_window: MainWindow,
+def test_gui_main_button_pressed_screenshot(
+    gui_main_window: MainWindow,
     test_output: Any,
     button: MainButton,
 ) -> None:
@@ -51,7 +51,7 @@ def test_gtk_main_button_pressed_screenshot(
     if not screenshot_tool_available():
         pytest.skip("Install ImageMagick 'import' or xwd to capture E2E screenshots")
 
-    screenshots = gtk_main_window.press_main_button_with_screenshots(
+    screenshots = gui_main_window.press_main_button_with_screenshots(
         button,
         test_output.screenshot_path,
     )
@@ -62,8 +62,8 @@ def test_gtk_main_button_pressed_screenshot(
 
 
 @pytest.mark.parametrize("toggle", PANEL_TOGGLES, ids=[toggle.value for toggle in PANEL_TOGGLES])
-def test_gtk_panel_toggle_opens_and_closes_with_screenshots(
-    gtk_main_window: MainWindow,
+def test_gui_panel_toggle_opens_and_closes_with_screenshots(
+    gui_main_window: MainWindow,
     test_output: Any,
     toggle: MainToggleButton,
 ) -> None:
@@ -71,7 +71,7 @@ def test_gtk_panel_toggle_opens_and_closes_with_screenshots(
     if not screenshot_tool_available():
         pytest.skip("Install ImageMagick 'import' or xwd to capture E2E screenshots")
 
-    screenshots = gtk_main_window.toggle_panel_with_screenshots(
+    screenshots = gui_main_window.toggle_panel_with_screenshots(
         toggle,
         test_output.screenshot_path,
     )

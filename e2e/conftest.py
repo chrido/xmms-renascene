@@ -23,7 +23,19 @@ from gui import MainWindow
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_BINARY = REPO_ROOT / "target" / "debug" / "xmms-rs"
 MAIN_WINDOW_TITLE = "XMMS Renascene Rust Preview"
+EGUI_WINDOW_TITLE = "XMMS Renascene egui"
 BASE_MAIN_WIDTH = 275
+
+
+@dataclass(frozen=True)
+class GuiFrontend:
+    name: str
+    window_title: str
+
+
+GTK_FRONTEND = GuiFrontend("gtk", MAIN_WINDOW_TITLE)
+EGUI_FRONTEND = GuiFrontend("egui", EGUI_WINDOW_TITLE)
+GUI_FRONTENDS = (GTK_FRONTEND, EGUI_FRONTEND)
 
 
 def sanitize_output_name(name: str) -> str:
@@ -82,21 +94,36 @@ class TestOutput:
 
 
 
+def command_path(name: str) -> str | None:
+    found = shutil.which(name)
+    if found is not None:
+        return found
+    cargo_bin_candidate = Path("/usr/local/cargo/bin") / name
+    if cargo_bin_candidate.is_file():
+        return str(cargo_bin_candidate)
+    return None
+
+
 def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    return command_path(name) is not None
 
 
 @pytest.fixture(scope="session", autouse=True)
-def build_gtk_frontend() -> None:
+def build_gui_frontends() -> None:
     if os.environ.get("XMMS_E2E_SKIP_BUILD") == "1":
         if not APP_BINARY.exists():
             pytest.skip(f"{APP_BINARY} does not exist and XMMS_E2E_SKIP_BUILD=1")
         return
-    if not command_exists("cargo"):
-        pytest.skip("cargo is required to build the GTK frontend")
+    cargo = command_path("cargo")
+    if cargo is None:
+        pytest.skip("cargo is required to build the GTK/egui frontends")
+    assert cargo is not None
+    build_env = os.environ.copy()
+    build_env["PATH"] = f"/usr/local/cargo/bin:{build_env.get('PATH', '')}"
     subprocess.run(
-        ["cargo", "build", "--manifest-path", "Cargo.toml", "--quiet"],
+        [cargo, "build", "--manifest-path", "Cargo.toml", "--features", "egui-ui", "--quiet"],
         cwd=REPO_ROOT,
+        env=build_env,
         check=True,
     )
 
@@ -109,7 +136,7 @@ def require_x11_tools() -> None:
         pytest.skip("xdotool is required for coordinate-based GUI E2E tests")
 
 
-def gtk_environment(tmp_path: Path) -> dict[str, str]:
+def gui_environment(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env.pop("WAYLAND_DISPLAY", None)
     env.update(
@@ -118,25 +145,40 @@ def gtk_environment(tmp_path: Path) -> dict[str, str]:
             "GSK_RENDERER": env.get("GSK_RENDERER", "cairo"),
             "GDK_DISABLE": env.get("GDK_DISABLE", "gl"),
             "NO_AT_BRIDGE": "1",
+            "WINIT_UNIX_BACKEND": "x11",
+            "WGPU_BACKEND": env.get("WGPU_BACKEND", "gl"),
+            "LIBGL_ALWAYS_SOFTWARE": env.get("LIBGL_ALWAYS_SOFTWARE", "1"),
             "XMMS_NON_UNIQUE": "1",
             "XMMS_RS_CONFIG_DIR": str(tmp_path / "config"),
             "XMMS_RS_LOG": env.get("XMMS_RS_LOG", "trace"),
+            "RUST_BACKTRACE": env.get("RUST_BACKTRACE", "1"),
         }
     )
     return env
 
 
-def start_gtk_process(tmp_path: Path, extra_args: list[str] | None = None, log_name: str = "xmms-gtk.log") -> Iterator[subprocess.Popen[bytes]]:
-    log_path = tmp_path / log_name
+def gtk_environment(tmp_path: Path) -> dict[str, str]:
+    return gui_environment(tmp_path)
+
+
+def start_gui_process(
+    tmp_path: Path,
+    frontend: GuiFrontend,
+    extra_args: list[str] | None = None,
+    log_name: str | None = None,
+) -> Iterator[subprocess.Popen[bytes]]:
+    log_path = tmp_path / (log_name or f"xmms-{frontend.name}.log")
     log = log_path.open("wb")
     process = subprocess.Popen(
-        [str(APP_BINARY), "--frontend", "gtk", "--reset", *(extra_args or [])],
+        [str(APP_BINARY), "--frontend", frontend.name, "--reset", *(extra_args or [])],
         cwd=REPO_ROOT,
-        env=gtk_environment(tmp_path),
+        env=gui_environment(tmp_path),
         stdout=log,
         stderr=subprocess.STDOUT,
     )
     setattr(process, "xmms_log_path", log_path)
+    setattr(process, "xmms_frontend", frontend.name)
+    setattr(process, "xmms_window_title", frontend.window_title)
     try:
         yield process
     finally:
@@ -148,6 +190,20 @@ def start_gtk_process(tmp_path: Path, extra_args: list[str] | None = None, log_n
                 process.kill()
                 process.wait(timeout=5)
         log.close()
+
+
+def start_gtk_process(tmp_path: Path, extra_args: list[str] | None = None, log_name: str = "xmms-gtk.log") -> Iterator[subprocess.Popen[bytes]]:
+    yield from start_gui_process(tmp_path, GTK_FRONTEND, extra_args, log_name)
+
+
+@pytest.fixture(params=GUI_FRONTENDS, ids=[frontend.name for frontend in GUI_FRONTENDS])
+def gui_frontend(request: Any) -> GuiFrontend:
+    return request.param
+
+
+@pytest.fixture
+def gui_app(tmp_path: Path, gui_frontend: GuiFrontend) -> Iterator[subprocess.Popen[bytes]]:
+    yield from start_gui_process(tmp_path, gui_frontend)
 
 
 @pytest.fixture
@@ -163,7 +219,7 @@ def generated_tracks(tmp_path: Path) -> list[Path]:
     tracks_dir.mkdir(parents=True, exist_ok=True)
     tracks: list[Path] = []
     for index in range(18):
-        path = tracks_dir / f"gtk-e2e-track-{index:02}.wav"
+        path = tracks_dir / f"xmms-e2e-track-{index:02}.wav"
         subprocess.run(
             [
                 "ffmpeg",
@@ -187,6 +243,20 @@ def generated_tracks(tmp_path: Path) -> list[Path]:
             raise AssertionError(f"ffmpeg did not create {path}")
         tracks.append(path)
     return tracks
+
+
+@pytest.fixture
+def gui_app_with_tracks(
+    tmp_path: Path,
+    gui_frontend: GuiFrontend,
+    generated_tracks: list[Path],
+) -> Iterator[subprocess.Popen[bytes]]:
+    yield from start_gui_process(
+        tmp_path,
+        gui_frontend,
+        [str(track) for track in generated_tracks],
+        log_name=f"xmms-{gui_frontend.name}-tracks.log",
+    )
 
 
 @pytest.fixture
@@ -214,6 +284,9 @@ def gtk_socket_app(tmp_path: Path, gtk_socket_port: int) -> Iterator[subprocess.
         stdout=log,
         stderr=subprocess.STDOUT,
     )
+    setattr(process, "xmms_log_path", log_path)
+    setattr(process, "xmms_frontend", GTK_FRONTEND.name)
+    setattr(process, "xmms_window_title", GTK_FRONTEND.window_title)
     try:
         control_socket.wait_for_socket(gtk_socket_port, timeout=10.0)
         yield process
@@ -241,8 +314,18 @@ def control_client(gtk_socket_app: subprocess.Popen[bytes], gtk_socket_port: int
 
 
 @pytest.fixture
+def gui_main_window(gui_app: subprocess.Popen[bytes]) -> MainWindow:
+    return wait_for_main_window_with_log(gui_app)
+
+
+@pytest.fixture
 def gtk_main_window(gtk_app: subprocess.Popen[bytes]) -> MainWindow:
     return wait_for_main_window_with_log(gtk_app)
+
+
+@pytest.fixture
+def gui_tracked_main_window(gui_app_with_tracks: subprocess.Popen[bytes]) -> MainWindow:
+    return wait_for_main_window_with_log(gui_app_with_tracks)
 
 
 @pytest.fixture
@@ -251,8 +334,9 @@ def gtk_tracked_main_window(gtk_app_with_tracks: subprocess.Popen[bytes]) -> Mai
 
 
 def wait_for_main_window_with_log(process: subprocess.Popen[bytes]) -> MainWindow:
+    title = getattr(process, "xmms_window_title", MAIN_WINDOW_TITLE)
     try:
-        return MainWindow.wait(MAIN_WINDOW_TITLE, process)
+        return MainWindow.wait(title, process)
     except Exception as exc:
         raise AssertionError(f"{exc}\n\nApplication log:\n{read_process_log(process)}") from exc
 
