@@ -1,3 +1,4 @@
+mod commands;
 mod core;
 mod docked;
 mod equalizer;
@@ -13,6 +14,7 @@ pub use crate::skin::layout::{
     PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_HEIGHT_BASE, PLAYLIST_MIN_HEIGHT,
     PLAYLIST_MIN_WIDTH, PLAYLIST_WIDTH_STEP,
 };
+pub use commands::*;
 pub use core::*;
 pub use docked::*;
 pub use equalizer::*;

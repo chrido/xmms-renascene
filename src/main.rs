@@ -1,7 +1,16 @@
-use xmms_renascene::ui::{self, PreviewOptions};
+use xmms_renascene::app::preview::{FrontendKind, PreviewOptions};
+use xmms_renascene::app::screenshot_scenarios::ScreenshotScenario;
+#[cfg(feature = "egui-ui")]
+use xmms_renascene::egui_frontend;
+#[cfg(feature = "gtk-ui")]
+use xmms_renascene::ui;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print_help();
+        return;
+    }
 
     let preview_options = match parse_preview_options(&args) {
         Ok(options) => options,
@@ -11,6 +20,14 @@ fn main() {
         }
     };
 
+    match preview_options.frontend {
+        FrontendKind::Gtk => run_gtk_frontend(preview_options, &args),
+        FrontendKind::Egui => run_egui_frontend(preview_options),
+    }
+}
+
+#[cfg(feature = "gtk-ui")]
+fn run_gtk_frontend(preview_options: PreviewOptions, args: &[String]) {
     if let Some(path) = preview_options.screenshot_path.as_deref() {
         if let Err(err) =
             ui::write_player_screenshot(preview_options.clone(), std::path::Path::new(path))
@@ -28,11 +45,55 @@ fn main() {
     }
 }
 
+#[cfg(not(feature = "gtk-ui"))]
+fn run_gtk_frontend(_preview_options: PreviewOptions, _args: &[String]) {
+    eprintln!("xmms-rs: this binary was built without the gtk-ui frontend");
+    std::process::exit(2);
+}
+
+#[cfg(feature = "egui-ui")]
+fn run_egui_frontend(preview_options: PreviewOptions) {
+    if let Some(path) = preview_options.screenshot_path.as_deref() {
+        if let Err(err) = egui_frontend::screenshots::write_egui_screenshot(
+            preview_options.clone(),
+            std::path::Path::new(path),
+        ) {
+            eprintln!("xmms-rs: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if let Err(err) = egui_frontend::app::run_egui_frontend(preview_options) {
+        eprintln!("xmms-rs: {err}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(feature = "egui-ui"))]
+fn run_egui_frontend(_preview_options: PreviewOptions) {
+    eprintln!("xmms-rs: this binary was built without the egui-ui frontend");
+    std::process::exit(2);
+}
+
+fn print_help() {
+    println!("Usage: xmms-rs [--frontend gtk|egui] [--socket PORT] [preview options]");
+    println!("If --frontend is omitted, gtk is used for compatibility.");
+    println!("--socket PORT starts a JSON-lines TCP control socket on 127.0.0.1:PORT.");
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
     let mut options = PreviewOptions::default();
     let mut iter = args.iter().skip(1);
     while let Some(arg) = iter.next() {
-        if arg == "--show-playlist" || arg == "--playlist" {
+        if let Some(value) = arg.strip_prefix("--frontend=") {
+            options.frontend = FrontendKind::parse(value)?;
+        } else if arg == "--frontend" {
+            let Some(value) = iter.next() else {
+                return Err("--frontend requires gtk or egui".to_string());
+            };
+            options.frontend = FrontendKind::parse(value)?;
+        } else if arg == "--show-playlist" || arg == "--playlist" {
             options.show_playlist = true;
         } else if arg == "--equalizer" {
             options.show_equalizer = true;
@@ -95,11 +156,25 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
                 return Err("--screenshot requires PATH".to_string());
             };
             options.screenshot_path = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--screenshot-scenario=") {
+            options.screenshot_scenario = Some(ScreenshotScenario::parse(value)?);
+        } else if arg == "--screenshot-scenario" {
+            let Some(value) = iter.next() else {
+                return Err("--screenshot-scenario requires NAME".to_string());
+            };
+            options.screenshot_scenario = Some(ScreenshotScenario::parse(value)?);
         } else if arg == "--scale" || arg == "--scale-factor" {
             let Some(value) = iter.next() else {
                 return Err(format!("{arg} requires SCALE"));
             };
             options.scale_factor = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("--socket=") {
+            options.socket_port = Some(parse_socket_port(value)?);
+        } else if arg == "--socket" {
+            let Some(value) = iter.next() else {
+                return Err("--socket requires PORT".to_string());
+            };
+            options.socket_port = Some(parse_socket_port(value)?);
         } else if let Some(value) = arg.strip_prefix("--playlist-size=") {
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
@@ -109,9 +184,21 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             };
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
+        } else if !arg.starts_with('-') {
+            options.positional_paths.push(arg.to_string());
         }
     }
     Ok(options)
+}
+
+fn parse_socket_port(value: &str) -> Result<u16, String> {
+    let port = value
+        .parse::<u16>()
+        .map_err(|_| format!("invalid socket port '{value}'"))?;
+    if port == 0 {
+        return Err("--socket requires a non-zero TCP port".to_string());
+    }
+    Ok(port)
 }
 
 fn parse_playlist_size(value: &str) -> Result<(i32, i32), String> {
@@ -193,5 +280,48 @@ mod tests {
     fn parses_scale_factor_preview_option() {
         let options = parse_preview_options(&args(&["--gtk", "--scale=1.7"])).unwrap();
         assert_eq!(options.scale_factor.as_deref(), Some("1.7"));
+    }
+
+    #[test]
+    fn parses_socket_preview_option() {
+        let options = parse_preview_options(&args(&["--socket", "48155"])).unwrap();
+        assert_eq!(options.socket_port, Some(48155));
+    }
+
+    #[test]
+    fn parses_positional_playlist_paths() {
+        let options = parse_preview_options(&args(&["/tmp/one.wav", "/tmp/two.wav"])).unwrap();
+        assert_eq!(
+            options.positional_paths,
+            vec!["/tmp/one.wav".to_string(), "/tmp/two.wav".to_string()]
+        );
+    }
+
+    #[test]
+    fn rejects_zero_socket_port() {
+        assert!(parse_preview_options(&args(&["--socket=0"])).is_err());
+    }
+
+    #[test]
+    fn unspecified_frontend_defaults_to_gtk() {
+        let options = parse_preview_options(&args(&[])).unwrap();
+        assert_eq!(options.frontend, FrontendKind::Gtk);
+    }
+
+    #[test]
+    fn parses_explicit_gtk_frontend() {
+        let options = parse_preview_options(&args(&["--frontend", "gtk"])).unwrap();
+        assert_eq!(options.frontend, FrontendKind::Gtk);
+    }
+
+    #[test]
+    fn parses_explicit_egui_frontend() {
+        let options = parse_preview_options(&args(&["--frontend=egui"])).unwrap();
+        assert_eq!(options.frontend, FrontendKind::Egui);
+    }
+
+    #[test]
+    fn rejects_unknown_frontend() {
+        assert!(parse_preview_options(&args(&["--frontend", "qt"])).is_err());
     }
 }

@@ -1,0 +1,1 @@
+//! Generic GTK dialog helpers.

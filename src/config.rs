@@ -63,8 +63,6 @@ pub struct Config {
     pub vis_peaks_falloff: VisFalloffSpeed,
     pub vis_vu_mode: VisVuMode,
     pub vis_refresh_divisor: i32,
-    pub podcast_cache_ttl_days: i32,
-    pub podcast_refresh_interval_minutes: i32,
 }
 
 #[repr(i32)]
@@ -136,8 +134,6 @@ impl Default for Config {
             vis_peaks_falloff: VisFalloffSpeed::Slow,
             vis_vu_mode: VisVuMode::Normal,
             vis_refresh_divisor: 1,
-            podcast_cache_ttl_days: 60,
-            podcast_refresh_interval_minutes: 60,
         }
     }
 }
@@ -297,12 +293,6 @@ impl Config {
             })
             .unwrap_or(cfg.vis_refresh_divisor)
             .clamp(1, 8);
-        cfg.podcast_cache_ttl_days = get_i32(&keys, "podcast_cache_ttl_days")
-            .unwrap_or(cfg.podcast_cache_ttl_days)
-            .clamp(1, 3650);
-        cfg.podcast_refresh_interval_minutes = get_i32(&keys, "podcast_refresh_interval_minutes")
-            .unwrap_or(cfg.podcast_refresh_interval_minutes)
-            .clamp(1, 10080);
         cfg
     }
 
@@ -417,16 +407,6 @@ impl Config {
                 _ => 0,
             },
         );
-        push_i32(
-            &mut out,
-            "podcast_cache_ttl_days",
-            self.podcast_cache_ttl_days,
-        );
-        push_i32(
-            &mut out,
-            "podcast_refresh_interval_minutes",
-            self.podcast_refresh_interval_minutes,
-        );
         if let Some(output_device) = &self.output_device {
             push_string(&mut out, "output_device", output_device);
         }
@@ -530,7 +510,6 @@ mod tests {
         assert_eq!(cfg.playlist_font, "Helvetica");
         assert_eq!(cfg.title_format, "%p - %t");
         assert_eq!(cfg.vis_refresh_divisor, 1);
-        assert_eq!(cfg.podcast_cache_ttl_days, 60);
     }
 
     #[test]
@@ -552,8 +531,7 @@ mod tests {
              equalizer_shaded=true\n\
              playlist_font=Monospace\n\
              vis_mode=1\n\
-             vis_refresh_divisor=99\n\
-             podcast_cache_ttl_days=0\n",
+             vis_refresh_divisor=99\n",
         );
 
         assert_eq!(cfg.player_x, 12);
@@ -573,7 +551,6 @@ mod tests {
         assert_eq!(cfg.playlist_font, "Monospace");
         assert_eq!(cfg.vis_mode, VisMode::Scope);
         assert_eq!(cfg.vis_refresh_divisor, 8);
-        assert_eq!(cfg.podcast_cache_ttl_days, 1);
     }
 
     #[test]

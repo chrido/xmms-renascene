@@ -1,11 +1,15 @@
+#[cfg(feature = "gstreamer-backend")]
 use gst::prelude::*;
+#[cfg(feature = "gstreamer-backend")]
 use gstreamer as gst;
+#[cfg(feature = "gstreamer-backend")]
 use std::cell::{Cell, RefCell};
 
+#[cfg(feature = "gstreamer-backend")]
 use crate::audio_model::{
-    equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions, SpectrumData,
-    EQUALIZER_BANDS, SPECTRUM_BANDS,
+    equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions, EQUALIZER_BANDS,
 };
+use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerState {
@@ -27,6 +31,7 @@ pub struct Player {
     vis_data_valid: bool,
 }
 
+#[cfg(feature = "gstreamer-backend")]
 pub struct GStreamerBackend {
     pipeline: gst::Element,
     audio_sink_bin: gst::Bin,
@@ -38,6 +43,7 @@ pub struct GStreamerBackend {
     requested_uri: RefCell<Option<String>>,
 }
 
+#[cfg(feature = "gstreamer-backend")]
 struct AudioSinkBin {
     bin: gst::Bin,
     chain: Vec<String>,
@@ -103,6 +109,7 @@ impl OutputDevice {
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 impl GStreamerBackend {
     pub fn new() -> Result<Self, String> {
         gst::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
@@ -332,6 +339,7 @@ impl GStreamerBackend {
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 impl Drop for GStreamerBackend {
     fn drop(&mut self) {
         let _ = self.pipeline.set_state(gst::State::Null);
@@ -361,6 +369,7 @@ pub fn group_output_devices(system_devices: Vec<OutputDevice>) -> OutputDeviceGr
     groups
 }
 
+#[cfg(feature = "gstreamer-backend")]
 pub fn list_gstreamer_output_devices() -> Result<Vec<OutputDevice>, String> {
     gst::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
     let monitor = gst::DeviceMonitor::new();
@@ -527,6 +536,7 @@ impl Player {
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<AudioSinkBin, String> {
     let bin = gst::Bin::builder().name("audio-sink-bin").build();
     let convert = make_element("audioconvert", "convert")?;
@@ -604,6 +614,7 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
     })
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn make_element(factory: &str, name: &str) -> Result<gst::Element, String> {
     gst::ElementFactory::make(factory)
         .name(name)
@@ -611,6 +622,7 @@ fn make_element(factory: &str, name: &str) -> Result<gst::Element, String> {
         .map_err(|err| format!("failed to create GStreamer {factory}: {err}"))
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn equalizer_band_property(band: usize) -> Result<&'static str, String> {
     match band {
         0 => Ok("band0"),
@@ -627,14 +639,17 @@ fn equalizer_band_property(band: usize) -> Result<&'static str, String> {
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn db_to_amplification(db: f64) -> f64 {
     10.0_f64.powf(db / 20.0)
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn amplification_to_db(amplification: f64) -> f64 {
     20.0 * amplification.max(f64::MIN_POSITIVE).log10()
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn event_from_message(
     message: &gst::Message,
     duration_query: impl FnOnce() -> Option<i64>,
@@ -655,12 +670,14 @@ fn event_from_message(
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn query_duration_ms(pipeline: &gst::Element) -> Option<i64> {
     pipeline
         .query_duration::<gst::ClockTime>()
         .map(|duration| duration.mseconds() as i64)
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn tags_from_tag_list(tags: &gst::TagList) -> PlaybackTags {
     PlaybackTags {
         title: tag_string::<gst::tags::Title>(tags),
@@ -672,6 +689,7 @@ fn tags_from_tag_list(tags: &gst::TagList) -> PlaybackTags {
     }
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn stream_info_from_caps(caps: &gst::Caps) -> StreamInfo {
     let mut info = StreamInfo::default();
     for structure in caps.iter() {
@@ -691,6 +709,7 @@ fn stream_info_from_caps(caps: &gst::Caps) -> StreamInfo {
     info
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn tag_string<'a, T>(tags: &'a gst::TagList) -> Option<String>
 where
     T: gst::Tag<'a, TagType = &'a str>,
@@ -700,6 +719,7 @@ where
         .filter(|value| !value.is_empty())
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<SpectrumData> {
     if structure.name() != "spectrum" {
         return None;
@@ -714,6 +734,7 @@ fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<SpectrumData
     None
 }
 
+#[cfg(feature = "gstreamer-backend")]
 fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<SpectrumData> {
     let mut bands = [0.0; SPECTRUM_BANDS];
     for (index, value) in values.iter().take(SPECTRUM_BANDS).enumerate() {
@@ -727,7 +748,7 @@ fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<SpectrumData>
     Some(bands)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gstreamer-backend"))]
 mod tests {
     use super::*;
     use std::path::Path;
