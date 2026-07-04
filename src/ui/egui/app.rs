@@ -2,7 +2,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "gstreamer-backend")]
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::app::command::{
@@ -13,9 +16,12 @@ use crate::app::input::AppShortcut;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
-    balance_to_eq_shaded_position, equalizer_view_model, format_playlist_footer_duration,
-    playlist_view_model, volume_to_eq_shaded_position,
+    balance_to_eq_shaded_position, equalizer_view_model,
+    playlist_footer_info as shared_playlist_footer_info, playlist_view_model,
+    volume_to_eq_shaded_position,
 };
+#[cfg(feature = "gstreamer-backend")]
+use crate::app_log_info;
 use crate::app_state::AppState;
 use crate::equalizer::{
     load_winamp_eqf_first, load_xmms_preset_file, save_winamp_eqf, save_xmms_preset_file,
@@ -25,7 +31,9 @@ use crate::equalizer::{
 use crate::player::PlayerState;
 #[cfg(feature = "gstreamer-backend")]
 use crate::player::{GStreamerBackend, PlaybackEvent, PlayerState};
-use crate::playlist::Playlist;
+#[cfg(feature = "gstreamer-backend")]
+use crate::playlist::file_uri_to_path;
+use crate::playlist::{DurationIndexResult, Playlist};
 use crate::render::{
     docked_panel_size, DockedPanelState, EqualizerControl, EqualizerRenderState, EqualizerSlider,
     MainPushButton, MainSlider, MainToggleButton, PlaylistMenuRenderKind, PlaylistRowRenderEntry,
@@ -39,7 +47,7 @@ use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin,
 use crate::socket_control::{
     start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
-use crate::{app_log_debug, app_log_info, app_log_trace};
+use crate::{app_log_debug, app_log_trace};
 
 use super::file_info;
 use super::menu::{self, EguiPrompt};
@@ -102,10 +110,14 @@ pub struct EguiFrontendState {
     pub playlist_scroll_offset: usize,
     visualization: Visualization,
     visualization_tick_counter: i32,
+    #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
+    duration_index_sender: Sender<DurationIndexResult>,
+    duration_index_receiver: Receiver<DurationIndexResult>,
     socket_control: Option<SocketControl>,
     controller: AppStore,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
+    #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
     pending_backend_seek_ms: Option<i64>,
 }
 
@@ -133,6 +145,7 @@ impl EguiFrontendState {
         )));
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
         let socket_control = options.socket_port.map(start_socket_control).transpose()?;
+        let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let mut state = Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
@@ -164,6 +177,8 @@ impl EguiFrontendState {
             playlist_scroll_offset: 0,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
+            duration_index_sender,
+            duration_index_receiver,
             socket_control,
             controller: AppStore::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
@@ -171,6 +186,7 @@ impl EguiFrontendState {
             pending_backend_seek_ms: None,
         };
         state.apply_visualization_preferences();
+        state.schedule_missing_local_playlist_durations();
         Ok(state)
     }
 
@@ -183,9 +199,21 @@ impl EguiFrontendState {
     }
 
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
-        let result = self.controller.dispatch(command.into());
+        let command = command.into();
+        let should_index_durations = matches!(
+            &command,
+            AppCommand::Playlist(
+                PlaylistCommand::AddUris(_)
+                    | PlaylistCommand::AddLocations(_)
+                    | PlaylistCommand::AddFiles(_)
+            )
+        );
+        let result = self.controller.dispatch(command);
         self.sync_frontend_state_from_store();
         self.apply_effects(result.effects);
+        if should_index_durations {
+            self.schedule_missing_local_playlist_durations();
+        }
     }
 
     pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
@@ -342,8 +370,89 @@ impl EguiFrontendState {
         }
     }
 
-    fn apply_pending_backend_seek(&mut self) {
+    fn poll_duration_index_results(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(result) = self.duration_index_receiver.try_recv() {
+            let dispatch = self.controller.apply_duration_index_result(result);
+            changed |= !dispatch.changes.is_empty();
+            self.sync_frontend_state_from_store();
+            self.apply_effects(dispatch.effects);
+        }
+        changed
+    }
+
+    fn schedule_missing_local_playlist_durations(&mut self) {
         #[cfg(feature = "gstreamer-backend")]
+        {
+            let items = self
+                .controller
+                .state()
+                .playlist
+                .missing_duration_items()
+                .into_iter()
+                .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
+                .collect::<Vec<_>>();
+            if items.is_empty() {
+                return;
+            }
+
+            let sender = self.duration_index_sender.clone();
+            thread::spawn(move || {
+                if let Err(err) = gstreamer::init() {
+                    eprintln!(
+                        "xmms-rs: failed to initialize GStreamer for playlist durations: {err}"
+                    );
+                    return;
+                }
+                let discoverer =
+                    match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
+                    {
+                        Ok(discoverer) => discoverer,
+                        Err(err) => {
+                            eprintln!(
+                                "xmms-rs: failed to create playlist duration discoverer: {err}"
+                            );
+                            return;
+                        }
+                    };
+
+                for item in items {
+                    let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists())
+                    else {
+                        continue;
+                    };
+                    let info = match discoverer.discover_uri(&item.uri) {
+                        Ok(info) => info,
+                        Err(err) => {
+                            eprintln!(
+                                "xmms-rs: failed to discover playlist item {}: {err}",
+                                path.display()
+                            );
+                            continue;
+                        }
+                    };
+                    let length_ms = info
+                        .duration()
+                        .map(|duration| duration.mseconds() as i64)
+                        .unwrap_or(-1);
+                    if sender
+                        .send(DurationIndexResult {
+                            index: item.index,
+                            uri: item.uri,
+                            length_ms,
+                            title: None,
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            });
+        }
+    }
+
+    #[cfg(feature = "gstreamer-backend")]
+    fn apply_pending_backend_seek(&mut self) {
         if let (Some(backend), Some(position_ms)) =
             (&self.playback_backend, self.pending_backend_seek_ms)
         {
@@ -528,6 +637,7 @@ impl EguiFrontendState {
                 self.playlist_scroll_offset = 0;
                 self.sync_frontend_state_from_store();
                 self.apply_effects(result.effects);
+                self.schedule_missing_local_playlist_durations();
             }
             Err(err) => self.runtime.pending_messages.push(format!(
                 "failed to load playlist '{}': {err}",
@@ -633,6 +743,9 @@ impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_socket_control(ctx);
         self.poll_playback_backend();
+        if self.poll_duration_index_results() {
+            ctx.request_repaint();
+        }
         self.tick_playback_position(ctx);
         handle_dropped_files(ctx, self);
         handle_global_shortcuts(ctx, self);
@@ -1010,37 +1123,7 @@ fn detached_playlist_footer_time_parts(app: &EguiFrontendState) -> (String, Stri
 }
 
 fn detached_playlist_footer_info(app: &EguiFrontendState) -> String {
-    let mut selected_ms = 0_i64;
-    let mut total_ms = 0_i64;
-    let mut selected_more = false;
-    let mut total_more = false;
-    let current = app.controller().state().playlist.position();
-    for (index, entry) in app
-        .controller()
-        .state()
-        .playlist
-        .entries()
-        .iter()
-        .enumerate()
-    {
-        if entry.length_ms >= 0 {
-            total_ms += entry.length_ms;
-        } else {
-            total_more = true;
-        }
-        if entry.selected || current == Some(index) {
-            if entry.length_ms >= 0 {
-                selected_ms += entry.length_ms;
-            } else {
-                selected_more = true;
-            }
-        }
-    }
-    format!(
-        "{}/{}",
-        format_playlist_footer_duration(selected_ms, selected_more),
-        format_playlist_footer_duration(total_ms, total_more)
-    )
+    shared_playlist_footer_info(app.controller().state())
 }
 
 fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -1513,6 +1596,35 @@ mod tests {
         assert!((app.controller().state().config.scale_factor - 1.0).abs() < f64::EPSILON);
         assert!((app.scale_factor - 1.0).abs() < f32::EPSILON);
         assert!(!app.controller().state().config.doublesize);
+    }
+
+    #[test]
+    fn egui_duration_index_results_update_playlist_footer_total() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .add_uri("file:///tmp/song.ogg");
+
+        assert_eq!(
+            shared_playlist_footer_info(app.controller().state()),
+            "0:00/?"
+        );
+
+        app.duration_index_sender
+            .send(DurationIndexResult {
+                index: 0,
+                uri: "file:///tmp/song.ogg".to_string(),
+                length_ms: 42_000,
+                title: None,
+            })
+            .unwrap();
+
+        assert!(app.poll_duration_index_results());
+        assert_eq!(
+            shared_playlist_footer_info(app.controller().state()),
+            "0:00/0:42"
+        );
     }
 
     #[test]

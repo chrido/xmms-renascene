@@ -24,8 +24,8 @@ use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
-    eq_slider_position_to_pixel, format_duration, format_playlist_footer_duration,
-    format_title_for_preferences, parse_time_ms, playlist_menu_at, playlist_menu_rect,
+    eq_slider_position_to_pixel, format_duration, format_title_for_preferences, parse_time_ms,
+    playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
     position_to_balance, position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
     volume_to_position,
 };
@@ -7448,33 +7448,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_footer_info(&self) -> String {
-        let mut selected_ms = 0_i64;
-        let mut total_ms = 0_i64;
-        let mut selected_more = false;
-        let mut total_more = false;
-        let selected_index = self.selected_playlist_index();
-
-        for (index, entry) in self.app_state.playlist.entries().iter().enumerate() {
-            if entry.length_ms >= 0 {
-                total_ms += entry.length_ms;
-            } else {
-                total_more = true;
-            }
-
-            if entry.selected || selected_index == Some(index) {
-                if entry.length_ms >= 0 {
-                    selected_ms += entry.length_ms;
-                } else {
-                    selected_more = true;
-                }
-            }
-        }
-
-        format!(
-            "{}/{}",
-            format_playlist_footer_duration(selected_ms, selected_more),
-            format_playlist_footer_duration(total_ms, total_more)
-        )
+        shared_playlist_footer_info(&self.app_state)
     }
 
     fn playlist_footer_time_parts(&self) -> (String, String) {

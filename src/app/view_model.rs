@@ -193,6 +193,35 @@ pub fn format_playlist_footer_duration(milliseconds: i64, more: bool) -> String 
     }
 }
 
+pub fn playlist_footer_info(state: &AppState) -> String {
+    let mut selected_ms = 0_i64;
+    let mut total_ms = 0_i64;
+    let mut selected_more = false;
+    let mut total_more = false;
+
+    for entry in state.playlist.entries() {
+        if entry.length_ms >= 0 {
+            total_ms += entry.length_ms;
+        } else {
+            total_more = true;
+        }
+
+        if entry.selected {
+            if entry.length_ms >= 0 {
+                selected_ms += entry.length_ms;
+            } else {
+                selected_more = true;
+            }
+        }
+    }
+
+    format!(
+        "{}/{}",
+        format_playlist_footer_duration(selected_ms, selected_more),
+        format_playlist_footer_duration(total_ms, total_more)
+    )
+}
+
 pub fn format_title_for_preferences(
     format: &str,
     filename: &str,
@@ -379,6 +408,28 @@ mod tests {
         assert_eq!(format_playlist_footer_duration(0, true), "?");
         assert_eq!(format_playlist_footer_duration(83_000, false), "1:23");
         assert_eq!(format_playlist_footer_duration(3_661_000, true), "1:01:01+");
+    }
+
+    #[test]
+    fn playlist_footer_info_formats_selected_and_total_durations() {
+        let mut state = AppState::default();
+        state
+            .playlist
+            .add_timed_uri("file:///tmp/one.ogg", "One", 60_000);
+        state.playlist.add_uri("file:///tmp/unknown.ogg");
+        state
+            .playlist
+            .add_timed_uri("file:///tmp/two.ogg", "Two", 90_000);
+        state.playlist.set_position(0);
+
+        assert_eq!(playlist_footer_info(&state), "0:00/2:30+");
+
+        state.playlist.entries_mut()[1].selected = true;
+        assert_eq!(playlist_footer_info(&state), "?/2:30+");
+
+        state.playlist.entries_mut()[1].selected = false;
+        state.playlist.entries_mut()[2].selected = true;
+        assert_eq!(playlist_footer_info(&state), "1:30/2:30+");
     }
 
     #[test]

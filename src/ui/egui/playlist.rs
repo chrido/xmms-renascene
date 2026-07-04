@@ -3,7 +3,7 @@
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
-    format_playlist_footer_duration, playlist_view_model, PlaylistViewModel,
+    playlist_footer_info as shared_playlist_footer_info, playlist_view_model, PlaylistViewModel,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
@@ -119,37 +119,7 @@ fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
 }
 
 fn playlist_footer_info(app: &EguiFrontendState) -> String {
-    let mut selected_ms = 0_i64;
-    let mut total_ms = 0_i64;
-    let mut selected_more = false;
-    let mut total_more = false;
-    let current = app.controller().state().playlist.position();
-    for (index, entry) in app
-        .controller()
-        .state()
-        .playlist
-        .entries()
-        .iter()
-        .enumerate()
-    {
-        if entry.length_ms >= 0 {
-            total_ms += entry.length_ms;
-        } else {
-            total_more = true;
-        }
-        if entry.selected || current == Some(index) {
-            if entry.length_ms >= 0 {
-                selected_ms += entry.length_ms;
-            } else {
-                selected_more = true;
-            }
-        }
-    }
-    format!(
-        "{}/{}",
-        format_playlist_footer_duration(selected_ms, selected_more),
-        format_playlist_footer_duration(total_ms, total_more)
-    )
+    shared_playlist_footer_info(app.controller().state())
 }
 
 fn add_playlist_hit_regions(
@@ -637,16 +607,32 @@ mod tests {
     }
 
     #[test]
-    fn playlist_footer_info_sums_durations() {
+    fn playlist_footer_info_matches_gtk_selected_and_total_durations() {
         let mut app =
             EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
         app.controller_mut().state_mut().playlist.add_timed_uri(
-            "file:///tmp/song.ogg",
-            "Song",
-            12_000,
+            "file:///tmp/one.ogg",
+            "One",
+            60_000,
+        );
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .add_uri("file:///tmp/unknown.ogg");
+        app.controller_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/two.ogg",
+            "Two",
+            90_000,
         );
         app.controller_mut().state_mut().playlist.set_position(0);
 
-        assert_eq!(playlist_footer_info(&app), "0:12/0:12");
+        assert_eq!(playlist_footer_info(&app), "0:00/2:30+");
+
+        app.controller_mut().state_mut().playlist.entries_mut()[1].selected = true;
+        assert_eq!(playlist_footer_info(&app), "?/2:30+");
+
+        app.controller_mut().state_mut().playlist.entries_mut()[1].selected = false;
+        app.controller_mut().state_mut().playlist.entries_mut()[2].selected = true;
+        assert_eq!(playlist_footer_info(&app), "1:30/2:30+");
     }
 }
