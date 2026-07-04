@@ -184,6 +184,8 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             };
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
+        } else if !arg.starts_with('-') {
+            options.positional_paths.push(arg.to_string());
         }
     }
     Ok(options)
@@ -284,6 +286,15 @@ mod tests {
     fn parses_socket_preview_option() {
         let options = parse_preview_options(&args(&["--socket", "48155"])).unwrap();
         assert_eq!(options.socket_port, Some(48155));
+    }
+
+    #[test]
+    fn parses_positional_playlist_paths() {
+        let options = parse_preview_options(&args(&["/tmp/one.wav", "/tmp/two.wav"])).unwrap();
+        assert_eq!(
+            options.positional_paths,
+            vec!["/tmp/one.wav".to_string(), "/tmp/two.wav".to_string()]
+        );
     }
 
     #[test]

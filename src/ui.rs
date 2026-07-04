@@ -936,6 +936,12 @@ fn preview_state_from_app_state(
         app_state = AppState::default();
     }
     apply_preview_options_to_config(&mut app_state.config, &options)?;
+    for path in &options.positional_paths {
+        app_state
+            .playlist
+            .add_location(path)
+            .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
+    }
     if let Some(scenario) = options.screenshot_scenario {
         scenario.apply_to_app_state(&mut app_state);
     }
@@ -9221,6 +9227,8 @@ impl MainWindowUiState {
             EqualizerPointer::PressedControl { control, inside } => {
                 let activated = inside && equalizer_control_at(x, y) == Some(control);
                 if activated {
+                    let control_name = format!("{control:?}");
+                    app_log_info!(equalizer, "control activated", control_name);
                     match control {
                         EqualizerControl::On => {
                             self.equalizer.active = !self.equalizer.active;
@@ -10017,6 +10025,8 @@ impl MainWindowUiState {
             if let Some(menu) =
                 playlist_menu_at(x, y, self.playlist_ui.width, self.playlist_ui.height)
             {
+                let menu_name = format!("{menu:?}");
+                app_log_info!(playlist, "menu opened", menu_name);
                 self.playlist_ui.menu.open(menu);
                 return PanelAction::ShowPlaylistMenu(menu);
             }
@@ -10031,6 +10041,8 @@ impl MainWindowUiState {
     }
 
     fn activate_playlist_footer_button(&mut self, button: PlaylistFooterButton) -> PanelAction {
+        let button_name = format!("{button:?}");
+        app_log_info!(playlist, "footer button", button_name);
         match button {
             PlaylistFooterButton::Previous => {
                 self.dispatch_store_command_and_apply_local_effects(PlayerCommand::PreviousTrack);
@@ -11002,6 +11014,9 @@ impl MainWindowUiState {
         if old_position == position {
             return false;
         }
+
+        let slider_name = format!("{slider:?}");
+        app_log_info!(player, "slider changed", slider_name, position);
 
         match slider {
             MainSlider::Volume => {

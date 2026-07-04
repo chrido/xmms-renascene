@@ -527,7 +527,7 @@ impl AppStore {
     ) -> DispatchResult {
         let result = self.finish_dispatch(changes, effects);
         let log_line = ConsoleEventLog::new(event, &result);
-        app_log!(level, event, "{log_line}");
+        app_log!(level, store, "{log_line}");
         result
     }
 
