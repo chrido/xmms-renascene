@@ -3,6 +3,75 @@
 use std::fmt;
 use std::sync::OnceLock;
 
+#[macro_export]
+macro_rules! app_log {
+    ($level:expr, $target:ident, $message:literal $(,)?) => {{
+        $crate::app::logging::console_log_at(
+            $level,
+            file!(),
+            line!(),
+            stringify!($target),
+            format_args!($message),
+        )
+    }};
+    ($level:expr, $target:ident, $message:literal, $($field:ident),+ $(,)?) => {{
+        $crate::app::logging::console_log_at(
+            $level,
+            file!(),
+            line!(),
+            stringify!($target),
+            format_args!(
+                concat!($message $(, ", ", stringify!($field), "={}")+),
+                $($field),+
+            ),
+        )
+    }};
+    ($level:expr, $target:ident, $fmt:literal, $($arg:expr),+ $(,)?) => {{
+        $crate::app::logging::console_log_at(
+            $level,
+            file!(),
+            line!(),
+            stringify!($target),
+            format_args!($fmt, $($arg),+),
+        )
+    }};
+}
+
+#[macro_export]
+macro_rules! app_log_error {
+    ($target:ident, $($arg:tt)*) => {{
+        $crate::app_log!($crate::app::logging::ConsoleLogLevel::Error, $target, $($arg)*)
+    }};
+}
+
+#[macro_export]
+macro_rules! app_log_warn {
+    ($target:ident, $($arg:tt)*) => {{
+        $crate::app_log!($crate::app::logging::ConsoleLogLevel::Warn, $target, $($arg)*)
+    }};
+}
+
+#[macro_export]
+macro_rules! app_log_info {
+    ($target:ident, $($arg:tt)*) => {{
+        $crate::app_log!($crate::app::logging::ConsoleLogLevel::Info, $target, $($arg)*)
+    }};
+}
+
+#[macro_export]
+macro_rules! app_log_debug {
+    ($target:ident, $($arg:tt)*) => {{
+        $crate::app_log!($crate::app::logging::ConsoleLogLevel::Debug, $target, $($arg)*)
+    }};
+}
+
+#[macro_export]
+macro_rules! app_log_trace {
+    ($target:ident, $($arg:tt)*) => {{
+        $crate::app_log!($crate::app::logging::ConsoleLogLevel::Trace, $target, $($arg)*)
+    }};
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConsoleLogLevel {
     Off = 0,
@@ -50,6 +119,25 @@ pub fn console_log(level: ConsoleLogLevel, args: fmt::Arguments<'_>) {
     }
 }
 
+pub fn console_log_at(
+    level: ConsoleLogLevel,
+    file: &'static str,
+    line: u32,
+    target: &'static str,
+    args: fmt::Arguments<'_>,
+) {
+    if console_log_enabled(level) {
+        eprintln!(
+            "xmms-rs {level} {} {target}: {args}",
+            format_console_location(file, line)
+        );
+    }
+}
+
+fn format_console_location(file: &str, line: u32) -> String {
+    format!("{file}:{line}")
+}
+
 fn console_log_enabled(level: ConsoleLogLevel) -> bool {
     level != ConsoleLogLevel::Off && level <= configured_console_log_level()
 }
@@ -81,6 +169,11 @@ mod tests {
     fn console_log_levels_display_lowercase() {
         assert_eq!(ConsoleLogLevel::Info.to_string(), "info");
         assert_eq!(ConsoleLogLevel::Trace.to_string(), "trace");
+    }
+
+    #[test]
+    fn console_location_includes_file_and_line() {
+        assert_eq!(format_console_location("src/ui.rs", 7088), "src/ui.rs:7088");
     }
 
     #[test]

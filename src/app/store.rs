@@ -11,7 +11,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, RenderTarget};
-use crate::app::logging::{console_log, ConsoleLogLevel};
+use crate::app::logging::ConsoleLogLevel;
+use crate::app_log;
 use crate::app_state::{AppState, RuntimeSnapshot};
 use crate::config::Config;
 use crate::player::PlaybackEvent;
@@ -525,10 +526,8 @@ impl AppStore {
         effects: Vec<AppEffect>,
     ) -> DispatchResult {
         let result = self.finish_dispatch(changes, effects);
-        console_log(
-            level,
-            format_args!("{}", ConsoleEventLog::new(event, &result)),
-        );
+        let log_line = ConsoleEventLog::new(event, &result);
+        app_log!(level, event, "{log_line}");
         result
     }
 

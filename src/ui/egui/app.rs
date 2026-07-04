@@ -10,7 +10,6 @@ use crate::app::command::{
 };
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
-use crate::app::logging::{console_log, ConsoleLogLevel};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
@@ -39,6 +38,7 @@ use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin,
 use crate::socket_control::{
     start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
+use crate::{app_log_debug, app_log_info, app_log_trace};
 
 use super::file_info;
 use super::menu::{self, EguiPrompt};
@@ -259,12 +259,7 @@ impl EguiFrontendState {
         {
             match backend.seek_to_ms(position_ms) {
                 Ok(()) => {
-                    console_log(
-                        ConsoleLogLevel::Info,
-                        format_args!(
-                            "backend: egui applied pending start seek position_ms={position_ms}"
-                        ),
-                    );
+                    app_log_info!(backend, "egui applied pending start seek", position_ms);
                     self.pending_backend_seek_ms = None;
                 }
                 Err(err) => self.runtime.pending_messages.push(err),
@@ -296,21 +291,13 @@ impl EguiFrontendState {
     }
 
     pub(crate) fn apply_effect(&mut self, effect: AppEffect) {
-        console_log(
-            ConsoleLogLevel::Debug,
-            format_args!("frontend-effect: egui {effect:?}"),
-        );
+        app_log_debug!(frontend_effect, "egui {effect:?}");
         #[cfg(feature = "gstreamer-backend")]
         if let Some(backend) = &self.playback_backend {
             match &effect {
                 AppEffect::StartPlaybackUri { uri, position_ms } => {
-                    console_log(
-                        ConsoleLogLevel::Info,
-                        format_args!(
-                            "backend: egui play_uri uri={uri} start_position_ms={position_ms} pending_seek={}",
-                            *position_ms > 0
-                        ),
-                    );
+                    let pending_seek = *position_ms > 0;
+                    app_log_info!(backend, "egui play_uri", uri, position_ms, pending_seek);
                     if let Err(err) = backend.play_uri(uri) {
                         self.runtime.pending_messages.push(err);
                     } else if *position_ms > 0 {
@@ -340,10 +327,7 @@ impl EguiFrontendState {
                     }
                 }
                 AppEffect::SeekPlayback(position_ms) => {
-                    console_log(
-                        ConsoleLogLevel::Info,
-                        format_args!("backend: egui seek_to_ms position_ms={position_ms}"),
-                    );
+                    app_log_info!(backend, "egui seek_to_ms", position_ms);
                     if let Err(err) = backend.seek_to_ms(*position_ms) {
                         self.runtime.pending_messages.push(err);
                     }
@@ -575,10 +559,7 @@ impl eframe::App for EguiFrontendState {
             show_skin_browser_placeholder(ctx, self);
         }
         menu::show_pending_messages(ctx, self);
-        console_log(
-            ConsoleLogLevel::Trace,
-            format_args!("render: egui update size={:?}", self.desired_window_size()),
-        );
+        app_log_trace!(render, "egui update size={:?}", self.desired_window_size());
     }
 }
 
