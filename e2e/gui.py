@@ -38,6 +38,61 @@ class MainToggleButton(str, Enum):
     PLAYLIST = "playlist"
 
 
+class MainSlider(str, Enum):
+    """Skinned main-window sliders addressed by base-skin geometry."""
+
+    VOLUME = "volume"
+    BALANCE = "balance"
+    POSITION = "position"
+
+
+class EqualizerControl(str, Enum):
+    """Skinned equalizer buttons addressed by base-skin geometry."""
+
+    ON = "on"
+    AUTO = "auto"
+    PRESETS = "presets"
+
+
+class EqualizerSlider(str, Enum):
+    """Skinned equalizer sliders addressed by base-skin geometry."""
+
+    PREAMP = "preamp"
+    BAND_0 = "band_0"
+    BAND_1 = "band_1"
+    BAND_2 = "band_2"
+    BAND_3 = "band_3"
+    BAND_4 = "band_4"
+    BAND_5 = "band_5"
+    BAND_6 = "band_6"
+    BAND_7 = "band_7"
+    BAND_8 = "band_8"
+    BAND_9 = "band_9"
+
+
+class PlaylistFooterButton(str, Enum):
+    """Skinned playlist footer transport/scroll buttons."""
+
+    PREVIOUS = "previous"
+    PLAY = "play"
+    PAUSE = "pause"
+    STOP = "stop"
+    NEXT = "next"
+    EJECT = "eject"
+    SCROLL_UP = "scroll_up"
+    SCROLL_DOWN = "scroll_down"
+
+
+class PlaylistMenuButton(str, Enum):
+    """Skinned playlist bottom menu buttons."""
+
+    ADD = "add"
+    REMOVE = "remove"
+    SELECT = "select"
+    MISC = "misc"
+    LIST = "list"
+
+
 @dataclass(frozen=True)
 class SkinRect:
     x: int
@@ -86,6 +141,47 @@ MAIN_TOGGLE_RECTS: dict[MainToggleButton, SkinRect] = {
     MainToggleButton.EQUALIZER: SkinRect(219, 58, 23, 12),
     MainToggleButton.PLAYLIST: SkinRect(242, 58, 23, 12),
 }
+
+MAIN_SLIDER_RECTS: dict[MainSlider, SkinRect] = {
+    MainSlider.VOLUME: SkinRect(107, 57, 68, 13),
+    MainSlider.BALANCE: SkinRect(177, 57, 38, 13),
+    MainSlider.POSITION: SkinRect(16, 72, 248, 10),
+}
+
+EQUALIZER_CONTROL_RECTS: dict[EqualizerControl, SkinRect] = {
+    EqualizerControl.ON: SkinRect(14, 18, 25, 12),
+    EqualizerControl.AUTO: SkinRect(39, 18, 33, 12),
+    EqualizerControl.PRESETS: SkinRect(217, 18, 44, 12),
+}
+
+PLAYLIST_DEFAULT_WIDTH = 275
+PLAYLIST_DEFAULT_HEIGHT = 232
+
+PLAYLIST_FOOTER_RECTS: dict[PlaylistFooterButton, SkinRect] = {
+    PlaylistFooterButton.PREVIOUS: SkinRect(PLAYLIST_DEFAULT_WIDTH - 144, PLAYLIST_DEFAULT_HEIGHT - 16, 8, 7),
+    PlaylistFooterButton.PLAY: SkinRect(PLAYLIST_DEFAULT_WIDTH - 138, PLAYLIST_DEFAULT_HEIGHT - 16, 10, 7),
+    PlaylistFooterButton.PAUSE: SkinRect(PLAYLIST_DEFAULT_WIDTH - 128, PLAYLIST_DEFAULT_HEIGHT - 16, 10, 7),
+    PlaylistFooterButton.STOP: SkinRect(PLAYLIST_DEFAULT_WIDTH - 118, PLAYLIST_DEFAULT_HEIGHT - 16, 9, 7),
+    PlaylistFooterButton.NEXT: SkinRect(PLAYLIST_DEFAULT_WIDTH - 109, PLAYLIST_DEFAULT_HEIGHT - 16, 8, 7),
+    PlaylistFooterButton.EJECT: SkinRect(PLAYLIST_DEFAULT_WIDTH - 100, PLAYLIST_DEFAULT_HEIGHT - 16, 9, 7),
+    PlaylistFooterButton.SCROLL_UP: SkinRect(PLAYLIST_DEFAULT_WIDTH - 14, PLAYLIST_DEFAULT_HEIGHT - 35, 8, 5),
+    PlaylistFooterButton.SCROLL_DOWN: SkinRect(PLAYLIST_DEFAULT_WIDTH - 14, PLAYLIST_DEFAULT_HEIGHT - 30, 8, 5),
+}
+
+PLAYLIST_MENU_RECTS: dict[PlaylistMenuButton, SkinRect] = {
+    PlaylistMenuButton.ADD: SkinRect(12, PLAYLIST_DEFAULT_HEIGHT - 29, 25, 18),
+    PlaylistMenuButton.REMOVE: SkinRect(41, PLAYLIST_DEFAULT_HEIGHT - 29, 25, 18),
+    PlaylistMenuButton.SELECT: SkinRect(70, PLAYLIST_DEFAULT_HEIGHT - 29, 25, 18),
+    PlaylistMenuButton.MISC: SkinRect(99, PLAYLIST_DEFAULT_HEIGHT - 29, 25, 18),
+    PlaylistMenuButton.LIST: SkinRect(PLAYLIST_DEFAULT_WIDTH - 46, PLAYLIST_DEFAULT_HEIGHT - 29, 23, 18),
+}
+
+
+def equalizer_slider_rect(slider: EqualizerSlider) -> SkinRect:
+    if slider is EqualizerSlider.PREAMP:
+        return SkinRect(21, 38, 14, 63)
+    band = int(slider.value.split("_", 1)[1])
+    return SkinRect(78 + band * 18, 38, 14, 63)
 
 
 class ScreenshotToolUnavailable(RuntimeError):
@@ -213,6 +309,68 @@ def click_window_coordinate(window_id: str, x: int, y: int) -> None:
     run_xdotool("mousemove", "--window", window_id, str(x), str(y), "click", "1")
 
 
+def scaled_skin_point(window_id: str, rect: SkinRect, base_width: int = BASE_MAIN_WIDTH) -> tuple[int, int]:
+    center_x, center_y = rect.center()
+    geometry = window_geometry(window_id)
+    scale = geometry.width / base_width
+    return (round(center_x * scale), round(center_y * scale))
+
+
+def click_skin_rect(window_id: str, rect: SkinRect, base_width: int = BASE_MAIN_WIDTH) -> None:
+    x, y = scaled_skin_point(window_id, rect, base_width)
+    click_window_coordinate(window_id, x, y)
+
+
+def drag_skin_rect(
+    window_id: str,
+    rect: SkinRect,
+    *,
+    end_fraction: float,
+    horizontal: bool,
+    base_width: int = BASE_MAIN_WIDTH,
+) -> None:
+    geometry = window_geometry(window_id)
+    scale = geometry.width / base_width
+    if horizontal:
+        start_x = round((rect.x + 1) * scale)
+        end_x = round((rect.x + rect.width * end_fraction) * scale)
+        y = round((rect.y + rect.height / 2) * scale)
+        start = (start_x, y)
+        end = (end_x, y)
+    else:
+        x = round((rect.x + rect.width / 2) * scale)
+        start_y = round((rect.y + rect.height - 2) * scale)
+        end_y = round((rect.y + rect.height * end_fraction) * scale)
+        start = (x, start_y)
+        end = (x, end_y)
+    run_xdotool("windowactivate", "--sync", window_id, check=False)
+    run_xdotool("mousemove", "--window", window_id, str(start[0]), str(start[1]))
+    run_xdotool("mousedown", "1")
+    try:
+        time.sleep(0.05)
+        run_xdotool("mousemove", "--window", window_id, str(end[0]), str(end[1]))
+        time.sleep(0.05)
+    finally:
+        run_xdotool("mouseup", "1", check=False)
+
+
+def drag_playlist_scrollbar_to_bottom(window_id: str, base_y: int = 0) -> None:
+    geometry = window_geometry(window_id)
+    scale = geometry.width / PLAYLIST_DEFAULT_WIDTH
+    x = round((PLAYLIST_DEFAULT_WIDTH - 12) * scale)
+    start_y = round((base_y + 20) * scale)
+    end_y = round((base_y + PLAYLIST_DEFAULT_HEIGHT - 39) * scale)
+    run_xdotool("windowactivate", "--sync", window_id, check=False)
+    run_xdotool("mousemove", "--window", window_id, str(x), str(start_y))
+    run_xdotool("mousedown", "1")
+    try:
+        time.sleep(0.05)
+        run_xdotool("mousemove", "--window", window_id, str(x), str(end_y))
+        time.sleep(0.05)
+    finally:
+        run_xdotool("mouseup", "1", check=False)
+
+
 def click_screen_coordinate(x: int, y: int) -> None:
     run_xdotool("mousemove", str(x), str(y), "click", "1")
 
@@ -267,6 +425,9 @@ class MainWindow:
     def main_toggle_point(self, toggle: MainToggleButton) -> tuple[int, int]:
         return self.scale_skin_point(MAIN_TOGGLE_RECTS[toggle])
 
+    def main_slider_point(self, slider: MainSlider) -> tuple[int, int]:
+        return self.scale_skin_point(MAIN_SLIDER_RECTS[slider])
+
     def scale_skin_point(self, rect: SkinRect) -> tuple[int, int]:
         center_x, center_y = rect.center()
         geometry = self.geometry()
@@ -280,6 +441,14 @@ class MainWindow:
     def click_main_toggle(self, toggle: MainToggleButton) -> None:
         x, y = self.main_toggle_point(toggle)
         click_window_coordinate(self.window_id, x, y)
+
+    def drag_main_slider(self, slider: MainSlider, end_fraction: float) -> None:
+        drag_skin_rect(
+            self.window_id,
+            MAIN_SLIDER_RECTS[slider],
+            end_fraction=end_fraction,
+            horizontal=True,
+        )
 
     def screenshot(self, path: Path) -> Path:
         return screenshot_window(self.window_id, path)

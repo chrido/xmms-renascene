@@ -120,23 +120,23 @@ def gtk_environment(tmp_path: Path) -> dict[str, str]:
             "NO_AT_BRIDGE": "1",
             "XMMS_NON_UNIQUE": "1",
             "XMMS_RS_CONFIG_DIR": str(tmp_path / "config"),
+            "XMMS_RS_LOG": env.get("XMMS_RS_LOG", "trace"),
         }
     )
     return env
 
 
-@pytest.fixture
-def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
-    log_path = tmp_path / "xmms-gtk.log"
+def start_gtk_process(tmp_path: Path, extra_args: list[str] | None = None, log_name: str = "xmms-gtk.log") -> Iterator[subprocess.Popen[bytes]]:
+    log_path = tmp_path / log_name
     log = log_path.open("wb")
-    env = gtk_environment(tmp_path)
     process = subprocess.Popen(
-        [str(APP_BINARY), "--frontend", "gtk", "--reset"],
+        [str(APP_BINARY), "--frontend", "gtk", "--reset", *(extra_args or [])],
         cwd=REPO_ROOT,
-        env=env,
+        env=gtk_environment(tmp_path),
         stdout=log,
         stderr=subprocess.STDOUT,
     )
+    setattr(process, "xmms_log_path", log_path)
     try:
         yield process
     finally:
@@ -148,6 +148,54 @@ def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
                 process.kill()
                 process.wait(timeout=5)
         log.close()
+
+
+@pytest.fixture
+def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
+    yield from start_gtk_process(tmp_path)
+
+
+@pytest.fixture
+def generated_tracks(tmp_path: Path) -> list[Path]:
+    if not command_exists("ffmpeg"):
+        pytest.skip("ffmpeg is required to create E2E audio tracks")
+    tracks_dir = tmp_path / "tracks"
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    tracks: list[Path] = []
+    for index in range(18):
+        path = tracks_dir / f"gtk-e2e-track-{index:02}.wav"
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                f"sine=frequency={440 + index * 20}:duration=2.0",
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                str(path),
+            ],
+            check=True,
+        )
+        if not path.is_file() or path.stat().st_size == 0:
+            raise AssertionError(f"ffmpeg did not create {path}")
+        tracks.append(path)
+    return tracks
+
+
+@pytest.fixture
+def gtk_app_with_tracks(tmp_path: Path, generated_tracks: list[Path]) -> Iterator[subprocess.Popen[bytes]]:
+    yield from start_gtk_process(
+        tmp_path,
+        [str(track) for track in generated_tracks],
+        log_name="xmms-gtk-tracks.log",
+    )
 
 
 @pytest.fixture
@@ -182,7 +230,7 @@ def gtk_socket_app(tmp_path: Path, gtk_socket_port: int) -> Iterator[subprocess.
 
 @pytest.fixture
 def gtk_socket_main_window(gtk_socket_app: subprocess.Popen[bytes]) -> MainWindow:
-    return MainWindow.wait(MAIN_WINDOW_TITLE, gtk_socket_app)
+    return wait_for_main_window_with_log(gtk_socket_app)
 
 
 @pytest.fixture
@@ -194,7 +242,56 @@ def control_client(gtk_socket_app: subprocess.Popen[bytes], gtk_socket_port: int
 
 @pytest.fixture
 def gtk_main_window(gtk_app: subprocess.Popen[bytes]) -> MainWindow:
-    return MainWindow.wait(MAIN_WINDOW_TITLE, gtk_app)
+    return wait_for_main_window_with_log(gtk_app)
+
+
+@pytest.fixture
+def gtk_tracked_main_window(gtk_app_with_tracks: subprocess.Popen[bytes]) -> MainWindow:
+    return wait_for_main_window_with_log(gtk_app_with_tracks)
+
+
+def wait_for_main_window_with_log(process: subprocess.Popen[bytes]) -> MainWindow:
+    try:
+        return MainWindow.wait(MAIN_WINDOW_TITLE, process)
+    except Exception as exc:
+        raise AssertionError(f"{exc}\n\nApplication log:\n{read_process_log(process)}") from exc
+
+
+def process_log_path(process: subprocess.Popen[bytes]) -> Path:
+    log_path = getattr(process, "xmms_log_path", None)
+    if not isinstance(log_path, Path):
+        raise AssertionError("GTK process does not expose an xmms_log_path")
+    return log_path
+
+
+def read_process_log(process: subprocess.Popen[bytes]) -> str:
+    path = process_log_path(process)
+    if not path.exists():
+        return ""
+    return path.read_text(errors="replace")
+
+
+def assert_app_log_contains(
+    process: subprocess.Popen[bytes],
+    *needles: str,
+    timeout: float = 5.0,
+) -> str:
+    deadline = time.monotonic() + timeout
+    log = ""
+    while time.monotonic() < deadline:
+        log = read_process_log(process)
+        missing = [needle for needle in needles if needle not in log]
+        if not missing:
+            return log
+        if process.poll() is not None:
+            break
+        time.sleep(0.1)
+    missing = [needle for needle in needles if needle not in log]
+    raise AssertionError(
+        "application log did not contain expected entries:\n"
+        + "\n".join(f"- {needle}" for needle in missing)
+        + f"\n\nFull log ({process_log_path(process)}):\n{log}"
+    )
 
 
 @pytest.fixture
