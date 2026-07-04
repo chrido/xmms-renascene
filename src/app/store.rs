@@ -11,6 +11,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, RenderTarget};
+use crate::app::logging::{console_log, ConsoleLogLevel};
 use crate::app_state::{AppState, RuntimeSnapshot};
 use crate::config::Config;
 use crate::player::PlaybackEvent;
@@ -159,7 +160,7 @@ impl fmt::Display for ConsoleEventLog {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "xmms-rs event: {}; revision={}; changes={}; effects={}",
+            "event: {}; revision={}; changes={}; effects={}",
             self.event, self.revision, self.changes, self.effects
         )
     }
@@ -321,7 +322,7 @@ impl AppStore {
         let before = StoreSnapshot::from_state(self.state());
         let effects = self.controller.handle_command(command);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch_logged(event, before.diff(&after), effects)
+        self.finish_dispatch_logged(ConsoleLogLevel::Info, event, before.diff(&after), effects)
     }
 
     pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> DispatchResult {
@@ -329,14 +330,24 @@ impl AppStore {
         let before = StoreSnapshot::from_state(self.state());
         let effects = self.controller.handle_playback_event(event);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch_logged(event_label, before.diff(&after), effects)
+        self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
+            event_label,
+            before.diff(&after),
+            effects,
+        )
     }
 
     pub fn handle_playlist_eof(&mut self) -> DispatchResult {
         let before = StoreSnapshot::from_state(self.state());
         let effects = self.controller.handle_playlist_eof();
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch_logged("playlist-eof", before.diff(&after), effects)
+        self.finish_dispatch_logged(
+            ConsoleLogLevel::Info,
+            "playlist-eof",
+            before.diff(&after),
+            effects,
+        )
     }
 
     pub fn tick_playback_position(&mut self, elapsed_ms: i64) -> DispatchResult {
@@ -353,6 +364,7 @@ impl AppStore {
         }
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
             format!("playback-position-tick elapsed_ms={elapsed_ms}"),
             before.diff(&after) | StateChangeSet::PLAYER | StateChangeSet::RENDER_MAIN,
             vec![AppEffect::QueueRender(RenderTarget::All)],
@@ -366,6 +378,7 @@ impl AppStore {
         self.controller.state_mut().player.set_volume(volume);
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
             format!(
                 "runtime-volume-transition requested_volume={requested_volume} volume={volume}"
             ),
@@ -389,6 +402,7 @@ impl AppStore {
         }
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
             format!(
                 "complete-stop-fade requested_restore_volume={requested_restore_volume} restore_volume={restore_volume}"
             ),
@@ -410,6 +424,7 @@ impl AppStore {
         }
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Info,
             "preferences-config-applied",
             before.diff(&after),
             vec![
@@ -429,6 +444,7 @@ impl AppStore {
             .apply_duration_index_result(result);
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
             event,
             if changed {
                 before.diff(&after) | StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST
@@ -455,6 +471,7 @@ impl AppStore {
         self.controller.state_mut().playlist = playlist;
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Info,
             format!("playlist-file-loaded entries={entry_count}"),
             before.diff(&after),
             vec![
@@ -480,6 +497,7 @@ impl AppStore {
         }
         let after = StoreSnapshot::from_state(self.state());
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Info,
             event,
             before.diff(&after),
             vec![
@@ -492,6 +510,7 @@ impl AppStore {
 
     pub fn notify_external_mutation(&mut self, changes: StateChangeSet) -> DispatchResult {
         self.finish_dispatch_logged(
+            ConsoleLogLevel::Debug,
             format!("external-mutation changes={changes}"),
             changes,
             Vec::new(),
@@ -500,12 +519,16 @@ impl AppStore {
 
     fn finish_dispatch_logged(
         &mut self,
+        level: ConsoleLogLevel,
         event: impl Into<String>,
         changes: StateChangeSet,
         effects: Vec<AppEffect>,
     ) -> DispatchResult {
         let result = self.finish_dispatch(changes, effects);
-        eprintln!("{}", ConsoleEventLog::new(event, &result));
+        console_log(
+            level,
+            format_args!("{}", ConsoleEventLog::new(event, &result)),
+        );
         result
     }
 
@@ -591,7 +614,7 @@ mod tests {
 
         assert_eq!(
             line,
-            "xmms-rs event: command Playlist(Clear); revision=7; changes=playlist|render-playlist; effects=[QueueRender(Playlist)]"
+            "event: command Playlist(Clear); revision=7; changes=playlist|render-playlist; effects=[QueueRender(Playlist)]"
         );
     }
 }

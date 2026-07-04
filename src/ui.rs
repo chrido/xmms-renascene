@@ -16,6 +16,7 @@ use crate::app::command::{
 };
 use crate::app::effect::AppEffect;
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
+use crate::app::logging::{console_log, ConsoleLogLevel};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
 use crate::app::playlist_actions::PlaylistMenuCommand;
@@ -281,12 +282,16 @@ fn build_preview_window(
             let state = main_state.borrow();
             let docked_state = state.docked_panel_state();
             let (base_width, base_height) = docked_panel_size(docked_state);
-            if let Err(err) =
-                render_scaled(cr, width, height, base_width, base_height, |cr, pass| {
+            match render_scaled(cr, width, height, base_width, base_height, |cr, pass| {
                     render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
-                })
-            {
-                eprintln!("xmms-rs: failed to render main-window preview: {err}");
+                }) {
+                Ok(()) => console_log(
+                    ConsoleLogLevel::Trace,
+                    format_args!(
+                        "render: gtk main-window width={width} height={height} base_width={base_width} base_height={base_height}"
+                    ),
+                ),
+                Err(err) => eprintln!("xmms-rs: failed to render main-window preview: {err}"),
             }
         });
     }
@@ -1636,7 +1641,7 @@ fn build_equalizer_window(
         } else {
             EQUALIZER_WINDOW_HEIGHT
         };
-        if let Err(err) = render_scaled(
+        match render_scaled(
             cr,
             width,
             height,
@@ -1650,7 +1655,13 @@ fn build_equalizer_window(
                 }
             },
         ) {
-            eprintln!("xmms-rs: failed to render equalizer preview: {err}");
+            Ok(()) => console_log(
+                ConsoleLogLevel::Trace,
+                format_args!(
+                    "render: gtk equalizer width={width} height={height} base_width={EQUALIZER_WINDOW_WIDTH} base_height={base_height}"
+                ),
+            ),
+            Err(err) => eprintln!("xmms-rs: failed to render equalizer preview: {err}"),
         }
     });
     let presets_menu = build_equalizer_presets_popover(&drawing_area, main_state, main_area);
@@ -1702,7 +1713,7 @@ fn build_playlist_window(
         } else {
             playlist_height
         };
-        if let Err(err) = render_scaled(
+        match render_scaled(
             cr,
             width,
             height,
@@ -1743,7 +1754,13 @@ fn build_playlist_window(
                 Ok(())
             },
         ) {
-            eprintln!("xmms-rs: failed to render playlist preview: {err}");
+            Ok(()) => console_log(
+                ConsoleLogLevel::Trace,
+                format_args!(
+                    "render: gtk playlist width={width} height={height} base_width={playlist_width} base_height={playlist_height}"
+                ),
+            ),
+            Err(err) => eprintln!("xmms-rs: failed to render playlist preview: {err}"),
         }
     });
 
@@ -7052,6 +7069,13 @@ impl MainWindowUiState {
         } else {
             PlaybackTransitionState::Idle
         };
+        console_log(
+            ConsoleLogLevel::Info,
+            format_args!(
+                "backend: gtk play_uri uri={uri} start_position_ms={position_ms} pending_seek={}",
+                position_ms > 0
+            ),
+        );
         if let Some(backend) = &self.playback_backend {
             if let Err(err) = backend.borrow().play_uri(uri) {
                 eprintln!("xmms-rs: failed to play {uri}: {err}");
@@ -7061,6 +7085,10 @@ impl MainWindowUiState {
     }
 
     fn apply_store_effect_local(&mut self, effect: AppEffect) {
+        console_log(
+            ConsoleLogLevel::Debug,
+            format_args!("frontend-effect: gtk {effect:?}"),
+        );
         match effect {
             AppEffect::StartPlaybackUri { uri, position_ms } => {
                 self.start_backend_playback_uri(&uri, position_ms);
@@ -7072,6 +7100,10 @@ impl MainWindowUiState {
                 self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
             }
             AppEffect::SeekPlayback(position_ms) => {
+                console_log(
+                    ConsoleLogLevel::Info,
+                    format_args!("backend: gtk seek_to_ms position_ms={position_ms}"),
+                );
                 self.set_playback_position_ms(position_ms);
                 if let Some(backend) = &self.playback_backend {
                     if let Err(err) = backend.borrow().seek_to_ms(position_ms) {
@@ -10669,6 +10701,12 @@ impl MainWindowUiState {
         };
         match backend.borrow().seek_to_ms(position_ms) {
             Ok(()) => {
+                console_log(
+                    ConsoleLogLevel::Info,
+                    format_args!(
+                        "backend: gtk applied pending start seek position_ms={position_ms}"
+                    ),
+                );
                 self.playback_transition = PlaybackTransitionState::Idle;
                 true
             }
