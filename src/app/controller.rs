@@ -167,17 +167,6 @@ impl AppController {
                     Vec::new()
                 }
             }
-            PlaylistCommand::AddPodcastEntry {
-                uri,
-                title,
-                feed,
-                guid,
-            } => {
-                self.state
-                    .playlist
-                    .add_podcast_entry(&uri, title, feed, guid);
-                self.playlist_changed_effects()
-            }
             PlaylistCommand::AddFiles(paths) => {
                 for path in paths {
                     let _ = self.state.playlist.add_path_or_directory(&path);

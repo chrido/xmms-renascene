@@ -184,6 +184,8 @@ fn add_equalizer_title_button_hits(
             egui::Sense::click(),
         );
         if response.clicked() {
+            let button_name = format!("{button:?}");
+            app_log_info!(equalizer, "title button", button_name);
             match button {
                 PanelTitleButton::Shade => app.dispatch(PanelCommand::ToggleEqualizerShade),
                 PanelTitleButton::Close => {

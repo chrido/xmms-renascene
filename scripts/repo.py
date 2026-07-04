@@ -570,6 +570,8 @@ class RepoTool:
                     "HOME=/tmp/xmms-e2e-home",
                     "-e",
                     "CARGO_HOME=/tmp/xmms-e2e-cargo",
+                    "-e",
+                    "CARGO_TARGET_DIR=/tmp/xmms-e2e-target",
                 ]
             )
         command.extend([image, "./repo", "pye2e", *args])

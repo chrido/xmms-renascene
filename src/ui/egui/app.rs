@@ -29,11 +29,12 @@ use crate::playlist::Playlist;
 use crate::render::{
     docked_panel_size, DockedPanelState, EqualizerControl, EqualizerRenderState, EqualizerSlider,
     MainPushButton, MainSlider, MainToggleButton, PlaylistMenuRenderKind, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::session::default_config_dir;
 use crate::skin::layout::{panel_title_button_rect, LayoutPanelKind, PanelTitleButton};
+use crate::skin::widget::{Visualization, WidgetId};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 use crate::socket_control::{
     start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
@@ -46,6 +47,8 @@ use super::preferences::{self, PreferencesPage, PreferencesViewportState};
 use super::runtime::EguiRuntime;
 use super::skin_texture::{render_equalizer_color_image, render_playlist_color_image};
 use super::{equalizer, main_player, playlist};
+
+const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Default)]
 pub struct EguiTextureCache {
@@ -97,6 +100,8 @@ pub struct EguiFrontendState {
     pub playlist_sort_menu_open: bool,
     pub confirm_physical_delete_open: bool,
     pub playlist_scroll_offset: usize,
+    visualization: Visualization,
+    visualization_tick_counter: i32,
     socket_control: Option<SocketControl>,
     controller: AppStore,
     #[cfg(feature = "gstreamer-backend")]
@@ -128,7 +133,7 @@ impl EguiFrontendState {
         )));
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
         let socket_control = options.socket_port.map(start_socket_control).transpose()?;
-        Ok(Self {
+        let mut state = Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
             skin_browser_open: false,
@@ -157,12 +162,16 @@ impl EguiFrontendState {
             playlist_sort_menu_open: false,
             confirm_physical_delete_open: false,
             playlist_scroll_offset: 0,
+            visualization: Visualization::new(WidgetId(6), 24, 43, 76),
+            visualization_tick_counter: 0,
             socket_control,
             controller: AppStore::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
             pending_backend_seek_ms: None,
-        })
+        };
+        state.apply_visualization_preferences();
+        Ok(state)
     }
 
     pub fn controller(&self) -> &AppStore {
@@ -179,12 +188,87 @@ impl EguiFrontendState {
         self.apply_effects(result.effects);
     }
 
+    pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
+        config.scale_factor = config.scale_factor.clamp(1.0, 5.0);
+        config.doublesize = config.scale_factor > 1.0;
+        let result = self.controller.apply_config_from_preferences(config);
+        self.sync_frontend_state_from_store();
+        self.sync_scale_factor_from_config();
+        self.apply_visualization_preferences();
+        self.apply_effects(result.effects);
+    }
+
     fn sync_frontend_state_from_store(&mut self) {
         let ui = &self.controller.state().ui;
         self.preferences_open = ui.preferences_visible;
         self.main_menu_open = ui.main_menu_visible;
         self.skin_browser_open = ui.skin_browser_visible;
         self.file_info_open = ui.file_info_visible;
+    }
+
+    pub(crate) fn sync_scale_factor_from_config(&mut self) {
+        self.scale_factor = self.controller.state().config.scale_factor.clamp(1.0, 5.0) as f32;
+    }
+
+    pub(crate) fn visualization_render_state(&self) -> VisualizationRenderState {
+        let config = &self.controller.state().config;
+        VisualizationRenderState {
+            mode: self.visualization.mode(),
+            analyzer_style: self.visualization.analyzer_style(),
+            analyzer_mode: self.visualization.analyzer_mode(),
+            scope_mode: self.visualization.scope_mode(),
+            peaks_enabled: self.visualization.peaks_enabled(),
+            vu_mode: config.vis_vu_mode,
+            data: *self.visualization.data(),
+            peak: *self.visualization.peak(),
+            milkdrop_energy: self.visualization.milkdrop_energy(),
+            milkdrop_phase: self.visualization.milkdrop_phase(),
+        }
+    }
+
+    pub(crate) fn apply_visualization_preferences(&mut self) {
+        let config = &self.controller.state().config;
+        self.visualization.set_mode(config.vis_mode);
+        self.visualization
+            .set_analyzer_mode(config.vis_analyzer_mode);
+        self.visualization
+            .set_analyzer_style(config.vis_analyzer_style);
+        self.visualization.set_scope_mode(config.vis_scope_mode);
+        self.visualization
+            .set_peaks_enabled(config.vis_peaks_enabled);
+        self.visualization
+            .set_falloff(config.vis_analyzer_falloff, config.vis_peaks_falloff);
+    }
+
+    fn visualization_refresh_divisor(&self) -> i32 {
+        self.controller
+            .state()
+            .config
+            .vis_refresh_divisor
+            .clamp(1, 8)
+    }
+
+    fn tick_visualization(&mut self) -> bool {
+        if self.controller.state().player.state() != PlayerState::Playing {
+            self.visualization_tick_counter = 0;
+            return false;
+        }
+
+        self.visualization_tick_counter += 1;
+        if self.visualization_tick_counter < self.visualization_refresh_divisor() {
+            return false;
+        }
+        self.visualization_tick_counter = 0;
+
+        let data = {
+            let player = &self.controller.state().player;
+            player
+                .visualization_data_valid()
+                .then(|| *player.visualization_data())
+        };
+        self.visualization
+            .tick(data.as_ref().map(|values| values.as_slice()));
+        true
     }
 
     fn poll_socket_control(&mut self, ctx: &egui::Context) {
@@ -274,7 +358,8 @@ impl EguiFrontendState {
     }
 
     fn tick_playback_position(&mut self, ctx: &egui::Context) {
-        ctx.request_repaint_after(Duration::from_millis(250));
+        ctx.request_repaint_after(VISUALIZER_REPAINT_INTERVAL);
+        let visualizer_changed = self.tick_visualization();
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
@@ -283,11 +368,17 @@ impl EguiFrontendState {
         }
         let elapsed_ms = elapsed.as_millis().min(i64::MAX as u128) as i64;
         if elapsed_ms == 0 {
+            if visualizer_changed {
+                ctx.request_repaint();
+            }
             return;
         }
         let result = self.controller.tick_playback_position(elapsed_ms);
         self.sync_frontend_state_from_store();
         self.apply_effects(result.effects);
+        if visualizer_changed {
+            ctx.request_repaint();
+        }
     }
 
     pub(crate) fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
@@ -298,6 +389,10 @@ impl EguiFrontendState {
 
     pub(crate) fn apply_effect(&mut self, effect: AppEffect) {
         app_log_debug!(frontend_effect, "egui {effect:?}");
+        let clear_visualization = matches!(
+            &effect,
+            AppEffect::StopPlayback | AppEffect::BeginStopFade { .. }
+        );
         #[cfg(feature = "gstreamer-backend")]
         if let Some(backend) = &self.playback_backend {
             match &effect {
@@ -350,6 +445,10 @@ impl EguiFrontendState {
                 }
                 _ => {}
             }
+        }
+        if clear_visualization {
+            self.visualization_tick_counter = 0;
+            self.visualization.clear_data();
         }
         match effect {
             AppEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
@@ -1214,8 +1313,7 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                             app.active_skin = skin;
                             let mut config = app.controller().state().config.clone();
                             config.skin = None;
-                            let result = app.controller_mut().apply_config_from_preferences(config);
-                            app.apply_effects(result.effects);
+                            app.apply_preferences_config(config);
                         }
                         Err(err) => app
                             .runtime
@@ -1257,8 +1355,7 @@ fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {
             app.active_skin = skin;
             let mut config = app.controller().state().config.clone();
             config.skin = Some(entry.path.to_string_lossy().into_owned());
-            let result = app.controller_mut().apply_config_from_preferences(config);
-            app.apply_effects(result.effects);
+            app.apply_preferences_config(config);
         }
         Err(err) => app.runtime.pending_messages.push(format!(
             "failed to load skin '{}': {err}",
@@ -1356,6 +1453,8 @@ fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {
 mod tests {
     use super::*;
     use crate::app::command::PanelCommand;
+    use crate::audio_model::SPECTRUM_BANDS;
+    use crate::player::PlaybackEvent;
 
     #[test]
     fn egui_app_constructs_without_native_window() {
@@ -1371,6 +1470,87 @@ mod tests {
             app.selected_preferences_page,
             PreferencesPage::AudioIoPlugins
         );
+    }
+
+    #[test]
+    fn egui_startup_equalizer_flag_enables_visible_panel() {
+        let app = EguiFrontendState::new(PreviewOptions {
+            show_equalizer: true,
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        assert!(app.controller().state().config.equalizer_visible);
+        assert!(!app.controller().state().config.equalizer_detached);
+        assert!(app.desired_window_size().y > EQUALIZER_WINDOW_HEIGHT as f32 * app.scale_factor);
+    }
+
+    #[test]
+    fn egui_preferences_scale_factor_updates_runtime_zoom() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        let default_size = app.desired_window_size();
+        let mut config = app.controller().state().config.clone();
+        config.scale_factor = 1.25;
+        config.doublesize = true;
+
+        app.apply_preferences_config(config);
+
+        assert!((app.controller().state().config.scale_factor - 1.25).abs() < f64::EPSILON);
+        assert!((app.scale_factor - 1.25).abs() < f32::EPSILON);
+        assert!(app.controller().state().config.doublesize);
+        assert!(app.desired_window_size().x < default_size.x);
+    }
+
+    #[test]
+    fn egui_preferences_scale_factor_is_clamped_and_updates_doublesize() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        let mut config = app.controller().state().config.clone();
+        config.scale_factor = 0.25;
+        config.doublesize = true;
+
+        app.apply_preferences_config(config);
+
+        assert!((app.controller().state().config.scale_factor - 1.0).abs() < f64::EPSILON);
+        assert!((app.scale_factor - 1.0).abs() < f32::EPSILON);
+        assert!(!app.controller().state().config.doublesize);
+    }
+
+    #[test]
+    fn egui_visualizer_render_state_uses_spectrum_events() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        let mut spectrum = [0.0; SPECTRUM_BANDS];
+        spectrum[9] = 0.9;
+
+        app.controller_mut().state_mut().player.mark_playing();
+        let result = app
+            .controller_mut()
+            .handle_playback_event(PlaybackEvent::Spectrum(spectrum));
+        app.apply_effects(result.effects);
+        assert!(app.tick_visualization());
+
+        let render_state = app.visualization_render_state();
+        assert!(render_state.data[9] > 0.0);
+        assert!(render_state.peak[9] > 0.0);
+    }
+
+    #[test]
+    fn egui_visualizer_clears_on_stop_effect() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        let mut spectrum = [0.0; SPECTRUM_BANDS];
+        spectrum[4] = 0.9;
+
+        app.controller_mut().state_mut().player.mark_playing();
+        let result = app
+            .controller_mut()
+            .handle_playback_event(PlaybackEvent::Spectrum(spectrum));
+        app.apply_effects(result.effects);
+        assert!(app.tick_visualization());
+        assert!(app.visualization_render_state().data[4] > 0.0);
+
+        app.apply_effect(AppEffect::StopPlayback);
+
+        assert_eq!(app.visualization_render_state().data[4], 0.0);
+        assert_eq!(app.visualization_render_state().peak[4], 0.0);
     }
 
     #[test]

@@ -975,23 +975,6 @@ impl UiE2e {
         self
     }
 
-    pub fn add_podcast_entry(
-        &mut self,
-        uri: &str,
-        title: &str,
-        feed: &str,
-        guid: &str,
-    ) -> &mut Self {
-        self.state.add_podcast_entry(
-            uri,
-            Some(title.to_string()),
-            Some(feed.to_string()),
-            Some(guid.to_string()),
-        );
-        self.sync_windows();
-        self
-    }
-
     pub fn select_playlist_entry(&mut self, index: usize) -> &mut Self {
         self.state.set_playlist_entry_selected(index, true);
         self
@@ -1533,33 +1516,6 @@ impl UiE2e {
 
     pub fn assert_preference_title_format(&mut self, expected: &str) -> &mut Self {
         assert_eq!(self.state.preference_title_format(), expected);
-        self
-    }
-
-    pub fn set_preference_podcast_cache_ttl_days(&mut self, days: i32) -> &mut Self {
-        self.state.set_preference_podcast_cache_ttl_days(days);
-        self
-    }
-
-    pub fn assert_preference_podcast_cache_ttl_days(&mut self, expected: i32) -> &mut Self {
-        assert_eq!(self.state.preference_podcast_cache_ttl_days(), expected);
-        self
-    }
-
-    pub fn set_preference_podcast_refresh_interval_minutes(&mut self, minutes: i32) -> &mut Self {
-        self.state
-            .set_preference_podcast_refresh_interval_minutes(minutes);
-        self
-    }
-
-    pub fn assert_preference_podcast_refresh_interval_minutes(
-        &mut self,
-        expected: i32,
-    ) -> &mut Self {
-        assert_eq!(
-            self.state.preference_podcast_refresh_interval_minutes(),
-            expected
-        );
         self
     }
 

@@ -55,12 +55,6 @@ pub enum PlaylistCommand {
     Randomize,
     AddUris(Vec<String>),
     AddLocations(Vec<String>),
-    AddPodcastEntry {
-        uri: String,
-        title: Option<String>,
-        feed: Option<String>,
-        guid: Option<String>,
-    },
     AddFiles(Vec<PathBuf>),
     Clear,
     RemoveSelectedOrCurrent,

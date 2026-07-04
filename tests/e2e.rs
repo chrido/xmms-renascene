@@ -11,16 +11,7 @@ use xmms_renascene::e2e::{
 };
 use xmms_renascene::mpris::{MprisCommand, MprisEvent};
 use xmms_renascene::player::{OutputDevice, OutputDeviceSelection, PlayerState};
-use xmms_renascene::playlist::{Playlist, PlaylistSortKey};
-use xmms_renascene::podcast::{
-    add_feed_to_playlist, cache_file_is_fresh, cache_is_fresh, cache_path_for_url,
-    classify_url_response, cleanup_cache_dir, discover_cached_duration_ms,
-    download_url_with_retries, download_with_retries, fetch_url_into_playlist, handle_url_response,
-    mark_cache_failed_and_skip_current, parse_feed, prepare_playback_uri, refresh_interval_seconds,
-    retry_delay_seconds, stale_cache_files, status_should_retry, write_cache_file,
-    PodcastCacheEntry, PodcastDownloadAttempt, PodcastHttpResponse, PodcastRefreshScheduler,
-    PodcastResponseAction, PodcastUrlKind,
-};
+use xmms_renascene::playlist::PlaylistSortKey;
 use xmms_renascene::render::{
     EQUALIZER_WINDOW_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
 };
@@ -677,21 +668,16 @@ fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
 }
 
 #[test]
-fn timed_and_podcast_entries_are_available_to_e2e_playlist_state() {
+fn timed_entries_are_available_to_e2e_playlist_state() {
     let mut app = UiE2e::start_player(PlayerSettings::default());
 
     app.add_timed_entry("file:///music/123", "Timed Song", 123_000)
-        .add_podcast_entry(
-            "https://example.test/episode.mp3",
-            "Podcast Episode",
-            "https://example.test/feed.xml",
-            "episode-1",
-        )
+        .add_timed_entry("https://example.test/stream.mp3", "Stream", -1)
         .assert_playlist_len(2)
         .assert_playlist_entry(0, "file:///music/123")
         .assert_playlist_title(0, "Timed Song")
-        .assert_playlist_entry(1, "https://example.test/episode.mp3")
-        .assert_playlist_title(1, "Podcast Episode");
+        .assert_playlist_entry(1, "https://example.test/stream.mp3")
+        .assert_playlist_title(1, "Stream");
 }
 
 #[test]
@@ -1182,21 +1168,13 @@ fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
 
     app.drop_on_playlist(["file:///music/a.ogg", "file:///music/b.ogg"])
         .add_timed_entry("file:///music/skip", "Known Duration", 123_000)
-        .add_podcast_entry(
-            "https://example.test/episode.mp3",
-            "Episode",
-            "https://example.test/feed.xml",
-            "episode-1",
-        )
         .index_missing_playlist_durations()
         .assert_playlist_length_ms(0, 1_000)
         .assert_playlist_title(0, "Indexed 1")
         .assert_playlist_length_ms(1, 2_000)
         .assert_playlist_title(1, "Indexed 2")
         .assert_playlist_length_ms(2, 123_000)
-        .assert_playlist_title(2, "Known Duration")
-        .assert_playlist_length_ms(3, -1)
-        .assert_playlist_title(3, "Episode");
+        .assert_playlist_title(2, "Known Duration");
 }
 
 #[test]
@@ -2280,26 +2258,6 @@ fn preferences_visualization_page_applies_controls_immediately() {
 }
 
 #[test]
-fn preferences_podcast_controls_apply_and_reset_defaults() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-
-    app.open_preferences_page(PreferencesPage::Options)
-        .set_preference_podcast_cache_ttl_days(14)
-        .assert_preference_podcast_cache_ttl_days(14)
-        .set_preference_podcast_refresh_interval_minutes(120)
-        .assert_preference_podcast_refresh_interval_minutes(120)
-        .set_preference_podcast_cache_ttl_days(0)
-        .assert_preference_podcast_cache_ttl_days(60)
-        .reset_preferences_to_defaults()
-        .assert_volume(100)
-        .assert_balance(0)
-        .assert_repeat(false)
-        .assert_shuffle(false)
-        .assert_preference_title_format("%p - %t")
-        .assert_preferences_saved();
-}
-
-#[test]
 fn playlist_bottom_buttons_open_their_submenus() {
     let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
 
@@ -2786,318 +2744,4 @@ fn docked_equalizer_and_playlist_can_be_shaded_from_main_window_stack() {
         .click_docked_panel(PanelTarget::PlaylistShade)
         .assert_playlist_unshaded()
         .assert_docked_panel_size((275, 464));
-}
-
-#[test]
-fn podcast_e2e_classifies_feed_and_stream_responses() {
-    assert_eq!(
-        classify_url_response(Some("application/atom+xml"), false, b""),
-        PodcastUrlKind::Feed
-    );
-    assert_eq!(
-        classify_url_response(Some("audio/ogg"), false, b""),
-        PodcastUrlKind::DirectStream
-    );
-    assert_eq!(
-        classify_url_response(None, false, b"<?xml version='1.0'?><rss></rss>"),
-        PodcastUrlKind::Feed
-    );
-    assert_eq!(
-        classify_url_response(None, true, b""),
-        PodcastUrlKind::DirectStream
-    );
-}
-
-#[test]
-fn podcast_e2e_parses_rss_atom_enclosure_urls_and_fallbacks() {
-    let episodes = parse_feed(
-        r#"
-        <rss><channel>
-          <item><title>First &amp; Best</title><guid>one</guid><enclosure url="media/one.mp3"/></item>
-          <entry><title>Second</title><id>two</id><link href="/two.ogg" rel="enclosure"/></entry>
-          <item><content url="https://cdn.example.test/three.mp3"/></item>
-        </channel></rss>
-        "#,
-        "https://example.test/podcasts/feed.xml",
-    );
-
-    assert_eq!(episodes.len(), 3);
-    assert_eq!(
-        episodes[0].url,
-        "https://example.test/podcasts/media/one.mp3"
-    );
-    assert_eq!(episodes[0].title, "First & Best");
-    assert_eq!(episodes[0].guid.as_deref(), Some("one"));
-    assert_eq!(episodes[1].url, "https://example.test/two.ogg");
-    assert_eq!(episodes[1].guid.as_deref(), Some("two"));
-    assert_eq!(episodes[2].title, "https://cdn.example.test/three.mp3");
-}
-
-#[test]
-fn podcast_e2e_cache_paths_freshness_cleanup_and_playback_uri_follow_c_defaults() {
-    let root = unique_temp_dir("xmms-rs-podcast-cache");
-    fs::create_dir_all(&root).unwrap();
-    let cache = cache_path_for_url(&root, "https://example.test/episode.mp3");
-
-    assert_eq!(cache.parent().unwrap(), root.join("podcast-cache"));
-    assert_eq!(cache.file_name().unwrap().to_string_lossy().len(), 64);
-    assert!(cache_is_fresh(1, 1_000, 1_000 + 30, 0));
-    assert!(!cache_is_fresh(0, 1_000, 1_000 + 30, 0));
-
-    let stale = stale_cache_files(
-        &[
-            PodcastCacheEntry {
-                name: "stale".to_string(),
-                modified_unix: 0,
-                size: 1,
-            },
-            PodcastCacheEntry {
-                name: "stale.part".to_string(),
-                modified_unix: 0,
-                size: 1,
-            },
-        ],
-        61 * 24 * 60 * 60,
-        0,
-    );
-    assert_eq!(stale, vec!["stale"]);
-    assert_eq!(
-        prepare_playback_uri(true, "https://example.test/episode.mp3", &cache, true),
-        format!("file://{}", cache.display())
-    );
-
-    let cache_dir = root.join("podcast-cache");
-    fs::create_dir_all(&cache_dir).unwrap();
-    let stale_path = cache_dir.join("stale-file");
-    let part_path = cache_dir.join("stale-file.part");
-    fs::write(&stale_path, b"stale").unwrap();
-    fs::write(&part_path, b"partial").unwrap();
-    assert_eq!(cleanup_cache_dir(&root, i64::MAX, 0).unwrap(), 1);
-    assert!(!stale_path.exists());
-    assert!(part_path.exists());
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn podcast_e2e_retry_and_refresh_scheduling_match_c() {
-    assert!(status_should_retry(429));
-    assert!(status_should_retry(503));
-    assert!(!status_should_retry(404));
-    assert_eq!(retry_delay_seconds(Some("15"), 0), 15);
-    assert_eq!(retry_delay_seconds(Some("120"), 0), 60);
-    assert_eq!(retry_delay_seconds(None, 4), 16);
-    assert_eq!(refresh_interval_seconds(0), 60 * 60);
-    assert_eq!(refresh_interval_seconds(5), 5 * 60);
-}
-
-#[test]
-fn podcast_e2e_imports_parsed_feed_into_playlist_with_deduplication() {
-    let mut playlist = Playlist::new();
-    let feed = r#"
-        <rss><channel>
-          <item><title>Episode One</title><guid>g1</guid><enclosure url="one.mp3"/></item>
-          <item><title>Episode One Updated</title><guid>g1</guid><enclosure url="one-new.mp3"/></item>
-        </channel></rss>
-    "#;
-
-    assert_eq!(
-        add_feed_to_playlist(&mut playlist, feed, "https://example.test/feed.xml"),
-        2
-    );
-    assert_eq!(playlist.len(), 1);
-    assert_eq!(playlist.entries()[0].title, "Episode One Updated");
-    assert_eq!(playlist.entries()[0].podcast_guid.as_deref(), Some("g1"));
-}
-
-#[test]
-fn podcast_e2e_writes_cache_file_and_discovers_cached_duration() {
-    let root = unique_temp_dir("xmms-rs-podcast-cache-write");
-    fs::create_dir_all(&root).unwrap();
-    let path =
-        write_cache_file(&root, "https://example.test/audio.wav", &silent_wav_bytes()).unwrap();
-
-    assert!(path.exists());
-    assert!(!path.with_extension("part").exists());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-    assert!(cache_file_is_fresh(&path, now, 0).unwrap());
-    assert!(discover_cached_duration_ms(&path).unwrap().unwrap() >= 1_000);
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn podcast_e2e_handles_fetched_feed_or_direct_stream_response() {
-    let mut playlist = Playlist::new();
-    let action = handle_url_response(
-        &mut playlist,
-        "https://example.test/feed.xml",
-        &PodcastHttpResponse {
-            status: 200,
-            content_type: Some("application/rss+xml".to_string()),
-            has_icy_name: false,
-            retry_after: None,
-            body: br#"<rss><channel><item><title>Fetched</title><enclosure url="fetched.mp3"/></item></channel></rss>"#.to_vec(),
-        },
-    )
-    .unwrap();
-
-    assert_eq!(action, PodcastResponseAction::AddedFeedEpisodes(1));
-    assert_eq!(playlist.entries()[0].title, "Fetched");
-
-    let action = handle_url_response(
-        &mut playlist,
-        "https://example.test/live.ogg",
-        &PodcastHttpResponse {
-            status: 200,
-            content_type: Some("audio/ogg".to_string()),
-            has_icy_name: false,
-            retry_after: None,
-            body: Vec::new(),
-        },
-    )
-    .unwrap();
-    assert_eq!(action, PodcastResponseAction::AddedDirectStream);
-    assert_eq!(
-        playlist.entries()[1].filename,
-        "https://example.test/live.ogg"
-    );
-}
-
-#[test]
-fn podcast_e2e_download_retry_loop_writes_cache_after_retry() {
-    let root = unique_temp_dir("xmms-rs-podcast-retry");
-    fs::create_dir_all(&root).unwrap();
-    let outcome = download_with_retries(&root, "https://example.test/retry.mp3", |attempt| {
-        Ok(if attempt < 2 {
-            PodcastDownloadAttempt {
-                status: 429,
-                retry_after: Some((attempt + 1).to_string()),
-                body: Vec::new(),
-            }
-        } else {
-            PodcastDownloadAttempt {
-                status: 200,
-                retry_after: None,
-                body: b"downloaded".to_vec(),
-            }
-        })
-    })
-    .unwrap();
-
-    assert_eq!(outcome.attempts, 3);
-    assert_eq!(outcome.retry_delays, vec![1, 2]);
-    assert_eq!(fs::read(outcome.cache_path).unwrap(), b"downloaded");
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn podcast_e2e_failed_current_podcast_item_is_skipped() {
-    let mut playlist = Playlist::new();
-    playlist.add_podcast_entry(
-        "https://example.test/fail.mp3",
-        Some("Needs cache".to_string()),
-        Some("https://example.test/feed.xml".to_string()),
-        Some("guid".to_string()),
-    );
-    playlist.add_uri("file:///tmp/after-failure.mp3");
-    playlist.set_position(0);
-
-    assert!(mark_cache_failed_and_skip_current(
-        &mut playlist,
-        "https://example.test/fail.mp3"
-    ));
-    assert_eq!(playlist.position(), Some(1));
-    assert_eq!(playlist.entries()[0].title, "failed: Needs cache");
-}
-
-#[test]
-fn podcast_e2e_refresh_scheduler_returns_due_feeds_and_reschedules() {
-    let mut scheduler = PodcastRefreshScheduler::new();
-    scheduler.add_feed("https://example.test/z.xml");
-    scheduler.add_feed("https://example.test/a.xml");
-    scheduler.schedule_from(10, 1);
-
-    assert_eq!(scheduler.next_refresh_unix(), Some(70));
-    assert!(scheduler.due_feeds(69).is_empty());
-    assert_eq!(
-        scheduler.due_feeds(70),
-        vec!["https://example.test/a.xml", "https://example.test/z.xml"]
-    );
-    scheduler.mark_refreshed(70, 2);
-    assert_eq!(scheduler.next_refresh_unix(), Some(190));
-}
-
-#[test]
-fn podcast_e2e_live_fetch_imports_feed_from_http_response() {
-    let feed = r#"<rss><channel><item><title>Live</title><enclosure url="live.mp3"/></item></channel></rss>"#;
-    let (url, server) = local_http_server(vec![format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\nContent-Length: {}\r\n\r\n{}",
-        feed.len(),
-        feed
-    )]);
-
-    let mut playlist = Playlist::new();
-    let action = fetch_url_into_playlist(&mut playlist, &url).unwrap();
-
-    assert_eq!(action, PodcastResponseAction::AddedFeedEpisodes(1));
-    assert_eq!(playlist.entries()[0].title, "Live");
-    server.join().unwrap();
-}
-
-#[test]
-fn podcast_e2e_live_download_retries_http_503_and_writes_cache() {
-    let (url, server) = local_http_server(vec![
-        "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n"
-            .to_string(),
-        "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: 10\r\n\r\ndownloaded"
-            .to_string(),
-    ]);
-    let root = unique_temp_dir("xmms-rs-podcast-live-download");
-    fs::create_dir_all(&root).unwrap();
-
-    let outcome = download_url_with_retries(&root, &url).unwrap();
-
-    assert_eq!(outcome.attempts, 2);
-    assert_eq!(outcome.retry_delays, vec![1]);
-    assert_eq!(fs::read(outcome.cache_path).unwrap(), b"downloaded");
-    fs::remove_dir_all(root).unwrap();
-    server.join().unwrap();
-}
-
-fn silent_wav_bytes() -> Vec<u8> {
-    let sample_rate = 8_000u32;
-    let samples = 8_000u32;
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"RIFF");
-    bytes.extend_from_slice(&(36 + samples).to_le_bytes());
-    bytes.extend_from_slice(b"WAVEfmt ");
-    bytes.extend_from_slice(&16u32.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&sample_rate.to_le_bytes());
-    bytes.extend_from_slice(&sample_rate.to_le_bytes());
-    bytes.extend_from_slice(&1u16.to_le_bytes());
-    bytes.extend_from_slice(&8u16.to_le_bytes());
-    bytes.extend_from_slice(b"data");
-    bytes.extend_from_slice(&samples.to_le_bytes());
-    bytes.extend(std::iter::repeat_n(128u8, samples as usize));
-    bytes
-}
-
-fn local_http_server(responses: Vec<String>) -> (String, std::thread::JoinHandle<()>) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = std::thread::spawn(move || {
-        for response in responses {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0u8; 1024];
-            let _ = std::io::Read::read(&mut stream, &mut request).unwrap();
-            std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
-        }
-    });
-    (format!("http://{addr}/podcast"), handle)
 }

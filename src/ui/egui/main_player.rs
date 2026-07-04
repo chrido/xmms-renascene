@@ -8,8 +8,8 @@ use crate::app::view_model::{
 use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::render::{
-    MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState, MAIN_TITLEBAR_HEIGHT,
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState, VisualizationRenderState,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::layout::{
     main_push_button_rect, main_slider_layout, main_toggle_button_rect, SkinRect,
@@ -35,6 +35,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         app.main_pressed_push,
         app.main_pressed_toggle,
         app.main_pressed_slider,
+        app.visualization_render_state(),
     );
     let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
         ui.label("failed to render skinned main player");
@@ -73,6 +74,7 @@ fn main_render_state(
     pressed_push: Option<MainPushButton>,
     pressed_toggle: Option<MainToggleButton>,
     pressed_slider: Option<MainSlider>,
+    visualization: VisualizationRenderState,
 ) -> MainWindowRenderState {
     MainWindowRenderState {
         title: if view_model.title.is_empty() {
@@ -106,6 +108,7 @@ fn main_render_state(
         pressed_toggle,
         pressed_slider,
         time_digits: [NumberDisplay::BLANK; 5],
+        visualization,
         ..MainWindowRenderState::default()
     }
 }
@@ -315,6 +318,8 @@ fn scale_skin_rect(base: egui::Rect, rect: SkinRect, scale: f32) -> egui::Rect {
 }
 
 fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainPushButton) {
+    let button_name = format!("{button:?}");
+    app_log_info!(player, "button activated", button_name);
     match button {
         MainPushButton::Previous => app.dispatch(PlayerCommand::PreviousTrack),
         MainPushButton::Play => app.dispatch(PlayerCommand::Play),
@@ -332,6 +337,8 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
 }
 
 fn dispatch_toggle(app: &mut EguiFrontendState, toggle: MainToggleButton) {
+    let toggle_name = format!("{toggle:?}");
+    app_log_info!(player, "toggle activated", toggle_name);
     match toggle {
         MainToggleButton::Shuffle => app.dispatch(PlaylistCommand::ToggleShuffle),
         MainToggleButton::Repeat => app.dispatch(PlaylistCommand::ToggleRepeat),
@@ -413,6 +420,7 @@ mod tests {
             Some(MainPushButton::Play),
             Some(MainToggleButton::Repeat),
             Some(MainSlider::Volume),
+            VisualizationRenderState::default(),
         );
 
         assert_eq!(state.volume_position, 51);
@@ -425,6 +433,57 @@ mod tests {
         assert_eq!(state.pressed_push, Some(MainPushButton::Play));
         assert_eq!(state.pressed_toggle, Some(MainToggleButton::Repeat));
         assert_eq!(state.pressed_slider, Some(MainSlider::Volume));
+    }
+
+    #[test]
+    fn main_render_state_keeps_visualization_data() {
+        let mut visualization = VisualizationRenderState::default();
+        visualization.data[7] = 0.85;
+        visualization.peak[7] = 0.95;
+
+        let state = main_render_state(
+            &MainPlayerViewModel {
+                title: "Song".to_string(),
+                player_state: PlayerState::Playing,
+                volume: 100,
+                balance: 0,
+                shuffle: false,
+                repeat: false,
+                shaded: false,
+                bitrate_text: "128".to_string(),
+                frequency_text: "44".to_string(),
+                channels_text: "2".to_string(),
+            },
+            0,
+            None,
+            false,
+            false,
+            None,
+            None,
+            None,
+            visualization.clone(),
+        );
+
+        assert_eq!(state.visualization, visualization);
+    }
+
+    #[test]
+    fn rendered_main_player_includes_visualizer_pixels() {
+        let skin = crate::skin::DefaultSkin::load_bundled().unwrap();
+        let blank_state = MainWindowRenderState::default();
+        let mut active_state = blank_state.clone();
+        active_state.visualization.data[5] = 1.0;
+        active_state.visualization.peak[5] = 1.0;
+
+        let blank = render_main_player_color_image(&skin, &blank_state).unwrap();
+        let active = render_main_player_color_image(&skin, &active_state).unwrap();
+        let width = MAIN_WINDOW_WIDTH as usize;
+        let changed_visualizer_pixels = (43usize..59)
+            .flat_map(|y| (24usize..100).map(move |x| (x, y)))
+            .filter(|(x, y)| blank.pixels[y * width + x] != active.pixels[y * width + x])
+            .count();
+
+        assert!(changed_visualizer_pixels > 0);
     }
 
     #[test]

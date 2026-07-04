@@ -101,9 +101,7 @@ fn basename(uri: &str) -> String {
 }
 
 fn file_format(entry: &PlaylistEntry) -> &'static str {
-    if entry.is_podcast {
-        "Podcast/stream"
-    } else if entry.filename.starts_with("http://") || entry.filename.starts_with("https://") {
+    if entry.filename.starts_with("http://") || entry.filename.starts_with("https://") {
         "Stream"
     } else {
         "Audio file"

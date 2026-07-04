@@ -46,7 +46,7 @@ pub const FRONTEND_SERVICE_BOUNDARIES: &[FrontendServiceBoundary] = &[
     },
     FrontendServiceBoundary {
         kind: FrontendServiceKind::StoragePath,
-        description: "resolve config, cache, playlist, podcast, and session storage paths",
+        description: "resolve config, cache, playlist, and session storage paths",
     },
     FrontendServiceBoundary {
         kind: FrontendServiceKind::SkinImportExportPath,

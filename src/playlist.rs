@@ -54,10 +54,6 @@ pub struct PlaylistEntry {
     pub title: String,
     pub length_ms: i64,
     pub selected: bool,
-    pub is_podcast: bool,
-    pub podcast_feed: Option<String>,
-    pub podcast_guid: Option<String>,
-    pub podcast_downloading: bool,
 }
 
 impl PlaylistEntry {
@@ -69,31 +65,6 @@ impl PlaylistEntry {
             title,
             length_ms: -1,
             selected: false,
-            is_podcast: false,
-            podcast_feed: None,
-            podcast_guid: None,
-            podcast_downloading: false,
-        }
-    }
-
-    pub fn podcast(
-        uri: impl Into<String>,
-        title: Option<String>,
-        feed: Option<String>,
-        guid: Option<String>,
-    ) -> Self {
-        let filename = uri.into();
-        Self {
-            title: title
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| filename.clone()),
-            filename,
-            length_ms: -1,
-            selected: false,
-            is_podcast: true,
-            podcast_feed: feed.filter(|s| !s.is_empty()),
-            podcast_guid: guid.filter(|s| !s.is_empty()),
-            podcast_downloading: false,
         }
     }
 }
@@ -186,49 +157,6 @@ impl Playlist {
             }
         }
         Ok(added)
-    }
-
-    pub fn add_podcast_entry(
-        &mut self,
-        uri: impl Into<String>,
-        title: Option<String>,
-        feed: Option<String>,
-        guid: Option<String>,
-    ) {
-        let uri = uri.into();
-        if uri.is_empty() {
-            return;
-        }
-
-        if let Some(entry) = self.entries.iter_mut().find(|entry| {
-            if !entry.is_podcast {
-                return false;
-            }
-            let same_guid = guid
-                .as_ref()
-                .filter(|guid| !guid.is_empty())
-                .is_some_and(|guid| {
-                    entry.podcast_guid.as_deref() == Some(guid.as_str())
-                        && entry.podcast_feed.as_deref() == feed.as_deref()
-                });
-            let same_url = entry.filename == uri;
-            same_guid || same_url
-        }) {
-            if let Some(title) = title.as_ref().filter(|title| !title.is_empty()) {
-                entry.title = title.clone();
-            }
-            if let Some(feed) = feed.as_ref().filter(|feed| !feed.is_empty()) {
-                entry.podcast_feed = Some(feed.clone());
-            }
-            if let Some(guid) = guid.as_ref().filter(|guid| !guid.is_empty()) {
-                entry.podcast_guid = Some(guid.clone());
-            }
-            return;
-        }
-
-        self.entries
-            .push(PlaylistEntry::podcast(uri, title, feed, guid));
-        self.invalidate_shuffle_order();
     }
 
     pub fn add_timed_uri(
@@ -482,9 +410,7 @@ impl Playlist {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| {
-                entry.length_ms < 0 && !entry.filename.is_empty() && !entry.is_podcast
-            })
+            .filter(|(_, entry)| entry.length_ms < 0 && !entry.filename.is_empty())
             .map(|(index, entry)| DurationIndexItem {
                 index,
                 uri: entry.filename.clone(),
@@ -700,32 +626,10 @@ impl Playlist {
         let mut playlist = Self::new();
         let mut pending_length = -1_i64;
         let mut pending_title: Option<String> = None;
-        let mut pending_feed: Option<String> = None;
-        let mut pending_guid: Option<String> = None;
-        let mut pending_podcast = false;
 
         for raw in contents.lines() {
             let line = raw.trim();
             if line.is_empty() {
-                continue;
-            }
-
-            if line == "#XMMSPODCAST" {
-                pending_podcast = true;
-                continue;
-            }
-
-            if let Some(payload) = line.strip_prefix("#XMMSPODCAST:") {
-                pending_podcast = true;
-                pending_feed = None;
-                pending_guid = None;
-                for part in payload.split('\t') {
-                    if let Some(value) = part.strip_prefix("feed=") {
-                        pending_feed = Some(percent_decode(value));
-                    } else if let Some(value) = part.strip_prefix("guid=") {
-                        pending_guid = Some(percent_decode(value));
-                    }
-                }
                 continue;
             }
 
@@ -743,16 +647,7 @@ impl Playlist {
             }
 
             let filename = normalize_playlist_path(line, base_dir);
-            let mut entry = if pending_podcast {
-                PlaylistEntry::podcast(
-                    filename,
-                    pending_title.clone(),
-                    pending_feed.clone(),
-                    pending_guid.clone(),
-                )
-            } else {
-                PlaylistEntry::new_uri(filename)
-            };
+            let mut entry = PlaylistEntry::new_uri(filename);
 
             if pending_length >= 0 {
                 entry.length_ms = pending_length;
@@ -764,9 +659,6 @@ impl Playlist {
 
             pending_length = -1;
             pending_title = None;
-            pending_feed = None;
-            pending_guid = None;
-            pending_podcast = false;
         }
 
         playlist
@@ -780,32 +672,7 @@ impl Playlist {
         let mut out = String::from("#EXTM3U\n");
 
         for entry in &self.entries {
-            if entry.is_podcast {
-                match (&entry.podcast_feed, &entry.podcast_guid) {
-                    (Some(feed), Some(guid)) => {
-                        out.push_str("#XMMSPODCAST:");
-                        out.push_str("feed=");
-                        out.push_str(&percent_encode(feed));
-                        out.push('\t');
-                        out.push_str("guid=");
-                        out.push_str(&percent_encode(guid));
-                        out.push('\n');
-                    }
-                    (Some(feed), None) => {
-                        out.push_str("#XMMSPODCAST:feed=");
-                        out.push_str(&percent_encode(feed));
-                        out.push('\n');
-                    }
-                    (None, Some(guid)) => {
-                        out.push_str("#XMMSPODCAST:guid=");
-                        out.push_str(&percent_encode(guid));
-                        out.push('\n');
-                    }
-                    (None, None) => out.push_str("#XMMSPODCAST\n"),
-                }
-            }
-
-            if entry.length_ms >= 0 || (entry.is_podcast && !entry.title.is_empty()) {
+            if entry.length_ms >= 0 {
                 let seconds = if entry.length_ms >= 0 {
                     entry.length_ms / 1000
                 } else {
@@ -954,18 +821,6 @@ pub(crate) fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn percent_encode(value: &str) -> String {
-    let mut out = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 fn percent_encode_path(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
@@ -1013,26 +868,6 @@ mod tests {
     }
 
     #[test]
-    fn m3u_preserves_podcast_metadata() {
-        let playlist = Playlist::load_m3u(
-            "#EXTM3U\n#XMMSPODCAST:feed=https%3A%2F%2Fexample.test%2Ffeed.xml\tguid=item%201\n#EXTINF:42,Episode\nhttps://example.test/audio.mp3\n",
-            Path::new("/tmp"),
-        );
-        assert_eq!(playlist.len(), 1);
-        let entry = &playlist.entries()[0];
-        assert!(entry.is_podcast);
-        assert_eq!(
-            entry.podcast_feed.as_deref(),
-            Some("https://example.test/feed.xml")
-        );
-        assert_eq!(entry.podcast_guid.as_deref(), Some("item 1"));
-        assert_eq!(entry.length_ms, 42_000);
-        assert!(playlist
-            .to_m3u()
-            .contains("#XMMSPODCAST:feed=https%3A%2F%2Fexample.test%2Ffeed.xml\tguid=item%201"));
-    }
-
-    #[test]
     fn add_directory_recursively_imports_supported_media_files() {
         let root = unique_temp_dir();
         let nested = root.join("nested");
@@ -1052,30 +887,6 @@ mod tests {
         assert_eq!(playlist.entries()[0].title, "Track One");
 
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn add_podcast_entry_updates_existing_by_guid() {
-        let mut playlist = Playlist::new();
-        playlist.add_podcast_entry(
-            "https://example.test/old.mp3",
-            Some("Old".to_string()),
-            Some("https://example.test/feed.xml".to_string()),
-            Some("episode-1".to_string()),
-        );
-        playlist.add_podcast_entry(
-            "https://example.test/new.mp3",
-            Some("New".to_string()),
-            Some("https://example.test/feed.xml".to_string()),
-            Some("episode-1".to_string()),
-        );
-
-        assert_eq!(playlist.len(), 1);
-        assert_eq!(playlist.entries()[0].title, "New");
-        assert_eq!(
-            playlist.entries()[0].filename,
-            "https://example.test/old.mp3"
-        );
     }
 
     #[test]
@@ -1127,12 +938,8 @@ mod tests {
     #[test]
     fn failed_current_skip_advances_only_from_failed_entries() {
         let mut playlist = Playlist::new();
-        playlist.add_podcast_entry(
-            "https://example.test/failed.mp3",
-            Some("failed: Episode".to_string()),
-            Some("https://example.test/feed.xml".to_string()),
-            Some("episode-1".to_string()),
-        );
+        playlist.add_uri("https://example.test/failed.mp3");
+        playlist.entries[0].title = "failed: Episode".to_string();
         playlist.add_uri("file:///tmp/next.ogg");
         playlist.set_position(0);
 
@@ -1294,17 +1101,11 @@ mod tests {
     }
 
     #[test]
-    fn duration_indexing_skips_known_and_podcast_entries() {
+    fn duration_indexing_skips_known_entries() {
         let mut playlist = Playlist::new();
         playlist.add_uri("file:///music/missing.ogg");
         playlist.add_uri("file:///music/known.ogg");
         playlist.entries[1].length_ms = 42_000;
-        playlist.add_podcast_entry(
-            "https://example.test/episode.mp3",
-            Some("Episode".to_string()),
-            Some("https://example.test/feed.xml".to_string()),
-            Some("episode-1".to_string()),
-        );
 
         let items = playlist.missing_duration_items();
 

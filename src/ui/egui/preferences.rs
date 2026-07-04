@@ -133,8 +133,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     app.dispatch(UiCommand::SetPreferencesVisible(next_open));
     app.selected_preferences_page = next_page;
     if let Some(config) = next_config {
-        let result = app.controller_mut().apply_config_from_preferences(config);
-        app.apply_effects(result.effects);
+        app.apply_preferences_config(config);
     }
     if open_skin_browser {
         app.dispatch(UiCommand::SetSkinBrowserVisible(true));
@@ -308,15 +307,14 @@ fn show_options_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading("Options");
     ui.add(egui::Slider::new(&mut config.volume, 0..=100).text("Volume"));
     ui.add(egui::Slider::new(&mut config.balance, -100..=100).text("Balance"));
-    ui.add(egui::Slider::new(&mut config.scale_factor, 1.0..=4.0).text("Zoom level"));
+    let mut scale_factor = config.scale_factor.clamp(1.0, 5.0);
     ui.add(
-        egui::Slider::new(&mut config.podcast_cache_ttl_days, 0..=365)
-            .text("Podcast cache TTL days"),
+        egui::Slider::new(&mut scale_factor, 1.0..=5.0)
+            .text("Zoom level")
+            .suffix("x"),
     );
-    ui.add(
-        egui::Slider::new(&mut config.podcast_refresh_interval_minutes, 1..=1440)
-            .text("Podcast refresh minutes"),
-    );
+    config.scale_factor = scale_factor;
+    config.doublesize = scale_factor > 1.0;
     ui.add(
         egui::Slider::new(&mut config.pause_between_songs_time, 0..=30)
             .text("Pause between songs seconds"),

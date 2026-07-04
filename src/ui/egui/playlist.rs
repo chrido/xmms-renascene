@@ -271,6 +271,8 @@ fn add_playlist_title_button_hits(
             egui::Sense::click(),
         );
         if response.clicked() {
+            let button_name = format!("{button:?}");
+            app_log_info!(playlist, "title button", button_name);
             match button {
                 PanelTitleButton::Shade => app.dispatch(PanelCommand::TogglePlaylistShade),
                 PanelTitleButton::Close => {

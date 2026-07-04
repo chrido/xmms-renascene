@@ -21,7 +21,10 @@ from gui import MainWindow
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-APP_BINARY = REPO_ROOT / "target" / "debug" / "xmms-rs"
+TARGET_DIR = Path(os.environ.get("CARGO_TARGET_DIR", str(REPO_ROOT / "target")))
+if not TARGET_DIR.is_absolute():
+    TARGET_DIR = REPO_ROOT / TARGET_DIR
+APP_BINARY = TARGET_DIR / "debug" / "xmms-rs"
 MAIN_WINDOW_TITLE = "XMMS Renascene Rust Preview"
 EGUI_WINDOW_TITLE = "XMMS Renascene egui"
 BASE_MAIN_WIDTH = 275

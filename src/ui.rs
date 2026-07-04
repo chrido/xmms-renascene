@@ -1106,8 +1106,6 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Volume:",
             "Balance:",
             "Zoom level:",
-            "Podcast cache TTL (days):",
-            "Podcast refresh interval (minutes):",
             "Repeat",
             "Shuffle",
             "No playlist advance",
@@ -2779,42 +2777,6 @@ fn build_preferences_options_page(
     grid.attach(&prefs_label("Zoom level:"), 0, 2, 2, 1);
     grid.attach(&zoom_box, 0, 3, 2, 1);
 
-    let ttl = gtk::SpinButton::with_range(1.0, 3650.0, 1.0);
-    ttl.set_value(main_state.borrow().preference_podcast_cache_ttl_days() as f64);
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        ttl.connect_value_changed(move |spin| {
-            main_state
-                .borrow_mut()
-                .set_preference_podcast_cache_ttl_days(spin.value_as_int());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Podcast cache TTL (days):", &ttl, 4);
-
-    let refresh = gtk::SpinButton::with_range(1.0, 10080.0, 1.0);
-    refresh.set_value(
-        main_state
-            .borrow()
-            .preference_podcast_refresh_interval_minutes() as f64,
-    );
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        refresh.connect_value_changed(move |spin| {
-            main_state
-                .borrow_mut()
-                .set_preference_podcast_refresh_interval_minutes(spin.value_as_int());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Podcast refresh interval (minutes):", &refresh, 5);
-
     let pause_time = gtk::SpinButton::with_range(0.0, 1000.0, 1.0);
     pause_time.set_value(main_state.borrow().preference_pause_between_songs_time() as f64);
     {
@@ -2829,7 +2791,7 @@ fn build_preferences_options_page(
             }
         });
     }
-    prefs_attach_label(&grid, "Pause between songs time (seconds):", &pause_time, 6);
+    prefs_attach_label(&grid, "Pause between songs time (seconds):", &pause_time, 4);
 
     let mouse_wheel = gtk::SpinButton::with_range(1.0, 100.0, 1.0);
     mouse_wheel.set_value(main_state.borrow().preference_mouse_wheel_change() as f64);
@@ -2845,7 +2807,7 @@ fn build_preferences_options_page(
             }
         });
     }
-    prefs_attach_label(&grid, "Mouse Wheel adjusts Volume by (%):", &mouse_wheel, 7);
+    prefs_attach_label(&grid, "Mouse Wheel adjusts Volume by (%):", &mouse_wheel, 5);
 
     let checks = {
         let state = main_state.borrow();
@@ -2951,7 +2913,7 @@ fn build_preferences_options_page(
                 }
             });
         }
-        grid.attach(&check, (index % 2) as i32, 8 + (index / 2) as i32, 1, 1);
+        grid.attach(&check, (index % 2) as i32, 6 + (index / 2) as i32, 1, 1);
     }
     page
 }
@@ -8785,21 +8747,6 @@ impl MainWindowUiState {
         self.save_runtime_snapshot(config_path, playlist_path)
     }
 
-    pub(crate) fn add_podcast_entry(
-        &mut self,
-        uri: &str,
-        title: Option<String>,
-        feed: Option<String>,
-        guid: Option<String>,
-    ) {
-        self.dispatch_store_command(PlaylistCommand::AddPodcastEntry {
-            uri: uri.to_string(),
-            title,
-            feed,
-            guid,
-        });
-    }
-
     pub(crate) fn set_playlist_entry_selected(&mut self, index: usize, selected: bool) {
         if self
             .app_state
@@ -10381,26 +10328,6 @@ impl MainWindowUiState {
 
     pub(crate) fn preference_title_format(&self) -> &str {
         &self.app_state.config.title_format
-    }
-
-    pub(crate) fn set_preference_podcast_cache_ttl_days(&mut self, days: i32) {
-        self.update_config_via_store(|config| {
-            config.podcast_cache_ttl_days = if days < 1 { 60 } else { days };
-        });
-    }
-
-    pub(crate) fn preference_podcast_cache_ttl_days(&self) -> i32 {
-        self.app_state.config.podcast_cache_ttl_days
-    }
-
-    pub(crate) fn set_preference_podcast_refresh_interval_minutes(&mut self, minutes: i32) {
-        self.update_config_via_store(|config| {
-            config.podcast_refresh_interval_minutes = if minutes < 1 { 60 } else { minutes };
-        });
-    }
-
-    pub(crate) fn preference_podcast_refresh_interval_minutes(&self) -> i32 {
-        self.app_state.config.podcast_refresh_interval_minutes
     }
 
     pub(crate) fn set_visualization_mode(&mut self, mode: VisMode) {
