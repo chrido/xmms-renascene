@@ -23,10 +23,10 @@ mobile-ui = []
 bzip2 = "0.6.1"
 cairo = { version = "0.22.0", package = "cairo-rs" }
 flate2 = "1.1.9"
-eframe = { version = "0.33", optional = true, default-features = true }
-egui = { version = "0.33", optional = true }
-gstreamer = { version = "0.24", optional = true }
-gstreamer-pbutils = { version = "0.24", optional = true }
+eframe = { version = "0.35", optional = true, default-features = true }
+egui = { version = "0.35", optional = true }
+gstreamer = { version = "0.25", optional = true }
+gstreamer-pbutils = { version = "0.25", optional = true }
 gtk = { version = "0.11.3", package = "gtk4", features = ["v4_6"], optional = true }
 id3 = "1"
 image = { version = "0.25.10", default-features = false, features = [
@@ -36,7 +36,7 @@ image = { version = "0.25.10", default-features = false, features = [
 image-extras = { version = "0.1.1", default-features = false, features = [
   "xpm",
 ] }
-rfd = { version = "0.15", optional = true }
+rfd = { version = "0.17", optional = true }
 serde_json = "1"
 zbus = { version = "5.16", optional = true }
 tar = "0.4.46"

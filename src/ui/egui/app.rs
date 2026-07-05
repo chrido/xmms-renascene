@@ -864,7 +864,7 @@ impl EguiFrontendState {
 }
 
 impl eframe::App for EguiFrontendState {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_socket_control(ctx);
         self.poll_mpris_requests(ctx);
         self.poll_playback_backend();
@@ -876,9 +876,13 @@ impl eframe::App for EguiFrontendState {
         handle_global_shortcuts(ctx, self);
         self.sync_mpris_properties(std::iter::empty());
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                 main_player::show_main_player(ui, self);
                 if self.controller.state().config.equalizer_visible
@@ -892,17 +896,17 @@ impl eframe::App for EguiFrontendState {
                     playlist::show_playlist(ui, self);
                 }
             });
-        show_detached_panels(ctx, self);
-        menu::show_main_menu(ctx, self);
-        menu::show_prompts(ctx, self);
+        show_detached_panels(&ctx, self);
+        menu::show_main_menu(&ctx, self);
+        menu::show_prompts(&ctx, self);
         if self.preferences_open {
-            preferences::show_preferences(ctx, self);
+            preferences::show_preferences(&ctx, self);
         }
-        file_info::show_file_info_dialog(ctx, self);
+        file_info::show_file_info_dialog(&ctx, self);
         if self.skin_browser_open {
-            show_skin_browser_placeholder(ctx, self);
+            show_skin_browser_placeholder(&ctx, self);
         }
-        menu::show_pending_messages(ctx, self);
+        menu::show_pending_messages(&ctx, self);
         app_log_trace!(render, "egui update size={:?}", self.desired_window_size());
     }
 }
@@ -1102,7 +1106,7 @@ fn show_detached_panel_viewport(
                 return;
             }
             match class {
-                egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
+                egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
                     show_embedded_detached_snapshot(ctx, &shared, title, equalizer_panel);
                 }
                 egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
@@ -1406,7 +1410,7 @@ fn next_equalizer_keyboard_slider(current: Option<EqualizerSlider>) -> Equalizer
 }
 
 fn handle_mouse_wheel(input: &egui::InputState, app: &mut EguiFrontendState) {
-    let scroll_y = input.raw_scroll_delta.y;
+    let scroll_y = input.smooth_scroll_delta().y;
     if scroll_y == 0.0 {
         return;
     }

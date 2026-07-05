@@ -69,7 +69,7 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
             let before = state.config.clone();
             match class {
-                egui::ViewportClass::Embedded | egui::ViewportClass::Root => {
+                egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
                     show_preferences_embedded(ctx, &mut state);
                 }
                 egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
