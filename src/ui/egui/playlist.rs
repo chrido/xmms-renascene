@@ -393,7 +393,7 @@ fn add_playlist_rows_hit_region(
     }
 }
 
-fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
+pub(crate) fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
     let menu_name = format!("{menu:?}");
     app_log_info!(playlist, "menu opened", menu_name);
     app.playlist_sort_menu_open = false;
@@ -663,7 +663,10 @@ fn playlist_sort_item(
     true
 }
 
-fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: PlaylistFooterButton) {
+pub(crate) fn dispatch_playlist_footer_button(
+    app: &mut EguiFrontendState,
+    button: PlaylistFooterButton,
+) {
     let button_name = format!("{button:?}");
     app_log_info!(playlist, "footer button", button_name);
     match button {
