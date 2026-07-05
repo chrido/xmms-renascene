@@ -9,7 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::app::command::{
-    AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand, UiCommand,
+    AppCommand, AudioCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
+    UiCommand,
 };
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
@@ -26,6 +27,10 @@ use crate::app_state::AppState;
 use crate::equalizer::{
     load_winamp_eqf_first, load_xmms_preset_file, save_winamp_eqf, save_xmms_preset_file,
     EqualizerPreset,
+};
+use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
+use crate::mpris::{
+    app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
 #[cfg(not(feature = "gstreamer-backend"))]
 use crate::player::PlayerState;
@@ -114,6 +119,7 @@ pub struct EguiFrontendState {
     duration_index_sender: Sender<DurationIndexResult>,
     duration_index_receiver: Receiver<DurationIndexResult>,
     socket_control: Option<SocketControl>,
+    mpris_service: Option<EguiMprisService>,
     controller: AppStore,
     #[cfg(feature = "gstreamer-backend")]
     playback_backend: Option<GStreamerBackend>,
@@ -145,6 +151,15 @@ impl EguiFrontendState {
         )));
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
         let socket_control = options.socket_port.map(start_socket_control).transpose()?;
+        let initial_mpris_player_properties =
+            mpris_player_properties(&app_state, app_state.config.playback_position_ms);
+        let mpris_service = match EguiMprisService::new(initial_mpris_player_properties) {
+            Ok(service) => Some(service),
+            Err(err) => {
+                app_log_debug!(mpris, "egui MPRIS service unavailable", err);
+                None
+            }
+        };
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let mut state = Self {
             main_menu_open: false,
@@ -180,6 +195,7 @@ impl EguiFrontendState {
             duration_index_sender,
             duration_index_receiver,
             socket_control,
+            mpris_service,
             controller: AppStore::new(app_state),
             #[cfg(feature = "gstreamer-backend")]
             playback_backend: GStreamerBackend::new().ok(),
@@ -327,6 +343,114 @@ impl EguiFrontendState {
                 request.accept();
             }
         }
+    }
+
+    fn current_mpris_player_properties(&self) -> crate::mpris::MprisPlayerProperties {
+        mpris_player_properties(
+            self.controller.state(),
+            self.controller.state().config.playback_position_ms,
+        )
+    }
+
+    fn sync_mpris_properties(&mut self, extra_events: impl IntoIterator<Item = MprisEvent>) {
+        let properties = self.current_mpris_player_properties();
+        if let Some(service) = &mut self.mpris_service {
+            let mut events = service.update_player_properties(properties);
+            events.extend(extra_events);
+            service.emit_events(&events);
+        }
+    }
+
+    fn poll_mpris_requests(&mut self, ctx: &egui::Context) {
+        let requests = self
+            .mpris_service
+            .as_mut()
+            .map(EguiMprisService::drain_requests)
+            .unwrap_or_default();
+        if requests.is_empty() {
+            return;
+        }
+
+        let mut events = Vec::new();
+        for request in requests {
+            events.extend(self.handle_mpris_request(ctx, request));
+        }
+        self.sync_mpris_properties(events);
+        ctx.request_repaint();
+    }
+
+    fn handle_mpris_request(
+        &mut self,
+        ctx: &egui::Context,
+        request: MprisServiceRequest,
+    ) -> Vec<MprisEvent> {
+        match request {
+            MprisServiceRequest::Command(command) => self.handle_mpris_command(ctx, command),
+            MprisServiceRequest::SetVolume(volume) => {
+                self.dispatch(AudioCommand::SetVolume((volume * 100.0) as i32));
+                vec![MprisEvent::PlaybackStatusChanged]
+            }
+        }
+    }
+
+    fn handle_mpris_command(
+        &mut self,
+        ctx: &egui::Context,
+        command: MprisCommand,
+    ) -> Vec<MprisEvent> {
+        let current_position_ms = self.controller.state().config.playback_position_ms;
+        match app_action_for_mpris_command(&command, current_position_ms) {
+            MprisAppAction::Raise => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                vec![MprisEvent::Raised]
+            }
+            MprisAppAction::Quit => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                vec![MprisEvent::QuitRequested]
+            }
+            MprisAppAction::Dispatch(app_command) => {
+                self.dispatch(app_command);
+                match command {
+                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
+                        vec![MprisEvent::Seeked(
+                            self.controller.state().config.playback_position_ms * 1_000,
+                        )]
+                    }
+                    MprisCommand::Next
+                    | MprisCommand::Previous
+                    | MprisCommand::Pause
+                    | MprisCommand::PlayPause
+                    | MprisCommand::Stop
+                    | MprisCommand::Play => vec![MprisEvent::PlaybackStatusChanged],
+                    MprisCommand::Raise | MprisCommand::Quit | MprisCommand::OpenUri(_) => {
+                        Vec::new()
+                    }
+                }
+            }
+            MprisAppAction::OpenUri(uri) => {
+                if self.open_mpris_uri(uri) {
+                    vec![
+                        MprisEvent::MetadataChanged,
+                        MprisEvent::PlaybackStatusChanged,
+                    ]
+                } else {
+                    Vec::new()
+                }
+            }
+        }
+    }
+
+    fn open_mpris_uri(&mut self, uri: String) -> bool {
+        self.dispatch(PlaylistCommand::Clear);
+        self.dispatch(PlaylistCommand::AddLocations(vec![uri]));
+        if self.controller.state().playlist.is_empty() {
+            return false;
+        }
+        self.dispatch(PlaylistCommand::SetPosition(0));
+        self.dispatch(PlayerCommand::StartCurrentTrack);
+        true
     }
 
     fn handle_socket_ui_command(&mut self, command: SocketUiCommand) {
@@ -742,6 +866,7 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_socket_control(ctx);
+        self.poll_mpris_requests(ctx);
         self.poll_playback_backend();
         if self.poll_duration_index_results() {
             ctx.request_repaint();
@@ -749,6 +874,7 @@ impl eframe::App for EguiFrontendState {
         self.tick_playback_position(ctx);
         handle_dropped_files(ctx, self);
         handle_global_shortcuts(ctx, self);
+        self.sync_mpris_properties(std::iter::empty());
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
@@ -1673,6 +1799,54 @@ mod tests {
 
         assert!(app.controller().state().config.playlist_visible);
         assert!(app.runtime.repaint_requested);
+    }
+
+    #[test]
+    fn egui_mpris_open_uri_replaces_playlist_and_starts_playback() {
+        let ctx = egui::Context::default();
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.dispatch(PlaylistCommand::AddUris(vec![
+            "file:///music/old.ogg".to_string()
+        ]));
+
+        let events = app.handle_mpris_command(
+            &ctx,
+            MprisCommand::OpenUri("file:///music/mpris.ogg".to_string()),
+        );
+
+        assert_eq!(app.controller().state().playlist.len(), 1);
+        assert_eq!(app.controller().state().playlist.position(), Some(0));
+        assert_eq!(
+            app.controller().state().playlist.entries()[0].filename,
+            "file:///music/mpris.ogg"
+        );
+        assert_eq!(
+            app.controller().state().player.state(),
+            PlayerState::Playing
+        );
+        assert!(events.contains(&MprisEvent::MetadataChanged));
+        assert!(events.contains(&MprisEvent::PlaybackStatusChanged));
+    }
+
+    #[test]
+    fn egui_mpris_seek_updates_position_and_emits_seeked() {
+        let ctx = egui::Context::default();
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.dispatch(PlaylistCommand::AddUris(vec![
+            "file:///music/mpris.ogg".to_string()
+        ]));
+        app.dispatch(PlaylistCommand::SetPosition(0));
+        app.dispatch(PlayerCommand::StartCurrentTrack);
+
+        let events = app.handle_mpris_command(
+            &ctx,
+            MprisCommand::Seek {
+                offset_us: 5_000_000,
+            },
+        );
+
+        assert_eq!(app.controller().state().config.playback_position_ms, 5_000);
+        assert_eq!(events, vec![MprisEvent::Seeked(5_000_000)]);
     }
 
     #[test]

@@ -4716,6 +4716,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "tar",
+ "zbus",
  "zip",
 ]
 

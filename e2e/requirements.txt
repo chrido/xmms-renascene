@@ -1,1 +1,2 @@
 pytest>=8
+dbus-next>=0.2
