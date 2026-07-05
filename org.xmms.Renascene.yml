@@ -20,7 +20,7 @@ finish-args:
   - --share=ipc
   # Audio playback
   - --socket=pulseaudio
-  # Network for podcast integration and stream URLs
+  # Network for stream URLs
   - --share=network
   # MPRIS D-Bus interface
   - --own-name=org.mpris.MediaPlayer2.xmms_renascene

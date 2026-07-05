@@ -1,3 +1,5 @@
+use crate::app::command::{AppCommand, PlayerCommand};
+use crate::app_state::AppState;
 use crate::player::PlayerState;
 
 pub const BUS_NAME: &str = "org.mpris.MediaPlayer2.xmms_renascene";
@@ -140,6 +142,80 @@ pub fn playback_status(state: PlayerState) -> &'static str {
     }
 }
 
+pub fn mpris_root_properties() -> MprisRootProperties {
+    MprisRootProperties::default()
+}
+
+pub fn mpris_player_properties(
+    state: &AppState,
+    playback_position_ms: i64,
+) -> MprisPlayerProperties {
+    MprisPlayerProperties {
+        playback_status: playback_status(state.player.state()),
+        rate: 1.0,
+        metadata: mpris_metadata(state),
+        volume: f64::from(state.player.volume()) / 100.0,
+        position_us: playback_position_ms.max(0) * 1_000,
+        can_go_next: true,
+        can_go_previous: true,
+        can_play: true,
+        can_pause: true,
+        can_seek: true,
+        can_control: true,
+    }
+}
+
+pub fn mpris_metadata(state: &AppState) -> MprisMetadata {
+    let position = state.playlist.position().unwrap_or(0);
+    let entry = state.playlist.entries().get(position);
+    MprisMetadata {
+        track_id: format!("/org/xmms/Track/{position}"),
+        title: entry.map(|entry| entry.title.clone()),
+        url: entry.map(|entry| entry.filename.clone()),
+        length_us: entry
+            .map(|entry| entry.length_ms)
+            .filter(|length| *length > 0)
+            .map(|length| length * 1_000),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MprisAppAction {
+    Raise,
+    Quit,
+    Dispatch(AppCommand),
+    OpenUri(String),
+}
+
+pub fn app_action_for_mpris_command(
+    command: &MprisCommand,
+    current_position_ms: i64,
+) -> MprisAppAction {
+    match command {
+        MprisCommand::Raise => MprisAppAction::Raise,
+        MprisCommand::Quit => MprisAppAction::Quit,
+        MprisCommand::Next => MprisAppAction::Dispatch(PlayerCommand::NextTrack.into()),
+        MprisCommand::Previous => MprisAppAction::Dispatch(PlayerCommand::PreviousTrack.into()),
+        MprisCommand::Pause => MprisAppAction::Dispatch(PlayerCommand::Pause.into()),
+        MprisCommand::PlayPause => MprisAppAction::Dispatch(PlayerCommand::TogglePause.into()),
+        MprisCommand::Stop => MprisAppAction::Dispatch(PlayerCommand::Stop.into()),
+        MprisCommand::Play => MprisAppAction::Dispatch(PlayerCommand::Play.into()),
+        MprisCommand::Seek { offset_us } => {
+            let target_ms = current_position_ms
+                .max(0)
+                .saturating_mul(1_000)
+                .saturating_add(*offset_us)
+                .max(0)
+                / 1_000;
+            MprisAppAction::Dispatch(PlayerCommand::SeekToMs(target_ms).into())
+        }
+        MprisCommand::SetPosition { position_us, .. } => {
+            MprisAppAction::Dispatch(PlayerCommand::SeekToMs((position_us / 1_000).max(0)).into())
+        }
+        MprisCommand::OpenUri(uri) => MprisAppAction::OpenUri(uri.clone()),
+    }
+}
+
 pub fn command_for_method(
     method_name: &str,
     parameters: &MprisMethodParameters,
@@ -178,6 +254,7 @@ pub struct MprisMethodParameters {
     pub open_uri: Option<String>,
 }
 
+#[cfg(feature = "gtk-ui")]
 pub mod gio_service {
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -527,5 +604,526 @@ pub mod gio_service {
                 None
             );
         }
+    }
+}
+
+#[cfg(feature = "egui-ui")]
+pub mod zbus_service {
+    use std::collections::HashMap;
+    use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+    use std::sync::{Arc, Mutex};
+
+    use zbus::blocking::{connection, Connection};
+    use zbus::interface;
+    use zbus::object_server::SignalEmitter;
+    use zbus::zvariant::{OwnedObjectPath, OwnedValue, Str};
+
+    use super::{
+        mpris_root_properties, MprisCommand, MprisEvent, MprisMetadata, MprisPlayerProperties,
+        MprisRootProperties, BUS_NAME, DBUS_PROPERTIES_INTERFACE, OBJECT_PATH, PLAYER_INTERFACE,
+    };
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum MprisServiceRequest {
+        Command(MprisCommand),
+        SetVolume(f64),
+    }
+
+    #[derive(Debug, Clone)]
+    struct MprisServiceState {
+        root: MprisRootProperties,
+        player: MprisPlayerProperties,
+    }
+
+    impl MprisServiceState {
+        fn new(player: MprisPlayerProperties) -> Self {
+            Self {
+                root: mpris_root_properties(),
+                player,
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedMprisState {
+        state: Arc<Mutex<MprisServiceState>>,
+        requests: Sender<MprisServiceRequest>,
+    }
+
+    impl SharedMprisState {
+        fn root(&self) -> MprisRootProperties {
+            self.state
+                .lock()
+                .expect("MPRIS state lock poisoned")
+                .root
+                .clone()
+        }
+
+        fn player(&self) -> MprisPlayerProperties {
+            self.state
+                .lock()
+                .expect("MPRIS state lock poisoned")
+                .player
+                .clone()
+        }
+
+        fn send_request(&self, request: MprisServiceRequest) -> zbus::fdo::Result<()> {
+            self.requests.send(request).map_err(|err| {
+                zbus::fdo::Error::Failed(format!("failed to queue MPRIS request: {err}"))
+            })
+        }
+
+        fn send_command(&self, command: MprisCommand) -> zbus::fdo::Result<()> {
+            self.send_request(MprisServiceRequest::Command(command))
+        }
+    }
+
+    pub struct EguiMprisService {
+        connection: Connection,
+        state: Arc<Mutex<MprisServiceState>>,
+        requests: Receiver<MprisServiceRequest>,
+    }
+
+    impl EguiMprisService {
+        pub fn new(initial_player_properties: MprisPlayerProperties) -> Result<Self, String> {
+            let state = Arc::new(Mutex::new(MprisServiceState::new(
+                initial_player_properties,
+            )));
+            let (requests_sender, requests) = mpsc::channel();
+            let shared = SharedMprisState {
+                state: Arc::clone(&state),
+                requests: requests_sender,
+            };
+
+            let connection = connection::Builder::session()
+                .map_err(|err| format!("failed to connect to the session bus: {err}"))?
+                .name(BUS_NAME)
+                .map_err(|err| format!("failed to request MPRIS bus name {BUS_NAME}: {err}"))?
+                .serve_at(OBJECT_PATH, MprisRootInterface::new(shared.clone()))
+                .map_err(|err| format!("failed to register MPRIS root interface: {err}"))?
+                .serve_at(OBJECT_PATH, MprisPlayerInterface::new(shared))
+                .map_err(|err| format!("failed to register MPRIS player interface: {err}"))?
+                .build()
+                .map_err(|err| format!("failed to start MPRIS service: {err}"))?;
+
+            Ok(Self {
+                connection,
+                state,
+                requests,
+            })
+        }
+
+        pub fn drain_requests(&mut self) -> Vec<MprisServiceRequest> {
+            let mut drained = Vec::new();
+            loop {
+                match self.requests.try_recv() {
+                    Ok(request) => drained.push(request),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => break,
+                }
+            }
+            drained
+        }
+
+        pub fn update_player_properties(&mut self, next: MprisPlayerProperties) -> Vec<MprisEvent> {
+            let mut state = self.state.lock().expect("MPRIS state lock poisoned");
+            let previous = state.player.clone();
+            state.player = next;
+
+            let mut events = Vec::new();
+            if previous.metadata != state.player.metadata {
+                events.push(MprisEvent::MetadataChanged);
+            }
+            if previous.playback_status != state.player.playback_status
+                || (previous.volume - state.player.volume).abs() > f64::EPSILON
+            {
+                events.push(MprisEvent::PlaybackStatusChanged);
+            }
+            events
+        }
+
+        pub fn emit_events(&self, events: &[MprisEvent]) {
+            if events.is_empty() {
+                return;
+            }
+            let properties = self
+                .state
+                .lock()
+                .expect("MPRIS state lock poisoned")
+                .player
+                .clone();
+            let mut emitted_properties_changed = false;
+
+            for event in events {
+                match event {
+                    MprisEvent::Seeked(position_us) => {
+                        let _ = self.connection.emit_signal(
+                            None::<&str>,
+                            OBJECT_PATH,
+                            PLAYER_INTERFACE,
+                            "Seeked",
+                            &(*position_us,),
+                        );
+                    }
+                    MprisEvent::MetadataChanged | MprisEvent::PlaybackStatusChanged => {
+                        if emitted_properties_changed {
+                            continue;
+                        }
+                        emitted_properties_changed = true;
+                        let changed = player_properties_changed_map(&properties);
+                        let _ = self.connection.emit_signal(
+                            None::<&str>,
+                            OBJECT_PATH,
+                            DBUS_PROPERTIES_INTERFACE,
+                            "PropertiesChanged",
+                            &(PLAYER_INTERFACE, changed, Vec::<&str>::new()),
+                        );
+                    }
+                    MprisEvent::Raised | MprisEvent::QuitRequested => {}
+                }
+            }
+        }
+    }
+
+    struct MprisRootInterface {
+        shared: SharedMprisState,
+    }
+
+    impl MprisRootInterface {
+        fn new(shared: SharedMprisState) -> Self {
+            Self { shared }
+        }
+    }
+
+    #[interface(name = "org.mpris.MediaPlayer2")]
+    impl MprisRootInterface {
+        fn raise(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Raise)
+        }
+
+        fn quit(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Quit)
+        }
+
+        #[zbus(property)]
+        fn can_quit(&self) -> bool {
+            self.shared.root().can_quit
+        }
+
+        #[zbus(property)]
+        fn can_raise(&self) -> bool {
+            self.shared.root().can_raise
+        }
+
+        #[zbus(property)]
+        fn has_track_list(&self) -> bool {
+            self.shared.root().has_track_list
+        }
+
+        #[zbus(property)]
+        fn identity(&self) -> String {
+            self.shared.root().identity.to_string()
+        }
+
+        #[zbus(property)]
+        fn desktop_entry(&self) -> String {
+            self.shared.root().desktop_entry.to_string()
+        }
+
+        #[zbus(property)]
+        fn supported_uri_schemes(&self) -> Vec<String> {
+            self.shared
+                .root()
+                .supported_uri_schemes
+                .iter()
+                .map(|scheme| (*scheme).to_string())
+                .collect()
+        }
+
+        #[zbus(property)]
+        fn supported_mime_types(&self) -> Vec<String> {
+            self.shared
+                .root()
+                .supported_mime_types
+                .iter()
+                .map(|mime_type| (*mime_type).to_string())
+                .collect()
+        }
+    }
+
+    struct MprisPlayerInterface {
+        shared: SharedMprisState,
+    }
+
+    impl MprisPlayerInterface {
+        fn new(shared: SharedMprisState) -> Self {
+            Self { shared }
+        }
+    }
+
+    #[interface(name = "org.mpris.MediaPlayer2.Player")]
+    impl MprisPlayerInterface {
+        fn next(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Next)
+        }
+
+        fn previous(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Previous)
+        }
+
+        fn pause(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Pause)
+        }
+
+        fn play_pause(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::PlayPause)
+        }
+
+        fn stop(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Stop)
+        }
+
+        fn play(&self) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::Play)
+        }
+
+        fn seek(&self, offset: i64) -> zbus::fdo::Result<()> {
+            self.shared
+                .send_command(MprisCommand::Seek { offset_us: offset })
+        }
+
+        fn set_position(&self, track_id: OwnedObjectPath, position: i64) -> zbus::fdo::Result<()> {
+            self.shared.send_command(MprisCommand::SetPosition {
+                track_id: track_id.to_string(),
+                position_us: position,
+            })
+        }
+
+        fn open_uri(&self, uri: &str) -> zbus::fdo::Result<()> {
+            self.shared
+                .send_command(MprisCommand::OpenUri(uri.to_string()))
+        }
+
+        #[zbus(property)]
+        fn playback_status(&self) -> String {
+            self.shared.player().playback_status.to_string()
+        }
+
+        #[zbus(property)]
+        fn rate(&self) -> f64 {
+            self.shared.player().rate
+        }
+
+        #[zbus(property)]
+        fn metadata(&self) -> HashMap<String, OwnedValue> {
+            metadata_map(&self.shared.player().metadata)
+        }
+
+        #[zbus(property)]
+        fn volume(&self) -> f64 {
+            self.shared.player().volume
+        }
+
+        #[zbus(property)]
+        fn set_volume(&self, volume: f64) -> zbus::fdo::Result<()> {
+            self.shared
+                .send_request(MprisServiceRequest::SetVolume(volume))
+        }
+
+        #[zbus(property)]
+        fn position(&self) -> i64 {
+            self.shared.player().position_us
+        }
+
+        #[zbus(property)]
+        fn can_go_next(&self) -> bool {
+            self.shared.player().can_go_next
+        }
+
+        #[zbus(property)]
+        fn can_go_previous(&self) -> bool {
+            self.shared.player().can_go_previous
+        }
+
+        #[zbus(property)]
+        fn can_play(&self) -> bool {
+            self.shared.player().can_play
+        }
+
+        #[zbus(property)]
+        fn can_pause(&self) -> bool {
+            self.shared.player().can_pause
+        }
+
+        #[zbus(property)]
+        fn can_seek(&self) -> bool {
+            self.shared.player().can_seek
+        }
+
+        #[zbus(property)]
+        fn can_control(&self) -> bool {
+            self.shared.player().can_control
+        }
+
+        #[zbus(signal)]
+        async fn seeked(signal_emitter: &SignalEmitter<'_>, position: i64) -> zbus::Result<()>;
+    }
+
+    fn metadata_map(metadata: &MprisMetadata) -> HashMap<String, OwnedValue> {
+        let mut map = HashMap::new();
+        map.insert(
+            "mpris:trackid".into(),
+            OwnedValue::from(Str::from(metadata.track_id.clone())),
+        );
+        if let Some(title) = metadata.title.as_deref() {
+            map.insert(
+                "xesam:title".into(),
+                OwnedValue::from(Str::from(title.to_string())),
+            );
+        }
+        if let Some(url) = metadata.url.as_deref() {
+            map.insert(
+                "xesam:url".into(),
+                OwnedValue::from(Str::from(url.to_string())),
+            );
+        }
+        if let Some(length_us) = metadata.length_us {
+            map.insert("mpris:length".into(), length_us.into());
+        }
+        map
+    }
+
+    fn player_properties_changed_map(
+        properties: &MprisPlayerProperties,
+    ) -> HashMap<&'static str, OwnedValue> {
+        let mut changed = HashMap::new();
+        changed.insert(
+            "PlaybackStatus",
+            OwnedValue::from(Str::from(properties.playback_status.to_string())),
+        );
+        changed.insert(
+            "Metadata",
+            OwnedValue::from(metadata_map(&properties.metadata)),
+        );
+        changed.insert("Volume", properties.volume.into());
+        changed.insert("Position", properties.position_us.into());
+        changed
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::app_state::AppState;
+        use crate::mpris::mpris_player_properties;
+
+        #[test]
+        #[ignore = "requires an isolated D-Bus session, e.g. dbus-run-session"]
+        fn zbus_service_receives_mpris_method_calls() {
+            let mut service =
+                EguiMprisService::new(mpris_player_properties(&AppState::default(), 0)).unwrap();
+            let client = Connection::session().unwrap();
+
+            client
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(crate::mpris::ROOT_INTERFACE),
+                    "Raise",
+                    &(),
+                )
+                .unwrap();
+            client
+                .call_method(
+                    Some(BUS_NAME),
+                    OBJECT_PATH,
+                    Some(PLAYER_INTERFACE),
+                    "Seek",
+                    &(5_000_000_i64,),
+                )
+                .unwrap();
+
+            assert_eq!(
+                service.drain_requests(),
+                vec![
+                    MprisServiceRequest::Command(MprisCommand::Raise),
+                    MprisServiceRequest::Command(MprisCommand::Seek {
+                        offset_us: 5_000_000,
+                    }),
+                ]
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod shared_tests {
+    use super::*;
+    use crate::app::command::{AppCommand, PlayerCommand};
+    use crate::app_state::AppState;
+
+    #[test]
+    fn shared_player_properties_match_existing_mpris_contract() {
+        let mut state = AppState::default();
+        state.player.set_volume(40);
+        state.player.mark_playing();
+        state
+            .playlist
+            .add_timed_uri("file:///music/one.ogg", "One", 12_000);
+        state.playlist.set_position(0);
+
+        let properties = mpris_player_properties(&state, 5_000);
+
+        assert_eq!(properties.playback_status, "Playing");
+        assert_eq!(properties.rate, 1.0);
+        assert_eq!(properties.volume, 0.4);
+        assert_eq!(properties.position_us, 5_000_000);
+        assert_eq!(properties.metadata.track_id, "/org/xmms/Track/0");
+        assert_eq!(properties.metadata.title.as_deref(), Some("One"));
+        assert_eq!(
+            properties.metadata.url.as_deref(),
+            Some("file:///music/one.ogg")
+        );
+        assert_eq!(properties.metadata.length_us, Some(12_000_000));
+        assert!(properties.can_go_next);
+        assert!(properties.can_go_previous);
+        assert!(properties.can_play);
+        assert!(properties.can_pause);
+        assert!(properties.can_seek);
+        assert!(properties.can_control);
+    }
+
+    #[test]
+    fn mpris_commands_map_to_shared_app_actions() {
+        assert_eq!(
+            app_action_for_mpris_command(&MprisCommand::Play, 0),
+            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::Play))
+        );
+        assert_eq!(
+            app_action_for_mpris_command(
+                &MprisCommand::Seek {
+                    offset_us: -2_000_000,
+                },
+                5_000,
+            ),
+            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::SeekToMs(3_000)))
+        );
+        assert_eq!(
+            app_action_for_mpris_command(&MprisCommand::Seek { offset_us: -999 }, 1_000,),
+            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::SeekToMs(999)))
+        );
+        assert_eq!(
+            app_action_for_mpris_command(
+                &MprisCommand::SetPosition {
+                    track_id: "/org/xmms/Track/0".to_string(),
+                    position_us: 42_000_000,
+                },
+                0,
+            ),
+            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::SeekToMs(42_000)))
+        );
+        assert_eq!(
+            app_action_for_mpris_command(&MprisCommand::OpenUri("file:///tmp/a.ogg".into()), 0),
+            MprisAppAction::OpenUri("file:///tmp/a.ogg".into())
+        );
     }
 }

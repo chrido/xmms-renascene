@@ -39,8 +39,9 @@ use crate::equalizer::{
     winamp_original_presets, EqualizerPreset,
 };
 use crate::mpris::{
-    gio_service::MprisService, playback_status as mpris_playback_status, MprisCommand, MprisEvent,
-    MprisMetadata, MprisPlayerProperties, MprisRootProperties,
+    app_action_for_mpris_command, gio_service::MprisService, mpris_player_properties,
+    mpris_root_properties, MprisAppAction, MprisCommand, MprisEvent, MprisPlayerProperties,
+    MprisRootProperties,
 };
 use crate::player::{
     group_output_devices, list_gstreamer_output_devices, GStreamerBackend, OutputDevice,
@@ -8085,36 +8086,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn mpris_root_properties(&self) -> MprisRootProperties {
-        MprisRootProperties::default()
+        mpris_root_properties()
     }
 
     pub(crate) fn mpris_player_properties(&self) -> MprisPlayerProperties {
-        MprisPlayerProperties {
-            playback_status: mpris_playback_status(self.app_state.player.state()),
-            rate: 1.0,
-            metadata: self.mpris_metadata(),
-            volume: f64::from(self.app_state.player.volume()) / 100.0,
-            position_us: self.playback_position_ms * 1_000,
-            can_go_next: true,
-            can_go_previous: true,
-            can_play: true,
-            can_pause: true,
-            can_seek: true,
-            can_control: true,
-        }
-    }
-
-    fn mpris_metadata(&self) -> MprisMetadata {
-        let position = self.app_state.playlist.position().unwrap_or(0);
-        MprisMetadata {
-            track_id: format!("/org/xmms/Track/{position}"),
-            title: self.playlist_entry_title(position).map(ToString::to_string),
-            url: self.playlist_entry_uri(position).map(ToString::to_string),
-            length_us: self
-                .playlist_entry_length_ms(position)
-                .filter(|length| *length > 0)
-                .map(|length| length * 1000),
-        }
+        mpris_player_properties(&self.app_state, self.playback_position_ms)
     }
 
     pub(crate) fn mpris_events(&self) -> &[MprisEvent] {
@@ -8135,55 +8111,31 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn execute_mpris_command(&mut self, command: MprisCommand) {
-        match command {
-            MprisCommand::Raise => self.mpris_events.push(MprisEvent::Raised),
-            MprisCommand::Quit => {
+        match app_action_for_mpris_command(&command, self.playback_position_ms) {
+            MprisAppAction::Raise => self.mpris_events.push(MprisEvent::Raised),
+            MprisAppAction::Quit => {
                 self.mpris_quit_requested = true;
                 self.mpris_events.push(MprisEvent::QuitRequested);
             }
-            MprisCommand::Next => {
-                let _ = self.activate_push(MainPushButton::Next);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+            MprisAppAction::Dispatch(app_command) => {
+                self.dispatch_store_command_and_apply_local_effects(app_command);
+                match command {
+                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
+                        self.mpris_events
+                            .push(MprisEvent::Seeked(self.playback_position_ms * 1_000));
+                    }
+                    MprisCommand::Next
+                    | MprisCommand::Previous
+                    | MprisCommand::Pause
+                    | MprisCommand::PlayPause
+                    | MprisCommand::Stop
+                    | MprisCommand::Play => {
+                        self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
+                    }
+                    MprisCommand::Raise | MprisCommand::Quit | MprisCommand::OpenUri(_) => {}
+                }
             }
-            MprisCommand::Previous => {
-                let _ = self.activate_push(MainPushButton::Previous);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-            }
-            MprisCommand::Pause => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Pause);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-            }
-            MprisCommand::PlayPause => {
-                let _ = self.activate_push(MainPushButton::Pause);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-            }
-            MprisCommand::Stop => {
-                let _ = self.activate_push(MainPushButton::Stop);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-            }
-            MprisCommand::Play => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Play);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-            }
-            MprisCommand::Seek { offset_us } => {
-                let position_us = (self.playback_position_ms * 1_000 + offset_us).max(0);
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::SeekToMs(
-                    position_us / 1_000,
-                ));
-                self.mpris_events
-                    .push(MprisEvent::Seeked(self.playback_position_ms * 1_000));
-            }
-            MprisCommand::SetPosition {
-                track_id: _,
-                position_us,
-            } => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::SeekToMs(
-                    position_us.max(0) / 1_000,
-                ));
-                self.mpris_events
-                    .push(MprisEvent::Seeked(self.playback_position_ms * 1_000));
-            }
-            MprisCommand::OpenUri(uri) => {
+            MprisAppAction::OpenUri(uri) => {
                 self.accept_dropped_uris([uri.as_str()], true, true);
                 self.mpris_events.push(MprisEvent::MetadataChanged);
                 self.mpris_events.push(MprisEvent::PlaybackStatusChanged);

@@ -15,7 +15,7 @@ path = "src/main.rs"
 [features]
 default = ["gtk-ui", "gstreamer-backend"]
 gtk-ui = ["dep:gtk"]
-egui-ui = ["dep:egui", "dep:eframe", "dep:rfd"]
+egui-ui = ["dep:egui", "dep:eframe", "dep:rfd", "dep:zbus"]
 gstreamer-backend = ["dep:gstreamer", "dep:gstreamer-pbutils"]
 mobile-ui = []
 
@@ -38,5 +38,6 @@ image-extras = { version = "0.1.1", default-features = false, features = [
 ] }
 rfd = { version = "0.15", optional = true }
 serde_json = "1"
+zbus = { version = "5.16", optional = true }
 tar = "0.4.46"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

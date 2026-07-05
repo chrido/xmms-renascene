@@ -8,7 +8,6 @@ pub mod e2e;
 #[path = "ui/egui/mod.rs"]
 pub mod egui_frontend;
 pub mod equalizer;
-#[cfg(feature = "gtk-ui")]
 pub mod mpris;
 pub mod playback;
 pub mod player;
