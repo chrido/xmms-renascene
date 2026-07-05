@@ -464,6 +464,75 @@ fn build_preview_window(
     }
     window.add_controller(click);
 
+    let docked_playlist_resize_drag = Rc::new(Cell::new(None::<(i32, f64)>));
+    let resize_drag = gtk::GestureDrag::new();
+    resize_drag.set_button(1);
+    resize_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let drawing_area = drawing_area.clone();
+        let main_state = Rc::clone(&main_state);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
+        resize_drag.connect_drag_begin(move |gesture, start_x, start_y| {
+            let mut state = main_state.borrow_mut();
+            let (base_x, base_y) = event_to_base_coords(&drawing_area, &state, start_x, start_y);
+            let Some((PanelKind::Playlist, panel_x, panel_y)) =
+                state.docked_panel_at(base_x, base_y)
+            else {
+                docked_playlist_resize_drag.set(None);
+                return;
+            };
+            if !state.playlist_resize_region(panel_x, panel_y) {
+                docked_playlist_resize_drag.set(None);
+                return;
+            }
+            let start_height = state.playlist_ui.height;
+            let scale = state.scale_factor();
+            if state.begin_docked_playlist_resize(panel_y) {
+                docked_playlist_resize_drag.set(Some((start_height, scale)));
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                drawing_area.queue_draw();
+            }
+        });
+    }
+    {
+        let drawing_area = drawing_area.clone();
+        let window = window.clone();
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
+        resize_drag.connect_drag_update(move |_gesture, _offset_x, offset_y| {
+            let Some((start_height, scale)) = docked_playlist_resize_drag.get() else {
+                return;
+            };
+            let base_delta_y = (offset_y / scale).round() as i32;
+            let changed = main_state
+                .borrow_mut()
+                .set_playlist_size(PLAYLIST_MIN_WIDTH, start_height + base_delta_y);
+            if changed {
+                sync_panel_windows(&panel_windows, &main_state.borrow());
+                resize_main_window(&window, &drawing_area, &main_state.borrow());
+                drawing_area.queue_draw();
+            }
+        });
+    }
+    {
+        let drawing_area = drawing_area.clone();
+        let window = window.clone();
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
+        resize_drag.connect_drag_end(move |_gesture, _offset_x, _offset_y| {
+            if docked_playlist_resize_drag.take().is_none() {
+                return;
+            }
+            main_state.borrow_mut().end_docked_playlist_resize();
+            sync_panel_windows(&panel_windows, &main_state.borrow());
+            resize_main_window(&window, &drawing_area, &main_state.borrow());
+            drawing_area.queue_draw();
+        });
+    }
+    window.add_controller(resize_drag);
+
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
     let main_hover_base = Rc::new(Cell::new(None::<(i32, i32)>));
@@ -473,10 +542,13 @@ fn build_preview_window(
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         let main_hover_base = Rc::clone(&main_hover_base);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             main_hover_base.set(Some((x, y)));
-            if main_state.borrow().is_docked_playlist_resizing() {
+            if docked_playlist_resize_drag.get().is_none()
+                && main_state.borrow().is_docked_playlist_resizing()
+            {
                 if main_state.borrow_mut().docked_playlist_resize_motion(y) {
                     sync_panel_windows(&panel_windows, &main_state.borrow());
                     resize_main_window(&window, &drawing_area, &main_state.borrow());
@@ -5710,23 +5782,7 @@ fn add_panel_click_controller(
                         return;
                     }
                     if main_state.borrow().playlist_resize_region(base_x, base_y) {
-                        let Some(device) = gesture.current_event_device() else {
-                            return;
-                        };
-                        let Some(surface) = window.surface() else {
-                            return;
-                        };
-                        let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
-                            return;
-                        };
-                        toplevel.begin_resize(
-                            gtk::gdk::SurfaceEdge::SouthEast,
-                            Some(&device),
-                            gesture.current_button() as i32,
-                            x,
-                            y,
-                            gesture.current_event_time(),
-                        );
+                        return;
                     }
                 }
                 return;
@@ -5755,6 +5811,7 @@ fn add_panel_click_controller(
     {
         let area = area.clone();
         let window = window.clone();
+        let main_area = main_area.clone();
         let main_state = Rc::clone(&main_state);
         click.connect_released(move |_gesture, _n_press, x, y| {
             let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
@@ -5795,6 +5852,76 @@ fn add_panel_click_controller(
         });
     }
     window.add_controller(click);
+
+    let floating_playlist_resize_drag = Rc::new(Cell::new(None::<(i32, i32, f64)>));
+    let resize_drag = gtk::GestureDrag::new();
+    resize_drag.set_button(1);
+    resize_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        let floating_playlist_resize_drag = Rc::clone(&floating_playlist_resize_drag);
+        resize_drag.connect_drag_begin(move |gesture, start_x, start_y| {
+            if kind != PanelKind::Playlist {
+                floating_playlist_resize_drag.set(None);
+                return;
+            }
+            let state = main_state.borrow();
+            let (base_x, base_y) =
+                panel_event_to_base_coords(kind, &area, &state, start_x, start_y);
+            if !state.is_panel_detached(kind) || !state.playlist_resize_region(base_x, base_y) {
+                floating_playlist_resize_drag.set(None);
+                return;
+            }
+            let (start_width, start_height) = state.playlist_size();
+            floating_playlist_resize_drag.set(Some((
+                start_width,
+                start_height,
+                state.scale_factor(),
+            )));
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            area.queue_draw();
+        });
+    }
+    {
+        let area = area.clone();
+        let window = window.clone();
+        let main_state = Rc::clone(&main_state);
+        let main_area = main_area.clone();
+        let floating_playlist_resize_drag = Rc::clone(&floating_playlist_resize_drag);
+        resize_drag.connect_drag_update(move |_gesture, offset_x, offset_y| {
+            let Some((start_width, start_height, scale)) = floating_playlist_resize_drag.get()
+            else {
+                return;
+            };
+            let base_delta_x = (offset_x / scale).round() as i32;
+            let base_delta_y = (offset_y / scale).round() as i32;
+            let changed = main_state
+                .borrow_mut()
+                .set_playlist_size(start_width + base_delta_x, start_height + base_delta_y);
+            if changed {
+                sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+                main_area.queue_draw();
+                area.queue_draw();
+            }
+        });
+    }
+    {
+        let area = area.clone();
+        let window = window.clone();
+        let main_state = Rc::clone(&main_state);
+        let main_area = main_area.clone();
+        let floating_playlist_resize_drag = Rc::clone(&floating_playlist_resize_drag);
+        resize_drag.connect_drag_end(move |_gesture, _offset_x, _offset_y| {
+            if floating_playlist_resize_drag.take().is_none() {
+                return;
+            }
+            sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+            main_area.queue_draw();
+            area.queue_draw();
+        });
+    }
+    window.add_controller(resize_drag);
 
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);

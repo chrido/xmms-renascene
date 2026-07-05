@@ -40,13 +40,16 @@ use crate::player::{GStreamerBackend, PlaybackEvent, PlayerState};
 use crate::playlist::file_uri_to_path;
 use crate::playlist::{DurationIndexResult, Playlist};
 use crate::render::{
-    docked_panel_size, DockedPanelState, EqualizerControl, EqualizerRenderState, EqualizerSlider,
-    MainPushButton, MainSlider, MainToggleButton, PlaylistMenuRenderKind, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    docked_panel_size, playlist_window_height, DockedPanelState, EqualizerControl,
+    EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider, MainToggleButton,
+    PlaylistMenuRenderKind, PlaylistRowRenderEntry, PlaylistRowsRenderState,
+    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::session::default_config_dir;
-use crate::skin::layout::{panel_title_button_rect, LayoutPanelKind, PanelTitleButton};
+use crate::skin::layout::{
+    panel_title_button_rect, snap_playlist_size, LayoutPanelKind, PanelTitleButton,
+};
 use crate::skin::widget::{Visualization, WidgetId};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 use crate::socket_control::{
@@ -89,6 +92,7 @@ pub struct EguiFrontendState {
     pub preferences_open: bool,
     pub skin_browser_open: bool,
     pub file_info_open: bool,
+    pub file_info_editor: file_info::FileInfoEditorState,
     pub skin_entries: Vec<SkinEntry>,
     pub prompt_open: Option<EguiPrompt>,
     pub prompt_text: String,
@@ -113,6 +117,8 @@ pub struct EguiFrontendState {
     pub playlist_sort_menu_open: bool,
     pub confirm_physical_delete_open: bool,
     pub playlist_scroll_offset: usize,
+    pub playlist_width: i32,
+    pub playlist_height: i32,
     visualization: Visualization,
     visualization_tick_counter: i32,
     #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
@@ -160,12 +166,17 @@ impl EguiFrontendState {
                 None
             }
         };
+        let playlist_size = options
+            .playlist_size
+            .map(|(width, height)| snap_playlist_size(width, height))
+            .unwrap_or_else(|| snap_playlist_size(PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT));
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let mut state = Self {
             main_menu_open: false,
             preferences_open: options.open_preferences,
             skin_browser_open: false,
             file_info_open: false,
+            file_info_editor: file_info::FileInfoEditorState::default(),
             skin_entries,
             prompt_open: None,
             prompt_text: String::new(),
@@ -190,6 +201,8 @@ impl EguiFrontendState {
             playlist_sort_menu_open: false,
             confirm_physical_delete_open: false,
             playlist_scroll_offset: 0,
+            playlist_width: playlist_size.width,
+            playlist_height: playlist_size.height,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
             duration_index_sender,
@@ -852,8 +865,8 @@ impl EguiFrontendState {
             playlist_visible: config.playlist_visible,
             playlist_detached: config.playlist_detached,
             playlist_shaded: config.playlist_shaded,
-            playlist_width: PLAYLIST_DEFAULT_WIDTH,
-            playlist_height: PLAYLIST_DEFAULT_HEIGHT,
+            playlist_width: self.playlist_width,
+            playlist_height: self.playlist_height,
             ..DockedPanelState::default()
         });
         egui::vec2(
@@ -1032,17 +1045,19 @@ fn detached_playlist_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSn
         search_query: None,
         show_numbers: app.controller().state().config.show_numbers_in_pl,
         font_family: app.controller().state().config.playlist_font.clone(),
-        width: PLAYLIST_DEFAULT_WIDTH,
-        height: PLAYLIST_DEFAULT_HEIGHT,
+        width: app.playlist_width,
+        height: app.playlist_height,
     };
+    let shaded_info = playlist::shaded_playlist_info(app);
     let footer_info = detached_playlist_footer_info(app);
     let (footer_min, footer_sec) = detached_playlist_footer_time_parts(app);
     let image = render_playlist_color_image(
         &app.active_skin,
         true,
         view_model.shaded,
-        PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT,
+        app.playlist_width,
+        app.playlist_height,
+        Some(&shaded_info),
         &rows,
         Some(&footer_info),
         Some(&footer_min),
@@ -1051,12 +1066,8 @@ fn detached_playlist_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSn
     .ok()?;
     Some(DetachedPanelSnapshot {
         panel: LayoutPanelKind::Playlist,
-        width: PLAYLIST_DEFAULT_WIDTH,
-        height: if view_model.shaded {
-            crate::render::MAIN_TITLEBAR_HEIGHT
-        } else {
-            PLAYLIST_DEFAULT_HEIGHT
-        },
+        width: app.playlist_width,
+        height: playlist_window_height(view_model.shaded, app.playlist_height),
         scale_factor: app.scale_factor,
         image,
     })
@@ -1257,6 +1268,9 @@ fn detached_playlist_footer_info(app: &EguiFrontendState) -> String {
 }
 
 fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    if global_shortcuts_suspended(ctx, app) {
+        return;
+    }
     ctx.input(|input| {
         for shortcut in egui_shortcuts_from_input(input) {
             dispatch_app_shortcut(ctx, app, shortcut);
@@ -1265,6 +1279,20 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
         handle_equalizer_shortcuts(input, app);
         handle_mouse_wheel(input, app);
     });
+}
+
+fn global_shortcuts_suspended(ctx: &egui::Context, app: &EguiFrontendState) -> bool {
+    ctx.egui_wants_keyboard_input()
+        || app.main_menu_open
+        || app.prompt_open.is_some()
+        || app.preferences_open
+        || app.skin_browser_open
+        || app.file_info_open
+        || app.equalizer_presets_open
+        || app.playlist_menu_open.is_some()
+        || app.playlist_sort_menu_open
+        || app.confirm_physical_delete_open
+        || !app.runtime.pending_messages.is_empty()
 }
 
 fn egui_shortcuts_from_input(input: &egui::InputState) -> Vec<AppShortcut> {
@@ -1414,19 +1442,10 @@ fn handle_mouse_wheel(input: &egui::InputState, app: &mut EguiFrontendState) {
     if scroll_y == 0.0 {
         return;
     }
-    if app.controller().state().config.playlist_visible && input.modifiers.shift {
-        let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
-        let max_offset = app
-            .controller()
-            .state()
-            .playlist
-            .len()
-            .saturating_sub(visible_rows);
-        if scroll_y > 0.0 {
-            app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(3);
-        } else {
-            app.playlist_scroll_offset = (app.playlist_scroll_offset + 3).min(max_offset);
-        }
+    if pointer_over_docked_playlist(input, app)
+        || (app.controller().state().config.playlist_visible && input.modifiers.shift)
+    {
+        scroll_playlist_by_wheel(app, scroll_y);
     } else {
         let step = app.controller().state().config.mouse_wheel_change;
         let volume = app.controller().state().player.volume();
@@ -1436,6 +1455,52 @@ fn handle_mouse_wheel(input: &egui::InputState, app: &mut EguiFrontendState) {
             volume.saturating_sub(step)
         };
         app.dispatch(crate::app::command::AudioCommand::SetVolume(next));
+    }
+}
+
+fn pointer_over_docked_playlist(input: &egui::InputState, app: &EguiFrontendState) -> bool {
+    let Some(pos) = input.pointer.hover_pos() else {
+        return false;
+    };
+    let config = &app.controller().state().config;
+    if !config.playlist_visible || config.playlist_detached {
+        return false;
+    }
+    let mut top = if config.main_shaded {
+        crate::render::MAIN_TITLEBAR_HEIGHT
+    } else {
+        crate::render::MAIN_WINDOW_HEIGHT
+    } as f32
+        * app.scale_factor;
+    if config.equalizer_visible && !config.equalizer_detached {
+        top += if config.equalizer_shaded {
+            crate::render::MAIN_TITLEBAR_HEIGHT
+        } else {
+            EQUALIZER_WINDOW_HEIGHT
+        } as f32
+            * app.scale_factor;
+    }
+    let height = playlist_window_height(config.playlist_shaded, app.playlist_height) as f32
+        * app.scale_factor;
+    egui::Rect::from_min_size(
+        egui::pos2(0.0, top),
+        egui::vec2(app.playlist_width as f32 * app.scale_factor, height),
+    )
+    .contains(pos)
+}
+
+fn scroll_playlist_by_wheel(app: &mut EguiFrontendState, scroll_y: f32) {
+    let visible_rows = ((app.playlist_height - 58) / 11).max(1) as usize;
+    let max_offset = app
+        .controller()
+        .state()
+        .playlist
+        .len()
+        .saturating_sub(visible_rows);
+    if scroll_y > 0.0 {
+        app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(3);
+    } else {
+        app.playlist_scroll_offset = (app.playlist_scroll_offset + 3).min(max_offset);
     }
 }
 
@@ -1464,7 +1529,7 @@ fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendSta
         app.dispatch(PlayerCommand::Play);
     }
     let current = app.controller().state().playlist.position().unwrap_or(0);
-    let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
+    let visible_rows = ((app.playlist_height - 58) / 11).max(1) as usize;
     let next = if input.key_pressed(egui::Key::ArrowDown)
         || (app.controller().state().config.vim_playlist_navigation
             && input.key_pressed(egui::Key::J))
@@ -1699,6 +1764,19 @@ mod tests {
     }
 
     #[test]
+    fn egui_startup_playlist_size_uses_skinned_dimensions() {
+        let app = EguiFrontendState::new(PreviewOptions {
+            playlist_size: Some((325, 290)),
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        assert!(app.controller().state().config.playlist_visible);
+        assert_eq!((app.playlist_width, app.playlist_height), (325, 290));
+        assert_eq!(app.desired_window_size().x, 325.0 * app.scale_factor);
+    }
+
+    #[test]
     fn egui_preferences_scale_factor_updates_runtime_zoom() {
         let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
         let default_size = app.desired_window_size();
@@ -1803,6 +1881,42 @@ mod tests {
 
         assert!(app.controller().state().config.playlist_visible);
         assert!(app.runtime.repaint_requested);
+    }
+
+    #[test]
+    fn egui_global_shortcuts_pause_while_dialogs_or_menus_are_active() {
+        let ctx = egui::Context::default();
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+
+        assert!(!global_shortcuts_suspended(&ctx, &app));
+
+        app.prompt_open = Some(EguiPrompt::OpenLocation);
+        assert!(global_shortcuts_suspended(&ctx, &app));
+        app.prompt_open = None;
+
+        app.playlist_menu_open = Some(PlaylistMenuRenderKind::Misc);
+        assert!(global_shortcuts_suspended(&ctx, &app));
+        app.playlist_menu_open = None;
+
+        app.runtime.pending_messages.push("message".to_string());
+        assert!(global_shortcuts_suspended(&ctx, &app));
+    }
+
+    #[test]
+    fn egui_playlist_wheel_scrolling_moves_three_rows_and_clamps() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        for index in 0..20 {
+            app.controller_mut().state_mut().playlist.add_timed_uri(
+                format!("file:///tmp/{index}.ogg"),
+                format!("Song {index}"),
+                12_000,
+            );
+        }
+
+        scroll_playlist_by_wheel(&mut app, -1.0);
+        assert_eq!(app.playlist_scroll_offset, 3);
+        scroll_playlist_by_wheel(&mut app, 1.0);
+        assert_eq!(app.playlist_scroll_offset, 0);
     }
 
     #[test]

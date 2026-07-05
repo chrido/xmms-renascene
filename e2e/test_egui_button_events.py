@@ -42,6 +42,7 @@ pytest: Any = import_module("pytest")
 MAIN_PLAYER_BASE_HEIGHT = 116
 PANEL_SHADE_RECT = SkinRect(254, 3, 9, 9)
 PANEL_CLOSE_RECT = SkinRect(264, 3, 9, 9)
+PLAYLIST_MISC_SORT_ITEM_RECT = SkinRect(98, 166, 25, 18)
 
 MAIN_PUSH_BUTTON_EVENTS = [
     (MainButton.MENU, "Menu", "command Ui(SetMainMenuVisible(true))"),
@@ -301,6 +302,14 @@ def test_egui_playlist_menu_button_emits_event(
         egui_app_with_event_tracks,
         f"playlist: menu opened, menu_name={menu_name}",
     )
+    if menu is PlaylistMenuButton.MISC:
+        click_skin_rect(
+            egui_main_window.window_id,
+            offset_rect(PLAYLIST_MISC_SORT_ITEM_RECT, playlist_y),
+        )
+        time.sleep(0.2)
+        assert visible_windows("Playlist Sort") == []
+        run_xdotool("key", "Escape", check=False)
 
 
 @pytest.mark.parametrize(

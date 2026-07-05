@@ -3,14 +3,15 @@
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
+    ellipsize_chars, format_duration, format_title_for_preferences,
     playlist_footer_info as shared_playlist_footer_info, playlist_view_model, PlaylistViewModel,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 use crate::render::{
-    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    playlist_window_height, PlaylistMenuRenderState, PlaylistRowRenderEntry,
+    PlaylistRowsRenderState,
 };
 use crate::skin::layout::{
     panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
@@ -33,14 +34,16 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         return;
     }
     let rows = playlist_rows_render_state(app, &view_model);
+    let shaded_info = shaded_playlist_info(app);
     let footer_info = playlist_footer_info(app);
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
     let Ok(image) = render_playlist_color_image(
         &app.active_skin,
         true,
         view_model.shaded,
-        PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT,
+        app.playlist_width,
+        app.playlist_height,
+        Some(&shaded_info),
         &rows,
         Some(&footer_info),
         Some(&footer_time_minutes),
@@ -50,13 +53,9 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         return;
     };
     let texture = upload_color_image(ui.ctx(), "xmms-playlist", image);
-    let base_height = if view_model.shaded {
-        crate::render::MAIN_TITLEBAR_HEIGHT
-    } else {
-        PLAYLIST_DEFAULT_HEIGHT
-    };
+    let base_height = playlist_window_height(view_model.shaded, app.playlist_height);
     let size = egui::vec2(
-        PLAYLIST_DEFAULT_WIDTH as f32 * app.scale_factor,
+        app.playlist_width as f32 * app.scale_factor,
         base_height as f32 * app.scale_factor,
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
@@ -68,8 +67,8 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     add_playlist_titlebar_drag_region(ui, app, rect);
     add_playlist_hit_regions(ui, app, rect, &view_model);
+    show_playlist_sort_popover(ui.ctx(), app, rect);
     add_playlist_menu_popover(ui, app, rect);
-    show_playlist_sort_popover(ui.ctx(), app);
     show_physical_delete_confirmation(ui.ctx(), app);
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -103,8 +102,8 @@ fn playlist_rows_render_state(
         search_query: None,
         show_numbers: app.controller().state().config.show_numbers_in_pl,
         font_family: app.controller().state().config.playlist_font.clone(),
-        width: PLAYLIST_DEFAULT_WIDTH,
-        height: PLAYLIST_DEFAULT_HEIGHT,
+        width: app.playlist_width,
+        height: app.playlist_height,
     }
 }
 
@@ -120,6 +119,39 @@ fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
 
 fn playlist_footer_info(app: &EguiFrontendState) -> String {
     shared_playlist_footer_info(app.controller().state())
+}
+
+pub(crate) fn shaded_playlist_info(app: &EguiFrontendState) -> String {
+    let state = app.controller().state();
+    let Some(position) = state.playlist.position() else {
+        return String::new();
+    };
+    let Some(entry) = state.playlist.entries().get(position) else {
+        return String::new();
+    };
+
+    let title = format_title_for_preferences(
+        &state.config.title_format,
+        &entry.filename,
+        &entry.title,
+        &state.config,
+    );
+    let prefix = if state.config.show_numbers_in_pl {
+        format!("{}. ", position + 1)
+    } else {
+        String::new()
+    };
+    let suffix = if entry.length_ms >= 0 {
+        format!(" {}", format_duration(entry.length_ms))
+    } else {
+        String::new()
+    };
+    let max_len = ((app.playlist_width - 35) / 5)
+        .saturating_sub(prefix.len() as i32)
+        .saturating_sub(suffix.len() as i32)
+        .max(0) as usize;
+    let title = ellipsize_chars(&title, max_len);
+    format!("{prefix}{title:<max_len$}{suffix}")
 }
 
 fn add_playlist_hit_regions(
@@ -146,7 +178,7 @@ fn add_playlist_hit_regions(
     ] {
         let rect = scale_skin_rect(
             base_rect,
-            playlist_menu_button_rect(menu, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT),
+            playlist_menu_button_rect(menu, app.playlist_width, app.playlist_height),
             app.scale_factor,
         );
         let response = ui.interact(
@@ -171,7 +203,7 @@ fn add_playlist_hit_regions(
     ] {
         let rect = scale_skin_rect(
             base_rect,
-            playlist_footer_button_rect(button, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT),
+            playlist_footer_button_rect(button, app.playlist_width, app.playlist_height),
             app.scale_factor,
         );
         let response = ui.interact(
@@ -195,7 +227,7 @@ fn add_playlist_titlebar_drag_region(
         SkinRect::new(
             0,
             0,
-            PLAYLIST_DEFAULT_WIDTH,
+            app.playlist_width,
             crate::render::MAIN_TITLEBAR_HEIGHT,
         ),
         app.scale_factor,
@@ -214,7 +246,7 @@ fn add_playlist_titlebar_drag_region(
         if [PanelTitleButton::Shade, PanelTitleButton::Close]
             .into_iter()
             .any(|button| {
-                panel_title_button_rect(LayoutPanelKind::Playlist, button, PLAYLIST_DEFAULT_WIDTH)
+                panel_title_button_rect(LayoutPanelKind::Playlist, button, app.playlist_width)
                     .contains(x, y)
             })
         {
@@ -232,7 +264,7 @@ fn add_playlist_title_button_hits(
     for button in [PanelTitleButton::Shade, PanelTitleButton::Close] {
         let rect = scale_skin_rect(
             base_rect,
-            panel_title_button_rect(LayoutPanelKind::Playlist, button, PLAYLIST_DEFAULT_WIDTH),
+            panel_title_button_rect(LayoutPanelKind::Playlist, button, app.playlist_width),
             app.scale_factor,
         );
         let response = ui.interact(
@@ -259,7 +291,11 @@ fn add_playlist_rows_hit_region(
     base_rect: egui::Rect,
     view_model: &PlaylistViewModel,
 ) {
-    let rows_rect = scale_skin_rect(base_rect, SkinRect::new(12, 20, 243, 176), app.scale_factor);
+    let rows_rect = scale_skin_rect(
+        base_rect,
+        SkinRect::new(12, 20, app.playlist_width - 31, app.playlist_height - 58),
+        app.scale_factor,
+    );
     let response = ui.interact(
         rows_rect,
         ui.id().with("playlist-rows"),
@@ -312,6 +348,7 @@ fn add_playlist_rows_hit_region(
 fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
     let menu_name = format!("{menu:?}");
     app_log_info!(playlist, "menu opened", menu_name);
+    app.playlist_sort_menu_open = false;
     app.playlist_menu_open = Some(menu);
 }
 
@@ -359,7 +396,11 @@ fn add_playlist_menu_popover(
     let Some(kind) = app.playlist_menu_open else {
         return;
     };
-    let popup = playlist_menu_popup_rect(kind, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT);
+    if ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)) {
+        app.playlist_menu_open = None;
+        return;
+    }
+    let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
     let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor);
     let item_height = 18.0 * app.scale_factor;
     app.playlist_menu_hover = None;
@@ -420,8 +461,22 @@ fn add_playlist_menu_popover(
         }
     }
 
+    let clicked_outside = ui.ctx().input(|input| {
+        input.pointer.any_released()
+            && input.pointer.latest_pos().is_some_and(|pos| {
+                let button_rect = scale_skin_rect(
+                    base_rect,
+                    playlist_menu_button_rect(kind, app.playlist_width, app.playlist_height),
+                    app.scale_factor,
+                );
+                !popup_rect.contains(pos) && !button_rect.contains(pos)
+            })
+    });
+
     if let Some(index) = clicked_item {
         dispatch_playlist_menu_item(app, kind, index);
+        app.playlist_menu_open = None;
+    } else if clicked_outside {
         app.playlist_menu_open = None;
     }
 }
@@ -443,47 +498,101 @@ fn dispatch_playlist_menu_item(app: &mut EguiFrontendState, kind: PlaylistMenuKi
     }
 }
 
-fn show_playlist_sort_popover(ctx: &egui::Context, app: &mut EguiFrontendState) {
+fn show_playlist_sort_popover(
+    ctx: &egui::Context,
+    app: &mut EguiFrontendState,
+    playlist_rect: egui::Rect,
+) {
     if !app.playlist_sort_menu_open {
         return;
     }
-    let mut open = true;
+    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        app.playlist_sort_menu_open = false;
+        return;
+    }
+
+    let misc_button = playlist_menu_button_rect(
+        PlaylistMenuButton::Misc,
+        app.playlist_width,
+        app.playlist_height,
+    );
+    let estimated_popup_height = 220.0;
+    let button_y = playlist_rect.top() + misc_button.y as f32 * app.scale_factor;
+    let popup_pos = egui::pos2(
+        playlist_rect.left() + misc_button.x as f32 * app.scale_factor,
+        (button_y - estimated_popup_height).max(0.0),
+    );
     let mut close_after_click = false;
-    egui::Window::new("Playlist Sort")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
+    let response = egui::Area::new(egui::Id::new("xmms-egui-playlist-sort-popup"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(popup_pos)
+        .constrain(false)
         .show(ctx, |ui| {
-            ui.label("Sort List");
-            close_after_click |=
-                playlist_sort_item(ui, app, false, PlaylistSortKey::Title, "By Title");
-            close_after_click |=
-                playlist_sort_item(ui, app, false, PlaylistSortKey::Filename, "By Filename");
-            close_after_click |=
-                playlist_sort_item(ui, app, false, PlaylistSortKey::Path, "By Path + Filename");
-            close_after_click |=
-                playlist_sort_item(ui, app, false, PlaylistSortKey::Date, "By Date");
-            ui.separator();
-            ui.label("Sort Selection");
-            close_after_click |=
-                playlist_sort_item(ui, app, true, PlaylistSortKey::Title, "By Title");
-            close_after_click |=
-                playlist_sort_item(ui, app, true, PlaylistSortKey::Filename, "By Filename");
-            close_after_click |=
-                playlist_sort_item(ui, app, true, PlaylistSortKey::Path, "By Path + Filename");
-            close_after_click |=
-                playlist_sort_item(ui, app, true, PlaylistSortKey::Date, "By Date");
-            ui.separator();
-            if ui.button("Randomize List").clicked() {
-                app.dispatch(PlaylistCommand::Randomize);
-                close_after_click = true;
-            }
-            if ui.button("Reverse List").clicked() {
-                app.dispatch(PlaylistCommand::Reverse);
-                close_after_click = true;
-            }
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(180.0);
+                egui::ScrollArea::vertical()
+                    .max_height(estimated_popup_height)
+                    .show(ui, |ui| {
+                        ui.label("Sort List");
+                        close_after_click |=
+                            playlist_sort_item(ui, app, false, PlaylistSortKey::Title, "By Title");
+                        close_after_click |= playlist_sort_item(
+                            ui,
+                            app,
+                            false,
+                            PlaylistSortKey::Filename,
+                            "By Filename",
+                        );
+                        close_after_click |= playlist_sort_item(
+                            ui,
+                            app,
+                            false,
+                            PlaylistSortKey::Path,
+                            "By Path + Filename",
+                        );
+                        close_after_click |=
+                            playlist_sort_item(ui, app, false, PlaylistSortKey::Date, "By Date");
+                        ui.separator();
+                        ui.label("Sort Selection");
+                        close_after_click |=
+                            playlist_sort_item(ui, app, true, PlaylistSortKey::Title, "By Title");
+                        close_after_click |= playlist_sort_item(
+                            ui,
+                            app,
+                            true,
+                            PlaylistSortKey::Filename,
+                            "By Filename",
+                        );
+                        close_after_click |= playlist_sort_item(
+                            ui,
+                            app,
+                            true,
+                            PlaylistSortKey::Path,
+                            "By Path + Filename",
+                        );
+                        close_after_click |=
+                            playlist_sort_item(ui, app, true, PlaylistSortKey::Date, "By Date");
+                        ui.separator();
+                        if ui.button("Randomize List").clicked() {
+                            app.dispatch(PlaylistCommand::Randomize);
+                            close_after_click = true;
+                        }
+                        if ui.button("Reverse List").clicked() {
+                            app.dispatch(PlaylistCommand::Reverse);
+                            close_after_click = true;
+                        }
+                    });
+            });
         });
-    if !open || close_after_click {
+
+    let clicked_outside = ctx.input(|input| {
+        input.pointer.any_released()
+            && input.pointer.latest_pos().is_some_and(|pos| {
+                let misc_rect = scale_skin_rect(playlist_rect, misc_button, app.scale_factor);
+                !response.response.rect.contains(pos) && !misc_rect.contains(pos)
+            })
+    });
+    if close_after_click || clicked_outside {
         app.playlist_sort_menu_open = false;
     }
 }
@@ -522,7 +631,7 @@ fn dispatch_playlist_footer_button(app: &mut EguiFrontendState, button: Playlist
             app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(1);
         }
         PlaylistFooterButton::ScrollDown => {
-            let visible_rows = ((PLAYLIST_DEFAULT_HEIGHT - 58) / 11).max(1) as usize;
+            let visible_rows = ((app.playlist_height - 58) / 11).max(1) as usize;
             let max_offset = app
                 .controller()
                 .state()
@@ -576,8 +685,10 @@ mod tests {
             "Song",
             12_000,
         );
+        app.playlist_sort_menu_open = true;
         dispatch_playlist_menu_button(&mut app, PlaylistMenuKind::Select);
         assert_eq!(app.playlist_menu_open, Some(PlaylistMenuKind::Select));
+        assert!(!app.playlist_sort_menu_open);
         dispatch_playlist_menu_item(&mut app, PlaylistMenuKind::Select, 2);
         assert!(app.controller().state().playlist.entries()[0].selected);
 
@@ -604,6 +715,24 @@ mod tests {
         assert_eq!(app.playlist_scroll_offset, 1);
         dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::ScrollUp);
         assert_eq!(app.playlist_scroll_offset, 0);
+    }
+
+    #[test]
+    fn shaded_playlist_info_matches_gtk_title_duration_layout() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        app.controller_mut().state_mut().config.show_numbers_in_pl = true;
+        app.controller_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/current-demo.ogg",
+            "Current demo track",
+            245_000,
+        );
+        app.controller_mut().state_mut().playlist.set_position(0);
+
+        let info = shaded_playlist_info(&app);
+
+        assert!(info.starts_with("1. Current demo track"));
+        assert!(info.ends_with(" 4:05"));
     }
 
     #[test]

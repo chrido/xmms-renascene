@@ -1,10 +1,11 @@
 //! egui equalizer panel/window.
 
-use crate::app::command::{EqualizerCommand, PanelCommand};
+use crate::app::command::{AudioCommand, EqualizerCommand, PanelCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::view_model::{
-    balance_to_eq_shaded_position, eq_slider_pixel_to_position, equalizer_view_model,
-    volume_to_eq_shaded_position, EqualizerViewModel,
+    balance_to_eq_shaded_position, eq_shaded_position_to_balance, eq_shaded_position_to_volume,
+    eq_slider_pixel_to_position, equalizer_view_model, volume_to_eq_shaded_position,
+    EqualizerViewModel,
 };
 use crate::app_log_info;
 use crate::equalizer::{winamp_original_presets, EqualizerPreset};
@@ -408,10 +409,19 @@ fn dispatch_equalizer_slider(
                 position: eq_slider_pixel_to_position(pixel),
             });
         }
-        EqualizerSlider::ShadedVolume | EqualizerSlider::ShadedBalance => {
-            app.runtime
-                .pending_messages
-                .push("shaded equalizer slider pending egui handler".to_string());
+        EqualizerSlider::ShadedVolume => {
+            let layout = equalizer_slider_layout(slider);
+            let position = ((pointer.x - rect.left()) / app.scale_factor).round() as i32;
+            app.dispatch(AudioCommand::SetVolume(eq_shaded_position_to_volume(
+                position.clamp(layout.min, layout.max),
+            )));
+        }
+        EqualizerSlider::ShadedBalance => {
+            let layout = equalizer_slider_layout(slider);
+            let position = ((pointer.x - rect.left()) / app.scale_factor).round() as i32;
+            app.dispatch(AudioCommand::SetBalance(eq_shaded_position_to_balance(
+                position.clamp(layout.min, layout.max),
+            )));
         }
     }
 }
@@ -473,5 +483,28 @@ mod tests {
             rect,
         );
         assert_eq!(app.controller().state().config.equalizer_band_pos[2], 0);
+    }
+
+    #[test]
+    fn shaded_equalizer_sliders_update_audio_state() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+
+        let scale = app.scale_factor;
+        dispatch_equalizer_slider(
+            &mut app,
+            EqualizerSlider::ShadedVolume,
+            egui::pos2(97.0 * scale, 0.0),
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(97.0 * scale, 8.0 * scale)),
+        );
+        assert_eq!(app.controller().state().player.volume(), 100);
+
+        dispatch_equalizer_slider(
+            &mut app,
+            EqualizerSlider::ShadedBalance,
+            egui::pos2(0.0, 0.0),
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(42.0 * scale, 8.0 * scale)),
+        );
+        assert_eq!(app.controller().state().player.balance(), -100);
     }
 }

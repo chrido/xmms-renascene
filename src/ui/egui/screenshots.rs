@@ -6,8 +6,9 @@ use cairo::{Context, Format, ImageSurface};
 
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
-    balance_to_eq_shaded_position, balance_to_position, volume_to_eq_shaded_position,
-    volume_to_position,
+    balance_to_eq_shaded_position, balance_to_position, ellipsize_chars, format_duration,
+    format_title_for_preferences, playlist_footer_info as shared_playlist_footer_info,
+    volume_to_eq_shaded_position, volume_to_position,
 };
 use crate::app_state::AppState;
 use crate::render::{
@@ -151,6 +152,10 @@ fn render_docked_screenshot_pass(
         cr.save()?;
         cr.translate(0.0, f64::from(y));
         if pass.is_bitmap() {
+            let shaded_info =
+                screenshot_shaded_playlist_info(app_state, docked_state.playlist_width);
+            let footer_info = shared_playlist_footer_info(app_state);
+            let (footer_min, footer_sec) = screenshot_playlist_footer_time_parts(app_state);
             rendered |= render_playlist_frame(
                 cr,
                 skin,
@@ -158,10 +163,10 @@ fn render_docked_screenshot_pass(
                 docked_state.playlist_shaded,
                 docked_state.playlist_width,
                 docked_state.playlist_height,
-                None,
-                None,
-                None,
-                None,
+                Some(&shaded_info),
+                Some(&footer_info),
+                Some(&footer_min),
+                Some(&footer_sec),
             )?;
         }
         if !docked_state.playlist_shaded {
@@ -196,6 +201,48 @@ fn render_docked_screenshot_pass(
     }
 
     Ok(rendered)
+}
+
+fn screenshot_playlist_footer_time_parts(app_state: &AppState) -> (String, String) {
+    if app_state.player.state() == crate::player::PlayerState::Stopped {
+        return ("   ".to_string(), "  ".to_string());
+    }
+    let total_seconds = app_state.config.playback_position_ms.max(0) / 1_000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    (format!("{minutes:>3}"), format!("{seconds:02}"))
+}
+
+fn screenshot_shaded_playlist_info(app_state: &AppState, width: i32) -> String {
+    let Some(position) = app_state.playlist.position() else {
+        return String::new();
+    };
+    let Some(entry) = app_state.playlist.entries().get(position) else {
+        return String::new();
+    };
+
+    let title = format_title_for_preferences(
+        &app_state.config.title_format,
+        &entry.filename,
+        &entry.title,
+        &app_state.config,
+    );
+    let prefix = if app_state.config.show_numbers_in_pl {
+        format!("{}. ", position + 1)
+    } else {
+        String::new()
+    };
+    let suffix = if entry.length_ms >= 0 {
+        format!(" {}", format_duration(entry.length_ms))
+    } else {
+        String::new()
+    };
+    let max_len = ((width - 35) / 5)
+        .saturating_sub(prefix.len() as i32)
+        .saturating_sub(suffix.len() as i32)
+        .max(0) as usize;
+    let title = ellipsize_chars(&title, max_len);
+    format!("{prefix}{title:<max_len$}{suffix}")
 }
 
 #[cfg(test)]

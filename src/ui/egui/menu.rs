@@ -97,6 +97,8 @@ pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
         return;
     };
     let mut open = true;
+    let mut cancel_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    let mut accept_requested = ctx.input(|input| input.key_pressed(egui::Key::Enter));
     egui::Window::new(prompt.title())
         .open(&mut open)
         .collapsible(false)
@@ -107,15 +109,16 @@ pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
                 .on_hover_text(prompt.placeholder());
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
-                    app.prompt_open = None;
-                    app.prompt_text.clear();
+                    cancel_requested = true;
                 }
                 if ui.button("OK").clicked() {
-                    accept_prompt(app, prompt);
+                    accept_requested = true;
                 }
             });
         });
-    if !open {
+    if accept_requested {
+        accept_prompt(app, prompt);
+    } else if cancel_requested || !open {
         app.prompt_open = None;
         app.prompt_text.clear();
     }
