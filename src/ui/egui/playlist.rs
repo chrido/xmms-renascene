@@ -529,7 +529,11 @@ fn add_playlist_menu_popover(
     }
 }
 
-fn dispatch_playlist_menu_item(app: &mut EguiFrontendState, kind: PlaylistMenuKind, index: usize) {
+pub(crate) fn dispatch_playlist_menu_item(
+    app: &mut EguiFrontendState,
+    kind: PlaylistMenuKind,
+    index: usize,
+) {
     match (kind, index) {
         (PlaylistMenuKind::Add, 0) => {
             app.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);

@@ -36,6 +36,7 @@ from gui import (
     click_skin_rect,
     run_xdotool,
     scaled_skin_point,
+    screenshot_window,
     wait_for_visible_window,
     window_geometry,
 )
@@ -527,6 +528,37 @@ def test_egui_detached_playlist_menu_button_emits_event_without_activation_click
         egui_detached_app_with_event_tracks,
         f"playlist: menu opened, menu_name={menu_name}",
     )
+
+
+def test_egui_detached_playlist_menu_button_changes_detached_window_image(
+    egui_detached_main_window: MainWindow,
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+    test_output: Any,
+) -> None:
+    playlist_window = wait_for_detached_panel_window(
+        egui_detached_app_with_event_tracks,
+        "Playlist",
+    )
+    run_xdotool("windowmove", playlist_window, "320", "280", check=False)
+    run_xdotool("windowfocus", playlist_window, check=False)
+    time.sleep(0.2)
+    before = test_output.screenshot_path()
+    screenshot_window(playlist_window, before)
+
+    click_detached_skin_rect_without_activation_click(
+        egui_detached_main_window,
+        playlist_window,
+        PLAYLIST_MENU_RECTS[PlaylistMenuButton.ADD],
+    )
+    assert_event_log(
+        egui_detached_app_with_event_tracks,
+        "playlist: menu opened, menu_name=Add",
+    )
+    time.sleep(0.2)
+    after = test_output.screenshot_path()
+    screenshot_window(playlist_window, after)
+
+    assert before.read_bytes() != after.read_bytes()
 
 
 def test_egui_detached_playlist_title_shade_button_emits_event_without_activation_click(

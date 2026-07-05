@@ -42,15 +42,16 @@ use crate::playlist::{DurationIndexResult, Playlist};
 use crate::render::{
     docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
     EqualizerControl, EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider,
-    MainToggleButton, PlaylistMenuRenderKind, PlaylistRowRenderEntry, PlaylistRowsRenderState,
-    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    MainToggleButton, PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowRenderEntry,
+    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::session::default_config_dir;
 use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, playlist_footer_button_rect,
-    playlist_menu_button_rect, snap_playlist_size, LayoutPanelKind, PanelTitleButton,
-    PlaylistFooterButton, PlaylistMenuButton,
+    playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
+    PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton,
 };
 use crate::skin::widget::{Visualization, WidgetId};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
@@ -63,7 +64,9 @@ use super::file_info;
 use super::menu::{self, EguiPrompt};
 use super::preferences::{self, PreferencesPage, PreferencesViewportState};
 use super::runtime::EguiRuntime;
-use super::skin_texture::{render_equalizer_color_image, render_playlist_color_image};
+use super::skin_texture::{
+    render_equalizer_color_image, render_playlist_color_image, render_playlist_menu_color_image,
+};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
@@ -80,6 +83,7 @@ struct DetachedPanelSnapshot {
     width: i32,
     height: i32,
     scale_factor: f32,
+    playlist_menu_open: Option<PlaylistMenuRenderKind>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +92,7 @@ enum DetachedPanelAction {
     EqualizerControl(EqualizerControl),
     PlaylistFooter(PlaylistFooterButton),
     PlaylistMenu(PlaylistMenuButton),
+    PlaylistMenuItem(PlaylistMenuButton, usize),
 }
 
 #[derive(Debug, Default)]
@@ -960,6 +965,7 @@ impl eframe::App for EguiFrontendState {
                 }
             });
         show_detached_panels(&ctx, self);
+        show_detached_equalizer_popovers(&ctx, self);
         menu::show_main_menu(&ctx, self);
         menu::show_prompts(&ctx, self);
         if self.preferences_open {
@@ -972,6 +978,19 @@ impl eframe::App for EguiFrontendState {
         menu::show_pending_messages(&ctx, self);
         app_log_trace!(render, "egui update size={:?}", self.desired_window_size());
     }
+}
+
+fn show_detached_equalizer_popovers(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    let config = &app.controller.state().config;
+    if !(config.equalizer_visible && config.equalizer_detached) {
+        return;
+    }
+    let height = equalizer_window_height(config.equalizer_shaded) as f32 * app.scale_factor;
+    let rect = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(EQUALIZER_WINDOW_WIDTH as f32 * app.scale_factor, height),
+    );
+    equalizer::show_equalizer_presets_popover(ctx, app, rect);
 }
 
 fn handle_dropped_files(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -1055,6 +1074,10 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
         DetachedPanelAction::PlaylistMenu(menu) => {
             playlist::dispatch_playlist_menu_button(app, menu)
         }
+        DetachedPanelAction::PlaylistMenuItem(menu, index) => {
+            playlist::dispatch_playlist_menu_item(app, menu, index);
+            app.playlist_menu_open = None;
+        }
     }
 }
 
@@ -1108,6 +1131,7 @@ fn detached_equalizer_snapshot(
             EQUALIZER_WINDOW_HEIGHT
         },
         scale_factor: app.scale_factor,
+        playlist_menu_open: None,
         image,
     })
 }
@@ -1146,7 +1170,7 @@ fn detached_playlist_snapshot(
     let shaded_info = playlist::shaded_playlist_info(app);
     let footer_info = detached_playlist_footer_info(app);
     let (footer_min, footer_sec) = detached_playlist_footer_time_parts(app);
-    let image = render_playlist_color_image(
+    let mut image = render_playlist_color_image(
         &app.active_skin,
         focused,
         view_model.shaded,
@@ -1159,13 +1183,53 @@ fn detached_playlist_snapshot(
         Some(&footer_sec),
     )
     .ok()?;
+    let playlist_menu_open = (!view_model.shaded)
+        .then_some(app.playlist_menu_open)
+        .flatten();
+    if let Some(kind) = playlist_menu_open {
+        overlay_detached_playlist_menu(&mut image, app, kind).ok()?;
+    }
     Some(DetachedPanelSnapshot {
         panel: LayoutPanelKind::Playlist,
         width: app.playlist_width,
         height: playlist_window_height(view_model.shaded, app.playlist_height),
         scale_factor: app.scale_factor,
+        playlist_menu_open,
         image,
     })
+}
+
+fn overlay_detached_playlist_menu(
+    image: &mut egui::ColorImage,
+    app: &EguiFrontendState,
+    kind: PlaylistMenuRenderKind,
+) -> Result<(), crate::render::RenderError> {
+    let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
+    let menu = render_playlist_menu_color_image(
+        &app.active_skin,
+        PlaylistMenuRenderState { kind, hover: None },
+        popup.width,
+        popup.height,
+    )?;
+    let image_width = image.size[0];
+    let image_height = image.size[1];
+    for y in 0..menu.size[1] {
+        let dest_y = popup.y + y as i32;
+        if dest_y < 0 || dest_y as usize >= image_height {
+            continue;
+        }
+        for x in 0..menu.size[0] {
+            let dest_x = popup.x + x as i32;
+            if dest_x < 0 || dest_x as usize >= image_width {
+                continue;
+            }
+            let src = menu.pixels[y * menu.size[0] + x];
+            if src.a() > 0 {
+                image.pixels[dest_y as usize * image_width + dest_x as usize] = src;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn detached_panel_viewport_size(snapshot: &DetachedPanelSnapshot) -> egui::Vec2 {
@@ -1483,6 +1547,20 @@ fn handle_detached_playlist_click(
     x: i32,
     y: i32,
 ) {
+    if let Some(open_menu) = snapshot.playlist_menu_open {
+        let popup = playlist_menu_popup_rect(open_menu, snapshot.width, snapshot.height);
+        if popup.contains(x, y) {
+            let index = ((y - popup.y) / 18).max(0) as usize;
+            if index < open_menu.item_count() {
+                push_detached_action(
+                    shared,
+                    DetachedPanelAction::PlaylistMenuItem(open_menu, index),
+                );
+            }
+            return;
+        }
+    }
+
     for menu in [
         PlaylistMenuButton::Add,
         PlaylistMenuButton::Remove,
@@ -2082,6 +2160,7 @@ mod tests {
             width: EQUALIZER_WINDOW_WIDTH,
             height: EQUALIZER_WINDOW_HEIGHT,
             scale_factor: 1.0,
+            playlist_menu_open: None,
         };
 
         let equalizer_builder =
@@ -2113,6 +2192,7 @@ mod tests {
             width: PLAYLIST_DEFAULT_WIDTH,
             height: PLAYLIST_DEFAULT_HEIGHT,
             scale_factor: 1.0,
+            playlist_menu_open: None,
         };
 
         let playlist_builder =
@@ -2188,6 +2268,25 @@ mod tests {
             assert!(state.playlist_focused);
             assert_ne!(playlist.image, inactive_playlist);
         }
+    }
+
+    #[test]
+    fn detached_playlist_snapshot_renders_open_skinned_menu() {
+        let mut app = EguiFrontendState::new(PreviewOptions {
+            show_playlist: true,
+            playlist_detached: Some(true),
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        let closed = detached_playlist_snapshot(&app, false).expect("closed playlist snapshot");
+        assert!(closed.playlist_menu_open.is_none());
+
+        app.playlist_menu_open = Some(PlaylistMenuButton::Add);
+        let open = detached_playlist_snapshot(&app, false).expect("open playlist snapshot");
+
+        assert_eq!(open.playlist_menu_open, Some(PlaylistMenuButton::Add));
+        assert_ne!(open.image, closed.image);
     }
 
     #[test]

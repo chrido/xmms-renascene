@@ -230,7 +230,7 @@ pub(crate) fn dispatch_equalizer_control(app: &mut EguiFrontendState, control: E
     }
 }
 
-fn show_equalizer_presets_popover(
+pub(crate) fn show_equalizer_presets_popover(
     ctx: &egui::Context,
     app: &mut EguiFrontendState,
     equalizer_rect: egui::Rect,
