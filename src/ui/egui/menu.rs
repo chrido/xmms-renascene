@@ -30,46 +30,66 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
     if !app.main_menu_open {
         return;
     }
-    let mut open = app.main_menu_open;
+    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        app.dispatch(UiCommand::SetMainMenuVisible(false));
+        return;
+    }
+
     let mut close_after_click = false;
-    egui::Window::new("XMMS Menu")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_pos(egui::pos2(0.0, 16.0 * app.scale_factor))
+    let dropdown_pos = egui::pos2(6.0 * app.scale_factor, 15.0 * app.scale_factor);
+    let response = egui::Area::new(egui::Id::new("xmms-egui-main-menu-dropdown"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(dropdown_pos)
+        .constrain(false)
         .show(ctx, |ui| {
-            ui.set_min_width(180.0);
-            if ui.button("Open Files...").clicked() {
-                close_after_click = true;
-                app.dispatch(PlaylistCommand::ExecuteMenu {
-                    kind: crate::playlist::PlaylistMenuKind::Add,
-                    index: 2,
-                });
-            }
-            if ui.button("Open Location...").clicked() {
-                close_after_click = true;
-                app.prompt_open = Some(EguiPrompt::OpenLocation);
-                app.prompt_text.clear();
-            }
-            if ui.button("Preferences").clicked() {
-                close_after_click = true;
-                app.dispatch(UiCommand::SetPreferencesVisible(true));
-            }
-            if ui.button("Skin Browser").clicked() {
-                close_after_click = true;
-                app.dispatch(UiCommand::SetSkinBrowserVisible(true));
-            }
-            if ui.button("Skin Editor").clicked() {
-                close_after_click = true;
-                app.runtime
-                    .pending_messages
-                    .push("skin editor is GTK-only for now".to_string());
-            }
-            if ui.button("Quit").clicked() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(180.0);
+                if ui.button("Open Files...").clicked() {
+                    close_after_click = true;
+                    app.dispatch(PlaylistCommand::ExecuteMenu {
+                        kind: crate::playlist::PlaylistMenuKind::Add,
+                        index: 2,
+                    });
+                }
+                if ui.button("Open Location...").clicked() {
+                    close_after_click = true;
+                    app.prompt_open = Some(EguiPrompt::OpenLocation);
+                    app.prompt_text.clear();
+                }
+                if ui.button("Preferences").clicked() {
+                    close_after_click = true;
+                    app.dispatch(UiCommand::SetPreferencesVisible(true));
+                }
+                if ui.button("Skin Browser").clicked() {
+                    close_after_click = true;
+                    app.dispatch(UiCommand::SetSkinBrowserVisible(true));
+                }
+                if ui.button("Skin Editor").clicked() {
+                    close_after_click = true;
+                    app.runtime
+                        .pending_messages
+                        .push("skin editor is GTK-only for now".to_string());
+                }
+                if ui.button("Quit").clicked() {
+                    close_after_click = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
         });
-    app.dispatch(UiCommand::SetMainMenuVisible(open && !close_after_click));
+
+    let clicked_outside = ctx.input(|input| {
+        input.pointer.any_released()
+            && input.pointer.latest_pos().is_some_and(|pos| {
+                let menu_button_rect = egui::Rect::from_min_size(
+                    egui::pos2(6.0 * app.scale_factor, 3.0 * app.scale_factor),
+                    egui::vec2(9.0 * app.scale_factor, 9.0 * app.scale_factor),
+                );
+                !response.response.rect.contains(pos) && !menu_button_rect.contains(pos)
+            })
+    });
+    if close_after_click || clicked_outside {
+        app.dispatch(UiCommand::SetMainMenuVisible(false));
+    }
 }
 
 pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {

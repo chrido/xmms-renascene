@@ -164,6 +164,13 @@ def open_docked_panel(main_window: MainWindow, toggle: MainToggleButton) -> int:
     raise AssertionError(f"egui panel for {toggle.value} did not open")
 
 
+def visible_windows(title: str) -> list[str]:
+    result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def assert_event_log(
     process: subprocess.Popen[bytes],
     primary_event: str,
@@ -241,6 +248,8 @@ def test_egui_equalizer_control_button_emits_event(
         expected_event,
     )
     if control is EqualizerControl.PRESETS:
+        time.sleep(0.2)
+        assert visible_windows("Equalizer Presets") == []
         run_xdotool("key", "Escape", check=False)
 
 
