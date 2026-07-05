@@ -490,24 +490,103 @@ class RepoTool:
         if not E2E_CREATE_VENV.is_file():
             raise RuntimeError(f"missing Python E2E virtualenv script: {E2E_CREATE_VENV}")
         python = self._e2e_venv_python()
-        if not python.is_file():
+        if python.is_file():
+            logging.info("Updating Python E2E virtualenv requirements...")
+        else:
             logging.info("Creating Python E2E virtualenv...")
-            [sys.executable, str(E2E_CREATE_VENV)] @ cli_follow | raise_on_error
+        [sys.executable, str(E2E_CREATE_VENV)] @ cli_follow | raise_on_error
         return python
+
+    def _pye2e_install_hint(self, missing: list[str]) -> str:
+        package_by_command = {
+            "cargo": "rustup or cargo",
+            "dbus-daemon": "dbus",
+            "ffmpeg": "ffmpeg",
+            "import": "imagemagick",
+            "python3": "python3",
+            "xdotool": "xdotool",
+            "xdpyinfo": "x11-utils",
+            "xvfb-run": "xvfb",
+            "xwd": "x11-apps",
+        }
+        packages = [package_by_command.get(command, command) for command in missing]
+        unique_packages = list(dict.fromkeys(packages))
+        return "sudo apt install -y " + " ".join(unique_packages)
+
+    def _display_is_reachable(self) -> bool:
+        display = os.environ.get("DISPLAY")
+        if not display:
+            return False
+        if not command_exists("xdpyinfo"):
+            logging.warning("DISPLAY is set but xdpyinfo is missing; assuming DISPLAY=%s is usable", display)
+            return True
+        result = subprocess.run(
+            ["xdpyinfo", "-display", display],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def _pye2e_xvfb_server_args(self) -> str:
+        return os.environ.get(
+            "XMMS_E2E_XVFB_SERVER_ARGS",
+            os.environ.get("XMMS_XVFB_SERVER_ARGS", "-screen 0 1024x768x24"),
+        )
+
+    def _pye2e_command(self, python: Path, args: tuple[str, ...]) -> list[str]:
+        pytest_command = [str(python), "-m", "pytest", "e2e", *args]
+        disable_xvfb = os.environ.get("XMMS_E2E_USE_XVFB") == "0"
+        force_xvfb = os.environ.get("XMMS_E2E_FORCE_XVFB") == "1"
+        if disable_xvfb and not force_xvfb:
+            logging.info("XMMS_E2E_USE_XVFB=0 set; running Python E2E tests on the current DISPLAY")
+            return pytest_command
+        if command_exists("xvfb-run"):
+            server_args = self._pye2e_xvfb_server_args()
+            logging.info("Running Python E2E tests under xvfb-run by default (%s)", server_args)
+            return ["xvfb-run", "-a", "-s", server_args, *pytest_command]
+        if force_xvfb or not self._display_is_reachable():
+            logging.error(
+                "xvfb-run is required for this Python E2E run. Install it with: %s",
+                self._pye2e_install_hint(["xvfb-run"]),
+            )
+            raise FileNotFoundError("xvfb-run")
+        logging.warning(
+            "xvfb-run is missing; falling back to the current DISPLAY. On GNOME/Wayland this may show screen-sharing prompts. Install it with: %s",
+            self._pye2e_install_hint(["xvfb-run"]),
+        )
+        return pytest_command
+
+    def _warn_missing_pye2e_tools(self) -> None:
+        missing = [command for command in ["cargo", "dbus-daemon", "ffmpeg", "xdotool"] if not command_exists(command)]
+        if os.environ.get("XMMS_E2E_USE_XVFB") != "0" and not command_exists("xvfb-run"):
+            missing.append("xvfb-run")
+        if not command_exists("import") and not command_exists("xwd"):
+            missing.extend(["import", "xwd"])
+        if missing:
+            logging.warning(
+                "Some Python E2E tools are missing (%s). Tests may fail or skip. Debian/Ubuntu setup: %s",
+                ", ".join(dict.fromkeys(missing)),
+                self._pye2e_install_hint(list(dict.fromkeys(missing))),
+            )
 
     async def pye2e(self, *args: str) -> int:
         """Run Python GUI E2E tests inside e2e/.venv.
 
-        Creates/updates the virtualenv from e2e/requirements.txt when needed.
-        Extra args are passed to pytest, e.g. `./repo pye2e -k gtk`.
+        Creates/updates the virtualenv from e2e/requirements.txt, checks common
+        local E2E tools, and runs pytest under xvfb-run by default so local
+        GNOME/Wayland sessions are not touched. Set XMMS_E2E_USE_XVFB=0 to use
+        the current DISPLAY instead. Extra args are passed to pytest, e.g.
+        `./repo pye2e -k gtk`.
         """
         os.chdir(REPO_DIR)
+        self._warn_missing_pye2e_tools()
         try:
             python = self._ensure_e2e_venv()
+            command = self._pye2e_command(python, args)
         except Exception as err:
-            logging.error("failed to prepare Python E2E virtualenv: %s", err)
+            logging.error("failed to prepare Python E2E run: %s", err)
             return 1
-        command = [str(python), "-m", "pytest", "e2e", *args]
         logging.info("Running Python E2E tests: %s", " ".join(shlex.quote(part) for part in command))
         result = subprocess.run(command, cwd=REPO_DIR, check=False)
         return result.returncode
@@ -560,8 +639,17 @@ class RepoTool:
             "XMMS_E2E_SCREENSHOT_DIR=/testoutput",
             "-e",
             "XMMS_E2E_VENV_DIR=/tmp/xmms-renascene-pye2e-venv",
+            "-e",
+            "XMMS_E2E_USE_XVFB=0",
         ]
         if hasattr(os, "getuid") and hasattr(os, "getgid"):
+            # Preserve host UID/GID so mounted artifacts are writable by the caller,
+            # but also expose passwd/group entries so services such as dbus-daemon
+            # can resolve the current UID inside the container.
+            if Path("/etc/passwd").is_file():
+                command.extend(["-v", "/etc/passwd:/etc/passwd:ro"])
+            if Path("/etc/group").is_file():
+                command.extend(["-v", "/etc/group:/etc/group:ro"])
             command.extend(
                 [
                     "--user",

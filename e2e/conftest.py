@@ -131,10 +131,12 @@ def build_gui_frontends() -> None:
     )
 
 
-@pytest.fixture(scope="session", autouse=True)
-def require_x11_tools() -> None:
+@pytest.fixture(autouse=True)
+def require_x11_tools(request: Any) -> None:
     if not os.environ.get("DISPLAY"):
         pytest.skip("DISPLAY is not set; run with xvfb-run, e.g. xvfb-run -a python -m pytest e2e")
+    if request.node.get_closest_marker("no_xdotool") is not None:
+        return
     if not command_exists("xdotool"):
         pytest.skip("xdotool is required for coordinate-based GUI E2E tests")
 
@@ -169,13 +171,17 @@ def start_gui_process(
     frontend: GuiFrontend,
     extra_args: list[str] | None = None,
     log_name: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> Iterator[subprocess.Popen[bytes]]:
     log_path = tmp_path / (log_name or f"xmms-{frontend.name}.log")
     log = log_path.open("wb")
+    env = gui_environment(tmp_path)
+    if extra_env:
+        env.update(extra_env)
     process = subprocess.Popen(
         [str(APP_BINARY), "--frontend", frontend.name, "--reset", *(extra_args or [])],
         cwd=REPO_ROOT,
-        env=gui_environment(tmp_path),
+        env=env,
         stdout=log,
         stderr=subprocess.STDOUT,
     )

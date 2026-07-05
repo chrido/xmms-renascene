@@ -335,12 +335,17 @@ pub mod gio_service {
                     }
                     MprisEvent::MetadataChanged | MprisEvent::PlaybackStatusChanged => {
                         let changed = player_properties_changed_variant(properties);
+                        let body = Variant::tuple_from_iter([
+                            PLAYER_INTERFACE.to_variant(),
+                            changed,
+                            Vec::<String>::new().to_variant(),
+                        ]);
                         let _ = connection.emit_signal(
                             None,
                             OBJECT_PATH,
                             DBUS_PROPERTIES_INTERFACE,
                             "PropertiesChanged",
-                            Some(&(PLAYER_INTERFACE, changed, Vec::<String>::new()).to_variant()),
+                            Some(&body),
                         );
                     }
                     MprisEvent::Raised | MprisEvent::QuitRequested => {}

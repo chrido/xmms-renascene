@@ -40,3 +40,23 @@ jobs:
 
       - name: Run unit tests
         run: xvfb-run -a cargo test --locked --all-targets
+
+  pye2e-docker:
+    name: Python GUI E2E Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Run Python GUI E2E tests in Docker
+        run: ./repo pye2e-docker
+
+      - name: Upload E2E screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pye2e-docker-output
+          path: testoutput
+          if-no-files-found: ignore

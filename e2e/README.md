@@ -6,31 +6,49 @@ The tests are intentionally black-box: they build/start the real application, fi
 
 ## Requirements
 
-Install the system tools used by the GTK/egui smoke tests:
+Install the system tools used by the GTK/egui smoke tests. On Debian/Ubuntu:
 
 ```bash
-sudo apt-get install -y xvfb xdotool imagemagick ffmpeg
+sudo apt-get install -y \
+  build-essential \
+  dbus \
+  dbus-x11 \
+  ffmpeg \
+  imagemagick \
+  libasound2-dev \
+  libcairo2-dev \
+  libgdk-pixbuf-2.0-dev \
+  libglib2.0-dev \
+  libgstreamer-plugins-base1.0-dev \
+  libgstreamer1.0-dev \
+  libgtk-4-dev \
+  libxkbcommon-x11-0 \
+  pkg-config \
+  python3 \
+  python3-venv \
+  x11-apps \
+  x11-utils \
+  xauth \
+  xdotool \
+  xvfb
 ```
 
 The screenshot helper prefers ImageMagick's `import` command for PNG output. If `import` is not installed but `xwd` is available, pressed-button screenshots are saved as `.xwd` files instead.
 
-Create/update the local test virtualenv:
+Run the tests locally:
 
 ```bash
-python e2e/create_venv.py
+./repo pye2e
 ```
 
-Run the tests under Xvfb so GTK has an X11 display:
+`./repo pye2e` creates/updates `e2e/.venv` from `e2e/requirements.txt`, checks common local E2E tools, and runs pytest under `xvfb-run -a` by default when `xvfb-run` is installed. This keeps GNOME/Wayland sessions from showing screen-sharing prompts or being controlled by the tests. Set `XMMS_E2E_VENV_DIR` to use a different virtualenv path. Extra arguments are passed to pytest, for example:
 
 ```bash
-xvfb-run -a -s "-screen 0 1024x768x24" ./repo pye2e
+./repo pye2e -k gtk
+./repo pye2e -k mpris
 ```
 
-`./repo pye2e` creates `e2e/.venv` from `e2e/requirements.txt` when needed and then runs `python -m pytest e2e` from that virtualenv. Set `XMMS_E2E_VENV_DIR` to use a different virtualenv path. Extra arguments are passed to pytest, for example:
-
-```bash
-xvfb-run -a ./repo pye2e -k gtk
-```
+Set `XMMS_E2E_USE_XVFB=0` to disable the automatic Xvfb wrapper and run against the current `DISPLAY`. This is useful for debugging but may trigger GNOME screen-sharing prompts. Set `XMMS_E2E_FORCE_XVFB=1` to require Xvfb and fail if `xvfb-run` is unavailable. Override Xvfb's server args with `XMMS_E2E_XVFB_SERVER_ARGS`, defaulting to `-screen 0 1024x768x24`.
 
 ## Docker/X server image
 
