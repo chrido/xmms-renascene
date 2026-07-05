@@ -220,7 +220,7 @@ fn add_equalizer_slider_hit(
     }
 }
 
-fn dispatch_equalizer_control(app: &mut EguiFrontendState, control: EqualizerControl) {
+pub(crate) fn dispatch_equalizer_control(app: &mut EguiFrontendState, control: EqualizerControl) {
     let control_name = format!("{control:?}");
     app_log_info!(equalizer, "control activated", control_name);
     match control {

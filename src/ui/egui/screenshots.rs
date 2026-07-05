@@ -17,6 +17,7 @@ use crate::render::{
     EqualizerRenderState, MainWindowRenderState, PlaylistRowsRenderState, RenderPass,
     PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
+use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
 
 use super::skin_texture::cairo_surface_to_color_image;
@@ -72,11 +73,11 @@ fn screenshot_state(
         main_shaded: app_state.config.main_shaded,
         equalizer_visible: app_state.config.equalizer_visible,
         equalizer_detached: app_state.config.equalizer_detached,
-        equalizer_focused: true,
+        equalizer_focused: false,
         equalizer_shaded: app_state.config.equalizer_shaded,
         playlist_visible: app_state.config.playlist_visible,
         playlist_detached: app_state.config.playlist_detached,
-        playlist_focused: true,
+        playlist_focused: false,
         playlist_shaded: app_state.config.playlist_shaded,
         playlist_width,
         playlist_height,
@@ -114,10 +115,21 @@ fn render_docked_screenshot_pass(
             &MainWindowRenderState {
                 focused: docked_state.main_focused,
                 shaded: docked_state.main_shaded,
+                title: screenshot_current_title(app_state),
+                bitrate_text: screenshot_bitrate_text(app_state),
+                frequency_text: screenshot_frequency_text(app_state),
+                play_status: match app_state.player.state() {
+                    crate::player::PlayerState::Playing => PlayStatusValue::Playing,
+                    crate::player::PlayerState::Paused => PlayStatusValue::Paused,
+                    crate::player::PlayerState::Stopped => PlayStatusValue::Stopped,
+                },
+                channels: app_state.player.channels(),
                 volume_position: volume_to_position(app_state.player.volume()),
                 balance_position: balance_to_position(app_state.player.balance()),
                 equalizer_selected: docked_state.equalizer_visible,
                 playlist_selected: docked_state.playlist_visible,
+                shuffle_selected: app_state.playlist.shuffle(),
+                repeat_selected: app_state.playlist.repeat(),
                 ..MainWindowRenderState::default()
             },
         )?;
@@ -201,6 +213,46 @@ fn render_docked_screenshot_pass(
     }
 
     Ok(rendered)
+}
+
+fn screenshot_current_title(app_state: &AppState) -> String {
+    let Some(position) = app_state.playlist.position() else {
+        return "XMMS Renascene".to_string();
+    };
+    let Some(entry) = app_state.playlist.entries().get(position) else {
+        return "XMMS Renascene".to_string();
+    };
+    format_title_for_preferences(
+        &app_state.config.title_format,
+        &entry.filename,
+        &entry.title,
+        &app_state.config,
+    )
+}
+
+fn screenshot_bitrate_text(app_state: &AppState) -> String {
+    let bitrate = app_state.player.bitrate();
+    if bitrate <= 0 {
+        return "   ".to_string();
+    }
+    if bitrate < 1000 {
+        format!("{bitrate:>3}")
+    } else {
+        format!("{:>2}H", bitrate / 100)
+    }
+}
+
+fn screenshot_frequency_text(app_state: &AppState) -> String {
+    let frequency = app_state.player.frequency();
+    if frequency <= 0 {
+        return "  ".to_string();
+    }
+    let khz = if frequency >= 1000 {
+        (frequency + 500) / 1000
+    } else {
+        frequency
+    };
+    format!("{khz:>2}")
 }
 
 fn screenshot_playlist_footer_time_parts(app_state: &AppState) -> (String, String) {

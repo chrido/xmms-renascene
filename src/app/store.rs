@@ -323,7 +323,16 @@ impl AppStore {
         let before = StoreSnapshot::from_state(self.state());
         let effects = self.controller.handle_command(command);
         let after = StoreSnapshot::from_state(self.state());
-        self.finish_dispatch_logged(ConsoleLogLevel::Info, event, before.diff(&after), effects)
+        let changes = before.diff(&after);
+        // Commands that don't mutate any state (e.g. idempotent UI-visibility
+        // commands re-dispatched every frame) are noise at info level; keep them
+        // at trace so meaningful state transitions stay visible.
+        let level = if changes.is_empty() {
+            ConsoleLogLevel::Trace
+        } else {
+            ConsoleLogLevel::Info
+        };
+        self.finish_dispatch_logged(level, event, changes, effects)
     }
 
     pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> DispatchResult {

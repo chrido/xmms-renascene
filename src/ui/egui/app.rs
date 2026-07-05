@@ -40,15 +40,17 @@ use crate::player::{GStreamerBackend, PlaybackEvent, PlayerState};
 use crate::playlist::file_uri_to_path;
 use crate::playlist::{DurationIndexResult, Playlist};
 use crate::render::{
-    docked_panel_size, playlist_window_height, DockedPanelState, EqualizerControl,
-    EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider, MainToggleButton,
-    PlaylistMenuRenderKind, PlaylistRowRenderEntry, PlaylistRowsRenderState,
+    docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
+    EqualizerControl, EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider,
+    MainToggleButton, PlaylistMenuRenderKind, PlaylistRowRenderEntry, PlaylistRowsRenderState,
     VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::session::default_config_dir;
 use crate::skin::layout::{
-    panel_title_button_rect, snap_playlist_size, LayoutPanelKind, PanelTitleButton,
+    equalizer_control_rect, panel_title_button_rect, playlist_footer_button_rect,
+    playlist_menu_button_rect, snap_playlist_size, LayoutPanelKind, PanelTitleButton,
+    PlaylistFooterButton, PlaylistMenuButton,
 };
 use crate::skin::widget::{Visualization, WidgetId};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
@@ -80,11 +82,23 @@ struct DetachedPanelSnapshot {
     scale_factor: f32,
 }
 
+#[derive(Debug, Clone)]
+enum DetachedPanelAction {
+    Panel(PanelCommand),
+    EqualizerControl(EqualizerControl),
+    PlaylistFooter(PlaylistFooterButton),
+    PlaylistMenu(PlaylistMenuButton),
+}
+
 #[derive(Debug, Default)]
 struct DetachedViewportState {
     equalizer: Option<DetachedPanelSnapshot>,
     playlist: Option<DetachedPanelSnapshot>,
-    commands: Vec<PanelCommand>,
+    equalizer_focused: bool,
+    playlist_focused: bool,
+    actions: Vec<DetachedPanelAction>,
+    playlist_resize_start: Option<(i32, i32)>,
+    playlist_resize_request: Option<(i32, i32)>,
 }
 
 pub struct EguiFrontendState {
@@ -119,6 +133,7 @@ pub struct EguiFrontendState {
     pub playlist_scroll_offset: usize,
     pub playlist_width: i32,
     pub playlist_height: i32,
+    pub playlist_resize_start: Option<i32>,
     visualization: Visualization,
     visualization_tick_counter: i32,
     #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
@@ -203,6 +218,7 @@ impl EguiFrontendState {
             playlist_scroll_offset: 0,
             playlist_width: playlist_size.width,
             playlist_height: playlist_size.height,
+            playlist_resize_start: None,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
             duration_index_sender,
@@ -248,7 +264,13 @@ impl EguiFrontendState {
     pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
         config.scale_factor = config.scale_factor.clamp(1.0, 5.0);
         config.doublesize = config.scale_factor > 1.0;
+        let was_playlist_detached = self.controller.state().config.playlist_detached;
         let result = self.controller.apply_config_from_preferences(config);
+        // When the playlist re-attaches to the main window, snap its width back to
+        // the player width so the docked stack matches the player (GTK parity).
+        if was_playlist_detached && !self.controller.state().config.playlist_detached {
+            self.set_playlist_size(crate::render::PLAYLIST_MIN_WIDTH, self.playlist_height);
+        }
         self.sync_frontend_state_from_store();
         self.sync_scale_factor_from_config();
         self.apply_visualization_preferences();
@@ -874,6 +896,33 @@ impl EguiFrontendState {
             height as f32 * self.scale_factor,
         )
     }
+
+    pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
+        let size = snap_playlist_size(width, height);
+        let changed = self.playlist_width != size.width || self.playlist_height != size.height;
+        self.playlist_width = size.width;
+        self.playlist_height = size.height;
+        self.clamp_playlist_scroll_offset();
+        changed
+    }
+
+    pub(crate) fn playlist_visible_rows(&self) -> usize {
+        ((self.playlist_height - 58) / 11).max(1) as usize
+    }
+
+    pub(crate) fn playlist_max_scroll_offset(&self) -> usize {
+        self.controller
+            .state()
+            .playlist
+            .len()
+            .saturating_sub(self.playlist_visible_rows())
+    }
+
+    pub(crate) fn clamp_playlist_scroll_offset(&mut self) {
+        self.playlist_scroll_offset = self
+            .playlist_scroll_offset
+            .min(self.playlist_max_scroll_offset());
+    }
 }
 
 impl eframe::App for EguiFrontendState {
@@ -893,6 +942,7 @@ impl eframe::App for EguiFrontendState {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        sync_root_viewport_focus(&ctx, self);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
@@ -938,6 +988,17 @@ fn handle_dropped_files(ctx: &egui::Context, app: &mut EguiFrontendState) {
     }
 }
 
+fn sync_root_viewport_focus(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    if ctx.input(|input| input.viewport().focused) == Some(true) {
+        let mut state = app
+            .detached_viewports
+            .lock()
+            .expect("detached viewport state poisoned");
+        state.equalizer_focused = false;
+        state.playlist_focused = false;
+    }
+}
+
 fn show_detached_panels(ctx: &egui::Context, app: &mut EguiFrontendState) {
     apply_detached_panel_commands(app);
     update_detached_panel_snapshots(app);
@@ -964,25 +1025,53 @@ fn show_detached_panels(ctx: &egui::Context, app: &mut EguiFrontendState) {
 }
 
 fn apply_detached_panel_commands(app: &mut EguiFrontendState) {
-    let commands = {
+    let (actions, resize_request) = {
         let mut state = app
             .detached_viewports
             .lock()
             .expect("detached viewport state poisoned");
-        std::mem::take(&mut state.commands)
+        (
+            std::mem::take(&mut state.actions),
+            state.playlist_resize_request.take(),
+        )
     };
-    for command in commands {
-        app.dispatch(command);
+    for action in actions {
+        apply_detached_panel_action(app, action);
+    }
+    if let Some((width, height)) = resize_request {
+        app.set_playlist_size(width, height);
+    }
+}
+
+fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPanelAction) {
+    match action {
+        DetachedPanelAction::Panel(command) => app.dispatch(command),
+        DetachedPanelAction::EqualizerControl(control) => {
+            equalizer::dispatch_equalizer_control(app, control)
+        }
+        DetachedPanelAction::PlaylistFooter(button) => {
+            playlist::dispatch_playlist_footer_button(app, button)
+        }
+        DetachedPanelAction::PlaylistMenu(menu) => {
+            playlist::dispatch_playlist_menu_button(app, menu)
+        }
     }
 }
 
 fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
     let config = app.controller().state().config.clone();
+    let (equalizer_focused, playlist_focused) = {
+        let state = app
+            .detached_viewports
+            .lock()
+            .expect("detached viewport state poisoned");
+        (state.equalizer_focused, state.playlist_focused)
+    };
     let equalizer = (config.equalizer_visible && config.equalizer_detached)
-        .then(|| detached_equalizer_snapshot(app))
+        .then(|| detached_equalizer_snapshot(app, equalizer_focused))
         .flatten();
     let playlist = (config.playlist_visible && config.playlist_detached)
-        .then(|| detached_playlist_snapshot(app))
+        .then(|| detached_playlist_snapshot(app, playlist_focused))
         .flatten();
     let mut state = app
         .detached_viewports
@@ -992,10 +1081,13 @@ fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
     state.playlist = playlist;
 }
 
-fn detached_equalizer_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSnapshot> {
+fn detached_equalizer_snapshot(
+    app: &EguiFrontendState,
+    focused: bool,
+) -> Option<DetachedPanelSnapshot> {
     let view_model = equalizer_view_model(app.controller().state());
     let render_state = EqualizerRenderState {
-        focused: true,
+        focused,
         shaded: view_model.shaded,
         active: view_model.active,
         automatic: view_model.auto,
@@ -1020,7 +1112,10 @@ fn detached_equalizer_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelS
     })
 }
 
-fn detached_playlist_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSnapshot> {
+fn detached_playlist_snapshot(
+    app: &EguiFrontendState,
+    focused: bool,
+) -> Option<DetachedPanelSnapshot> {
     let view_model = playlist_view_model(app.controller().state());
     let rows = PlaylistRowsRenderState {
         entries: view_model
@@ -1053,7 +1148,7 @@ fn detached_playlist_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSn
     let (footer_min, footer_sec) = detached_playlist_footer_time_parts(app);
     let image = render_playlist_color_image(
         &app.active_skin,
-        true,
+        focused,
         view_model.shaded,
         app.playlist_width,
         app.playlist_height,
@@ -1071,6 +1166,71 @@ fn detached_playlist_snapshot(app: &EguiFrontendState) -> Option<DetachedPanelSn
         scale_factor: app.scale_factor,
         image,
     })
+}
+
+fn detached_panel_viewport_size(snapshot: &DetachedPanelSnapshot) -> egui::Vec2 {
+    egui::vec2(
+        snapshot.width as f32 * snapshot.scale_factor,
+        snapshot.height as f32 * snapshot.scale_factor,
+    )
+}
+
+fn detached_panel_viewport_min_size(
+    snapshot: &DetachedPanelSnapshot,
+    equalizer_panel: bool,
+) -> egui::Vec2 {
+    // Do not use the current panel size as the viewport minimum: shade toggles
+    // intentionally shrink detached panels, and Wayland rejects resizing a
+    // surface below its configured minimum (`wl_surface: Invalid min/max size`).
+    if equalizer_panel {
+        egui::vec2(
+            EQUALIZER_WINDOW_WIDTH as f32 * snapshot.scale_factor,
+            equalizer_window_height(true) as f32 * snapshot.scale_factor,
+        )
+    } else {
+        egui::vec2(
+            PLAYLIST_MIN_WIDTH as f32 * snapshot.scale_factor,
+            playlist_window_height(true, PLAYLIST_MIN_HEIGHT) as f32 * snapshot.scale_factor,
+        )
+    }
+}
+
+fn detached_panel_viewport_builder(
+    title: &'static str,
+    snapshot: &DetachedPanelSnapshot,
+    equalizer_panel: bool,
+) -> egui::ViewportBuilder {
+    egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size(detached_panel_viewport_size(snapshot))
+        .with_min_inner_size(detached_panel_viewport_min_size(snapshot, equalizer_panel))
+        // Wayland implements `resizable = false` by locking min and max size
+        // to the current size. Detached panels still need programmatic resizes
+        // for shade/unshade, so keep the protocol surface resizable; only the
+        // playlist exposes an in-app resize handle.
+        .with_resizable(true)
+        .with_decorations(false)
+}
+
+fn update_detached_panel_viewport_focus(
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    equalizer_panel: bool,
+    focused: bool,
+) -> bool {
+    let mut state = shared.lock().expect("detached viewport state poisoned");
+    let before = (state.equalizer_focused, state.playlist_focused);
+    if equalizer_panel {
+        state.equalizer_focused = focused;
+        if focused {
+            state.playlist_focused = false;
+        }
+    } else {
+        state.playlist_focused = focused;
+        if focused {
+            state.equalizer_focused = false;
+        }
+    }
+    before != (state.equalizer_focused, state.playlist_focused)
 }
 
 fn show_detached_panel_viewport(
@@ -1091,20 +1251,13 @@ fn show_detached_panel_viewport(
     let Some(snapshot) = snapshot else {
         return;
     };
-    let size = egui::vec2(
-        snapshot.width as f32 * snapshot.scale_factor,
-        snapshot.height as f32 * snapshot.scale_factor,
-    );
-    let builder = egui::ViewportBuilder::default()
-        .with_title(title)
-        .with_inner_size(size)
-        .with_min_inner_size(size)
-        .with_resizable(!equalizer_panel)
-        .with_decorations(false);
+    let size = detached_panel_viewport_size(&snapshot);
+    let builder = detached_panel_viewport_builder(title, &snapshot, equalizer_panel);
     ctx.show_viewport_deferred(
         egui::ViewportId::from_hash_of(id),
         builder,
         move |ctx, class| {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             if ctx.input(|input| input.viewport().close_requested()) {
                 push_detached_command(
                     &shared,
@@ -1121,6 +1274,18 @@ fn show_detached_panel_viewport(
                     show_embedded_detached_snapshot(ctx, &shared, title, equalizer_panel);
                 }
                 egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                    let focus_changed =
+                        ctx.input(|input| input.viewport().focused)
+                            .is_some_and(|focused| {
+                                update_detached_panel_viewport_focus(
+                                    &shared,
+                                    equalizer_panel,
+                                    focused,
+                                )
+                            });
+                    if focus_changed {
+                        ctx.request_repaint();
+                    }
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE)
                         .show(ctx, |ui| show_detached_snapshot(ui, &shared, &snapshot));
@@ -1187,15 +1352,61 @@ fn show_detached_snapshot(
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+    let resize_offset = {
+        let state = shared.lock().expect("detached viewport state poisoned");
+        state.playlist_resize_start
+    };
+    if let Some((offset_x, offset_y)) = resize_offset {
+        if ui.ctx().input(|input| input.pointer.primary_down()) {
+            if let Some(pointer) = ui.ctx().input(|input| input.pointer.latest_pos()) {
+                let local_x = ((pointer.x - rect.left()) / snapshot.scale_factor).round() as i32;
+                let local_y = ((pointer.y - rect.top()) / snapshot.scale_factor).round() as i32;
+                let mut state = shared.lock().expect("detached viewport state poisoned");
+                state.playlist_resize_request = Some((local_x + offset_x, local_y + offset_y));
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        let mut state = shared.lock().expect("detached viewport state poisoned");
+        state.playlist_resize_start = None;
+    }
     if let Some(pos) = response.interact_pointer_pos() {
-        if response.drag_started() && detached_panel_titlebar_drag_region(snapshot, rect, pos) {
+        if response.drag_started() && detached_playlist_resize_region(snapshot, rect, pos) {
+            let local_x = ((pos.x - rect.left()) / snapshot.scale_factor).round() as i32;
+            let local_y = ((pos.y - rect.top()) / snapshot.scale_factor).round() as i32;
+            let mut state = shared.lock().expect("detached viewport state poisoned");
+            state.playlist_resize_start =
+                Some((snapshot.width - local_x, snapshot.height - local_y));
+            ui.ctx().request_repaint();
+            return;
+        }
+        let primary_pressed = response.is_pointer_button_down_on()
+            && ui
+                .ctx()
+                .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+        if primary_pressed && detached_panel_titlebar_drag_region(snapshot, rect, pos) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             return;
         }
-        if response.clicked() {
+        if primary_pressed {
             handle_detached_panel_click(shared, snapshot, rect, pos);
         }
     }
+}
+
+fn detached_playlist_resize_region(
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+    pos: egui::Pos2,
+) -> bool {
+    if snapshot.panel != LayoutPanelKind::Playlist
+        || snapshot.height <= crate::render::MAIN_TITLEBAR_HEIGHT
+    {
+        return false;
+    }
+    let x = ((pos.x - base_rect.left()) / snapshot.scale_factor).floor() as i32;
+    let y = ((pos.y - base_rect.top()) / snapshot.scale_factor).floor() as i32;
+    x >= snapshot.width - 20 && y >= snapshot.height - 20
 }
 
 fn detached_panel_titlebar_drag_region(
@@ -1243,14 +1454,75 @@ fn handle_detached_panel_click(
             return;
         }
     }
+
+    if snapshot.height <= crate::render::MAIN_TITLEBAR_HEIGHT {
+        return;
+    }
+    match snapshot.panel {
+        LayoutPanelKind::Equalizer => handle_detached_equalizer_click(shared, x, y),
+        LayoutPanelKind::Playlist => handle_detached_playlist_click(shared, snapshot, x, y),
+    }
+}
+
+fn handle_detached_equalizer_click(shared: &Arc<Mutex<DetachedViewportState>>, x: i32, y: i32) {
+    for control in [
+        EqualizerControl::On,
+        EqualizerControl::Auto,
+        EqualizerControl::Presets,
+    ] {
+        if equalizer_control_rect(control).contains(x, y) {
+            push_detached_action(shared, DetachedPanelAction::EqualizerControl(control));
+            return;
+        }
+    }
+}
+
+fn handle_detached_playlist_click(
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+    x: i32,
+    y: i32,
+) {
+    for menu in [
+        PlaylistMenuButton::Add,
+        PlaylistMenuButton::Remove,
+        PlaylistMenuButton::Select,
+        PlaylistMenuButton::Misc,
+        PlaylistMenuButton::List,
+    ] {
+        if playlist_menu_button_rect(menu, snapshot.width, snapshot.height).contains(x, y) {
+            push_detached_action(shared, DetachedPanelAction::PlaylistMenu(menu));
+            return;
+        }
+    }
+
+    for button in [
+        PlaylistFooterButton::Previous,
+        PlaylistFooterButton::Play,
+        PlaylistFooterButton::Pause,
+        PlaylistFooterButton::Stop,
+        PlaylistFooterButton::Next,
+        PlaylistFooterButton::Eject,
+        PlaylistFooterButton::ScrollUp,
+        PlaylistFooterButton::ScrollDown,
+    ] {
+        if playlist_footer_button_rect(button, snapshot.width, snapshot.height).contains(x, y) {
+            push_detached_action(shared, DetachedPanelAction::PlaylistFooter(button));
+            return;
+        }
+    }
 }
 
 fn push_detached_command(shared: &Arc<Mutex<DetachedViewportState>>, command: PanelCommand) {
+    push_detached_action(shared, DetachedPanelAction::Panel(command));
+}
+
+fn push_detached_action(shared: &Arc<Mutex<DetachedViewportState>>, action: DetachedPanelAction) {
     shared
         .lock()
         .expect("detached viewport state poisoned")
-        .commands
-        .push(command);
+        .actions
+        .push(action);
 }
 
 fn detached_playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
@@ -1490,17 +1762,11 @@ fn pointer_over_docked_playlist(input: &egui::InputState, app: &EguiFrontendStat
 }
 
 fn scroll_playlist_by_wheel(app: &mut EguiFrontendState, scroll_y: f32) {
-    let visible_rows = ((app.playlist_height - 58) / 11).max(1) as usize;
-    let max_offset = app
-        .controller()
-        .state()
-        .playlist
-        .len()
-        .saturating_sub(visible_rows);
     if scroll_y > 0.0 {
         app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(3);
     } else {
-        app.playlist_scroll_offset = (app.playlist_scroll_offset + 3).min(max_offset);
+        app.playlist_scroll_offset =
+            (app.playlist_scroll_offset + 3).min(app.playlist_max_scroll_offset());
     }
 }
 
@@ -1529,7 +1795,7 @@ fn handle_playlist_shortcuts(input: &egui::InputState, app: &mut EguiFrontendSta
         app.dispatch(PlayerCommand::Play);
     }
     let current = app.controller().state().playlist.position().unwrap_or(0);
-    let visible_rows = ((app.playlist_height - 58) / 11).max(1) as usize;
+    let visible_rows = app.playlist_visible_rows();
     let next = if input.key_pressed(egui::Key::ArrowDown)
         || (app.controller().state().config.vim_playlist_navigation
             && input.key_pressed(egui::Key::J))
@@ -1566,7 +1832,7 @@ pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size(window_size)
                 .with_decorations(false)
-                .with_resizable(false),
+                .with_resizable(true),
             ..eframe::NativeOptions::default()
         },
         Box::new(|_cc| Ok(Box::new(app))),
@@ -1765,15 +2031,163 @@ mod tests {
 
     #[test]
     fn egui_startup_playlist_size_uses_skinned_dimensions() {
-        let app = EguiFrontendState::new(PreviewOptions {
+        let app = match EguiFrontendState::new(PreviewOptions {
             playlist_size: Some((325, 290)),
             ..PreviewOptions::default()
-        })
-        .unwrap();
+        }) {
+            Ok(app) => app,
+            Err(err) => panic!("failed to construct egui state: {err}"),
+        };
 
         assert!(app.controller().state().config.playlist_visible);
         assert_eq!((app.playlist_width, app.playlist_height), (325, 290));
         assert_eq!(app.desired_window_size().x, 325.0 * app.scale_factor);
+    }
+
+    #[test]
+    fn egui_reattaching_playlist_snaps_width_to_player() {
+        let mut app = match EguiFrontendState::new(PreviewOptions {
+            playlist_size: Some((325, 290)),
+            playlist_detached: Some(true),
+            ..PreviewOptions::default()
+        }) {
+            Ok(app) => app,
+            Err(err) => panic!("failed to construct egui state: {err}"),
+        };
+
+        assert!(app.controller().state().config.playlist_detached);
+        assert_eq!(app.playlist_width, 325);
+        let detached_height = app.playlist_height;
+
+        let mut config = app.controller().state().config.clone();
+        config.playlist_detached = false;
+        app.apply_preferences_config(config);
+
+        assert!(!app.controller().state().config.playlist_detached);
+        // Width snaps back to the player width; height is preserved (GTK parity).
+        assert_eq!(app.playlist_width, crate::render::PLAYLIST_MIN_WIDTH);
+        assert_eq!(app.playlist_height, detached_height);
+        assert_eq!(
+            app.desired_window_size().x,
+            crate::render::MAIN_WINDOW_WIDTH as f32 * app.scale_factor
+        );
+    }
+
+    #[test]
+    fn detached_panel_viewport_constraints_allow_wayland_shade_resize() {
+        let image = egui::ColorImage::from_rgba_unmultiplied([1, 1], &[0, 0, 0, 0]);
+        let equalizer_snapshot = DetachedPanelSnapshot {
+            panel: LayoutPanelKind::Equalizer,
+            image: image.clone(),
+            width: EQUALIZER_WINDOW_WIDTH,
+            height: EQUALIZER_WINDOW_HEIGHT,
+            scale_factor: 1.0,
+        };
+
+        let equalizer_builder =
+            detached_panel_viewport_builder("Equalizer", &equalizer_snapshot, true);
+
+        assert_eq!(equalizer_builder.resizable, Some(true));
+        assert_eq!(
+            equalizer_builder.inner_size,
+            Some(egui::vec2(
+                EQUALIZER_WINDOW_WIDTH as f32,
+                EQUALIZER_WINDOW_HEIGHT as f32
+            ))
+        );
+        assert_eq!(
+            equalizer_builder.min_inner_size,
+            Some(egui::vec2(
+                EQUALIZER_WINDOW_WIDTH as f32,
+                equalizer_window_height(true) as f32
+            ))
+        );
+        assert!(equalizer_builder.max_inner_size.is_none());
+        assert!(
+            equalizer_builder.min_inner_size.unwrap().y < equalizer_builder.inner_size.unwrap().y
+        );
+
+        let playlist_snapshot = DetachedPanelSnapshot {
+            panel: LayoutPanelKind::Playlist,
+            image,
+            width: PLAYLIST_DEFAULT_WIDTH,
+            height: PLAYLIST_DEFAULT_HEIGHT,
+            scale_factor: 1.0,
+        };
+
+        let playlist_builder =
+            detached_panel_viewport_builder("Playlist", &playlist_snapshot, false);
+
+        assert_eq!(playlist_builder.resizable, Some(true));
+        assert_eq!(
+            playlist_builder.min_inner_size,
+            Some(egui::vec2(
+                PLAYLIST_MIN_WIDTH as f32,
+                playlist_window_height(true, PLAYLIST_MIN_HEIGHT) as f32
+            ))
+        );
+        assert!(
+            playlist_builder.min_inner_size.unwrap().y < playlist_builder.inner_size.unwrap().y
+        );
+    }
+
+    #[test]
+    fn detached_panel_snapshots_use_active_window_skin_state() {
+        let mut app = EguiFrontendState::new(PreviewOptions {
+            show_equalizer: true,
+            show_playlist: true,
+            equalizer_detached: Some(true),
+            playlist_detached: Some(true),
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        update_detached_panel_snapshots(&mut app);
+        let (inactive_equalizer, inactive_playlist) = {
+            let state = app
+                .detached_viewports
+                .lock()
+                .expect("detached viewport state poisoned");
+            let equalizer = state.equalizer.as_ref().expect("equalizer snapshot");
+            let playlist = state.playlist.as_ref().expect("playlist snapshot");
+            assert!(!state.equalizer_focused);
+            assert!(!state.playlist_focused);
+            (equalizer.image.clone(), playlist.image.clone())
+        };
+
+        assert!(update_detached_panel_viewport_focus(
+            &app.detached_viewports,
+            true,
+            true
+        ));
+        update_detached_panel_snapshots(&mut app);
+        {
+            let state = app
+                .detached_viewports
+                .lock()
+                .expect("detached viewport state poisoned");
+            let equalizer = state.equalizer.as_ref().expect("equalizer snapshot");
+            assert!(state.equalizer_focused);
+            assert!(!state.playlist_focused);
+            assert_ne!(equalizer.image, inactive_equalizer);
+        }
+
+        assert!(update_detached_panel_viewport_focus(
+            &app.detached_viewports,
+            false,
+            true
+        ));
+        update_detached_panel_snapshots(&mut app);
+        {
+            let state = app
+                .detached_viewports
+                .lock()
+                .expect("detached viewport state poisoned");
+            let playlist = state.playlist.as_ref().expect("playlist snapshot");
+            assert!(!state.equalizer_focused);
+            assert!(state.playlist_focused);
+            assert_ne!(playlist.image, inactive_playlist);
+        }
     }
 
     #[test]

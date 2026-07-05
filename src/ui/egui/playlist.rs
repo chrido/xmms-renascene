@@ -11,7 +11,7 @@ use crate::player::PlayerState;
 use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 use crate::render::{
     playlist_window_height, PlaylistMenuRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState,
+    PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH,
 };
 use crate::skin::layout::{
     panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
@@ -67,6 +67,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     add_playlist_titlebar_drag_region(ui, app, rect);
     add_playlist_hit_regions(ui, app, rect, &view_model);
+    add_playlist_resize_handle(ui, app, rect, &view_model);
     show_playlist_sort_popover(ui.ctx(), app, rect);
     add_playlist_menu_popover(ui, app, rect);
     show_physical_delete_confirmation(ui.ctx(), app);
@@ -214,6 +215,53 @@ fn add_playlist_hit_regions(
         if response.clicked() {
             dispatch_playlist_footer_button(app, button);
         }
+    }
+}
+
+fn add_playlist_resize_handle(
+    ui: &mut egui::Ui,
+    app: &mut EguiFrontendState,
+    base_rect: egui::Rect,
+    view_model: &PlaylistViewModel,
+) {
+    if view_model.shaded {
+        app.playlist_resize_start = None;
+        return;
+    }
+    let rect = scale_skin_rect(
+        base_rect,
+        SkinRect::new(app.playlist_width - 20, app.playlist_height - 20, 20, 20),
+        app.scale_factor,
+    );
+    let response = ui.interact(
+        rect,
+        ui.id().with("playlist-resize-handle"),
+        egui::Sense::click_and_drag(),
+    );
+    if response.hovered() || app.playlist_resize_start.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+    }
+    if response.drag_started() {
+        let pointer = response
+            .interact_pointer_pos()
+            .unwrap_or(rect.right_bottom());
+        let local_y = ((pointer.y - base_rect.top()) / app.scale_factor).round() as i32;
+        app.playlist_resize_start = Some(app.playlist_height - local_y);
+    }
+    if let Some(offset_y) = app.playlist_resize_start {
+        if ui.ctx().input(|input| input.pointer.primary_down()) {
+            if let Some(pointer) = ui.ctx().input(|input| input.pointer.latest_pos()) {
+                let local_y = ((pointer.y - base_rect.top()) / app.scale_factor).round() as i32;
+                if app.set_playlist_size(PLAYLIST_MIN_WIDTH, local_y + offset_y) {
+                    ui.ctx().request_repaint();
+                }
+            }
+        } else {
+            app.playlist_resize_start = None;
+        }
+    }
+    if response.drag_stopped() {
+        app.playlist_resize_start = None;
     }
 }
 
@@ -719,8 +767,10 @@ mod tests {
 
     #[test]
     fn shaded_playlist_info_matches_gtk_title_duration_layout() {
-        let mut app =
-            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        let mut app = match EguiFrontendState::new(crate::app::preview::PreviewOptions::default()) {
+            Ok(app) => app,
+            Err(err) => panic!("failed to construct egui state: {err}"),
+        };
         app.controller_mut().state_mut().config.show_numbers_in_pl = true;
         app.controller_mut().state_mut().playlist.add_timed_uri(
             "file:///tmp/current-demo.ogg",

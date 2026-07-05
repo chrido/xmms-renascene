@@ -35,6 +35,9 @@ from gui import (
     SkinRect,
     click_skin_rect,
     run_xdotool,
+    scaled_skin_point,
+    wait_for_visible_window,
+    window_geometry,
 )
 
 pytest: Any = import_module("pytest")
@@ -144,8 +147,32 @@ def egui_app_with_event_tracks(
 
 
 @pytest.fixture
+def egui_detached_app_with_event_tracks(
+    tmp_path: Path,
+    egui_event_tracks: list[Path],
+) -> Iterator[subprocess.Popen[bytes]]:
+    yield from start_gui_process(
+        tmp_path,
+        EGUI_FRONTEND,
+        [
+            "--equalizer-undocked",
+            "--playlist-undocked",
+            *(str(track) for track in egui_event_tracks),
+        ],
+        log_name="xmms-egui-detached-button-events.log",
+    )
+
+
+@pytest.fixture
 def egui_main_window(egui_app_with_event_tracks: subprocess.Popen[bytes]) -> MainWindow:
     return wait_for_main_window_with_log(egui_app_with_event_tracks)
+
+
+@pytest.fixture
+def egui_detached_main_window(
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+) -> MainWindow:
+    return wait_for_main_window_with_log(egui_detached_app_with_event_tracks)
 
 
 def offset_rect(rect: SkinRect, y_offset: int) -> SkinRect:
@@ -170,6 +197,33 @@ def visible_windows(title: str) -> list[str]:
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def wait_for_detached_panel_window(
+    process: subprocess.Popen[bytes],
+    title: str,
+) -> str:
+    return wait_for_visible_window(title, process=process, timeout=5.0)
+
+
+def click_detached_skin_rect_without_activation_click(
+    main_window: MainWindow,
+    detached_window_id: str,
+    rect: SkinRect,
+) -> None:
+    x, y = scaled_skin_point(detached_window_id, rect)
+    # Xvfb often runs without a window manager, so egui native windows all start
+    # overlapped at 0,0. Put the detached target somewhere non-overlapping and
+    # focus its X window for event delivery, then send exactly one button click.
+    # No separate activation click is used.
+    run_xdotool("windowmove", detached_window_id, "320", "280", check=False)
+    time.sleep(0.1)
+    main_window.focus_main_window()
+    run_xdotool("windowfocus", detached_window_id, check=False)
+    geometry = window_geometry(detached_window_id)
+    run_xdotool("mousemove", str(geometry.x + x), str(geometry.y + y), "mousedown", "1")
+    time.sleep(0.05)
+    run_xdotool("mouseup", "1")
 
 
 def assert_event_log(
@@ -363,4 +417,134 @@ def test_egui_playlist_title_button_emits_event(
         egui_app_with_event_tracks,
         f"playlist: title button, button_name={button_name}",
         expected_command,
+    )
+
+
+@pytest.mark.parametrize(
+    ("control", "control_name", "expected_event"),
+    [event for event in EQUALIZER_CONTROL_EVENTS if event[0] is not EqualizerControl.PRESETS],
+    ids=[event[0].value for event in EQUALIZER_CONTROL_EVENTS if event[0] is not EqualizerControl.PRESETS],
+)
+def test_egui_detached_equalizer_control_button_emits_event_without_activation_click(
+    egui_detached_main_window: MainWindow,
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+    control: EqualizerControl,
+    control_name: str,
+    expected_event: str | None,
+) -> None:
+    equalizer_window = wait_for_detached_panel_window(
+        egui_detached_app_with_event_tracks,
+        "Equalizer",
+    )
+
+    click_detached_skin_rect_without_activation_click(
+        egui_detached_main_window,
+        equalizer_window,
+        EQUALIZER_CONTROL_RECTS[control],
+    )
+
+    assert_event_log(
+        egui_detached_app_with_event_tracks,
+        f"equalizer: control activated, control_name={control_name}",
+        expected_event,
+    )
+
+
+def test_egui_detached_equalizer_title_shade_button_emits_event_without_activation_click(
+    egui_detached_main_window: MainWindow,
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+) -> None:
+    equalizer_window = wait_for_detached_panel_window(
+        egui_detached_app_with_event_tracks,
+        "Equalizer",
+    )
+
+    click_detached_skin_rect_without_activation_click(
+        egui_detached_main_window,
+        equalizer_window,
+        PANEL_SHADE_RECT,
+    )
+
+    assert_event_log(
+        egui_detached_app_with_event_tracks,
+        "command Panel(ToggleEqualizerShade)",
+    )
+
+
+@pytest.mark.parametrize(
+    ("button", "button_name", "expected_event"),
+    [event for event in PLAYLIST_FOOTER_EVENTS if event[0] is not PlaylistFooterButton.EJECT],
+    ids=[event[0].value for event in PLAYLIST_FOOTER_EVENTS if event[0] is not PlaylistFooterButton.EJECT],
+)
+def test_egui_detached_playlist_footer_button_emits_event_without_activation_click(
+    egui_detached_main_window: MainWindow,
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+    button: PlaylistFooterButton,
+    button_name: str,
+    expected_event: str | None,
+) -> None:
+    playlist_window = wait_for_detached_panel_window(
+        egui_detached_app_with_event_tracks,
+        "Playlist",
+    )
+
+    click_detached_skin_rect_without_activation_click(
+        egui_detached_main_window,
+        playlist_window,
+        PLAYLIST_FOOTER_RECTS[button],
+    )
+
+    assert_event_log(
+        egui_detached_app_with_event_tracks,
+        f"playlist: footer button, button_name={button_name}",
+        expected_event,
+    )
+
+
+@pytest.mark.parametrize(
+    ("menu", "menu_name"),
+    PLAYLIST_MENU_EVENTS,
+    ids=[menu.value for menu, _ in PLAYLIST_MENU_EVENTS],
+)
+def test_egui_detached_playlist_menu_button_emits_event_without_activation_click(
+    egui_detached_main_window: MainWindow,
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+    menu: PlaylistMenuButton,
+    menu_name: str,
+) -> None:
+    playlist_window = wait_for_detached_panel_window(
+        egui_detached_app_with_event_tracks,
+        "Playlist",
+    )
+
+    click_detached_skin_rect_without_activation_click(
+        egui_detached_main_window,
+        playlist_window,
+        PLAYLIST_MENU_RECTS[menu],
+    )
+
+    assert_event_log(
+        egui_detached_app_with_event_tracks,
+        f"playlist: menu opened, menu_name={menu_name}",
+    )
+
+
+def test_egui_detached_playlist_title_shade_button_emits_event_without_activation_click(
+    egui_detached_main_window: MainWindow,
+    egui_detached_app_with_event_tracks: subprocess.Popen[bytes],
+) -> None:
+    playlist_window = wait_for_detached_panel_window(
+        egui_detached_app_with_event_tracks,
+        "Playlist",
+    )
+
+    click_detached_skin_rect_without_activation_click(
+        egui_detached_main_window,
+        playlist_window,
+        PANEL_SHADE_RECT,
+    )
+
+    assert_event_log(
+        egui_detached_app_with_event_tracks,
+        "command Panel(TogglePlaylistShade)",
     )
