@@ -33,7 +33,8 @@ use crate::app::view_model::{
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
     eq_slider_position_to_pixel, format_duration, format_title_for_preferences, parse_time_ms,
     playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
-    position_to_balance, position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
+    playlist_rows_render_state as shared_playlist_rows_render_state, position_to_balance,
+    position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
     volume_to_position,
 };
 use crate::app_state::AppState;
@@ -64,7 +65,7 @@ use crate::render::{
     render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
     surface_from_xpm, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
     MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
-    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState, RenderPass,
+    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderPass,
     VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
     MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
@@ -7341,34 +7342,17 @@ impl MainWindowUiState {
     }
 
     fn playlist_rows_render_state(&self) -> PlaylistRowsRenderState {
-        let current = self.app_state.playlist.position();
-        let entries = self
-            .app_state
-            .playlist
-            .entries()
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| PlaylistRowRenderEntry {
-                title: self.formatted_playlist_entry_title(entry),
-                length_ms: entry.length_ms,
-                selected: entry.selected,
-                current: current == Some(index),
-            })
-            .collect();
-
-        PlaylistRowsRenderState {
-            entries,
-            scroll_offset: self.playlist_ui.scroll_offset,
-            scrollbar_dragging: matches!(
+        shared_playlist_rows_render_state(
+            &self.app_state,
+            self.playlist_ui.scroll_offset,
+            matches!(
                 self.playlist_ui.pointer,
                 PlaylistPointer::DraggingScrollbar { .. }
             ),
-            search_query: self.playlist_ui.search.active_query().map(str::to_owned),
-            show_numbers: self.app_state.config.show_numbers_in_pl,
-            font_family: self.app_state.config.playlist_font.clone(),
-            width: self.playlist_ui.width,
-            height: self.playlist_ui.height,
-        }
+            self.playlist_ui.search.active_query().map(str::to_owned),
+            self.playlist_ui.width,
+            self.playlist_ui.height,
+        )
     }
 
     fn bitrate_text(&self) -> String {

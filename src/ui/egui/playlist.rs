@@ -7,15 +7,14 @@ use crate::app::playlist_actions::{
 };
 use crate::app::view_model::{
     ellipsize_chars, format_duration, format_title_for_preferences,
-    playlist_footer_info as shared_playlist_footer_info, playlist_view_model, PlaylistViewModel,
+    playlist_footer_info as shared_playlist_footer_info,
+    playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
+    PlaylistViewModel,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistMenuKind;
-use crate::render::{
-    playlist_window_height, PlaylistMenuRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH,
-};
+use crate::render::{playlist_window_height, PlaylistMenuRenderState, PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH};
 use crate::skin::layout::{
     panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
     playlist_menu_popup_rect, LayoutPanelKind, PanelTitleButton, PlaylistFooterButton,
@@ -86,29 +85,15 @@ fn playlist_rows_render_state(
     app: &EguiFrontendState,
     view_model: &PlaylistViewModel,
 ) -> PlaylistRowsRenderState {
-    let state = app.controller().state();
-    PlaylistRowsRenderState {
-        entries: view_model
-            .rows
-            .iter()
-            .map(|row| {
-                let entry = state.playlist.entries().get(row.index);
-                PlaylistRowRenderEntry {
-                    title: row.title.clone(),
-                    length_ms: entry.map(|entry| entry.length_ms).unwrap_or(-1),
-                    selected: row.selected,
-                    current: row.current,
-                }
-            })
-            .collect(),
-        scroll_offset: app.playlist_scroll_offset,
-        scrollbar_dragging: false,
-        search_query: None,
-        show_numbers: state.config.show_numbers_in_pl,
-        font_family: state.config.playlist_font.clone(),
-        width: app.playlist_width,
-        height: app.playlist_height,
-    }
+    let _ = view_model;
+    shared_playlist_rows_render_state(
+        app.controller().state(),
+        app.playlist_scroll_offset,
+        false,
+        None,
+        app.playlist_width,
+        app.playlist_height,
+    )
 }
 
 fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {

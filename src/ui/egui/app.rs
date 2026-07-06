@@ -19,7 +19,8 @@ use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
-    playlist_footer_info as shared_playlist_footer_info, playlist_view_model,
+    playlist_footer_info as shared_playlist_footer_info,
+    playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
     volume_to_eq_shaded_position,
 };
 #[cfg(feature = "gstreamer-backend")]
@@ -43,10 +44,9 @@ use crate::playlist::{DurationIndexResult, Playlist};
 use crate::render::{
     docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
     EqualizerControl, EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider,
-    MainToggleButton, PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowRenderEntry,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
-    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
-    PLAYLIST_MIN_WIDTH,
+    MainToggleButton, PlaylistMenuRenderKind, PlaylistMenuRenderState, VisualizationRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::session::default_config_dir;
 use crate::skin::layout::{
@@ -1204,32 +1204,14 @@ fn detached_playlist_snapshot(
     let view_model = playlist_view_model(app.controller().state());
     let playlist_row_indices: Vec<usize> = view_model.rows.iter().map(|row| row.index).collect();
     let playlist_total_entries = view_model.rows.len();
-    let rows = PlaylistRowsRenderState {
-        entries: view_model
-            .rows
-            .iter()
-            .map(|row| PlaylistRowRenderEntry {
-                title: row.title.clone(),
-                length_ms: app
-                    .controller()
-                    .state()
-                    .playlist
-                    .entries()
-                    .get(row.index)
-                    .map(|entry| entry.length_ms)
-                    .unwrap_or(-1),
-                selected: row.selected,
-                current: row.current,
-            })
-            .collect(),
-        scroll_offset: app.playlist_scroll_offset,
-        scrollbar_dragging: false,
-        search_query: None,
-        show_numbers: app.controller().state().config.show_numbers_in_pl,
-        font_family: app.controller().state().config.playlist_font.clone(),
-        width: app.playlist_width,
-        height: app.playlist_height,
-    };
+    let rows = shared_playlist_rows_render_state(
+        app.controller().state(),
+        app.playlist_scroll_offset,
+        false,
+        None,
+        app.playlist_width,
+        app.playlist_height,
+    );
     let shaded_info = playlist::shaded_playlist_info(app);
     let footer_info = detached_playlist_footer_info(app);
     let (footer_min, footer_sec) = detached_playlist_footer_time_parts(app);

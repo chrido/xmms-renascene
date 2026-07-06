@@ -8,14 +8,15 @@ use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars, format_duration,
     format_title_for_preferences, playlist_footer_info as shared_playlist_footer_info,
-    volume_to_eq_shaded_position, volume_to_position,
+    playlist_rows_render_state as shared_playlist_rows_render_state, volume_to_eq_shaded_position,
+    volume_to_position,
 };
 use crate::app_state::AppState;
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, render_equalizer_state,
     render_main_player_state, render_playlist_frame, render_playlist_rows, DockedPanelState,
-    EqualizerRenderState, MainWindowRenderState, PlaylistRowsRenderState, RenderPass,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    EqualizerRenderState, MainWindowRenderState, RenderPass, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
@@ -182,37 +183,15 @@ fn render_docked_screenshot_pass(
             )?;
         }
         if !docked_state.playlist_shaded {
-            rendered |= render_playlist_rows(
-                cr,
-                skin,
-                &PlaylistRowsRenderState {
-                    entries: app_state
-                        .playlist
-                        .entries()
-                        .iter()
-                        .enumerate()
-                        .map(|(index, entry)| crate::render::PlaylistRowRenderEntry {
-                            title: format_title_for_preferences(
-                                &app_state.config.title_format,
-                                &entry.filename,
-                                &entry.title,
-                                &app_state.config,
-                            ),
-                            length_ms: entry.length_ms,
-                            selected: entry.selected,
-                            current: app_state.playlist.position() == Some(index),
-                        })
-                        .collect(),
-                    scroll_offset: 0,
-                    scrollbar_dragging: false,
-                    search_query: None,
-                    show_numbers: app_state.config.show_numbers_in_pl,
-                    font_family: app_state.config.playlist_font.clone(),
-                    width: docked_state.playlist_width,
-                    height: docked_state.playlist_height,
-                },
-                pass,
-            )?;
+            let rows = shared_playlist_rows_render_state(
+                app_state,
+                0,
+                false,
+                None,
+                docked_state.playlist_width,
+                docked_state.playlist_height,
+            );
+            rendered |= render_playlist_rows(cr, skin, &rows, pass)?;
         }
         cr.restore()?;
     }
