@@ -39,8 +39,7 @@ use crate::app::view_model::{
     formatted_playlist_entry_title as shared_formatted_playlist_entry_title, parse_time_ms,
     playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
     playlist_rows_render_state as shared_playlist_rows_render_state, position_to_balance,
-    position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
-    volume_to_position,
+    position_to_volume, scale_event_coords, volume_to_eq_shaded_position, volume_to_position,
 };
 use crate::app_state::AppState;
 use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
@@ -70,10 +69,10 @@ use crate::render::{
     render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
     surface_from_xpm, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
     MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
-    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderPass,
-    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderPass, VisualizationRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
@@ -105,6 +104,7 @@ pub(crate) mod gtk_frontend;
 mod style;
 
 use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};
+use gtk_frontend::playlist_menu::{build_playlist_sort_popover, show_playlist_sort_menu};
 use style::{
     refresh_xmms_skin_css, style_color_shelf_button, style_skin_color_button,
     style_skin_editor_custom_color_button,
@@ -2214,55 +2214,6 @@ fn show_playlist_delete_confirmation(
     window.present();
 }
 
-fn build_playlist_sort_popover(
-    parent: &gtk::DrawingArea,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-) -> gtk::Popover {
-    let popover = gtk::Popover::builder()
-        .autohide(true)
-        .has_arrow(false)
-        .build();
-    style_xmms_popover(&popover);
-    popover.set_parent(parent);
-    let menu_box = xmms_menu_box(0);
-    for sort_item in PLAYLIST_SORT_MENU_ITEMS {
-        let action = sort_item.action;
-        let item = xmms_menu_button(sort_item.label);
-        {
-            let main_state = Rc::clone(main_state);
-            let parent = parent.clone();
-            let main_area = main_area.clone();
-            let popover = popover.clone();
-            item.connect_clicked(move |_| {
-                main_state
-                    .borrow_mut()
-                    .activate_playlist_sort_action(action);
-                popover.popdown();
-                parent.queue_draw();
-                main_area.queue_draw();
-            });
-        }
-        menu_box.append(&item);
-    }
-    popover.set_child(Some(&menu_box));
-    popover
-}
-
-fn show_playlist_sort_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
-    let width = area.allocated_width().max(1) as f64;
-    let height = area.allocated_height().max(1) as f64;
-    let rect = gtk::gdk::Rectangle::new(
-        (99.0 * (width / f64::from(PLAYLIST_DEFAULT_WIDTH))) as i32,
-        (f64::from(PLAYLIST_DEFAULT_HEIGHT - 29) * (height / f64::from(PLAYLIST_DEFAULT_HEIGHT)))
-            as i32,
-        25,
-        1,
-    );
-    popover.set_pointing_to(Some(&rect));
-    popover.popup();
-}
-
 fn build_equalizer_presets_popover(
     parent: &gtk::DrawingArea,
     main_state: &Rc<RefCell<MainWindowUiState>>,
@@ -2276,10 +2227,7 @@ fn build_equalizer_presets_popover(
         for item in section.items {
             let action = item.action;
             let action_name = action.action_name();
-            submenu.append(
-                Some(item.label),
-                Some(&format!("eq-presets.{action_name}")),
-            );
+            submenu.append(Some(item.label), Some(&format!("eq-presets.{action_name}")));
             install_equalizer_preset_action(
                 &action_group,
                 action,
