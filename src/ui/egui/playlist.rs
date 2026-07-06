@@ -22,6 +22,7 @@ use crate::skin::layout::{
 };
 
 use super::app::EguiFrontendState;
+use super::layout::clamp_popup_to_rect;
 use super::skin_texture::{
     pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
     upload_color_image,
@@ -535,21 +536,6 @@ pub(crate) fn dispatch_playlist_menu_item(
     }
 }
 
-fn sort_popover_position(
-    playlist_rect: egui::Rect,
-    misc_button: SkinRect,
-    scale_factor: f32,
-    popup_width: f32,
-    popup_height: f32,
-) -> egui::Pos2 {
-    let button_y = playlist_rect.top() + misc_button.y as f32 * scale_factor;
-    let anchor_x = playlist_rect.left() + misc_button.x as f32 * scale_factor;
-    let max_x = (playlist_rect.right() - popup_width).max(playlist_rect.left());
-    let popup_x = anchor_x.min(max_x).max(playlist_rect.left());
-    let popup_y = (button_y - popup_height).max(playlist_rect.top());
-    egui::pos2(popup_x, popup_y)
-}
-
 fn show_playlist_sort_popover(
     ctx: &egui::Context,
     app: &mut EguiFrontendState,
@@ -575,12 +561,13 @@ fn show_playlist_sort_popover(
     // the bottom) would push its buttons off-window and make them unclickable
     // (GTK gets away with this because it uses a native top-level popover).
     // Clamp the popover so it stays fully inside the playlist window.
-    let popup_pos = sort_popover_position(
+    let popup_pos = clamp_popup_to_rect(
+        egui::pos2(
+            playlist_rect.left() + misc_button.x as f32 * app.scale_factor,
+            playlist_rect.top() + misc_button.y as f32 * app.scale_factor - estimated_popup_height,
+        ),
         playlist_rect,
-        misc_button,
-        app.scale_factor,
-        popup_width,
-        estimated_popup_height,
+        egui::vec2(popup_width, estimated_popup_height),
     );
     let mut close_after_click = false;
     let response = egui::Area::new(egui::Id::new("xmms-egui-playlist-sort-popup"))
@@ -689,7 +676,15 @@ mod tests {
         let misc_button =
             crate::skin::layout::playlist_menu_button_rect(PlaylistMenuButton::Misc, 275, 232);
         let popup_width = 200.0;
-        let pos = sort_popover_position(playlist_rect, misc_button, 1.0, popup_width, 220.0);
+        let popup_height = 220.0;
+        let pos = clamp_popup_to_rect(
+            egui::pos2(
+                playlist_rect.left() + misc_button.x as f32,
+                playlist_rect.top() + misc_button.y as f32 - popup_height,
+            ),
+            playlist_rect,
+            egui::vec2(popup_width, popup_height),
+        );
         assert!(pos.x >= playlist_rect.left());
         assert!(
             pos.x + popup_width <= playlist_rect.right() + 0.5,
