@@ -221,6 +221,19 @@ mod tests {
     }
 
     #[test]
+    fn playlist_sort_menu_items_all_dispatch_commands() {
+        for item in PLAYLIST_SORT_MENU_ITEMS {
+            match item.action.command() {
+                PlaylistCommand::Sort(_)
+                | PlaylistCommand::SortSelected(_)
+                | PlaylistCommand::Randomize
+                | PlaylistCommand::Reverse => {}
+                other => panic!("unexpected sort command for {}: {other:?}", item.label),
+            }
+        }
+    }
+
+    #[test]
     fn playlist_menu_command_maps_menu_indices() {
         assert_eq!(
             PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 0),

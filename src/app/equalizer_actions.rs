@@ -197,6 +197,27 @@ mod tests {
     }
 
     #[test]
+    fn equalizer_preset_menu_items_all_have_stable_action_names() {
+        let mut names = Vec::new();
+        for section in EQUALIZER_PRESET_MENU_SECTIONS {
+            assert!(!section.items.is_empty(), "{} section is empty", section.label);
+            for item in section.items {
+                assert!(!item.label.is_empty());
+                names.push(item.action.action_name());
+            }
+        }
+        names.push(EQUALIZER_CONFIGURE_PRESET_ITEM.action.action_name());
+        names.sort_unstable();
+        names.dedup();
+        let expected_count = EQUALIZER_PRESET_MENU_SECTIONS
+            .iter()
+            .map(|section| section.items.len())
+            .sum::<usize>()
+            + 1;
+        assert_eq!(names.len(), expected_count);
+    }
+
+    #[test]
     fn egui_unsupported_actions_are_explicitly_documented() {
         assert_eq!(
             EqualizerPresetAction::LoadPreset.unsupported_egui_message(),
