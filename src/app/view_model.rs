@@ -519,14 +519,7 @@ mod tests {
         state.playlist.entries_mut()[0].selected = true;
         state.playlist.set_position(0);
 
-        let rows = playlist_rows_render_state(
-            &state,
-            2,
-            true,
-            Some("Song".to_string()),
-            275,
-            232,
-        );
+        let rows = playlist_rows_render_state(&state, 2, true, Some("Song".to_string()), 275, 232);
 
         assert_eq!(rows.entries[0].title, "Song (Artist)");
         assert_eq!(rows.entries[0].length_ms, 12_000);

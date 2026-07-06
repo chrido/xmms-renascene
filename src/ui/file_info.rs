@@ -221,8 +221,8 @@ fn show_file_info_dialog_inner(
         let uri = details.uri.clone();
         let fallback_title = fallback_title_from_basename(&details.basename);
         remove.connect_clicked(move |_| {
-            if let Err(payload) = panic::catch_unwind(AssertUnwindSafe(|| {
-                match remove_id3_metadata(&path) {
+            if let Err(payload) =
+                panic::catch_unwind(AssertUnwindSafe(|| match remove_id3_metadata(&path) {
                     Ok(()) => {
                         if let Ok(mut state) = main_state.try_borrow_mut() {
                             state.update_playlist_title_for_uri(&uri, &fallback_title);
@@ -230,8 +230,8 @@ fn show_file_info_dialog_inner(
                         window_for_remove.close();
                     }
                     Err(err) => eprintln!("xmms-rs: failed to remove ID3 tag: {err}"),
-                }
-            })) {
+                }))
+            {
                 eprintln!(
                     "xmms-rs: failed to remove file info metadata: {}",
                     panic_payload_message(payload.as_ref())

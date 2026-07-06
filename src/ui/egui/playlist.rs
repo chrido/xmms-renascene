@@ -14,7 +14,9 @@ use crate::app::view_model::{
 use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistMenuKind;
-use crate::render::{playlist_window_height, PlaylistMenuRenderState, PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH};
+use crate::render::{
+    playlist_window_height, PlaylistMenuRenderState, PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH,
+};
 use crate::skin::layout::{
     panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
     playlist_menu_popup_rect, LayoutPanelKind, PanelTitleButton, PlaylistFooterButton,
@@ -370,7 +372,8 @@ fn add_playlist_rows_hit_region(
             .ctx()
             .input(|input| input.modifiers.ctrl || input.modifiers.command);
         if let Some(model) = view_model.rows.get(index) {
-            for command in playlist_row_click_commands(model.index, response.double_clicked(), ctrl) {
+            for command in playlist_row_click_commands(model.index, response.double_clicked(), ctrl)
+            {
                 app.dispatch(command);
             }
         }

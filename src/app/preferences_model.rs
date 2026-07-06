@@ -72,7 +72,10 @@ mod tests {
             title_format: "%t (%p)".to_string(),
             ..Config::default()
         };
-        assert_eq!(title_format_preview(&config), "Example Title (Example Artist)");
+        assert_eq!(
+            title_format_preview(&config),
+            "Example Title (Example Artist)"
+        );
         assert_eq!(normalize_title_format(""), "%p - %t");
         assert_eq!(normalize_title_format("%t"), "%t");
     }

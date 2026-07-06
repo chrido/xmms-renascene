@@ -307,7 +307,8 @@ impl EguiFrontendState {
     }
 
     pub(crate) fn sync_scale_factor_from_config(&mut self) {
-        self.scale_factor = clamped_scale_factor(self.controller.state().config.scale_factor) as f32;
+        self.scale_factor =
+            clamped_scale_factor(self.controller.state().config.scale_factor) as f32;
     }
 
     pub(crate) fn visualization_render_state(&self) -> VisualizationRenderState {

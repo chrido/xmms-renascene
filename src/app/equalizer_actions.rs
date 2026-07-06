@@ -166,9 +166,18 @@ mod tests {
 
     #[test]
     fn equalizer_preset_action_names_are_stable() {
-        assert_eq!(EqualizerPresetAction::LoadPreset.action_name(), "load-preset");
-        assert_eq!(EqualizerPresetAction::LoadDefault.action_name(), "load-default");
-        assert_eq!(EqualizerPresetAction::SaveToFile.action_name(), "save-to-file");
+        assert_eq!(
+            EqualizerPresetAction::LoadPreset.action_name(),
+            "load-preset"
+        );
+        assert_eq!(
+            EqualizerPresetAction::LoadDefault.action_name(),
+            "load-default"
+        );
+        assert_eq!(
+            EqualizerPresetAction::SaveToFile.action_name(),
+            "save-to-file"
+        );
         assert_eq!(EqualizerPresetAction::Configure.action_name(), "configure");
     }
 
@@ -200,7 +209,11 @@ mod tests {
     fn equalizer_preset_menu_items_all_have_stable_action_names() {
         let mut names = Vec::new();
         for section in EQUALIZER_PRESET_MENU_SECTIONS {
-            assert!(!section.items.is_empty(), "{} section is empty", section.label);
+            assert!(
+                !section.items.is_empty(),
+                "{} section is empty",
+                section.label
+            );
             for item in section.items {
                 assert!(!item.label.is_empty());
                 names.push(item.action.action_name());
@@ -223,6 +236,9 @@ mod tests {
             EqualizerPresetAction::LoadPreset.unsupported_egui_message(),
             Some("named equalizer preset picker pending egui handler")
         );
-        assert_eq!(EqualizerPresetAction::LoadDefault.unsupported_egui_message(), None);
+        assert_eq!(
+            EqualizerPresetAction::LoadDefault.unsupported_egui_message(),
+            None
+        );
     }
 }
