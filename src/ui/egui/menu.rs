@@ -1,6 +1,7 @@
 //! egui main menu and lightweight prompt/dialog windows.
 
 use crate::app::command::{PlaylistCommand, UiCommand};
+use crate::app::view_model::parse_time_ms;
 
 use super::app::EguiFrontendState;
 
@@ -135,7 +136,7 @@ fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
             app.dispatch(crate::app::command::PlayerCommand::Play);
         }
         EguiPrompt::JumpToTime => {
-            if let Some(ms) = parse_prompt_time_ms(&text) {
+            if let Some(ms) = parse_time_ms(&text) {
                 app.dispatch(crate::app::command::PlayerCommand::SeekToMs(ms));
             } else {
                 app.runtime
@@ -146,18 +147,6 @@ fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
     }
     app.prompt_open = None;
     app.prompt_text.clear();
-}
-
-pub fn parse_prompt_time_ms(text: &str) -> Option<i64> {
-    let text = text.trim();
-    if let Some((minutes, seconds)) = text.split_once(':') {
-        let minutes = minutes.trim().parse::<i64>().ok()?;
-        let seconds = seconds.trim().parse::<i64>().ok()?;
-        return Some((minutes * 60 + seconds).max(0) * 1_000);
-    }
-    text.parse::<i64>()
-        .ok()
-        .map(|seconds| seconds.max(0) * 1_000)
 }
 
 pub fn show_pending_messages(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -187,8 +176,10 @@ mod tests {
 
     #[test]
     fn parses_prompt_times_like_gtk_helpers() {
-        assert_eq!(parse_prompt_time_ms("42"), Some(42_000));
-        assert_eq!(parse_prompt_time_ms("1:23"), Some(83_000));
-        assert_eq!(parse_prompt_time_ms("nope"), None);
+        assert_eq!(parse_time_ms("42"), Some(42_000));
+        assert_eq!(parse_time_ms("1:23"), Some(83_000));
+        assert_eq!(parse_time_ms(""), None);
+        assert_eq!(parse_time_ms("1:2:3"), None);
+        assert_eq!(parse_time_ms("nope"), None);
     }
 }
