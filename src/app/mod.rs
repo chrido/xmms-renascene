@@ -6,6 +6,7 @@
 pub mod command;
 pub mod controller;
 pub mod effect;
+pub mod file_info;
 pub mod input;
 pub mod logging;
 pub mod panel;
