@@ -31,7 +31,9 @@ use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
-    eq_slider_position_to_pixel, format_duration, format_title_for_preferences, parse_time_ms,
+    eq_slider_position_to_pixel, format_duration,
+    formatted_current_title as shared_formatted_current_title,
+    formatted_playlist_entry_title as shared_formatted_playlist_entry_title, parse_time_ms,
     playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
     playlist_rows_render_state as shared_playlist_rows_render_state, position_to_balance,
     position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
@@ -7381,13 +7383,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn formatted_current_title(&self) -> String {
-        let Some(position) = self.app_state.playlist.position() else {
-            return "XMMS Renascene".to_string();
-        };
-        let Some(entry) = self.app_state.playlist.entries().get(position) else {
-            return "XMMS Renascene".to_string();
-        };
-        self.formatted_playlist_entry_title(entry)
+        shared_formatted_current_title(&self.app_state)
     }
 
     fn equalizer_drag_info_text(&self) -> Option<String> {
@@ -7415,12 +7411,7 @@ impl MainWindowUiState {
     }
 
     fn formatted_playlist_entry_title(&self, entry: &crate::playlist::PlaylistEntry) -> String {
-        format_title_for_preferences(
-            &self.app_state.config.title_format,
-            &entry.filename,
-            &entry.title,
-            &self.app_state.config,
-        )
+        shared_formatted_playlist_entry_title(&self.app_state, entry)
     }
 
     pub(crate) fn shaded_playlist_info(&self) -> String {

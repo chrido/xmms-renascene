@@ -9,7 +9,7 @@ use crate::app_state::AppState;
 use crate::audio_model::EqualizerBandPositions;
 use crate::config::Config;
 use crate::player::PlayerState;
-use crate::playlist::PlaylistMenuKind;
+use crate::playlist::{PlaylistEntry, PlaylistMenuKind};
 use crate::render::{PlaylistRowRenderEntry, PlaylistRowsRenderState};
 use crate::skin::layout::{playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton};
 
@@ -57,18 +57,7 @@ pub struct EqualizerViewModel {
 }
 
 pub fn main_player_view_model(state: &AppState) -> MainPlayerViewModel {
-    let position = state.playlist.position();
-    let title = position
-        .and_then(|index| state.playlist.entries().get(index))
-        .map(|entry| {
-            format_title_for_preferences(
-                &state.config.title_format,
-                &entry.filename,
-                &entry.title,
-                &state.config,
-            )
-        })
-        .unwrap_or_default();
+    let title = formatted_current_title(state);
     MainPlayerViewModel {
         title,
         player_state: state.player.state(),
@@ -83,6 +72,25 @@ pub fn main_player_view_model(state: &AppState) -> MainPlayerViewModel {
     }
 }
 
+pub fn formatted_playlist_entry_title(state: &AppState, entry: &PlaylistEntry) -> String {
+    format_title_for_preferences(
+        &state.config.title_format,
+        &entry.filename,
+        &entry.title,
+        &state.config,
+    )
+}
+
+pub fn formatted_current_title(state: &AppState) -> String {
+    let Some(position) = state.playlist.position() else {
+        return "XMMS Renascene".to_string();
+    };
+    let Some(entry) = state.playlist.entries().get(position) else {
+        return "XMMS Renascene".to_string();
+    };
+    formatted_playlist_entry_title(state, entry)
+}
+
 pub fn playlist_view_model(state: &AppState) -> PlaylistViewModel {
     let current_index = state.playlist.position();
     let rows = state
@@ -92,12 +100,7 @@ pub fn playlist_view_model(state: &AppState) -> PlaylistViewModel {
         .enumerate()
         .map(|(index, entry)| PlaylistRowViewModel {
             index,
-            title: format_title_for_preferences(
-                &state.config.title_format,
-                &entry.filename,
-                &entry.title,
-                &state.config,
-            ),
+            title: formatted_playlist_entry_title(state, entry),
             duration_text: (entry.length_ms >= 0).then(|| format_duration(entry.length_ms)),
             selected: entry.selected,
             current: Some(index) == current_index,
@@ -489,6 +492,21 @@ mod tests {
         assert_eq!(balance_to_position(100), 24);
         assert_eq!(eq_slider_position_to_pixel(50), 25);
         assert_eq!(eq_slider_pixel_to_position(25), 50);
+    }
+
+    #[test]
+    fn formatted_current_title_uses_preferences_and_fallback() {
+        let mut state = AppState::default();
+        assert_eq!(formatted_current_title(&state), "XMMS Renascene");
+
+        state.config.title_format = "%t (%p)".to_string();
+        state
+            .playlist
+            .add_timed_uri("file:///tmp/song.ogg", "Artist - Song", 12_000);
+        state.playlist.set_position(0);
+
+        assert_eq!(formatted_current_title(&state), "Song (Artist)");
+        assert_eq!(main_player_view_model(&state).title, "Song (Artist)");
     }
 
     #[test]

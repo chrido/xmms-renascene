@@ -7,7 +7,8 @@ use cairo::{Context, Format, ImageSurface};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars, format_duration,
-    format_title_for_preferences, playlist_footer_info as shared_playlist_footer_info,
+    formatted_current_title as shared_formatted_current_title, formatted_playlist_entry_title,
+    playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, volume_to_eq_shaded_position,
     volume_to_position,
 };
@@ -200,18 +201,7 @@ fn render_docked_screenshot_pass(
 }
 
 fn screenshot_current_title(app_state: &AppState) -> String {
-    let Some(position) = app_state.playlist.position() else {
-        return "XMMS Renascene".to_string();
-    };
-    let Some(entry) = app_state.playlist.entries().get(position) else {
-        return "XMMS Renascene".to_string();
-    };
-    format_title_for_preferences(
-        &app_state.config.title_format,
-        &entry.filename,
-        &entry.title,
-        &app_state.config,
-    )
+    shared_formatted_current_title(app_state)
 }
 
 fn screenshot_bitrate_text(app_state: &AppState) -> String {
@@ -257,12 +247,7 @@ fn screenshot_shaded_playlist_info(app_state: &AppState, width: i32) -> String {
         return String::new();
     };
 
-    let title = format_title_for_preferences(
-        &app_state.config.title_format,
-        &entry.filename,
-        &entry.title,
-        &app_state.config,
-    );
+    let title = formatted_playlist_entry_title(app_state, entry);
     let prefix = if app_state.config.show_numbers_in_pl {
         format!("{}. ", position + 1)
     } else {

@@ -6,7 +6,7 @@ use crate::app::playlist_actions::{
     playlist_row_click_commands, PlaylistSortAction, PLAYLIST_SORT_MENU_ITEMS,
 };
 use crate::app::view_model::{
-    ellipsize_chars, format_duration, format_title_for_preferences,
+    ellipsize_chars, format_duration, formatted_playlist_entry_title,
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
     PlaylistViewModel,
@@ -119,12 +119,7 @@ pub(crate) fn shaded_playlist_info(app: &EguiFrontendState) -> String {
         return String::new();
     };
 
-    let title = format_title_for_preferences(
-        &state.config.title_format,
-        &entry.filename,
-        &entry.title,
-        &state.config,
-    );
+    let title = formatted_playlist_entry_title(state, entry);
     let prefix = if state.config.show_numbers_in_pl {
         format!("{}. ", position + 1)
     } else {
@@ -718,7 +713,7 @@ mod tests {
 
         let view_model = playlist_view_model(app.controller().state());
         let rows = playlist_rows_render_state(&app, &view_model);
-        let expected = format_title_for_preferences(
+        let expected = crate::app::view_model::format_title_for_preferences(
             "%t (%p)",
             "file:///tmp/song.ogg",
             "Example Artist - Example Title",
