@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use crate::app::command::UiCommand;
-use crate::app::view_model::format_title_for_preferences;
+use crate::app::preferences_model::{
+    clamped_scale_factor, mirror_live_preferences_fields, set_scale_factor, title_format_preview,
+};
 use crate::config::{Config, TimerMode};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
@@ -102,17 +104,7 @@ fn sync_viewport_state_from_app(app: &mut EguiFrontendState) {
         // volume/balance can change from the main window, menus, shortcuts, or
         // by closing a window. Mirror those live so the checkboxes/sliders don't
         // show a stale value (the snapshot is only re-seeded when opening).
-        let live = &app.controller().state().config;
-        state.config.playlist_visible = live.playlist_visible;
-        state.config.equalizer_visible = live.equalizer_visible;
-        state.config.playlist_detached = live.playlist_detached;
-        state.config.equalizer_detached = live.equalizer_detached;
-        state.config.playlist_shaded = live.playlist_shaded;
-        state.config.equalizer_shaded = live.equalizer_shaded;
-        state.config.repeat = live.repeat;
-        state.config.shuffle = live.shuffle;
-        state.config.volume = live.volume;
-        state.config.balance = live.balance;
+        mirror_live_preferences_fields(&mut state.config, &app.controller().state().config);
     }
 }
 
@@ -323,14 +315,13 @@ fn show_options_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading("Options");
     ui.add(egui::Slider::new(&mut config.volume, 0..=100).text("Volume"));
     ui.add(egui::Slider::new(&mut config.balance, -100..=100).text("Balance"));
-    let mut scale_factor = config.scale_factor.clamp(1.0, 5.0);
+    let mut scale_factor = clamped_scale_factor(config.scale_factor);
     ui.add(
         egui::Slider::new(&mut scale_factor, 1.0..=5.0)
             .text("Zoom level")
             .suffix("x"),
     );
-    config.scale_factor = scale_factor;
-    config.doublesize = scale_factor > 1.0;
+    set_scale_factor(config, scale_factor);
     ui.add(
         egui::Slider::new(&mut config.pause_between_songs_time, 0..=30)
             .text("Pause between songs seconds"),
@@ -394,13 +385,7 @@ fn show_title_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.label(
         "Tokens: %p performer, %a album, %t title, %n track number, %f filename, %F full path/URI.",
     );
-    let preview = format_title_for_preferences(
-        &config.title_format,
-        "file:///tmp/Example_Artist%20-%20Example_Title.mp3",
-        "Example Artist - Example Title",
-        config,
-    );
-    ui.label(format!("Preview: {preview}"));
+    ui.label(format!("Preview: {}", title_format_preview(config)));
 }
 
 fn combo<T: Copy + PartialEq>(

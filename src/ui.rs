@@ -26,6 +26,9 @@ pub use crate::app::playlist_actions::PlaylistSortAction;
 use crate::app::playlist_actions::{
     playlist_row_click_commands, PlaylistMenuCommand, PLAYLIST_SORT_MENU_ITEMS,
 };
+use crate::app::preferences_model::{
+    normalize_title_format, set_scale_factor as set_config_scale_factor, title_format_preview,
+};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
@@ -2999,19 +3002,30 @@ fn build_preferences_title_page(
     box_.append(&grid);
     let title = gtk::Entry::new();
     title.set_text(main_state.borrow().preference_title_format());
+    let preview = gtk::Label::new(Some(&format!(
+        "Preview: {}",
+        title_format_preview(&main_state.borrow().app_state.config)
+    )));
+    preview.set_halign(gtk::Align::Start);
     {
         let main_state = Rc::clone(main_state);
         let on_change = on_change.clone();
+        let preview = preview.clone();
         title.connect_changed(move |entry| {
             main_state
                 .borrow_mut()
                 .set_preference_title_format(entry.text().as_str());
+            preview.set_label(&format!(
+                "Preview: {}",
+                title_format_preview(&main_state.borrow().app_state.config)
+            ));
             if let Some(on_change) = &on_change {
                 on_change();
             }
         });
     }
     prefs_attach_label(&grid, "Title format:", &title, 0);
+    box_.append(&preview);
     box_.append(&prefs_label("Original XMMS tokens include %p artist, %a album, %g genre, %f filename, and %t title. The current decoder uses embedded titles when available and stores this format for compatibility."));
     page
 }
@@ -8257,19 +8271,13 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn double_fractional_scale(&mut self) {
-        let scale = (self.app_state.config.scale_factor * 2.0).clamp(1.0, 5.0);
-        self.update_config_via_store(|config| {
-            config.scale_factor = scale;
-            config.doublesize = scale > 1.0;
-        });
+        let scale = self.app_state.config.scale_factor * 2.0;
+        self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn halve_fractional_scale(&mut self) {
-        let scale = (self.app_state.config.scale_factor / 2.0).clamp(1.0, 5.0);
-        self.update_config_via_store(|config| {
-            config.scale_factor = scale;
-            config.doublesize = scale > 1.0;
-        });
+        let scale = self.app_state.config.scale_factor / 2.0;
+        self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn double_size(&self) -> bool {
@@ -10059,11 +10067,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_scale_factor(&mut self, scale: f64) {
-        let scale = scale.clamp(1.0, 5.0);
-        self.update_config_via_store(|config| {
-            config.scale_factor = scale;
-            config.doublesize = scale > 1.0;
-        });
+        self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn set_preference_repeat(&mut self, enabled: bool) {
@@ -10220,11 +10224,7 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preference_title_format(&mut self, format: &str) {
         self.update_config_via_store(|config| {
-            config.title_format = if format.trim().is_empty() {
-                "%p - %t".to_string()
-            } else {
-                format.trim().to_string()
-            };
+            config.title_format = normalize_title_format(format);
         });
     }
 

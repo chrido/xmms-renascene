@@ -15,6 +15,7 @@ use crate::app::command::{
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
 use crate::app::playlist_actions::playlist_row_click_commands;
+use crate::app::preferences_model::{clamped_scale_factor, normalize_preferences_config};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
@@ -283,8 +284,7 @@ impl EguiFrontendState {
     }
 
     pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
-        config.scale_factor = config.scale_factor.clamp(1.0, 5.0);
-        config.doublesize = config.scale_factor > 1.0;
+        normalize_preferences_config(&mut config);
         let was_playlist_detached = self.controller.state().config.playlist_detached;
         let result = self.controller.apply_config_from_preferences(config);
         // When the playlist re-attaches to the main window, snap its width back to
@@ -307,7 +307,7 @@ impl EguiFrontendState {
     }
 
     pub(crate) fn sync_scale_factor_from_config(&mut self) {
-        self.scale_factor = self.controller.state().config.scale_factor.clamp(1.0, 5.0) as f32;
+        self.scale_factor = clamped_scale_factor(self.controller.state().config.scale_factor) as f32;
     }
 
     pub(crate) fn visualization_render_state(&self) -> VisualizationRenderState {
