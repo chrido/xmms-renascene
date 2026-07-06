@@ -87,18 +87,26 @@ pub const EQUALIZER_LOAD_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[
     item("Default", EqualizerPresetAction::LoadDefault),
     item("Zero", EqualizerPresetAction::LoadZero),
     item("From file", EqualizerPresetAction::LoadFromFile),
-    item("From WinAMP EQF file", EqualizerPresetAction::LoadFromWinampFile),
+    item(
+        "From WinAMP EQF file",
+        EqualizerPresetAction::LoadFromWinampFile,
+    ),
 ];
 
-pub const EQUALIZER_IMPORT_PRESET_ITEMS: &[EqualizerPresetMenuItem] =
-    &[item("WinAMP Presets", EqualizerPresetAction::ImportWinampPresets)];
+pub const EQUALIZER_IMPORT_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[item(
+    "WinAMP Presets",
+    EqualizerPresetAction::ImportWinampPresets,
+)];
 
 pub const EQUALIZER_SAVE_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[
     item("Preset", EqualizerPresetAction::SavePreset),
     item("Auto-load preset", EqualizerPresetAction::SaveAutoPreset),
     item("Default", EqualizerPresetAction::SaveDefault),
     item("To file", EqualizerPresetAction::SaveToFile),
-    item("To WinAMP EQF file", EqualizerPresetAction::SaveToWinampFile),
+    item(
+        "To WinAMP EQF file",
+        EqualizerPresetAction::SaveToWinampFile,
+    ),
 ];
 
 pub const EQUALIZER_DELETE_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[
@@ -161,7 +169,11 @@ mod tests {
         let mut names: Vec<_> = EQUALIZER_PRESET_MENU_SECTIONS
             .iter()
             .flat_map(|section| {
-                assert!(!section.items.is_empty(), "{} section is empty", section.label);
+                assert!(
+                    !section.items.is_empty(),
+                    "{} section is empty",
+                    section.label
+                );
                 section.items.iter().map(|item| {
                     assert!(!item.label.is_empty());
                     item.action.action_name()
@@ -181,6 +193,9 @@ mod tests {
             EqualizerPresetAction::LoadPreset.unsupported_egui_message(),
             Some("named equalizer preset picker pending egui handler")
         );
-        assert_eq!(EqualizerPresetAction::LoadDefault.unsupported_egui_message(), None);
+        assert_eq!(
+            EqualizerPresetAction::LoadDefault.unsupported_egui_message(),
+            None
+        );
     }
 }

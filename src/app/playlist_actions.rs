@@ -67,15 +67,27 @@ const fn sort_item(label: &'static str, action: PlaylistSortAction) -> PlaylistS
 pub const PLAYLIST_SORT_MENU_ITEMS: &[PlaylistSortMenuItem] = &[
     sort_item("Sort List: By Title", PlaylistSortAction::ListByTitle),
     sort_item("Sort List: By Filename", PlaylistSortAction::ListByFilename),
-    sort_item("Sort List: By Path + Filename", PlaylistSortAction::ListByPath),
+    sort_item(
+        "Sort List: By Path + Filename",
+        PlaylistSortAction::ListByPath,
+    ),
     sort_item("Sort List: By Date", PlaylistSortAction::ListByDate),
-    sort_item("Sort Selection: By Title", PlaylistSortAction::SelectionByTitle),
+    sort_item(
+        "Sort Selection: By Title",
+        PlaylistSortAction::SelectionByTitle,
+    ),
     sort_item(
         "Sort Selection: By Filename",
         PlaylistSortAction::SelectionByFilename,
     ),
-    sort_item("Sort Selection: By Path + Filename", PlaylistSortAction::SelectionByPath),
-    sort_item("Sort Selection: By Date", PlaylistSortAction::SelectionByDate),
+    sort_item(
+        "Sort Selection: By Path + Filename",
+        PlaylistSortAction::SelectionByPath,
+    ),
+    sort_item(
+        "Sort Selection: By Date",
+        PlaylistSortAction::SelectionByDate,
+    ),
     sort_item("Randomize List", PlaylistSortAction::RandomizeList),
     sort_item("Reverse List", PlaylistSortAction::ReverseList),
 ];
@@ -147,12 +159,18 @@ mod tests {
     #[test]
     fn playlist_sort_actions_map_to_playlist_commands() {
         for (action, command) in [
-            (PlaylistSortAction::ListByTitle, PlaylistCommand::Sort(PlaylistSortKey::Title)),
+            (
+                PlaylistSortAction::ListByTitle,
+                PlaylistCommand::Sort(PlaylistSortKey::Title),
+            ),
             (
                 PlaylistSortAction::SelectionByFilename,
                 PlaylistCommand::SortSelected(PlaylistSortKey::Filename),
             ),
-            (PlaylistSortAction::RandomizeList, PlaylistCommand::Randomize),
+            (
+                PlaylistSortAction::RandomizeList,
+                PlaylistCommand::Randomize,
+            ),
             (PlaylistSortAction::ReverseList, PlaylistCommand::Reverse),
         ] {
             assert_eq!(action.command(), command);
@@ -198,8 +216,16 @@ mod tests {
     #[test]
     fn playlist_menu_command_maps_menu_indices() {
         for (kind, index, command) in [
-            (PlaylistMenuKind::Add, 0, PlaylistMenuCommand::OpenLocationWindow),
-            (PlaylistMenuKind::Add, 2, PlaylistMenuCommand::OpenFileDialog),
+            (
+                PlaylistMenuKind::Add,
+                0,
+                PlaylistMenuCommand::OpenLocationWindow,
+            ),
+            (
+                PlaylistMenuKind::Add,
+                2,
+                PlaylistMenuCommand::OpenFileDialog,
+            ),
             (
                 PlaylistMenuKind::Remove,
                 3,
@@ -207,7 +233,10 @@ mod tests {
             ),
             (PlaylistMenuKind::List, 1, PlaylistMenuCommand::SavePlaylist),
         ] {
-            assert_eq!(PlaylistMenuCommand::from_menu_item(kind, index), Some(command));
+            assert_eq!(
+                PlaylistMenuCommand::from_menu_item(kind, index),
+                Some(command)
+            );
         }
         assert_eq!(
             PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Misc, 99),
