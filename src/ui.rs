@@ -15,6 +15,10 @@ use crate::app::command::{
     UiCommand,
 };
 use crate::app::effect::AppEffect;
+pub use crate::app::equalizer_actions::EqualizerPresetAction;
+use crate::app::equalizer_actions::{
+    EQUALIZER_CONFIGURE_PRESET_ITEM, EQUALIZER_PRESET_MENU_SECTIONS,
+};
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
@@ -2259,63 +2263,25 @@ fn build_equalizer_presets_popover(
     let action_group = gtk::gio::SimpleActionGroup::new();
     let menu = gtk::gio::Menu::new();
 
-    for (label, actions) in [
-        (
-            "Load",
-            &[
-                ("Preset", EqualizerPresetAction::LoadPreset),
-                ("Auto-load preset", EqualizerPresetAction::LoadAutoPreset),
-                ("Default", EqualizerPresetAction::LoadDefault),
-                ("Zero", EqualizerPresetAction::LoadZero),
-                ("From file", EqualizerPresetAction::LoadFromFile),
-                (
-                    "From WinAMP EQF file",
-                    EqualizerPresetAction::LoadFromWinampFile,
-                ),
-            ][..],
-        ),
-        (
-            "Import",
-            &[("WinAMP Presets", EqualizerPresetAction::ImportWinampPresets)][..],
-        ),
-        (
-            "Save",
-            &[
-                ("Preset", EqualizerPresetAction::SavePreset),
-                ("Auto-load preset", EqualizerPresetAction::SaveAutoPreset),
-                ("Default", EqualizerPresetAction::SaveDefault),
-                ("To file", EqualizerPresetAction::SaveToFile),
-                (
-                    "To WinAMP EQF file",
-                    EqualizerPresetAction::SaveToWinampFile,
-                ),
-            ][..],
-        ),
-        (
-            "Delete",
-            &[
-                ("Preset", EqualizerPresetAction::DeletePreset),
-                ("Auto-load preset", EqualizerPresetAction::DeleteAutoPreset),
-            ][..],
-        ),
-    ] {
+    for section in EQUALIZER_PRESET_MENU_SECTIONS {
         let submenu = gtk::gio::Menu::new();
-        for (child_label, action) in actions {
-            let action_name = equalizer_preset_action_name(*action);
+        for item in section.items {
+            let action = item.action;
+            let action_name = action.action_name();
             submenu.append(
-                Some(child_label),
+                Some(item.label),
                 Some(&format!("eq-presets.{action_name}")),
             );
             install_equalizer_preset_action(
                 &action_group,
-                *action,
+                action,
                 action_name,
                 parent,
                 main_state,
                 main_area,
             );
         }
-        if label == "Load" {
+        if section.label == "Load" {
             let winamp_section = gtk::gio::Menu::new();
             for (index, preset) in winamp_original_presets().into_iter().enumerate() {
                 let action_name = format!("load-winamp-original-preset-{index}");
@@ -2360,22 +2326,22 @@ fn build_equalizer_presets_popover(
                 submenu.append_section(Some("Presets"), &preset_section);
             }
         }
-        menu.append_submenu(Some(label), &submenu);
+        menu.append_submenu(Some(section.label), &submenu);
     }
 
     install_equalizer_preset_action(
         &action_group,
-        EqualizerPresetAction::Configure,
-        equalizer_preset_action_name(EqualizerPresetAction::Configure),
+        EQUALIZER_CONFIGURE_PRESET_ITEM.action,
+        EQUALIZER_CONFIGURE_PRESET_ITEM.action.action_name(),
         parent,
         main_state,
         main_area,
     );
     menu.append(
-        Some("Configure Equalizer"),
+        Some(EQUALIZER_CONFIGURE_PRESET_ITEM.label),
         Some(&format!(
             "eq-presets.{}",
-            equalizer_preset_action_name(EqualizerPresetAction::Configure)
+            EQUALIZER_CONFIGURE_PRESET_ITEM.action.action_name()
         )),
     );
 
@@ -2455,26 +2421,6 @@ fn install_equalizer_named_preset_action(
         main_area.queue_draw();
     });
     group.add_action(&simple_action);
-}
-
-fn equalizer_preset_action_name(action: EqualizerPresetAction) -> &'static str {
-    match action {
-        EqualizerPresetAction::LoadPreset => "load-preset",
-        EqualizerPresetAction::LoadAutoPreset => "load-auto-preset",
-        EqualizerPresetAction::LoadDefault => "load-default",
-        EqualizerPresetAction::LoadZero => "load-zero",
-        EqualizerPresetAction::LoadFromFile => "load-from-file",
-        EqualizerPresetAction::LoadFromWinampFile => "load-from-winamp-file",
-        EqualizerPresetAction::ImportWinampPresets => "import-winamp-presets",
-        EqualizerPresetAction::SavePreset => "save-preset",
-        EqualizerPresetAction::SaveAutoPreset => "save-auto-preset",
-        EqualizerPresetAction::SaveDefault => "save-default",
-        EqualizerPresetAction::SaveToFile => "save-to-file",
-        EqualizerPresetAction::SaveToWinampFile => "save-to-winamp-file",
-        EqualizerPresetAction::DeletePreset => "delete-preset",
-        EqualizerPresetAction::DeleteAutoPreset => "delete-auto-preset",
-        EqualizerPresetAction::Configure => "configure",
-    }
 }
 
 fn build_preferences_window(
@@ -5538,25 +5484,6 @@ pub enum PlaylistContextAction {
     SelectAll,
     SelectNone,
     InvertSelection,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EqualizerPresetAction {
-    LoadPreset,
-    LoadAutoPreset,
-    LoadDefault,
-    LoadZero,
-    LoadFromFile,
-    LoadFromWinampFile,
-    ImportWinampPresets,
-    SavePreset,
-    SaveAutoPreset,
-    SaveDefault,
-    SaveToFile,
-    SaveToWinampFile,
-    DeletePreset,
-    DeleteAutoPreset,
-    Configure,
 }
 
 impl PlaylistMenuKind {
