@@ -1238,6 +1238,7 @@ fn detached_playlist_snapshot(
     let shaded_info = playlist::shaded_playlist_info(app);
     let footer_info = detached_playlist_footer_info(app);
     let (footer_min, footer_sec) = detached_playlist_footer_time_parts(app);
+    let render_scale = app.scale_factor as f64;
     let mut image = render_playlist_color_image(
         &app.active_skin,
         focused,
@@ -1249,6 +1250,7 @@ fn detached_playlist_snapshot(
         Some(&footer_info),
         Some(&footer_min),
         Some(&footer_sec),
+        render_scale,
     )
     .ok()?;
     let playlist_menu_open = (!view_model.shaded)
@@ -1257,7 +1259,7 @@ fn detached_playlist_snapshot(
     if let Some(kind) = playlist_menu_open {
         let hover =
             menu_hover.and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
-        overlay_detached_playlist_menu(&mut image, app, kind, hover).ok()?;
+        overlay_detached_playlist_menu(&mut image, app, kind, hover, render_scale).ok()?;
     }
     Some(DetachedPanelSnapshot {
         panel: LayoutPanelKind::Playlist,
@@ -1277,6 +1279,7 @@ fn overlay_detached_playlist_menu(
     app: &EguiFrontendState,
     kind: PlaylistMenuRenderKind,
     hover: Option<usize>,
+    scale: f64,
 ) -> Result<(), crate::render::RenderError> {
     let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
     let menu = render_playlist_menu_color_image(
@@ -1284,16 +1287,20 @@ fn overlay_detached_playlist_menu(
         PlaylistMenuRenderState { kind, hover },
         popup.width,
         popup.height,
+        scale,
     )?;
+    let scale = scale.max(1.0);
+    let offset_x = ((popup.x as f64) * scale).round() as i32;
+    let offset_y = ((popup.y as f64) * scale).round() as i32;
     let image_width = image.size[0];
     let image_height = image.size[1];
     for y in 0..menu.size[1] {
-        let dest_y = popup.y + y as i32;
+        let dest_y = offset_y + y as i32;
         if dest_y < 0 || dest_y as usize >= image_height {
             continue;
         }
         for x in 0..menu.size[0] {
-            let dest_x = popup.x + x as i32;
+            let dest_x = offset_x + x as i32;
             if dest_x < 0 || dest_x as usize >= image_width {
                 continue;
             }

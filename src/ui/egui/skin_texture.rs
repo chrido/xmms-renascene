@@ -5,9 +5,9 @@ use cairo::{Context, Format, ImageSurface};
 use crate::render::{
     equalizer_window_height, playlist_window_height, render_equalizer_state,
     render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
-    EqualizerRenderState, MainWindowRenderState, PlaylistMenuRenderState, PlaylistRowsRenderState,
-    RenderError, RenderPass, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
-    MAIN_WINDOW_WIDTH,
+    render_scaled, EqualizerRenderState, MainWindowRenderState, PlaylistMenuRenderState,
+    PlaylistRowsRenderState, RenderError, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
+    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::DefaultSkin;
 
@@ -67,6 +67,7 @@ pub fn render_equalizer_color_image(
     cairo_surface_to_color_image(&mut surface)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_playlist_color_image(
     skin: &DefaultSkin,
     focused: bool,
@@ -78,26 +79,46 @@ pub fn render_playlist_color_image(
     footer_info: Option<&str>,
     footer_time_minutes: Option<&str>,
     footer_time_seconds: Option<&str>,
+    scale: f64,
 ) -> Result<egui::ColorImage, RenderError> {
     let render_height = playlist_window_height(shaded, height);
-    let mut surface = ImageSurface::create(Format::ARgb32, width, render_height)?;
+    // Render at the final device resolution so the vector song-name font is
+    // rasterised crisply (like GTK), instead of rendering at 1x and letting
+    // egui upscale the anti-aliased text into a blurry texture. render_scaled
+    // nearest-scales the skin bitmap layer and draws the text pass at device
+    // resolution, matching the GTK playlist draw path exactly.
+    let scale = scale.max(1.0);
+    let device_width = ((width as f64) * scale).round().max(1.0) as i32;
+    let device_height = ((render_height as f64) * scale).round().max(1.0) as i32;
+    let mut surface = ImageSurface::create(Format::ARgb32, device_width, device_height)?;
     let cr = Context::new(&surface)?;
-    render_playlist_frame(
+    render_scaled(
         &cr,
-        skin,
-        focused,
-        shaded,
+        device_width,
+        device_height,
         width,
-        height,
-        shaded_info,
-        footer_info,
-        footer_time_minutes,
-        footer_time_seconds,
+        render_height,
+        |cr, pass| {
+            if pass.is_bitmap() {
+                render_playlist_frame(
+                    cr,
+                    skin,
+                    focused,
+                    shaded,
+                    width,
+                    height,
+                    shaded_info,
+                    footer_info,
+                    footer_time_minutes,
+                    footer_time_seconds,
+                )?;
+            }
+            if !shaded {
+                render_playlist_rows(cr, skin, rows, pass)?;
+            }
+            Ok(())
+        },
     )?;
-    if !shaded {
-        render_playlist_rows(&cr, skin, rows, RenderPass::Bitmap)?;
-        render_playlist_rows(&cr, skin, rows, RenderPass::Text)?;
-    }
     drop(cr);
     cairo_surface_to_color_image(&mut surface)
 }
@@ -107,10 +128,26 @@ pub fn render_playlist_menu_color_image(
     state: PlaylistMenuRenderState,
     width: i32,
     height: i32,
+    scale: f64,
 ) -> Result<egui::ColorImage, RenderError> {
-    let mut surface = ImageSurface::create(Format::ARgb32, width, height)?;
+    let scale = scale.max(1.0);
+    let device_width = ((width as f64) * scale).round().max(1.0) as i32;
+    let device_height = ((height as f64) * scale).round().max(1.0) as i32;
+    let mut surface = ImageSurface::create(Format::ARgb32, device_width, device_height)?;
     let cr = Context::new(&surface)?;
-    render_playlist_menu(&cr, skin, state)?;
+    render_scaled(
+        &cr,
+        device_width,
+        device_height,
+        width,
+        height,
+        |cr, pass| {
+            if pass.is_bitmap() {
+                render_playlist_menu(cr, skin, state)?;
+            }
+            Ok(())
+        },
+    )?;
     drop(cr);
     cairo_surface_to_color_image(&mut surface)
 }
@@ -172,9 +209,39 @@ mod tests {
             },
             25,
             54,
+            1.0,
         )
         .unwrap();
 
         assert_eq!(image.size, [25, 54]);
+    }
+
+    #[test]
+    fn playlist_image_renders_at_device_resolution_when_scaled() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let rows = PlaylistRowsRenderState {
+            entries: Vec::new(),
+            scroll_offset: 0,
+            scrollbar_dragging: false,
+            search_query: None,
+            show_numbers: false,
+            font_family: "Helvetica".to_string(),
+            width: 275,
+            height: 232,
+        };
+        let base = render_playlist_color_image(
+            &skin, true, false, 275, 232, None, &rows, None, None, None, 1.0,
+        )
+        .unwrap();
+        assert_eq!(base.size, [275, 232]);
+
+        // At 2x zoom the cairo image must be produced at the full device
+        // resolution so the vector song-name font is rasterised crisply instead
+        // of being upscaled (blurred) by egui.
+        let scaled = render_playlist_color_image(
+            &skin, true, false, 275, 232, None, &rows, None, None, None, 2.0,
+        )
+        .unwrap();
+        assert_eq!(scaled.size, [550, 464]);
     }
 }

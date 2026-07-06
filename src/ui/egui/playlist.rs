@@ -38,6 +38,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let shaded_info = shaded_playlist_info(app);
     let footer_info = playlist_footer_info(app);
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
+    let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
     let Ok(image) = render_playlist_color_image(
         &app.active_skin,
         true,
@@ -49,6 +50,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         Some(&footer_info),
         Some(&footer_time_minutes),
         Some(&footer_time_seconds),
+        render_scale,
     ) else {
         ui.label("failed to render skinned playlist");
         return;
@@ -493,11 +495,13 @@ fn add_playlist_menu_popover(
         .playlist_menu_hover
         .and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
     let render_state = PlaylistMenuRenderState { kind, hover };
+    let menu_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
     match render_playlist_menu_color_image(
         &app.active_skin,
         render_state,
         popup.width,
         popup.height,
+        menu_scale,
     ) {
         Ok(image) => {
             let texture = upload_color_image(
