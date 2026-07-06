@@ -2,13 +2,14 @@
 
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
+use crate::app::playlist_actions::{PlaylistSortAction, PLAYLIST_SORT_MENU_ITEMS};
 use crate::app::view_model::{
     ellipsize_chars, format_duration, format_title_for_preferences,
     playlist_footer_info as shared_playlist_footer_info, playlist_view_model, PlaylistViewModel,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
-use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
+use crate::playlist::PlaylistMenuKind;
 use crate::render::{
     playlist_window_height, PlaylistMenuRenderState, PlaylistRowRenderEntry,
     PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH,
@@ -616,53 +617,9 @@ fn show_playlist_sort_popover(
                 egui::ScrollArea::vertical()
                     .max_height(estimated_popup_height)
                     .show(ui, |ui| {
-                        ui.label("Sort List");
-                        close_after_click |=
-                            playlist_sort_item(ui, app, false, PlaylistSortKey::Title, "By Title");
-                        close_after_click |= playlist_sort_item(
-                            ui,
-                            app,
-                            false,
-                            PlaylistSortKey::Filename,
-                            "By Filename",
-                        );
-                        close_after_click |= playlist_sort_item(
-                            ui,
-                            app,
-                            false,
-                            PlaylistSortKey::Path,
-                            "By Path + Filename",
-                        );
-                        close_after_click |=
-                            playlist_sort_item(ui, app, false, PlaylistSortKey::Date, "By Date");
-                        ui.separator();
-                        ui.label("Sort Selection");
-                        close_after_click |=
-                            playlist_sort_item(ui, app, true, PlaylistSortKey::Title, "By Title");
-                        close_after_click |= playlist_sort_item(
-                            ui,
-                            app,
-                            true,
-                            PlaylistSortKey::Filename,
-                            "By Filename",
-                        );
-                        close_after_click |= playlist_sort_item(
-                            ui,
-                            app,
-                            true,
-                            PlaylistSortKey::Path,
-                            "By Path + Filename",
-                        );
-                        close_after_click |=
-                            playlist_sort_item(ui, app, true, PlaylistSortKey::Date, "By Date");
-                        ui.separator();
-                        if ui.button("Randomize List").clicked() {
-                            app.dispatch(PlaylistCommand::Randomize);
-                            close_after_click = true;
-                        }
-                        if ui.button("Reverse List").clicked() {
-                            app.dispatch(PlaylistCommand::Reverse);
-                            close_after_click = true;
+                        for sort_item in PLAYLIST_SORT_MENU_ITEMS {
+                            close_after_click |=
+                                playlist_sort_item(ui, app, sort_item.action, sort_item.label);
                         }
                     });
             });
@@ -683,18 +640,13 @@ fn show_playlist_sort_popover(
 fn playlist_sort_item(
     ui: &mut egui::Ui,
     app: &mut EguiFrontendState,
-    selected_only: bool,
-    key: PlaylistSortKey,
+    action: PlaylistSortAction,
     label: &str,
 ) -> bool {
     if !ui.button(label).clicked() {
         return false;
     }
-    if selected_only {
-        app.dispatch(PlaylistCommand::SortSelected(key));
-    } else {
-        app.dispatch(PlaylistCommand::Sort(key));
-    }
+    app.dispatch(action.command());
     true
 }
 

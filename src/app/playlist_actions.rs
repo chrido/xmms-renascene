@@ -1,6 +1,87 @@
 //! Frontend-neutral playlist action mapping.
 
-use crate::playlist::PlaylistMenuKind;
+use crate::app::command::PlaylistCommand;
+use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistSortAction {
+    ListByTitle,
+    ListByFilename,
+    ListByPath,
+    ListByDate,
+    SelectionByTitle,
+    SelectionByFilename,
+    SelectionByPath,
+    SelectionByDate,
+    RandomizeList,
+    ReverseList,
+}
+
+impl PlaylistSortAction {
+    pub fn command(self) -> PlaylistCommand {
+        match self {
+            Self::ListByTitle => PlaylistCommand::Sort(PlaylistSortKey::Title),
+            Self::ListByFilename => PlaylistCommand::Sort(PlaylistSortKey::Filename),
+            Self::ListByPath => PlaylistCommand::Sort(PlaylistSortKey::Path),
+            Self::ListByDate => PlaylistCommand::Sort(PlaylistSortKey::Date),
+            Self::SelectionByTitle => PlaylistCommand::SortSelected(PlaylistSortKey::Title),
+            Self::SelectionByFilename => PlaylistCommand::SortSelected(PlaylistSortKey::Filename),
+            Self::SelectionByPath => PlaylistCommand::SortSelected(PlaylistSortKey::Path),
+            Self::SelectionByDate => PlaylistCommand::SortSelected(PlaylistSortKey::Date),
+            Self::RandomizeList => PlaylistCommand::Randomize,
+            Self::ReverseList => PlaylistCommand::Reverse,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaylistSortMenuItem {
+    pub label: &'static str,
+    pub action: PlaylistSortAction,
+}
+
+pub const PLAYLIST_SORT_MENU_ITEMS: &[PlaylistSortMenuItem] = &[
+    PlaylistSortMenuItem {
+        label: "Sort List: By Title",
+        action: PlaylistSortAction::ListByTitle,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort List: By Filename",
+        action: PlaylistSortAction::ListByFilename,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort List: By Path + Filename",
+        action: PlaylistSortAction::ListByPath,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort List: By Date",
+        action: PlaylistSortAction::ListByDate,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort Selection: By Title",
+        action: PlaylistSortAction::SelectionByTitle,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort Selection: By Filename",
+        action: PlaylistSortAction::SelectionByFilename,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort Selection: By Path + Filename",
+        action: PlaylistSortAction::SelectionByPath,
+    },
+    PlaylistSortMenuItem {
+        label: "Sort Selection: By Date",
+        action: PlaylistSortAction::SelectionByDate,
+    },
+    PlaylistSortMenuItem {
+        label: "Randomize List",
+        action: PlaylistSortAction::RandomizeList,
+    },
+    PlaylistSortMenuItem {
+        label: "Reverse List",
+        action: PlaylistSortAction::ReverseList,
+    },
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistMenuCommand {
@@ -46,6 +127,49 @@ impl PlaylistMenuCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playlist_sort_actions_map_to_playlist_commands() {
+        assert_eq!(
+            PlaylistSortAction::ListByTitle.command(),
+            PlaylistCommand::Sort(PlaylistSortKey::Title)
+        );
+        assert_eq!(
+            PlaylistSortAction::SelectionByFilename.command(),
+            PlaylistCommand::SortSelected(PlaylistSortKey::Filename)
+        );
+        assert_eq!(
+            PlaylistSortAction::RandomizeList.command(),
+            PlaylistCommand::Randomize
+        );
+        assert_eq!(
+            PlaylistSortAction::ReverseList.command(),
+            PlaylistCommand::Reverse
+        );
+    }
+
+    #[test]
+    fn playlist_sort_menu_items_cover_expected_labels() {
+        let labels: Vec<_> = PLAYLIST_SORT_MENU_ITEMS
+            .iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Sort List: By Title",
+                "Sort List: By Filename",
+                "Sort List: By Path + Filename",
+                "Sort List: By Date",
+                "Sort Selection: By Title",
+                "Sort Selection: By Filename",
+                "Sort Selection: By Path + Filename",
+                "Sort Selection: By Date",
+                "Randomize List",
+                "Reverse List",
+            ]
+        );
+    }
 
     #[test]
     fn playlist_menu_command_maps_menu_indices() {

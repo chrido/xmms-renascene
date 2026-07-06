@@ -18,7 +18,8 @@ use crate::app::effect::AppEffect;
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
-use crate::app::playlist_actions::PlaylistMenuCommand;
+pub use crate::app::playlist_actions::PlaylistSortAction;
+use crate::app::playlist_actions::{PlaylistMenuCommand, PLAYLIST_SORT_MENU_ITEMS};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
@@ -2213,34 +2214,9 @@ fn build_playlist_sort_popover(
     style_xmms_popover(&popover);
     popover.set_parent(parent);
     let menu_box = xmms_menu_box(0);
-    for (label, action) in [
-        ("Sort List: By Title", PlaylistSortAction::ListByTitle),
-        ("Sort List: By Filename", PlaylistSortAction::ListByFilename),
-        (
-            "Sort List: By Path + Filename",
-            PlaylistSortAction::ListByPath,
-        ),
-        ("Sort List: By Date", PlaylistSortAction::ListByDate),
-        (
-            "Sort Selection: By Title",
-            PlaylistSortAction::SelectionByTitle,
-        ),
-        (
-            "Sort Selection: By Filename",
-            PlaylistSortAction::SelectionByFilename,
-        ),
-        (
-            "Sort Selection: By Path + Filename",
-            PlaylistSortAction::SelectionByPath,
-        ),
-        (
-            "Sort Selection: By Date",
-            PlaylistSortAction::SelectionByDate,
-        ),
-        ("Randomize List", PlaylistSortAction::RandomizeList),
-        ("Reverse List", PlaylistSortAction::ReverseList),
-    ] {
-        let item = xmms_menu_button(label);
+    for sort_item in PLAYLIST_SORT_MENU_ITEMS {
+        let action = sort_item.action;
+        let item = xmms_menu_button(sort_item.label);
         {
             let main_state = Rc::clone(main_state);
             let parent = parent.clone();
@@ -5562,20 +5538,6 @@ pub enum PlaylistContextAction {
     SelectAll,
     SelectNone,
     InvertSelection,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistSortAction {
-    ListByTitle,
-    ListByFilename,
-    ListByPath,
-    ListByDate,
-    SelectionByTitle,
-    SelectionByFilename,
-    SelectionByPath,
-    SelectionByDate,
-    RandomizeList,
-    ReverseList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9704,27 +9666,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn activate_playlist_sort_action(&mut self, action: PlaylistSortAction) -> bool {
-        let command = match action {
-            PlaylistSortAction::ListByTitle => PlaylistCommand::Sort(PlaylistSortKey::Title),
-            PlaylistSortAction::ListByFilename => PlaylistCommand::Sort(PlaylistSortKey::Filename),
-            PlaylistSortAction::ListByPath => PlaylistCommand::Sort(PlaylistSortKey::Path),
-            PlaylistSortAction::ListByDate => PlaylistCommand::Sort(PlaylistSortKey::Date),
-            PlaylistSortAction::SelectionByTitle => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Title)
-            }
-            PlaylistSortAction::SelectionByFilename => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Filename)
-            }
-            PlaylistSortAction::SelectionByPath => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Path)
-            }
-            PlaylistSortAction::SelectionByDate => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Date)
-            }
-            PlaylistSortAction::RandomizeList => PlaylistCommand::Randomize,
-            PlaylistSortAction::ReverseList => PlaylistCommand::Reverse,
-        };
-        self.dispatch_store_command(command);
+        self.dispatch_store_command(action.command());
         self.clamp_playlist_scroll_offset();
         true
     }
