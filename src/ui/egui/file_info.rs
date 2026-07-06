@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use id3::frame::{Comment, Content};
 use id3::{Tag, TagLike, Version};
@@ -51,6 +52,20 @@ struct EditableFileInfo {
     genre: String,
 }
 
+/// Self-contained state for the File Info dialog. It lives behind an
+/// `Arc<Mutex<..>>` so the dialog can be rendered in its own OS-level egui
+/// viewport (a real, freely draggable window like GTK) whose closure cannot
+/// borrow `EguiFrontendState`.
+#[derive(Debug, Default)]
+pub struct FileInfoViewportState {
+    open: bool,
+    details: Option<FileInfoDetails>,
+    editor: FileInfoEditorState,
+    save_requested: bool,
+    remove_requested: bool,
+    close_requested: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileInfoDetails {
     uri: String,
@@ -76,55 +91,125 @@ struct FileInfoDetails {
 
 pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
     if !app.file_info_open {
-        app.file_info_editor.clear();
+        let mut state = app
+            .file_info_viewport
+            .lock()
+            .expect("file info viewport state poisoned");
+        state.open = false;
+        state.details = None;
+        state.editor.clear();
         return;
     }
 
     let details = selected_or_current_entry(app).map(|entry| file_info_details_for_entry(&entry));
-    if let Some(details) = details.as_ref() {
-        app.file_info_editor.sync_for_details(details);
+
+    // Seed the shared state that the (detached, `'static`) viewport closure
+    // renders from. The editor only re-syncs when the URI changes so in-progress
+    // edits are preserved across frames.
+    {
+        let mut state = app
+            .file_info_viewport
+            .lock()
+            .expect("file info viewport state poisoned");
+        state.open = true;
+        if let Some(details) = details.as_ref() {
+            state.editor.sync_for_details(details);
+        }
+        state.details = details.clone();
     }
 
-    let mut open = app.file_info_open;
-    let mut close_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape));
-    let mut save_requested = false;
-    let mut remove_requested = false;
-    egui::Window::new(file_info_title(details.as_ref()))
-        .open(&mut open)
-        .resizable(true)
-        .default_width(620.0)
-        .default_height(320.0)
-        .show(ctx, |ui| {
-            if let Some(details) = details.as_ref() {
-                show_file_info_contents(
-                    ui,
-                    details,
-                    &mut app.file_info_editor,
-                    &mut save_requested,
-                    &mut remove_requested,
-                    &mut close_requested,
-                );
-            } else {
-                ui.label("No current or selected playlist entry.");
-                if ui.button("Close").clicked() {
-                    close_requested = true;
+    let shared = Arc::clone(&app.file_info_viewport);
+    let builder = egui::ViewportBuilder::default()
+        .with_title(file_info_title(details.as_ref()))
+        .with_inner_size(egui::vec2(640.0, 340.0))
+        .with_min_inner_size(egui::vec2(480.0, 260.0))
+        .with_resizable(true)
+        .with_decorations(true);
+
+    ctx.show_viewport_deferred(
+        egui::ViewportId::from_hash_of("xmms-egui-file-info"),
+        builder,
+        move |ctx, class| {
+            let mut state = shared.lock().expect("file info viewport state poisoned");
+            if ctx.input(|input| input.viewport().close_requested())
+                || ctx.input(|input| input.key_pressed(egui::Key::Escape))
+            {
+                state.open = false;
+                state.close_requested = true;
+                return;
+            }
+            match class {
+                egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
+                    egui::Window::new("File Info")
+                        .resizable(true)
+                        .show(ctx, |ui| render_file_info_viewport(ui, &mut state));
+                }
+                egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| render_file_info_viewport(ui, &mut state));
                 }
             }
-        });
+        },
+    );
 
+    let (save_requested, remove_requested, close_requested, still_open, values) = {
+        let mut state = app
+            .file_info_viewport
+            .lock()
+            .expect("file info viewport state poisoned");
+        let save = std::mem::take(&mut state.save_requested);
+        let remove = std::mem::take(&mut state.remove_requested);
+        let close = std::mem::take(&mut state.close_requested);
+        (save, remove, close, state.open, state.editor.values.clone())
+    };
+
+    let mut close = close_requested || !still_open;
     if let Some(details) = details.as_ref() {
-        if save_requested && save_file_info(app, details) {
-            close_requested = true;
+        if save_requested && save_file_info(app, details, &values) {
+            close = true;
         }
         if remove_requested && remove_file_info_tag(app, details) {
-            close_requested = true;
+            close = true;
         }
     }
 
-    if close_requested || !open {
-        app.file_info_editor.clear();
+    if close {
+        let mut state = app
+            .file_info_viewport
+            .lock()
+            .expect("file info viewport state poisoned");
+        state.open = false;
+        state.editor.clear();
     }
-    app.dispatch(UiCommand::SetFileInfoVisible(open && !close_requested));
+    app.dispatch(UiCommand::SetFileInfoVisible(!close));
+}
+
+fn render_file_info_viewport(ui: &mut egui::Ui, state: &mut FileInfoViewportState) {
+    if let Some(details) = state.details.clone() {
+        let mut save_requested = false;
+        let mut remove_requested = false;
+        let mut close_requested = false;
+        show_file_info_contents(
+            ui,
+            &details,
+            &mut state.editor,
+            &mut save_requested,
+            &mut remove_requested,
+            &mut close_requested,
+        );
+        state.save_requested |= save_requested;
+        state.remove_requested |= remove_requested;
+        if close_requested {
+            state.close_requested = true;
+            state.open = false;
+        }
+    } else {
+        ui.label("No current or selected playlist entry.");
+        if ui.button("Close").clicked() {
+            state.close_requested = true;
+            state.open = false;
+        }
+    }
 }
 
 fn show_file_info_contents(
@@ -363,15 +448,19 @@ fn file_info_details_for_entry(entry: &PlaylistEntry) -> FileInfoDetails {
     }
 }
 
-fn save_file_info(app: &mut EguiFrontendState, details: &FileInfoDetails) -> bool {
+fn save_file_info(
+    app: &mut EguiFrontendState,
+    details: &FileInfoDetails,
+    values: &EditableFileInfo,
+) -> bool {
     let Some(path) = details.path.as_deref() else {
         return false;
     };
-    match write_id3_metadata(path, &app.file_info_editor.values) {
+    match write_id3_metadata(path, values) {
         Ok(()) => {
             app.dispatch(PlaylistCommand::UpdateTitleForUri {
                 uri: details.uri.clone(),
-                title: app.file_info_editor.values.title.clone(),
+                title: values.title.clone(),
             });
             true
         }

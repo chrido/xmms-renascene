@@ -244,9 +244,16 @@ pub(crate) fn show_equalizer_presets_popover(
     }
 
     let presets_button = equalizer_control_rect(EqualizerControl::Presets);
-    let popup_pos = egui::pos2(
-        equalizer_rect.left() + presets_button.x as f32 * app.scale_factor,
-        equalizer_rect.top() + presets_button.bottom() as f32 * app.scale_factor,
+    let estimated_popup_width = 240.0;
+    // egui Areas are clipped to the OS window. The Presets button sits near the
+    // right edge of the 275px equalizer, while this popup is much wider, so an
+    // unadjusted right-opening popup is clipped. Move it left as needed so the
+    // full menu remains visible inside the equalizer/window bounds.
+    let popup_pos = equalizer_presets_popover_position(
+        equalizer_rect,
+        presets_button,
+        app.scale_factor,
+        estimated_popup_width,
     );
     let mut close_after_click = false;
     let response = egui::Area::new(egui::Id::new("xmms-egui-equalizer-presets-popup"))
@@ -382,6 +389,19 @@ pub(crate) fn show_equalizer_presets_popover(
     }
 }
 
+fn equalizer_presets_popover_position(
+    equalizer_rect: egui::Rect,
+    presets_button: SkinRect,
+    scale_factor: f32,
+    popup_width: f32,
+) -> egui::Pos2 {
+    let anchor_x = equalizer_rect.left() + presets_button.x as f32 * scale_factor;
+    let max_x = (equalizer_rect.right() - popup_width).max(equalizer_rect.left());
+    let popup_x = anchor_x.min(max_x).max(equalizer_rect.left());
+    let popup_y = equalizer_rect.top() + presets_button.bottom() as f32 * scale_factor;
+    egui::pos2(popup_x, popup_y)
+}
+
 fn apply_equalizer_preset(app: &mut EguiFrontendState, preset: &EqualizerPreset) {
     app.dispatch(EqualizerCommand::SetPreamp(preset.preamp_position()));
     for (band, position) in preset.band_positions().into_iter().enumerate() {
@@ -483,6 +503,29 @@ mod tests {
             rect,
         );
         assert_eq!(app.controller().state().config.equalizer_band_pos[2], 0);
+    }
+
+    #[test]
+    fn equalizer_presets_popover_stays_inside_equalizer_window() {
+        let equalizer_rect = egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(
+                EQUALIZER_WINDOW_WIDTH as f32,
+                EQUALIZER_WINDOW_HEIGHT as f32,
+            ),
+        );
+        let presets_button = equalizer_control_rect(EqualizerControl::Presets);
+        let popup_width = 240.0;
+        let pos =
+            equalizer_presets_popover_position(equalizer_rect, presets_button, 1.0, popup_width);
+        assert!(pos.x >= equalizer_rect.left());
+        assert!(
+            pos.x + popup_width <= equalizer_rect.right() + 0.5,
+            "preset popup right edge {} overflows equalizer right {}",
+            pos.x + popup_width,
+            equalizer_rect.right()
+        );
+        assert!(pos.x < presets_button.x as f32);
     }
 
     #[test]

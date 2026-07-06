@@ -90,18 +90,8 @@ fn playlist_rows_render_state(
             .iter()
             .map(|row| {
                 let entry = state.playlist.entries().get(row.index);
-                let title = entry
-                    .map(|entry| {
-                        format_title_for_preferences(
-                            &state.config.title_format,
-                            &entry.filename,
-                            &entry.title,
-                            &state.config,
-                        )
-                    })
-                    .unwrap_or_else(|| row.title.clone());
                 PlaylistRowRenderEntry {
-                    title,
+                    title: row.title.clone(),
                     length_ms: entry.map(|entry| entry.length_ms).unwrap_or(-1),
                     selected: row.selected,
                     current: row.current,

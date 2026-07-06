@@ -91,7 +91,12 @@ pub fn playlist_view_model(state: &AppState) -> PlaylistViewModel {
         .enumerate()
         .map(|(index, entry)| PlaylistRowViewModel {
             index,
-            title: entry.title.clone(),
+            title: format_title_for_preferences(
+                &state.config.title_format,
+                &entry.filename,
+                &entry.title,
+                &state.config,
+            ),
             duration_text: (entry.length_ms >= 0).then(|| format_duration(entry.length_ms)),
             selected: entry.selected,
             current: Some(index) == current_index,

@@ -192,7 +192,12 @@ fn render_docked_screenshot_pass(
                         .iter()
                         .enumerate()
                         .map(|(index, entry)| crate::render::PlaylistRowRenderEntry {
-                            title: entry.title.clone(),
+                            title: format_title_for_preferences(
+                                &app_state.config.title_format,
+                                &entry.filename,
+                                &entry.title,
+                                &app_state.config,
+                            ),
                             length_ms: entry.length_ms,
                             selected: entry.selected,
                             current: app_state.playlist.position() == Some(index),
