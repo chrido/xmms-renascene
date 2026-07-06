@@ -23,7 +23,9 @@ use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
 pub use crate::app::playlist_actions::PlaylistSortAction;
-use crate::app::playlist_actions::{PlaylistMenuCommand, PLAYLIST_SORT_MENU_ITEMS};
+use crate::app::playlist_actions::{
+    playlist_row_click_commands, PlaylistMenuCommand, PLAYLIST_SORT_MENU_ITEMS,
+};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
@@ -9420,8 +9422,8 @@ impl MainWindowUiState {
             return false;
         };
         if ctrl_pressed {
-            if let Some(entry) = self.app_state.playlist.entries_mut().get_mut(index) {
-                entry.selected = !entry.selected;
+            for command in playlist_row_click_commands(index, false, true) {
+                self.dispatch_store_command(command);
             }
             self.playlist_ui.last_click = None;
             self.playlist_ui.pending_double_click = None;
@@ -9439,7 +9441,9 @@ impl MainWindowUiState {
 
         self.playlist_ui.last_click = Some((index, now));
         self.playlist_ui.pending_double_click = is_double_click.then_some(index);
-        self.select_single_playlist_entry(index);
+        for command in playlist_row_click_commands(index, false, false) {
+            self.dispatch_store_command(command);
+        }
         self.playlist_ui.pointer = PlaylistPointer::DraggingEntry {
             index,
             moved: false,
@@ -9459,12 +9463,12 @@ impl MainWindowUiState {
     }
 
     fn activate_playlist_entry(&mut self, index: usize) {
-        self.select_single_playlist_entry(index);
         self.playlist_ui.last_click = None;
         self.playlist_ui.pending_double_click = None;
         self.playlist_ui.pointer = PlaylistPointer::Idle;
-        self.dispatch_store_command(PlaylistCommand::SetPosition(index));
-        self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+        for command in playlist_row_click_commands(index, true, false) {
+            self.dispatch_store_command_and_apply_local_effects(command);
+        }
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
@@ -9755,8 +9759,9 @@ impl MainWindowUiState {
     }
 
     fn select_single_playlist_entry(&mut self, index: usize) {
-        self.dispatch_store_command(PlaylistCommand::SelectNone);
-        self.dispatch_store_command(PlaylistCommand::ToggleEntrySelection(index));
+        for command in playlist_row_click_commands(index, false, false) {
+            self.dispatch_store_command(command);
+        }
     }
 
     fn scroll_playlist_entry_into_view(&mut self, index: usize) {

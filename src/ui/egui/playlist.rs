@@ -2,7 +2,9 @@
 
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
-use crate::app::playlist_actions::{PlaylistSortAction, PLAYLIST_SORT_MENU_ITEMS};
+use crate::app::playlist_actions::{
+    playlist_row_click_commands, PlaylistSortAction, PLAYLIST_SORT_MENU_ITEMS,
+};
 use crate::app::view_model::{
     ellipsize_chars, format_duration, format_title_for_preferences,
     playlist_footer_info as shared_playlist_footer_info, playlist_view_model, PlaylistViewModel,
@@ -387,14 +389,8 @@ fn add_playlist_rows_hit_region(
             .ctx()
             .input(|input| input.modifiers.ctrl || input.modifiers.command);
         if let Some(model) = view_model.rows.get(index) {
-            if response.double_clicked() {
-                app.dispatch(PlaylistCommand::SetPosition(model.index));
-                app.dispatch(PlayerCommand::StartCurrentTrack);
-            } else if ctrl {
-                app.dispatch(PlaylistCommand::ToggleEntrySelection(model.index));
-            } else {
-                app.dispatch(PlaylistCommand::SelectNone);
-                app.dispatch(PlaylistCommand::ToggleEntrySelection(model.index));
+            for command in playlist_row_click_commands(model.index, response.double_clicked(), ctrl) {
+                app.dispatch(command);
             }
         }
     }

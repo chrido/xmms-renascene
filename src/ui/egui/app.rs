@@ -14,6 +14,7 @@ use crate::app::command::{
 };
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
+use crate::app::playlist_actions::playlist_row_click_commands;
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
@@ -1120,14 +1121,8 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
             double,
             ctrl,
         } => {
-            if double {
-                app.dispatch(PlaylistCommand::SetPosition(index));
-                app.dispatch(PlayerCommand::StartCurrentTrack);
-            } else if ctrl {
-                app.dispatch(PlaylistCommand::ToggleEntrySelection(index));
-            } else {
-                app.dispatch(PlaylistCommand::SelectNone);
-                app.dispatch(PlaylistCommand::ToggleEntrySelection(index));
+            for command in playlist_row_click_commands(index, double, ctrl) {
+                app.dispatch(command);
             }
         }
         DetachedPanelAction::PlaylistScrollTo(offset) => {

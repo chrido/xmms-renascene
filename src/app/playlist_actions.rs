@@ -1,6 +1,6 @@
 //! Frontend-neutral playlist action mapping.
 
-use crate::app::command::PlaylistCommand;
+use crate::app::command::{AppCommand, PlayerCommand, PlaylistCommand};
 use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +38,26 @@ impl PlaylistSortAction {
 pub struct PlaylistSortMenuItem {
     pub label: &'static str,
     pub action: PlaylistSortAction,
+}
+
+pub fn playlist_row_click_commands(
+    index: usize,
+    double_click: bool,
+    multi_select_modifier: bool,
+) -> Vec<AppCommand> {
+    if double_click {
+        return vec![
+            PlaylistCommand::SetPosition(index).into(),
+            PlayerCommand::StartCurrentTrack.into(),
+        ];
+    }
+    if multi_select_modifier {
+        return vec![PlaylistCommand::ToggleEntrySelection(index).into()];
+    }
+    vec![
+        PlaylistCommand::SelectNone.into(),
+        PlaylistCommand::ToggleEntrySelection(index).into(),
+    ]
 }
 
 pub const PLAYLIST_SORT_MENU_ITEMS: &[PlaylistSortMenuItem] = &[
@@ -127,6 +147,35 @@ impl PlaylistMenuCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playlist_row_click_commands_match_frontend_selection_semantics() {
+        assert_eq!(
+            playlist_row_click_commands(3, false, false),
+            vec![
+                PlaylistCommand::SelectNone.into(),
+                PlaylistCommand::ToggleEntrySelection(3).into(),
+            ]
+        );
+        assert_eq!(
+            playlist_row_click_commands(3, false, true),
+            vec![PlaylistCommand::ToggleEntrySelection(3).into()]
+        );
+        assert_eq!(
+            playlist_row_click_commands(3, true, false),
+            vec![
+                PlaylistCommand::SetPosition(3).into(),
+                PlayerCommand::StartCurrentTrack.into(),
+            ]
+        );
+        assert_eq!(
+            playlist_row_click_commands(3, true, true),
+            vec![
+                PlaylistCommand::SetPosition(3).into(),
+                PlayerCommand::StartCurrentTrack.into(),
+            ]
+        );
+    }
 
     #[test]
     fn playlist_sort_actions_map_to_playlist_commands() {
