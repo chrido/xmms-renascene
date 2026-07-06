@@ -405,24 +405,9 @@ fn scale_skin_rect(base: egui::Rect, rect: SkinRect, scale: f32) -> egui::Rect {
     )
 }
 
-pub fn equalizer_band_command(band: usize, position: i32) -> EqualizerCommand {
-    EqualizerCommand::SetBand { band, position }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn equalizer_slider_translation_uses_equalizer_command_domain() {
-        assert_eq!(
-            equalizer_band_command(4, 75),
-            EqualizerCommand::SetBand {
-                band: 4,
-                position: 75,
-            }
-        );
-    }
 
     #[test]
     fn equalizer_controls_dispatch_to_app_state() {

@@ -70,95 +70,51 @@ pub struct EqualizerPresetMenuSection {
     pub items: &'static [EqualizerPresetMenuItem],
 }
 
+const fn item(label: &'static str, action: EqualizerPresetAction) -> EqualizerPresetMenuItem {
+    EqualizerPresetMenuItem { label, action }
+}
+
+const fn section(
+    label: &'static str,
+    items: &'static [EqualizerPresetMenuItem],
+) -> EqualizerPresetMenuSection {
+    EqualizerPresetMenuSection { label, items }
+}
+
 pub const EQUALIZER_LOAD_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[
-    EqualizerPresetMenuItem {
-        label: "Preset",
-        action: EqualizerPresetAction::LoadPreset,
-    },
-    EqualizerPresetMenuItem {
-        label: "Auto-load preset",
-        action: EqualizerPresetAction::LoadAutoPreset,
-    },
-    EqualizerPresetMenuItem {
-        label: "Default",
-        action: EqualizerPresetAction::LoadDefault,
-    },
-    EqualizerPresetMenuItem {
-        label: "Zero",
-        action: EqualizerPresetAction::LoadZero,
-    },
-    EqualizerPresetMenuItem {
-        label: "From file",
-        action: EqualizerPresetAction::LoadFromFile,
-    },
-    EqualizerPresetMenuItem {
-        label: "From WinAMP EQF file",
-        action: EqualizerPresetAction::LoadFromWinampFile,
-    },
+    item("Preset", EqualizerPresetAction::LoadPreset),
+    item("Auto-load preset", EqualizerPresetAction::LoadAutoPreset),
+    item("Default", EqualizerPresetAction::LoadDefault),
+    item("Zero", EqualizerPresetAction::LoadZero),
+    item("From file", EqualizerPresetAction::LoadFromFile),
+    item("From WinAMP EQF file", EqualizerPresetAction::LoadFromWinampFile),
 ];
 
-pub const EQUALIZER_IMPORT_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[EqualizerPresetMenuItem {
-    label: "WinAMP Presets",
-    action: EqualizerPresetAction::ImportWinampPresets,
-}];
+pub const EQUALIZER_IMPORT_PRESET_ITEMS: &[EqualizerPresetMenuItem] =
+    &[item("WinAMP Presets", EqualizerPresetAction::ImportWinampPresets)];
 
 pub const EQUALIZER_SAVE_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[
-    EqualizerPresetMenuItem {
-        label: "Preset",
-        action: EqualizerPresetAction::SavePreset,
-    },
-    EqualizerPresetMenuItem {
-        label: "Auto-load preset",
-        action: EqualizerPresetAction::SaveAutoPreset,
-    },
-    EqualizerPresetMenuItem {
-        label: "Default",
-        action: EqualizerPresetAction::SaveDefault,
-    },
-    EqualizerPresetMenuItem {
-        label: "To file",
-        action: EqualizerPresetAction::SaveToFile,
-    },
-    EqualizerPresetMenuItem {
-        label: "To WinAMP EQF file",
-        action: EqualizerPresetAction::SaveToWinampFile,
-    },
+    item("Preset", EqualizerPresetAction::SavePreset),
+    item("Auto-load preset", EqualizerPresetAction::SaveAutoPreset),
+    item("Default", EqualizerPresetAction::SaveDefault),
+    item("To file", EqualizerPresetAction::SaveToFile),
+    item("To WinAMP EQF file", EqualizerPresetAction::SaveToWinampFile),
 ];
 
 pub const EQUALIZER_DELETE_PRESET_ITEMS: &[EqualizerPresetMenuItem] = &[
-    EqualizerPresetMenuItem {
-        label: "Preset",
-        action: EqualizerPresetAction::DeletePreset,
-    },
-    EqualizerPresetMenuItem {
-        label: "Auto-load preset",
-        action: EqualizerPresetAction::DeleteAutoPreset,
-    },
+    item("Preset", EqualizerPresetAction::DeletePreset),
+    item("Auto-load preset", EqualizerPresetAction::DeleteAutoPreset),
 ];
 
 pub const EQUALIZER_PRESET_MENU_SECTIONS: &[EqualizerPresetMenuSection] = &[
-    EqualizerPresetMenuSection {
-        label: "Load",
-        items: EQUALIZER_LOAD_PRESET_ITEMS,
-    },
-    EqualizerPresetMenuSection {
-        label: "Import",
-        items: EQUALIZER_IMPORT_PRESET_ITEMS,
-    },
-    EqualizerPresetMenuSection {
-        label: "Save",
-        items: EQUALIZER_SAVE_PRESET_ITEMS,
-    },
-    EqualizerPresetMenuSection {
-        label: "Delete",
-        items: EQUALIZER_DELETE_PRESET_ITEMS,
-    },
+    section("Load", EQUALIZER_LOAD_PRESET_ITEMS),
+    section("Import", EQUALIZER_IMPORT_PRESET_ITEMS),
+    section("Save", EQUALIZER_SAVE_PRESET_ITEMS),
+    section("Delete", EQUALIZER_DELETE_PRESET_ITEMS),
 ];
 
-pub const EQUALIZER_CONFIGURE_PRESET_ITEM: EqualizerPresetMenuItem = EqualizerPresetMenuItem {
-    label: "Configure Equalizer",
-    action: EqualizerPresetAction::Configure,
-};
+pub const EQUALIZER_CONFIGURE_PRESET_ITEM: EqualizerPresetMenuItem =
+    item("Configure Equalizer", EqualizerPresetAction::Configure);
 
 #[cfg(test)]
 mod tests {
@@ -166,19 +122,14 @@ mod tests {
 
     #[test]
     fn equalizer_preset_action_names_are_stable() {
-        assert_eq!(
-            EqualizerPresetAction::LoadPreset.action_name(),
-            "load-preset"
-        );
-        assert_eq!(
-            EqualizerPresetAction::LoadDefault.action_name(),
-            "load-default"
-        );
-        assert_eq!(
-            EqualizerPresetAction::SaveToFile.action_name(),
-            "save-to-file"
-        );
-        assert_eq!(EqualizerPresetAction::Configure.action_name(), "configure");
+        for (action, name) in [
+            (EqualizerPresetAction::LoadPreset, "load-preset"),
+            (EqualizerPresetAction::LoadDefault, "load-default"),
+            (EqualizerPresetAction::SaveToFile, "save-to-file"),
+            (EqualizerPresetAction::Configure, "configure"),
+        ] {
+            assert_eq!(action.action_name(), name);
+        }
     }
 
     #[test]
@@ -193,7 +144,7 @@ mod tests {
                 .iter()
                 .map(|item| item.label)
                 .collect::<Vec<_>>(),
-            vec![
+            [
                 "Preset",
                 "Auto-load preset",
                 "Default",
@@ -207,26 +158,20 @@ mod tests {
 
     #[test]
     fn equalizer_preset_menu_items_all_have_stable_action_names() {
-        let mut names = Vec::new();
-        for section in EQUALIZER_PRESET_MENU_SECTIONS {
-            assert!(
-                !section.items.is_empty(),
-                "{} section is empty",
-                section.label
-            );
-            for item in section.items {
-                assert!(!item.label.is_empty());
-                names.push(item.action.action_name());
-            }
-        }
-        names.push(EQUALIZER_CONFIGURE_PRESET_ITEM.action.action_name());
+        let mut names: Vec<_> = EQUALIZER_PRESET_MENU_SECTIONS
+            .iter()
+            .flat_map(|section| {
+                assert!(!section.items.is_empty(), "{} section is empty", section.label);
+                section.items.iter().map(|item| {
+                    assert!(!item.label.is_empty());
+                    item.action.action_name()
+                })
+            })
+            .chain([EQUALIZER_CONFIGURE_PRESET_ITEM.action.action_name()])
+            .collect();
+        let expected_count = names.len();
         names.sort_unstable();
         names.dedup();
-        let expected_count = EQUALIZER_PRESET_MENU_SECTIONS
-            .iter()
-            .map(|section| section.items.len())
-            .sum::<usize>()
-            + 1;
         assert_eq!(names.len(), expected_count);
     }
 
@@ -236,9 +181,6 @@ mod tests {
             EqualizerPresetAction::LoadPreset.unsupported_egui_message(),
             Some("named equalizer preset picker pending egui handler")
         );
-        assert_eq!(
-            EqualizerPresetAction::LoadDefault.unsupported_egui_message(),
-            None
-        );
+        assert_eq!(EqualizerPresetAction::LoadDefault.unsupported_egui_message(), None);
     }
 }

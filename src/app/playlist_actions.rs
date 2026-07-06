@@ -60,47 +60,24 @@ pub fn playlist_row_click_commands(
     ]
 }
 
+const fn sort_item(label: &'static str, action: PlaylistSortAction) -> PlaylistSortMenuItem {
+    PlaylistSortMenuItem { label, action }
+}
+
 pub const PLAYLIST_SORT_MENU_ITEMS: &[PlaylistSortMenuItem] = &[
-    PlaylistSortMenuItem {
-        label: "Sort List: By Title",
-        action: PlaylistSortAction::ListByTitle,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort List: By Filename",
-        action: PlaylistSortAction::ListByFilename,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort List: By Path + Filename",
-        action: PlaylistSortAction::ListByPath,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort List: By Date",
-        action: PlaylistSortAction::ListByDate,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort Selection: By Title",
-        action: PlaylistSortAction::SelectionByTitle,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort Selection: By Filename",
-        action: PlaylistSortAction::SelectionByFilename,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort Selection: By Path + Filename",
-        action: PlaylistSortAction::SelectionByPath,
-    },
-    PlaylistSortMenuItem {
-        label: "Sort Selection: By Date",
-        action: PlaylistSortAction::SelectionByDate,
-    },
-    PlaylistSortMenuItem {
-        label: "Randomize List",
-        action: PlaylistSortAction::RandomizeList,
-    },
-    PlaylistSortMenuItem {
-        label: "Reverse List",
-        action: PlaylistSortAction::ReverseList,
-    },
+    sort_item("Sort List: By Title", PlaylistSortAction::ListByTitle),
+    sort_item("Sort List: By Filename", PlaylistSortAction::ListByFilename),
+    sort_item("Sort List: By Path + Filename", PlaylistSortAction::ListByPath),
+    sort_item("Sort List: By Date", PlaylistSortAction::ListByDate),
+    sort_item("Sort Selection: By Title", PlaylistSortAction::SelectionByTitle),
+    sort_item(
+        "Sort Selection: By Filename",
+        PlaylistSortAction::SelectionByFilename,
+    ),
+    sort_item("Sort Selection: By Path + Filename", PlaylistSortAction::SelectionByPath),
+    sort_item("Sort Selection: By Date", PlaylistSortAction::SelectionByDate),
+    sort_item("Randomize List", PlaylistSortAction::RandomizeList),
+    sort_item("Reverse List", PlaylistSortAction::ReverseList),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,51 +127,36 @@ mod tests {
 
     #[test]
     fn playlist_row_click_commands_match_frontend_selection_semantics() {
-        assert_eq!(
-            playlist_row_click_commands(3, false, false),
-            vec![
-                PlaylistCommand::SelectNone.into(),
-                PlaylistCommand::ToggleEntrySelection(3).into(),
-            ]
-        );
+        let single = vec![
+            PlaylistCommand::SelectNone.into(),
+            PlaylistCommand::ToggleEntrySelection(3).into(),
+        ];
+        let play = vec![
+            PlaylistCommand::SetPosition(3).into(),
+            PlayerCommand::StartCurrentTrack.into(),
+        ];
+        assert_eq!(playlist_row_click_commands(3, false, false), single);
         assert_eq!(
             playlist_row_click_commands(3, false, true),
             vec![PlaylistCommand::ToggleEntrySelection(3).into()]
         );
-        assert_eq!(
-            playlist_row_click_commands(3, true, false),
-            vec![
-                PlaylistCommand::SetPosition(3).into(),
-                PlayerCommand::StartCurrentTrack.into(),
-            ]
-        );
-        assert_eq!(
-            playlist_row_click_commands(3, true, true),
-            vec![
-                PlaylistCommand::SetPosition(3).into(),
-                PlayerCommand::StartCurrentTrack.into(),
-            ]
-        );
+        assert_eq!(playlist_row_click_commands(3, true, false), play);
+        assert_eq!(playlist_row_click_commands(3, true, true), play);
     }
 
     #[test]
     fn playlist_sort_actions_map_to_playlist_commands() {
-        assert_eq!(
-            PlaylistSortAction::ListByTitle.command(),
-            PlaylistCommand::Sort(PlaylistSortKey::Title)
-        );
-        assert_eq!(
-            PlaylistSortAction::SelectionByFilename.command(),
-            PlaylistCommand::SortSelected(PlaylistSortKey::Filename)
-        );
-        assert_eq!(
-            PlaylistSortAction::RandomizeList.command(),
-            PlaylistCommand::Randomize
-        );
-        assert_eq!(
-            PlaylistSortAction::ReverseList.command(),
-            PlaylistCommand::Reverse
-        );
+        for (action, command) in [
+            (PlaylistSortAction::ListByTitle, PlaylistCommand::Sort(PlaylistSortKey::Title)),
+            (
+                PlaylistSortAction::SelectionByFilename,
+                PlaylistCommand::SortSelected(PlaylistSortKey::Filename),
+            ),
+            (PlaylistSortAction::RandomizeList, PlaylistCommand::Randomize),
+            (PlaylistSortAction::ReverseList, PlaylistCommand::Reverse),
+        ] {
+            assert_eq!(action.command(), command);
+        }
     }
 
     #[test]
@@ -205,7 +167,7 @@ mod tests {
             .collect();
         assert_eq!(
             labels,
-            vec![
+            [
                 "Sort List: By Title",
                 "Sort List: By Filename",
                 "Sort List: By Path + Filename",
@@ -235,22 +197,18 @@ mod tests {
 
     #[test]
     fn playlist_menu_command_maps_menu_indices() {
-        assert_eq!(
-            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 0),
-            Some(PlaylistMenuCommand::OpenLocationWindow)
-        );
-        assert_eq!(
-            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Add, 2),
-            Some(PlaylistMenuCommand::OpenFileDialog)
-        );
-        assert_eq!(
-            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Remove, 3),
-            Some(PlaylistMenuCommand::RemoveSelectedOrCurrent)
-        );
-        assert_eq!(
-            PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::List, 1),
-            Some(PlaylistMenuCommand::SavePlaylist)
-        );
+        for (kind, index, command) in [
+            (PlaylistMenuKind::Add, 0, PlaylistMenuCommand::OpenLocationWindow),
+            (PlaylistMenuKind::Add, 2, PlaylistMenuCommand::OpenFileDialog),
+            (
+                PlaylistMenuKind::Remove,
+                3,
+                PlaylistMenuCommand::RemoveSelectedOrCurrent,
+            ),
+            (PlaylistMenuKind::List, 1, PlaylistMenuCommand::SavePlaylist),
+        ] {
+            assert_eq!(PlaylistMenuCommand::from_menu_item(kind, index), Some(command));
+        }
         assert_eq!(
             PlaylistMenuCommand::from_menu_item(PlaylistMenuKind::Misc, 99),
             None

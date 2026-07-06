@@ -14,9 +14,7 @@ use crate::app::view_model::{
 use crate::app_log_info;
 use crate::player::PlayerState;
 use crate::playlist::PlaylistMenuKind;
-use crate::render::{
-    playlist_window_height, PlaylistMenuRenderState, PlaylistRowsRenderState, PLAYLIST_MIN_WIDTH,
-};
+use crate::render::{playlist_window_height, PlaylistMenuRenderState, PLAYLIST_MIN_WIDTH};
 use crate::skin::layout::{
     panel_title_button_rect, playlist_footer_button_rect, playlist_menu_button_rect,
     playlist_menu_popup_rect, LayoutPanelKind, PanelTitleButton, PlaylistFooterButton,
@@ -39,7 +37,14 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     if !view_model.visible {
         return;
     }
-    let rows = playlist_rows_render_state(app, &view_model);
+    let rows = shared_playlist_rows_render_state(
+        app.controller().state(),
+        app.playlist_scroll_offset,
+        false,
+        None,
+        app.playlist_width,
+        app.playlist_height,
+    );
     let shaded_info = shaded_playlist_info(app);
     let footer_info = playlist_footer_info(app);
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
@@ -82,21 +87,6 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-}
-
-fn playlist_rows_render_state(
-    app: &EguiFrontendState,
-    view_model: &PlaylistViewModel,
-) -> PlaylistRowsRenderState {
-    let _ = view_model;
-    shared_playlist_rows_render_state(
-        app.controller().state(),
-        app.playlist_scroll_offset,
-        false,
-        None,
-        app.playlist_width,
-        app.playlist_height,
-    )
 }
 
 fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
@@ -657,13 +647,6 @@ fn scale_skin_rect(base: egui::Rect, rect: SkinRect, scale: f32) -> egui::Rect {
     )
 }
 
-pub fn playlist_menu_command(
-    kind: crate::playlist::PlaylistMenuKind,
-    index: usize,
-) -> PlaylistCommand {
-    PlaylistCommand::ExecuteMenu { kind, index }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,8 +692,14 @@ mod tests {
             12_000,
         );
 
-        let view_model = playlist_view_model(app.controller().state());
-        let rows = playlist_rows_render_state(&app, &view_model);
+        let rows = shared_playlist_rows_render_state(
+            app.controller().state(),
+            app.playlist_scroll_offset,
+            false,
+            None,
+            app.playlist_width,
+            app.playlist_height,
+        );
         let expected = crate::app::view_model::format_title_for_preferences(
             "%t (%p)",
             "file:///tmp/song.ogg",
@@ -719,17 +708,6 @@ mod tests {
         );
         assert_eq!(rows.entries[0].title, expected);
         assert_ne!(rows.entries[0].title, "Example Artist - Example Title");
-    }
-
-    #[test]
-    fn playlist_menu_translation_uses_playlist_command_domain() {
-        assert_eq!(
-            playlist_menu_command(PlaylistMenuKind::Add, 2),
-            PlaylistCommand::ExecuteMenu {
-                kind: PlaylistMenuKind::Add,
-                index: 2,
-            }
-        );
     }
 
     #[test]
