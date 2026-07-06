@@ -65,7 +65,8 @@ use super::menu::{self, EguiPrompt};
 use super::preferences::{self, PreferencesPage, PreferencesViewportState};
 use super::runtime::EguiRuntime;
 use super::skin_texture::{
-    render_equalizer_color_image, render_playlist_color_image, render_playlist_menu_color_image,
+    pixel_snapped_rect, render_equalizer_color_image, render_playlist_color_image,
+    render_playlist_menu_color_image,
 };
 use super::{equalizer, main_player, playlist};
 
@@ -84,6 +85,9 @@ struct DetachedPanelSnapshot {
     height: i32,
     scale_factor: f32,
     playlist_menu_open: Option<PlaylistMenuRenderKind>,
+    playlist_scroll_offset: usize,
+    playlist_total_entries: usize,
+    playlist_row_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +97,14 @@ enum DetachedPanelAction {
     PlaylistFooter(PlaylistFooterButton),
     PlaylistMenu(PlaylistMenuButton),
     PlaylistMenuItem(PlaylistMenuButton, usize),
+    ClosePlaylistMenu,
+    PlaylistRowClick {
+        index: usize,
+        double: bool,
+        ctrl: bool,
+    },
+    PlaylistScrollTo(usize),
+    PlaylistScrollRows(i32),
 }
 
 #[derive(Debug, Default)]
@@ -102,6 +114,9 @@ struct DetachedViewportState {
     equalizer_focused: bool,
     playlist_focused: bool,
     actions: Vec<DetachedPanelAction>,
+    playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
+    playlist_last_click: Option<(usize, Instant)>,
+    playlist_scrollbar_drag_offset: Option<i32>,
     playlist_resize_start: Option<(i32, i32)>,
     playlist_resize_request: Option<(i32, i32)>,
 }
@@ -530,6 +545,21 @@ impl EguiFrontendState {
                     }
                 }
                 Err(err) => self.runtime.pending_messages.push(err),
+            }
+
+            // Bus messages never carry channel/frequency info, so poll the sink
+            // pad caps each tick (GTK parity) to keep the mono/stereo indicator
+            // and bitrate/frequency display current.
+            let stream_info = self
+                .playback_backend
+                .as_ref()
+                .map(|backend| backend.audio_stream_info());
+            if let Some(stream_info) = stream_info {
+                let result = self
+                    .controller
+                    .handle_playback_event(PlaybackEvent::StreamInfo(stream_info));
+                self.sync_frontend_state_from_store();
+                self.runtime.apply_effects(result.effects);
             }
         }
     }
@@ -1072,29 +1102,61 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
             playlist::dispatch_playlist_footer_button(app, button)
         }
         DetachedPanelAction::PlaylistMenu(menu) => {
+            app.playlist_menu_hover = None;
             playlist::dispatch_playlist_menu_button(app, menu)
         }
         DetachedPanelAction::PlaylistMenuItem(menu, index) => {
+            app.playlist_menu_hover = None;
             playlist::dispatch_playlist_menu_item(app, menu, index);
             app.playlist_menu_open = None;
+        }
+        DetachedPanelAction::ClosePlaylistMenu => {
+            app.playlist_menu_hover = None;
+            app.playlist_menu_open = None;
+            app.playlist_sort_menu_open = false;
+        }
+        DetachedPanelAction::PlaylistRowClick {
+            index,
+            double,
+            ctrl,
+        } => {
+            if double {
+                app.dispatch(PlaylistCommand::SetPosition(index));
+                app.dispatch(PlayerCommand::StartCurrentTrack);
+            } else if ctrl {
+                app.dispatch(PlaylistCommand::ToggleEntrySelection(index));
+            } else {
+                app.dispatch(PlaylistCommand::SelectNone);
+                app.dispatch(PlaylistCommand::ToggleEntrySelection(index));
+            }
+        }
+        DetachedPanelAction::PlaylistScrollTo(offset) => {
+            app.playlist_scroll_offset = offset.min(app.playlist_max_scroll_offset());
+        }
+        DetachedPanelAction::PlaylistScrollRows(rows) => {
+            scroll_playlist_by_wheel(app, rows as f32);
         }
     }
 }
 
 fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
     let config = app.controller().state().config.clone();
-    let (equalizer_focused, playlist_focused) = {
+    let (equalizer_focused, playlist_focused, playlist_menu_hover) = {
         let state = app
             .detached_viewports
             .lock()
             .expect("detached viewport state poisoned");
-        (state.equalizer_focused, state.playlist_focused)
+        (
+            state.equalizer_focused,
+            state.playlist_focused,
+            state.playlist_menu_hover,
+        )
     };
     let equalizer = (config.equalizer_visible && config.equalizer_detached)
         .then(|| detached_equalizer_snapshot(app, equalizer_focused))
         .flatten();
     let playlist = (config.playlist_visible && config.playlist_detached)
-        .then(|| detached_playlist_snapshot(app, playlist_focused))
+        .then(|| detached_playlist_snapshot(app, playlist_focused, playlist_menu_hover))
         .flatten();
     let mut state = app
         .detached_viewports
@@ -1132,6 +1194,9 @@ fn detached_equalizer_snapshot(
         },
         scale_factor: app.scale_factor,
         playlist_menu_open: None,
+        playlist_scroll_offset: 0,
+        playlist_total_entries: 0,
+        playlist_row_indices: Vec::new(),
         image,
     })
 }
@@ -1139,8 +1204,11 @@ fn detached_equalizer_snapshot(
 fn detached_playlist_snapshot(
     app: &EguiFrontendState,
     focused: bool,
+    menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
 ) -> Option<DetachedPanelSnapshot> {
     let view_model = playlist_view_model(app.controller().state());
+    let playlist_row_indices: Vec<usize> = view_model.rows.iter().map(|row| row.index).collect();
+    let playlist_total_entries = view_model.rows.len();
     let rows = PlaylistRowsRenderState {
         entries: view_model
             .rows
@@ -1187,7 +1255,9 @@ fn detached_playlist_snapshot(
         .then_some(app.playlist_menu_open)
         .flatten();
     if let Some(kind) = playlist_menu_open {
-        overlay_detached_playlist_menu(&mut image, app, kind).ok()?;
+        let hover =
+            menu_hover.and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
+        overlay_detached_playlist_menu(&mut image, app, kind, hover).ok()?;
     }
     Some(DetachedPanelSnapshot {
         panel: LayoutPanelKind::Playlist,
@@ -1195,6 +1265,9 @@ fn detached_playlist_snapshot(
         height: playlist_window_height(view_model.shaded, app.playlist_height),
         scale_factor: app.scale_factor,
         playlist_menu_open,
+        playlist_scroll_offset: app.playlist_scroll_offset,
+        playlist_total_entries,
+        playlist_row_indices,
         image,
     })
 }
@@ -1203,11 +1276,12 @@ fn overlay_detached_playlist_menu(
     image: &mut egui::ColorImage,
     app: &EguiFrontendState,
     kind: PlaylistMenuRenderKind,
+    hover: Option<usize>,
 ) -> Result<(), crate::render::RenderError> {
     let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
     let menu = render_playlist_menu_color_image(
         &app.active_skin,
-        PlaylistMenuRenderState { kind, hover: None },
+        PlaylistMenuRenderState { kind, hover },
         popup.width,
         popup.height,
     )?;
@@ -1412,10 +1486,11 @@ fn show_detached_snapshot(
     );
     ui.painter().image(
         texture.id(),
-        rect,
+        pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
+    handle_detached_playlist_wheel(ui, shared, snapshot, rect);
     let resize_offset = {
         let state = shared.lock().expect("detached viewport state poisoned");
         state.playlist_resize_start
@@ -1434,6 +1509,10 @@ fn show_detached_snapshot(
         let mut state = shared.lock().expect("detached viewport state poisoned");
         state.playlist_resize_start = None;
     }
+    if update_detached_playlist_scrollbar_drag(ui, shared, snapshot, rect) {
+        return;
+    }
+    update_detached_playlist_menu_interaction(ui, shared, snapshot, rect);
     if let Some(pos) = response.interact_pointer_pos() {
         if response.drag_started() && detached_playlist_resize_region(snapshot, rect, pos) {
             let local_x = ((pos.x - rect.left()) / snapshot.scale_factor).round() as i32;
@@ -1454,8 +1533,285 @@ fn show_detached_snapshot(
         }
         if primary_pressed {
             handle_detached_panel_click(shared, snapshot, rect, pos);
+            let ctrl = ui
+                .ctx()
+                .input(|input| input.modifiers.ctrl || input.modifiers.command);
+            handle_detached_playlist_row_press(shared, snapshot, rect, pos, ctrl);
+            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
         }
     }
+}
+
+fn handle_detached_playlist_wheel(
+    ui: &mut egui::Ui,
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+) {
+    if snapshot.panel != LayoutPanelKind::Playlist
+        || snapshot.height <= crate::render::MAIN_TITLEBAR_HEIGHT
+    {
+        return;
+    }
+    let scroll_y = ui.ctx().input(|input| input.smooth_scroll_delta().y);
+    if scroll_y == 0.0 {
+        return;
+    }
+    let over_playlist = ui.ctx().input(|input| {
+        input
+            .pointer
+            .hover_pos()
+            .is_some_and(|pos| base_rect.contains(pos))
+    });
+    if !over_playlist {
+        return;
+    }
+    push_detached_action(
+        shared,
+        DetachedPanelAction::PlaylistScrollRows(if scroll_y > 0.0 { 3 } else { -3 }),
+    );
+    ui.ctx().request_repaint();
+    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+}
+
+fn update_detached_playlist_scrollbar_drag(
+    ui: &mut egui::Ui,
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+) -> bool {
+    if snapshot.panel != LayoutPanelKind::Playlist
+        || snapshot.height <= crate::render::MAIN_TITLEBAR_HEIGHT
+    {
+        return false;
+    }
+    let active_offset = {
+        let state = shared.lock().expect("detached viewport state poisoned");
+        state.playlist_scrollbar_drag_offset
+    };
+    if let Some(offset) = active_offset {
+        if ui.ctx().input(|input| input.pointer.primary_down()) {
+            if let Some(pointer) = ui.ctx().input(|input| input.pointer.latest_pos()) {
+                let (_, y) = detached_local_point(snapshot, base_rect, pointer);
+                if let Some(scroll_offset) =
+                    detached_playlist_scroll_offset_from_thumb_y(snapshot, y - offset)
+                {
+                    push_detached_action(
+                        shared,
+                        DetachedPanelAction::PlaylistScrollTo(scroll_offset),
+                    );
+                }
+            }
+            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            return true;
+        }
+        let mut state = shared.lock().expect("detached viewport state poisoned");
+        state.playlist_scrollbar_drag_offset = None;
+        return true;
+    }
+
+    let primary_pressed = ui
+        .ctx()
+        .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
+    if !primary_pressed {
+        return false;
+    }
+    let Some(pointer) = ui.ctx().input(|input| input.pointer.latest_pos()) else {
+        return false;
+    };
+    let (x, y) = detached_local_point(snapshot, base_rect, pointer);
+    if !detached_playlist_scrollbar_region(snapshot, x, y) {
+        return false;
+    }
+    let Some((thumb_y, thumb_h)) = detached_playlist_scrollbar_geometry(snapshot) else {
+        return false;
+    };
+    let offset = if y >= thumb_y && y < thumb_y + thumb_h {
+        y - thumb_y
+    } else {
+        thumb_h / 2
+    };
+    {
+        let mut state = shared.lock().expect("detached viewport state poisoned");
+        state.playlist_scrollbar_drag_offset = Some(offset);
+    }
+    if let Some(scroll_offset) = detached_playlist_scroll_offset_from_thumb_y(snapshot, y - offset)
+    {
+        push_detached_action(shared, DetachedPanelAction::PlaylistScrollTo(scroll_offset));
+    }
+    ui.ctx().request_repaint();
+    ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    true
+}
+
+fn handle_detached_playlist_row_press(
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+    pos: egui::Pos2,
+    ctrl: bool,
+) {
+    if snapshot.panel != LayoutPanelKind::Playlist
+        || snapshot.height <= crate::render::MAIN_TITLEBAR_HEIGHT
+        || snapshot.playlist_menu_open.is_some()
+    {
+        return;
+    }
+    let (x, y) = detached_local_point(snapshot, base_rect, pos);
+    let Some(index) = detached_playlist_entry_at(snapshot, x, y) else {
+        return;
+    };
+    let now = Instant::now();
+    let double = {
+        let mut state = shared.lock().expect("detached viewport state poisoned");
+        let double = state
+            .playlist_last_click
+            .is_some_and(|(last_index, last_time)| {
+                last_index == index && now.duration_since(last_time) <= Duration::from_millis(500)
+            });
+        state.playlist_last_click = Some((index, now));
+        double
+    };
+    push_detached_action(
+        shared,
+        DetachedPanelAction::PlaylistRowClick {
+            index,
+            double,
+            ctrl,
+        },
+    );
+}
+
+fn detached_playlist_entry_at(snapshot: &DetachedPanelSnapshot, x: i32, y: i32) -> Option<usize> {
+    if x < 12 || x >= snapshot.width - 19 || y < 20 || y >= snapshot.height - 38 {
+        return None;
+    }
+    let row = ((y - 20) / 11).max(0) as usize;
+    let index = snapshot.playlist_scroll_offset.saturating_add(row);
+    snapshot.playlist_row_indices.get(index).copied()
+}
+
+fn detached_playlist_scrollbar_region(snapshot: &DetachedPanelSnapshot, x: i32, y: i32) -> bool {
+    x >= snapshot.width - 15 && x < snapshot.width - 7 && y >= 20 && y < snapshot.height - 38
+}
+
+fn detached_playlist_visible_entries(snapshot: &DetachedPanelSnapshot) -> usize {
+    ((snapshot.height - 58) / 11).max(1) as usize
+}
+
+fn detached_playlist_scrollbar_geometry(snapshot: &DetachedPanelSnapshot) -> Option<(i32, i32)> {
+    let visible = detached_playlist_visible_entries(snapshot);
+    let total = snapshot.playlist_total_entries;
+    if total <= visible {
+        return None;
+    }
+    let list_h = snapshot.height - 58;
+    let thumb_h = 18;
+    let max_scroll = total - visible;
+    let max_thumb_pos = (list_h - thumb_h).max(0);
+    let thumb_y = 20
+        + ((snapshot.playlist_scroll_offset.min(max_scroll) as i32 * max_thumb_pos)
+            / max_scroll.max(1) as i32);
+    Some((thumb_y, thumb_h))
+}
+
+fn detached_playlist_scroll_offset_from_thumb_y(
+    snapshot: &DetachedPanelSnapshot,
+    thumb_y: i32,
+) -> Option<usize> {
+    let visible = detached_playlist_visible_entries(snapshot);
+    let total = snapshot.playlist_total_entries;
+    if total <= visible {
+        return Some(0);
+    }
+    let list_h = snapshot.height - 58;
+    let thumb_h = 18;
+    let max_scroll = total - visible;
+    let max_thumb_pos = (list_h - thumb_h).max(0);
+    if max_thumb_pos <= 0 {
+        return Some(0);
+    }
+    let thumb_pos = (thumb_y - 20).clamp(0, max_thumb_pos);
+    Some(
+        ((thumb_pos as usize * max_scroll) + (max_thumb_pos as usize / 2)) / max_thumb_pos as usize,
+    )
+}
+
+fn update_detached_playlist_menu_interaction(
+    ui: &mut egui::Ui,
+    shared: &Arc<Mutex<DetachedViewportState>>,
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+) {
+    let Some(open_menu) = snapshot.playlist_menu_open else {
+        return;
+    };
+    if ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)) {
+        push_detached_action(shared, DetachedPanelAction::ClosePlaylistMenu);
+        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+        return;
+    }
+
+    let pointer_pos = ui.ctx().input(|input| input.pointer.latest_pos());
+    let hover =
+        pointer_pos.and_then(|pos| detached_playlist_menu_item_at(snapshot, base_rect, pos));
+    let changed = {
+        let mut state = shared.lock().expect("detached viewport state poisoned");
+        if state.playlist_menu_hover == hover {
+            false
+        } else {
+            state.playlist_menu_hover = hover;
+            true
+        }
+    };
+    if changed {
+        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
+
+    let clicked_outside = ui.ctx().input(|input| {
+        input.pointer.any_pressed()
+            && pointer_pos.is_some_and(|pos| {
+                let (x, y) = detached_local_point(snapshot, base_rect, pos);
+                let popup = playlist_menu_popup_rect(open_menu, snapshot.width, snapshot.height);
+                let button = playlist_menu_button_rect(open_menu, snapshot.width, snapshot.height);
+                !popup.contains(x, y) && !button.contains(x, y)
+            })
+    });
+    if clicked_outside {
+        push_detached_action(shared, DetachedPanelAction::ClosePlaylistMenu);
+        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+    }
+}
+
+fn detached_playlist_menu_item_at(
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+    pos: egui::Pos2,
+) -> Option<(PlaylistMenuRenderKind, usize)> {
+    let open_menu = snapshot.playlist_menu_open?;
+    let (x, y) = detached_local_point(snapshot, base_rect, pos);
+    let popup = playlist_menu_popup_rect(open_menu, snapshot.width, snapshot.height);
+    if !popup.contains(x, y) {
+        return None;
+    }
+    let index = ((y - popup.y) / 18).max(0) as usize;
+    (index < open_menu.item_count()).then_some((open_menu, index))
+}
+
+fn detached_local_point(
+    snapshot: &DetachedPanelSnapshot,
+    base_rect: egui::Rect,
+    pos: egui::Pos2,
+) -> (i32, i32) {
+    (
+        ((pos.x - base_rect.left()) / snapshot.scale_factor).floor() as i32,
+        ((pos.y - base_rect.top()) / snapshot.scale_factor).floor() as i32,
+    )
 }
 
 fn detached_playlist_resize_region(
@@ -2161,6 +2517,9 @@ mod tests {
             height: EQUALIZER_WINDOW_HEIGHT,
             scale_factor: 1.0,
             playlist_menu_open: None,
+            playlist_scroll_offset: 0,
+            playlist_total_entries: 0,
+            playlist_row_indices: Vec::new(),
         };
 
         let equalizer_builder =
@@ -2193,6 +2552,9 @@ mod tests {
             height: PLAYLIST_DEFAULT_HEIGHT,
             scale_factor: 1.0,
             playlist_menu_open: None,
+            playlist_scroll_offset: 0,
+            playlist_total_entries: 0,
+            playlist_row_indices: Vec::new(),
         };
 
         let playlist_builder =
@@ -2279,14 +2641,19 @@ mod tests {
         })
         .unwrap();
 
-        let closed = detached_playlist_snapshot(&app, false).expect("closed playlist snapshot");
+        let closed =
+            detached_playlist_snapshot(&app, false, None).expect("closed playlist snapshot");
         assert!(closed.playlist_menu_open.is_none());
 
         app.playlist_menu_open = Some(PlaylistMenuButton::Add);
-        let open = detached_playlist_snapshot(&app, false).expect("open playlist snapshot");
+        let open = detached_playlist_snapshot(&app, false, None).expect("open playlist snapshot");
 
         assert_eq!(open.playlist_menu_open, Some(PlaylistMenuButton::Add));
         assert_ne!(open.image, closed.image);
+
+        let hover = detached_playlist_snapshot(&app, false, Some((PlaylistMenuButton::Add, 0)))
+            .expect("hover playlist snapshot");
+        assert_ne!(hover.image, open.image);
     }
 
     #[test]

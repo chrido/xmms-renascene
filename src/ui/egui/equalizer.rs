@@ -18,7 +18,7 @@ use crate::skin::layout::{
 };
 
 use super::app::EguiFrontendState;
-use super::skin_texture::{render_equalizer_color_image, upload_color_image};
+use super::skin_texture::{pixel_snapped_rect, render_equalizer_color_image, upload_color_image};
 
 pub fn equalizer_band_count(view_model: &EqualizerViewModel) -> usize {
     view_model.band_positions.len()
@@ -47,7 +47,7 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
         texture.id(),
-        rect,
+        pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );

@@ -97,6 +97,22 @@ fn sync_viewport_state_from_app(app: &mut EguiFrontendState) {
         );
     } else if !app.preferences_open {
         state.open = false;
+    } else {
+        // While Preferences stays open, panel visibility/detach/shade and
+        // volume/balance can change from the main window, menus, shortcuts, or
+        // by closing a window. Mirror those live so the checkboxes/sliders don't
+        // show a stale value (the snapshot is only re-seeded when opening).
+        let live = &app.controller().state().config;
+        state.config.playlist_visible = live.playlist_visible;
+        state.config.equalizer_visible = live.equalizer_visible;
+        state.config.playlist_detached = live.playlist_detached;
+        state.config.equalizer_detached = live.equalizer_detached;
+        state.config.playlist_shaded = live.playlist_shaded;
+        state.config.equalizer_shaded = live.equalizer_shaded;
+        state.config.repeat = live.repeat;
+        state.config.shuffle = live.shuffle;
+        state.config.volume = live.volume;
+        state.config.balance = live.balance;
     }
 }
 
@@ -357,6 +373,7 @@ fn show_fonts_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
         ui.label("Playlist font:");
         ui.text_edit_singleline(&mut state.config.playlist_font);
     });
+    ui.label("Format: family, optional style, optional size (e.g. \"Sans Bold 11\").");
     ui.label("Main window text uses the active skin bitmap font.");
     ui.horizontal(|ui| {
         ui.label("Main window font:");

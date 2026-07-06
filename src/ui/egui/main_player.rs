@@ -17,7 +17,7 @@ use crate::skin::layout::{
 use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 
 use super::app::EguiFrontendState;
-use super::skin_texture::{render_main_player_color_image, upload_color_image};
+use super::skin_texture::{pixel_snapped_rect, render_main_player_color_image, upload_color_image};
 
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
     &view_model.title
@@ -54,7 +54,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
         texture.id(),
-        rect,
+        pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );

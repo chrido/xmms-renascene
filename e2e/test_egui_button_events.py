@@ -47,6 +47,7 @@ MAIN_PLAYER_BASE_HEIGHT = 116
 PANEL_SHADE_RECT = SkinRect(254, 3, 9, 9)
 PANEL_CLOSE_RECT = SkinRect(264, 3, 9, 9)
 PLAYLIST_MISC_SORT_ITEM_RECT = SkinRect(98, 166, 25, 18)
+PLAYLIST_ADD_FIRST_ITEM_RECT = SkinRect(11, 166, 25, 18)
 
 MAIN_PUSH_BUTTON_EVENTS = [
     (MainButton.MENU, "Menu", "command Ui(SetMainMenuVisible(true))"),
@@ -559,6 +560,15 @@ def test_egui_detached_playlist_menu_button_changes_detached_window_image(
     screenshot_window(playlist_window, after)
 
     assert before.read_bytes() != after.read_bytes()
+
+    hover_x, hover_y = scaled_skin_point(playlist_window, PLAYLIST_ADD_FIRST_ITEM_RECT)
+    geometry = window_geometry(playlist_window)
+    run_xdotool("mousemove", str(geometry.x + hover_x), str(geometry.y + hover_y))
+    time.sleep(0.3)
+    hover = test_output.screenshot_path()
+    screenshot_window(playlist_window, hover)
+
+    assert hover.read_bytes() != after.read_bytes()
 
 
 def test_egui_detached_playlist_title_shade_button_emits_event_without_activation_click(

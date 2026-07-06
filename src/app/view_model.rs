@@ -59,7 +59,14 @@ pub fn main_player_view_model(state: &AppState) -> MainPlayerViewModel {
     let position = state.playlist.position();
     let title = position
         .and_then(|index| state.playlist.entries().get(index))
-        .map(|entry| entry.title.clone())
+        .map(|entry| {
+            format_title_for_preferences(
+                &state.config.title_format,
+                &entry.filename,
+                &entry.title,
+                &state.config,
+            )
+        })
         .unwrap_or_default();
     MainPlayerViewModel {
         title,

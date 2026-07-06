@@ -123,6 +123,22 @@ pub fn upload_color_image(
     ctx.load_texture(name, image, egui::TextureOptions::NEAREST)
 }
 
+/// Snap a rectangle to the physical pixel grid so a NEAREST skin texture maps
+/// one texel to a whole number of device pixels. Without this, a fractional
+/// `pixels_per_point` (or a sub-pixel layout origin) resamples the bitmap font
+/// and it looks blurry.
+pub fn pixel_snapped_rect(ctx: &egui::Context, rect: egui::Rect) -> egui::Rect {
+    let ppp = ctx.pixels_per_point();
+    if ppp <= 0.0 {
+        return rect;
+    }
+    let snap = |value: f32| (value * ppp).round() / ppp;
+    egui::Rect::from_min_max(
+        egui::pos2(snap(rect.min.x), snap(rect.min.y)),
+        egui::pos2(snap(rect.max.x), snap(rect.max.y)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -21,7 +21,8 @@ use crate::skin::layout::{
 
 use super::app::EguiFrontendState;
 use super::skin_texture::{
-    render_playlist_color_image, render_playlist_menu_color_image, upload_color_image,
+    pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
+    upload_color_image,
 };
 
 pub fn playlist_row_count(view_model: &PlaylistViewModel) -> usize {
@@ -61,7 +62,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
         texture.id(),
-        rect,
+        pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
     );
@@ -80,29 +81,36 @@ fn playlist_rows_render_state(
     app: &EguiFrontendState,
     view_model: &PlaylistViewModel,
 ) -> PlaylistRowsRenderState {
+    let state = app.controller().state();
     PlaylistRowsRenderState {
         entries: view_model
             .rows
             .iter()
-            .map(|row| PlaylistRowRenderEntry {
-                title: row.title.clone(),
-                length_ms: app
-                    .controller()
-                    .state()
-                    .playlist
-                    .entries()
-                    .get(row.index)
-                    .map(|entry| entry.length_ms)
-                    .unwrap_or(-1),
-                selected: row.selected,
-                current: row.current,
+            .map(|row| {
+                let entry = state.playlist.entries().get(row.index);
+                let title = entry
+                    .map(|entry| {
+                        format_title_for_preferences(
+                            &state.config.title_format,
+                            &entry.filename,
+                            &entry.title,
+                            &state.config,
+                        )
+                    })
+                    .unwrap_or_else(|| row.title.clone());
+                PlaylistRowRenderEntry {
+                    title,
+                    length_ms: entry.map(|entry| entry.length_ms).unwrap_or(-1),
+                    selected: row.selected,
+                    current: row.current,
+                }
             })
             .collect(),
         scroll_offset: app.playlist_scroll_offset,
         scrollbar_dragging: false,
         search_query: None,
-        show_numbers: app.controller().state().config.show_numbers_in_pl,
-        font_family: app.controller().state().config.playlist_font.clone(),
+        show_numbers: state.config.show_numbers_in_pl,
+        font_family: state.config.playlist_font.clone(),
         width: app.playlist_width,
         height: app.playlist_height,
     }
@@ -382,11 +390,17 @@ fn add_playlist_rows_hit_region(
         let pointer = response.interact_pointer_pos().unwrap();
         let row = ((pointer.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
         let index = app.playlist_scroll_offset.saturating_add(row);
+        let ctrl = ui
+            .ctx()
+            .input(|input| input.modifiers.ctrl || input.modifiers.command);
         if let Some(model) = view_model.rows.get(index) {
             if response.double_clicked() {
                 app.dispatch(PlaylistCommand::SetPosition(model.index));
                 app.dispatch(PlayerCommand::StartCurrentTrack);
+            } else if ctrl {
+                app.dispatch(PlaylistCommand::ToggleEntrySelection(model.index));
             } else {
+                app.dispatch(PlaylistCommand::SelectNone);
                 app.dispatch(PlaylistCommand::ToggleEntrySelection(model.index));
             }
         }
@@ -493,7 +507,7 @@ fn add_playlist_menu_popover(
             );
             ui.painter().image(
                 texture.id(),
-                popup_rect,
+                pixel_snapped_rect(ui.ctx(), popup_rect),
                 egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                 egui::Color32::WHITE,
             );
@@ -550,6 +564,21 @@ pub(crate) fn dispatch_playlist_menu_item(
     }
 }
 
+fn sort_popover_position(
+    playlist_rect: egui::Rect,
+    misc_button: SkinRect,
+    scale_factor: f32,
+    popup_width: f32,
+    popup_height: f32,
+) -> egui::Pos2 {
+    let button_y = playlist_rect.top() + misc_button.y as f32 * scale_factor;
+    let anchor_x = playlist_rect.left() + misc_button.x as f32 * scale_factor;
+    let max_x = (playlist_rect.right() - popup_width).max(playlist_rect.left());
+    let popup_x = anchor_x.min(max_x).max(playlist_rect.left());
+    let popup_y = (button_y - popup_height).max(playlist_rect.top());
+    egui::pos2(popup_x, popup_y)
+}
+
 fn show_playlist_sort_popover(
     ctx: &egui::Context,
     app: &mut EguiFrontendState,
@@ -569,10 +598,18 @@ fn show_playlist_sort_popover(
         app.playlist_height,
     );
     let estimated_popup_height = 220.0;
-    let button_y = playlist_rect.top() + misc_button.y as f32 * app.scale_factor;
-    let popup_pos = egui::pos2(
-        playlist_rect.left() + misc_button.x as f32 * app.scale_factor,
-        (button_y - estimated_popup_height).max(0.0),
+    let popup_width = 200.0;
+    // egui Areas are clipped to the OS window, which is only as wide/tall as the
+    // docked playlist. Anchoring the popover at the Misc button (far right, near
+    // the bottom) would push its buttons off-window and make them unclickable
+    // (GTK gets away with this because it uses a native top-level popover).
+    // Clamp the popover so it stays fully inside the playlist window.
+    let popup_pos = sort_popover_position(
+        playlist_rect,
+        misc_button,
+        app.scale_factor,
+        popup_width,
+        estimated_popup_height,
     );
     let mut close_after_click = false;
     let response = egui::Area::new(egui::Id::new("xmms-egui-playlist-sort-popup"))
@@ -719,6 +756,50 @@ pub fn playlist_menu_command(
 mod tests {
     use super::*;
     use crate::playlist::PlaylistMenuKind;
+
+    #[test]
+    fn sort_popover_stays_within_narrow_playlist_window() {
+        // Docked playlist window is only as wide as the playlist; the Misc button
+        // sits near the right edge, so an un-clamped popover would overflow the
+        // window and its buttons would be unclickable.
+        let playlist_rect =
+            egui::Rect::from_min_size(egui::pos2(0.0, 116.0), egui::vec2(275.0, 232.0));
+        let misc_button =
+            crate::skin::layout::playlist_menu_button_rect(PlaylistMenuButton::Misc, 275, 232);
+        let popup_width = 200.0;
+        let pos = sort_popover_position(playlist_rect, misc_button, 1.0, popup_width, 220.0);
+        assert!(pos.x >= playlist_rect.left());
+        assert!(
+            pos.x + popup_width <= playlist_rect.right() + 0.5,
+            "popover right edge {} overflows window right {}",
+            pos.x + popup_width,
+            playlist_rect.right()
+        );
+        assert!(pos.y >= playlist_rect.top());
+    }
+
+    #[test]
+    fn playlist_rows_apply_preferences_title_format() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        app.controller_mut().state_mut().config.title_format = "%t (%p)".to_string();
+        app.controller_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/song.ogg",
+            "Example Artist - Example Title",
+            12_000,
+        );
+
+        let view_model = playlist_view_model(app.controller().state());
+        let rows = playlist_rows_render_state(&app, &view_model);
+        let expected = format_title_for_preferences(
+            "%t (%p)",
+            "file:///tmp/song.ogg",
+            "Example Artist - Example Title",
+            &app.controller().state().config,
+        );
+        assert_eq!(rows.entries[0].title, expected);
+        assert_ne!(rows.entries[0].title, "Example Artist - Example Title");
+    }
 
     #[test]
     fn playlist_menu_translation_uses_playlist_command_domain() {
