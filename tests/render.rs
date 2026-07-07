@@ -1,7 +1,9 @@
+mod common;
+
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use cairo::{Context, Format, ImageSurface};
+use common::temp_dir;
 use xmms_renascene::render::{
     render_equalizer_state, render_main_player_reset, render_main_player_state,
     render_playlist_frame, render_playlist_rows, render_visualization, surface_from_xpm,
@@ -15,15 +17,6 @@ use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "{prefix}-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ))
 }
 
 fn default_skin() -> DefaultSkin {
@@ -183,8 +176,7 @@ fn main_stream_info_text_is_drawn_at_original_positions() {
 
 #[test]
 fn main_balance_slider_bar_uses_original_frame_offset() {
-    let tmp = unique_temp_dir("xmms-rs-balance-bar-offset");
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = temp_dir("xmms-rs-balance-bar-offset");
     let mut balance = image::RgbaImage::new(68, 433);
     for pixel in balance.pixels_mut() {
         *pixel = image::Rgba([0, 0, 0, 255]);
@@ -206,14 +198,11 @@ fn main_balance_slider_bar_uses_original_frame_offset() {
     });
 
     assert_eq!(pixel_u32(&mut surface, 177, 57), 0xff44bbdd);
-
-    std::fs::remove_dir_all(tmp).unwrap();
 }
 
 #[test]
 fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
-    let tmp = unique_temp_dir("xmms-rs-eq-slider-align");
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = temp_dir("xmms-rs-eq-slider-align");
     let mut eqmain = image::RgbaImage::new(275, 315);
     for pixel in eqmain.pixels_mut() {
         *pixel = image::Rgba([0, 0, 0, 255]);
@@ -241,8 +230,6 @@ fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
 
     assert_eq!(pixel_u32(&mut surface, 21, 38), 0xff000000);
     assert_eq!(pixel_u32(&mut surface, 22, 38), 0xffee1122);
-
-    std::fs::remove_dir_all(tmp).unwrap();
 }
 
 #[test]
