@@ -13,18 +13,18 @@ from conftest import EGUI_FRONTEND, assert_app_log_contains, start_gui_process, 
 from gui import (
     BASE_MAIN_WIDTH,
     EQUALIZER_CONTROL_RECTS,
+    EQUALIZER_WINDOW_HEIGHT,
+    MAIN_PLAYER_BASE_HEIGHT,
     EqualizerControl,
     MainWindow,
-    SkinRect,
     click_skin_rect,
+    offset_rect,
     wait_for_visible_window,
     window_geometry,
 )
 
 pytest: Any = import_module("pytest")
 
-MAIN_PLAYER_BASE_HEIGHT = 116
-EQUALIZER_WINDOW_HEIGHT = 116
 EQUALIZER_DETACHED_TITLE = "Equalizer"
 
 
@@ -46,10 +46,6 @@ def egui_app_with_detached_equalizer(tmp_path: Path) -> Iterator[subprocess.Pope
         ["--equalizer", "--equalizer-undocked"],
         log_name="xmms-egui-detached-equalizer-enabled.log",
     )
-
-
-def offset_rect(rect: SkinRect, y_offset: int) -> SkinRect:
-    return SkinRect(rect.x, rect.y + y_offset, rect.width, rect.height)
 
 
 def wait_for_minimum_height(main_window: MainWindow, minimum_height: int) -> None:

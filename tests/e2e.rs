@@ -2,9 +2,13 @@
 
 use image::GenericImageView;
 use std::fs;
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+mod common;
+
+use common::{
+    app as default_app, assert_playlist_order, date_order_files, detached_equalizer_app,
+    detached_playlist_app, docked_panels_app, equalizer_app, file_uri, player, playlist_app,
+    seed_playlist, temp_dir, write_one_pixel_skin, write_one_pixel_wsz, write_solid_main_png_skin,
+};
 use std::process::Command;
 use xmms_renascene::e2e::{
     MainTarget, MenuItem, PanelTarget, PlayerSettings, Shortcut, UiE2e, Window,
@@ -31,7 +35,7 @@ use xmms_renascene::ui::{
 
 #[test]
 fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.click(MainTarget::MENU)
         .assert_window_visible(Window::Player)
@@ -62,7 +66,7 @@ fn titlebar_buttons_keep_player_open_minimize_shade_and_close() {
 
 #[test]
 fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
-    let root = unique_temp_dir("xmms-rs-cli-smoke-skin");
+    let root = temp_dir("xmms-rs-cli-smoke-skin");
     fs::create_dir_all(&root).unwrap();
     let skin = root.join("base-2.9.1.wsz");
     write_one_pixel_wsz(&skin, "#010203");
@@ -88,7 +92,6 @@ fn cli_startup_flags_are_accepted_by_gtk_smoke_mode() {
         .unwrap();
 
     assert!(status.success());
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -103,7 +106,7 @@ fn cli_primary_binary_starts_gtk_smoke_mode() {
 
 #[test]
 fn cli_primary_binary_starts_requested_skin_in_gtk_smoke_mode() {
-    let root = unique_temp_dir("xmms-rs-cli-primary-skin");
+    let root = temp_dir("xmms-rs-cli-primary-skin");
     let skin = root.join("base-2.9.1");
     write_one_pixel_skin(&skin, "#010203");
 
@@ -113,13 +116,11 @@ fn cli_primary_binary_starts_requested_skin_in_gtk_smoke_mode() {
         .unwrap();
 
     assert!(output.status.success());
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn cli_screenshot_renders_requested_skin_to_png() {
-    let root = unique_temp_dir("xmms-rs-cli-screenshot-skin");
+    let root = temp_dir("xmms-rs-cli-screenshot-skin");
     let skin = root.join("base-2.9.1");
     let screenshot = root.join("player.png");
     write_solid_main_png_skin(&skin, [0x11, 0x22, 0x33]);
@@ -144,13 +145,11 @@ fn cli_screenshot_renders_requested_skin_to_png() {
         image.get_pixel(0, (MAIN_WINDOW_HEIGHT - 1) as u32).0,
         [0x11, 0x22, 0x33, 0xff]
     );
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn cli_screenshot_includes_visible_docked_panels() {
-    let root = unique_temp_dir("xmms-rs-cli-screenshot-panels");
+    let root = temp_dir("xmms-rs-cli-screenshot-panels");
     let screenshot = root.join("player-panels.png");
 
     let output = Command::new(env!("CARGO_BIN_EXE_xmms-rs"))
@@ -172,8 +171,6 @@ fn cli_screenshot_includes_visible_docked_panels() {
             (MAIN_WINDOW_HEIGHT + EQUALIZER_WINDOW_HEIGHT + PLAYLIST_DEFAULT_HEIGHT) as u32,
         )
     );
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -245,7 +242,7 @@ fn session_e2e_flags_secondary_activation_and_state_dict_match_c_contract() {
 
 #[test]
 fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
-    let root = unique_temp_dir("xmms-rs-session-save");
+    let root = temp_dir("xmms-rs-session-save");
     let config_path = root.join("config");
     let playlist_path = root.join("playlist.m3u");
     let mut state = xmms_renascene::app_state::AppState::default();
@@ -265,20 +262,14 @@ fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
     let reset = load_saved_state(&config_path, &playlist_path, true).unwrap();
     assert!(!reset.config.playlist_visible);
     assert!(reset.playlist.is_empty());
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options() {
-    let root = unique_temp_dir("xmms-rs-runtime-session-save");
+    let root = temp_dir("xmms-rs-runtime-session-save");
     let config_path = root.join("config");
     let playlist_path = root.join("playlist.m3u");
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_playlist_visible(true)
-            .with_equalizer_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.drop_on_playlist([
         "file:///music/session-one.ogg",
@@ -320,20 +311,14 @@ fn session_e2e_runtime_snapshot_restores_playlist_position_and_playback_options(
         .assert_player_shaded()
         .assert_equalizer_shaded()
         .assert_playlist_shaded();
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn session_e2e_runtime_snapshot_restores_window_and_equalizer_options() {
-    let root = unique_temp_dir("xmms-rs-runtime-options-save");
+    let root = temp_dir("xmms-rs-runtime-options-save");
     let config_path = root.join("config");
     let playlist_path = root.join("playlist.m3u");
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_playlist_visible(true)
-            .with_equalizer_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.open_preferences_page(PreferencesPage::Options)
         .set_preference_playlist_docked(false)
@@ -361,13 +346,11 @@ fn session_e2e_runtime_snapshot_restores_window_and_equalizer_options() {
         .assert_equalizer_automatic(true)
         .assert_equalizer_preamp_position(24)
         .assert_equalizer_band_position(0, 10);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn main_menu_items_trigger_their_preview_actions() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.click(MainTarget::MENU)
         .assert_menu_visible()
@@ -406,7 +389,7 @@ fn main_menu_items_trigger_their_preview_actions() {
 
 #[test]
 fn main_prompts_accept_location_and_jump_time_values() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.click(MainTarget::MENU)
         .click_menu_item(MenuItem::OpenLocation)
@@ -432,7 +415,7 @@ fn main_prompts_accept_location_and_jump_time_values() {
 
 #[test]
 fn prompt_keyboard_shortcuts_open_location_and_jump_time() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.press_shortcut(Shortcut::OpenLocation)
         .assert_window_visible(Window::OpenLocation);
@@ -443,7 +426,7 @@ fn prompt_keyboard_shortcuts_open_location_and_jump_time() {
 
 #[test]
 fn main_keyboard_shortcuts_trigger_preview_actions() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_timed_entry("file:///music/shortcut", "Shortcut", 10_000)
         .press_shortcut(Shortcut::Play)
@@ -494,7 +477,7 @@ fn main_keyboard_shortcuts_trigger_preview_actions() {
 
 #[test]
 fn main_feature_shortcuts_file_info_and_play_first_are_wired() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.accept_open_location("file:///tmp/first.mp3")
         .accept_open_location("file:///tmp/second.mp3")
@@ -533,7 +516,7 @@ fn panel_keyboard_shortcuts_toggle_and_shade_windows() {
 
 #[test]
 fn drag_and_drop_on_main_replaces_playlist_and_starts_playback() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist(["file:///tmp/old.ogg"])
         .assert_playlist_len(1)
@@ -546,7 +529,7 @@ fn drag_and_drop_on_main_replaces_playlist_and_starts_playback() {
 
 #[test]
 fn drag_and_drop_on_playlist_appends_to_existing_entries() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.drop_on_playlist(["file:///tmp/first.ogg"])
         .drop_on_playlist(["https://example.test/stream"])
@@ -558,7 +541,7 @@ fn drag_and_drop_on_playlist_appends_to_existing_entries() {
 
 #[test]
 fn playlist_navigation_controls_update_position_and_eof_behavior() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist(["file:///tmp/one.ogg", "file:///tmp/two.ogg"])
         .click(MainTarget::NEXT)
@@ -590,7 +573,7 @@ fn playlist_navigation_controls_update_position_and_eof_behavior() {
 
 #[test]
 fn shaded_transport_controls_trigger_playback_actions() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist(["file:///tmp/one.ogg", "file:///tmp/two.ogg"])
         .click(MainTarget::SHADE)
@@ -614,7 +597,7 @@ fn shaded_transport_controls_trigger_playback_actions() {
 
 #[test]
 fn shaded_player_displays_time_and_position_slider() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_timed_entry("file:///music/one", "Song", 130_000)
         .press_shortcut(Shortcut::PlayFirst)
@@ -634,7 +617,7 @@ fn shaded_player_displays_time_and_position_slider() {
 
 #[test]
 fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist(["file:///tmp/old.ogg"])
         .press_shortcut(Shortcut::OpenFiles)
@@ -648,8 +631,8 @@ fn accepted_file_dialog_replaces_playlist_and_starts_playback() {
 
 #[test]
 fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-    let music_dir = unique_temp_dir("xmms-rs-e2e-open-dir");
+    let mut app = default_app();
+    let music_dir = temp_dir("xmms-rs-e2e-open-dir");
     fs::create_dir_all(music_dir.join("albums")).unwrap();
     fs::write(music_dir.join("albums").join("New_Song.flac"), b"audio").unwrap();
     fs::write(music_dir.join("cover.png"), b"image").unwrap();
@@ -663,13 +646,11 @@ fn accepted_directory_dialog_replaces_playlist_and_starts_playback() {
             &file_uri(&music_dir.join("albums").join("New_Song.flac")),
         )
         .assert_player_state(PlayerState::Playing);
-
-    fs::remove_dir_all(music_dir).unwrap();
 }
 
 #[test]
 fn timed_entries_are_available_to_e2e_playlist_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_timed_entry("file:///music/123", "Timed Song", 123_000)
         .add_timed_entry("https://example.test/stream.mp3", "Stream", -1)
@@ -682,7 +663,7 @@ fn timed_entries_are_available_to_e2e_playlist_state() {
 
 #[test]
 fn playlist_sort_e2e_orders_entries_and_preserves_current_item() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist([
         "file:///music/Beta/b_song.ogg",
@@ -705,7 +686,7 @@ fn playlist_sort_e2e_orders_entries_and_preserves_current_item() {
 
 #[test]
 fn playlist_row_selection_footer_and_drag_reorder_are_wired() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.add_timed_entry("file:///music/one", "One", 60_000)
         .add_playlist_uri("file:///music/unknown.ogg")
@@ -729,7 +710,7 @@ fn playlist_row_selection_footer_and_drag_reorder_are_wired() {
 
 #[test]
 fn clicked_playlist_rows_update_single_selection() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.drop_on_playlist([
         "file:///music/4-zulu.ogg",
@@ -749,11 +730,7 @@ fn clicked_playlist_rows_update_single_selection() {
 
 #[test]
 fn ctrl_tab_cycles_visible_player_equalizer_playlist() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.assert_docked_main_focused(true)
         .press_ctrl_tab()
@@ -763,8 +740,7 @@ fn ctrl_tab_cycles_visible_player_equalizer_playlist() {
         .press_ctrl_tab()
         .assert_docked_main_focused(true);
 
-    let mut playlist_only =
-        UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut playlist_only = playlist_app();
     playlist_only
         .assert_docked_main_focused(true)
         .press_ctrl_tab()
@@ -775,11 +751,7 @@ fn ctrl_tab_cycles_visible_player_equalizer_playlist() {
 
 #[test]
 fn ctrl_w_shades_current_selected_docked_window() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.add_timed_entry("file:///music/one.ogg", "One", 10_000)
         .press_shortcut(Shortcut::ShadeMain)
@@ -798,11 +770,7 @@ fn ctrl_w_shades_current_selected_docked_window() {
 
 #[test]
 fn docked_title_focus_routes_vertical_arrows() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.add_timed_entry("file:///music/one.ogg", "One", 10_000)
         .add_timed_entry("file:///music/two.ogg", "Two", 10_000)
@@ -874,7 +842,7 @@ fn docked_title_focus_routes_vertical_arrows() {
 
 #[test]
 fn playlist_arrow_keys_move_selection() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.drop_on_playlist([
         "file:///music/one.ogg",
@@ -923,7 +891,7 @@ fn vim_playlist_keys_move_selection_and_play_selected_entry() {
     .assert_playlist_position(Some(2))
     .assert_current_playlist_entry("file:///music/three.ogg");
 
-    let mut disabled = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut disabled = playlist_app();
     disabled
         .drop_on_playlist([
             "file:///music/disabled-one.ogg",
@@ -938,7 +906,7 @@ fn vim_playlist_keys_move_selection_and_play_selected_entry() {
 
 #[test]
 fn ctrl_clicking_playlist_rows_toggles_multiple_selection() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.drop_on_playlist([
         "file:///music/4-zulu.ogg",
@@ -963,7 +931,7 @@ fn ctrl_clicking_playlist_rows_toggles_multiple_selection() {
 
 #[test]
 fn double_clicking_playlist_row_starts_that_entry() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.drop_on_playlist([
         "file:///music/first.ogg",
@@ -981,39 +949,34 @@ fn double_clicking_playlist_row_starts_that_entry() {
 
 #[test]
 fn playlist_sort_e2e_supports_title_and_date_keys() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-
-    app.add_timed_entry("file:///music/z", "Zulu", 1_000)
-        .add_timed_entry("file:///music/a", "alpha", 1_000)
-        .add_timed_entry("file:///music/e", "Echo", 1_000)
-        .sort_playlist_by(PlaylistSortKey::Title)
-        .assert_playlist_entry(0, "file:///music/a")
-        .assert_playlist_title(0, "alpha")
-        .assert_playlist_entry(1, "file:///music/e")
+    let mut app = default_app();
+    seed_playlist(
+        &mut app,
+        [
+            ("file:///music/z", "Zulu", 1_000),
+            ("file:///music/a", "alpha", 1_000),
+            ("file:///music/e", "Echo", 1_000),
+        ],
+    )
+    .sort_playlist_by(PlaylistSortKey::Title);
+    assert_playlist_order(
+        &mut app,
+        ["file:///music/a", "file:///music/e", "file:///music/z"],
+    );
+    app.assert_playlist_title(0, "alpha")
         .assert_playlist_title(1, "Echo")
-        .assert_playlist_entry(2, "file:///music/z")
         .assert_playlist_title(2, "Zulu");
 
-    let music_dir = unique_temp_dir("xmms-rs-e2e-sort-date");
-    fs::create_dir_all(&music_dir).unwrap();
-    let older = music_dir.join("older.ogg");
-    let newer = music_dir.join("newer.ogg");
-    fs::write(&older, b"old").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    fs::write(&newer, b"new").unwrap();
-
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let (_music_dir, older, newer) = date_order_files("xmms-rs-e2e-sort-date");
+    let mut app = default_app();
     app.drop_on_playlist([file_uri(&newer), file_uri(&older)])
-        .sort_playlist_by(PlaylistSortKey::Date)
-        .assert_playlist_entry(0, &file_uri(&older))
-        .assert_playlist_entry(1, &file_uri(&newer));
-
-    fs::remove_dir_all(music_dir).unwrap();
+        .sort_playlist_by(PlaylistSortKey::Date);
+    assert_playlist_order(&mut app, [file_uri(&older), file_uri(&newer)]);
 }
 
 #[test]
 fn selected_playlist_sort_e2e_reorders_only_selected_rows() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist([
         "file:///music/4-zulu.ogg",
@@ -1027,16 +990,21 @@ fn selected_playlist_sort_e2e_reorders_only_selected_rows() {
     .select_playlist_entry(2)
     .select_playlist_entry(3)
     .sort_selected_playlist_by(PlaylistSortKey::Filename)
-    .assert_playlist_entry(0, "file:///music/1-alpha.ogg")
-    .assert_playlist_entry(1, "file:///music/3-charlie.ogg")
-    .assert_playlist_entry(2, "file:///music/2-bravo.ogg")
-    .assert_playlist_entry(3, "file:///music/4-zulu.ogg")
     .assert_playlist_position(Some(3));
+    assert_playlist_order(
+        &mut app,
+        [
+            "file:///music/1-alpha.ogg",
+            "file:///music/3-charlie.ogg",
+            "file:///music/2-bravo.ogg",
+            "file:///music/4-zulu.ogg",
+        ],
+    );
 }
 
 #[test]
 fn playlist_reverse_and_randomize_e2e_preserve_current_entry() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist([
         "file:///music/one.ogg",
@@ -1049,11 +1017,16 @@ fn playlist_reverse_and_randomize_e2e_preserve_current_entry() {
     .assert_playlist_position(Some(1))
     .assert_playlist_entry(1, "file:///music/two.ogg")
     .reverse_playlist()
-    .assert_playlist_entry(0, "file:///music/four.ogg")
-    .assert_playlist_entry(1, "file:///music/three.ogg")
-    .assert_playlist_entry(2, "file:///music/two.ogg")
-    .assert_playlist_entry(3, "file:///music/one.ogg")
-    .assert_playlist_position(Some(2))
+    .assert_playlist_position(Some(2));
+    assert_playlist_order(
+        &mut app,
+        [
+            "file:///music/four.ogg",
+            "file:///music/three.ogg",
+            "file:///music/two.ogg",
+            "file:///music/one.ogg",
+        ],
+    )
     .randomize_playlist()
     .assert_playlist_len(4)
     .assert_current_playlist_entry("file:///music/two.ogg");
@@ -1061,7 +1034,7 @@ fn playlist_reverse_and_randomize_e2e_preserve_current_entry() {
 
 #[test]
 fn playlist_misc_sort_menu_actions_cover_each_list_sort() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
     app.drop_on_playlist([
         "file:///music/Beta/b_song.ogg",
         "file:///music/Alpha/c_song.ogg",
@@ -1069,60 +1042,77 @@ fn playlist_misc_sort_menu_actions_cover_each_list_sort() {
     ])
     .click_panel(PanelTarget::PlaylistMisc)
     .activate_playlist_menu_item(0)
-    .activate_playlist_sort_action(PlaylistSortAction::ListByFilename)
-    .assert_playlist_entry(0, "file:///music/Gamma/a_song.ogg")
-    .assert_playlist_entry(1, "file:///music/Beta/b_song.ogg")
-    .assert_playlist_entry(2, "file:///music/Alpha/c_song.ogg")
-    .activate_playlist_sort_action(PlaylistSortAction::ListByPath)
-    .assert_playlist_entry(0, "file:///music/Alpha/c_song.ogg")
-    .assert_playlist_entry(1, "file:///music/Beta/b_song.ogg")
-    .assert_playlist_entry(2, "file:///music/Gamma/a_song.ogg");
+    .activate_playlist_sort_action(PlaylistSortAction::ListByFilename);
+    assert_playlist_order(
+        &mut app,
+        [
+            "file:///music/Gamma/a_song.ogg",
+            "file:///music/Beta/b_song.ogg",
+            "file:///music/Alpha/c_song.ogg",
+        ],
+    )
+    .activate_playlist_sort_action(PlaylistSortAction::ListByPath);
+    assert_playlist_order(
+        &mut app,
+        [
+            "file:///music/Alpha/c_song.ogg",
+            "file:///music/Beta/b_song.ogg",
+            "file:///music/Gamma/a_song.ogg",
+        ],
+    );
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
-    app.add_timed_entry("file:///music/z", "Zulu", 1_000)
-        .add_timed_entry("file:///music/a", "alpha", 1_000)
-        .add_timed_entry("file:///music/e", "Echo", 1_000)
-        .activate_playlist_sort_action(PlaylistSortAction::ListByTitle)
-        .assert_playlist_entry(0, "file:///music/a")
-        .assert_playlist_entry(1, "file:///music/e")
-        .assert_playlist_entry(2, "file:///music/z");
+    let mut app = playlist_app();
+    seed_playlist(
+        &mut app,
+        [
+            ("file:///music/z", "Zulu", 1_000),
+            ("file:///music/a", "alpha", 1_000),
+            ("file:///music/e", "Echo", 1_000),
+        ],
+    )
+    .activate_playlist_sort_action(PlaylistSortAction::ListByTitle);
+    assert_playlist_order(
+        &mut app,
+        ["file:///music/a", "file:///music/e", "file:///music/z"],
+    );
 
-    let music_dir = unique_temp_dir("xmms-rs-misc-sort-date");
-    fs::create_dir_all(&music_dir).unwrap();
-    let older = music_dir.join("older.ogg");
-    let newer = music_dir.join("newer.ogg");
-    fs::write(&older, b"old").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    fs::write(&newer, b"new").unwrap();
-
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let (_music_dir, older, newer) = date_order_files("xmms-rs-misc-sort-date");
+    let mut app = playlist_app();
     app.drop_on_playlist([file_uri(&newer), file_uri(&older)])
-        .activate_playlist_sort_action(PlaylistSortAction::ListByDate)
-        .assert_playlist_entry(0, &file_uri(&older))
-        .assert_playlist_entry(1, &file_uri(&newer))
-        .activate_playlist_sort_action(PlaylistSortAction::ReverseList)
-        .assert_playlist_entry(0, &file_uri(&newer))
-        .assert_playlist_entry(1, &file_uri(&older))
+        .activate_playlist_sort_action(PlaylistSortAction::ListByDate);
+    assert_playlist_order(&mut app, [file_uri(&older), file_uri(&newer)])
+        .activate_playlist_sort_action(PlaylistSortAction::ReverseList);
+    assert_playlist_order(&mut app, [file_uri(&newer), file_uri(&older)])
         .activate_playlist_sort_action(PlaylistSortAction::RandomizeList)
         .assert_playlist_len(2);
-
-    fs::remove_dir_all(music_dir).unwrap();
 }
 
 #[test]
 fn playlist_misc_sort_menu_actions_cover_each_selected_sort() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
-    app.add_timed_entry("file:///music/z", "Zulu", 1_000)
-        .add_timed_entry("file:///music/middle", "middle", 1_000)
-        .add_timed_entry("file:///music/a", "alpha", 1_000)
-        .select_playlist_entry(0)
-        .select_playlist_entry(2)
-        .activate_playlist_sort_action(PlaylistSortAction::SelectionByTitle)
-        .assert_playlist_entry(0, "file:///music/a")
-        .assert_playlist_entry(1, "file:///music/middle")
-        .assert_playlist_entry(2, "file:///music/z");
+    let mut app = playlist_app();
+    seed_playlist(
+        &mut app,
+        [
+            ("file:///music/z", "Zulu", 1_000),
+            ("file:///music/middle", "middle", 1_000),
+            ("file:///music/a", "alpha", 1_000),
+        ],
+    )
+    .select_playlist_entry(0)
+    .select_playlist_entry(2)
+    .activate_playlist_sort_action(PlaylistSortAction::SelectionByTitle);
+    assert_playlist_order(
+        &mut app,
+        ["file:///music/a", "file:///music/middle", "file:///music/z"],
+    );
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let expected = [
+        "file:///music/1-alpha.ogg",
+        "file:///music/3-charlie.ogg",
+        "file:///music/2-bravo.ogg",
+        "file:///music/4-zulu.ogg",
+    ];
+    let mut app = playlist_app();
     app.drop_on_playlist([
         "file:///music/4-zulu.ogg",
         "file:///music/3-charlie.ogg",
@@ -1132,23 +1122,17 @@ fn playlist_misc_sort_menu_actions_cover_each_selected_sort() {
     .select_playlist_entry(0)
     .select_playlist_entry(2)
     .select_playlist_entry(3)
-    .activate_playlist_sort_action(PlaylistSortAction::SelectionByFilename)
-    .assert_playlist_entry(0, "file:///music/1-alpha.ogg")
-    .assert_playlist_entry(1, "file:///music/3-charlie.ogg")
-    .assert_playlist_entry(2, "file:///music/2-bravo.ogg")
-    .assert_playlist_entry(3, "file:///music/4-zulu.ogg")
-    .activate_playlist_sort_action(PlaylistSortAction::SelectionByPath)
-    .assert_playlist_entry(0, "file:///music/1-alpha.ogg")
-    .assert_playlist_entry(1, "file:///music/3-charlie.ogg")
-    .assert_playlist_entry(2, "file:///music/2-bravo.ogg")
-    .assert_playlist_entry(3, "file:///music/4-zulu.ogg")
-    .activate_playlist_sort_action(PlaylistSortAction::SelectionByDate)
-    .assert_playlist_len(4);
+    .activate_playlist_sort_action(PlaylistSortAction::SelectionByFilename);
+    assert_playlist_order(&mut app, expected)
+        .activate_playlist_sort_action(PlaylistSortAction::SelectionByPath);
+    assert_playlist_order(&mut app, expected)
+        .activate_playlist_sort_action(PlaylistSortAction::SelectionByDate)
+        .assert_playlist_len(4);
 }
 
 #[test]
 fn playlist_misc_file_info_and_options_actions_are_wired() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.add_timed_entry("file:///music/one", "Info Target", 1_000)
         .add_timed_entry("file:///music/two", "Other Track", 1_000)
@@ -1164,7 +1148,7 @@ fn playlist_misc_file_info_and_options_actions_are_wired() {
 
 #[test]
 fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_playlist(["file:///music/a.ogg", "file:///music/b.ogg"])
         .add_timed_entry("file:///music/skip", "Known Duration", 123_000)
@@ -1179,7 +1163,7 @@ fn playlist_duration_indexing_e2e_updates_missing_file_entries_only() {
 
 #[test]
 fn playlist_duration_results_are_applied_asynchronously_from_timer() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.drop_on_playlist(["file:///music/async-a.ogg", "file:///music/async-b.ogg"])
         .assert_playlist_length_ms(0, -1)
@@ -1194,7 +1178,7 @@ fn playlist_duration_results_are_applied_asynchronously_from_timer() {
 
 #[test]
 fn update_timer_advances_position_while_playing_only() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.assert_position(0)
         .assert_main_time_digits([10, 10, 10, 10, 10])
@@ -1220,7 +1204,7 @@ fn update_timer_advances_position_while_playing_only() {
 
 #[test]
 fn skin_browser_discovers_user_and_system_skins_sorted_like_c() {
-    let root = unique_temp_dir("xmms-rs-skin-browser-discover");
+    let root = temp_dir("xmms-rs-skin-browser-discover");
     let user_skins = root.join("user").join("xmms").join("Skins");
     let system_skins = root.join("system").join("Skins");
     fs::create_dir_all(user_skins.join("Zed Skin")).unwrap();
@@ -1229,7 +1213,7 @@ fn skin_browser_discovers_user_and_system_skins_sorted_like_c() {
     fs::write(user_skins.join("Blue.wsz"), b"archive").unwrap();
     fs::write(user_skins.join("not-a-skin.txt"), b"ignored").unwrap();
 
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
     app.open_preferences_page(PreferencesPage::Fonts)
         .click_menu_item(MenuItem::SkinBrowser)
         .assert_window_visible(Window::SkinBrowser)
@@ -1237,13 +1221,11 @@ fn skin_browser_discovers_user_and_system_skins_sorted_like_c() {
         .assert_skin_browser_entries(&["Blue", "Classic", "Zed Skin"])
         .assert_selected_skin_index(0)
         .assert_selected_skin_path(None);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn skin_browser_selects_default_and_installed_skin_paths() {
-    let root = unique_temp_dir("xmms-rs-skin-browser-select");
+    let root = temp_dir("xmms-rs-skin-browser-select");
     let skins = root.join("Skins");
     write_one_pixel_skin(&skins.join("Classic"), "#010203");
     fs::create_dir_all(&skins).unwrap();
@@ -1251,7 +1233,7 @@ fn skin_browser_selects_default_and_installed_skin_paths() {
 
     let classic = skins.join("Classic");
     let packed = skins.join("Packed.wsz");
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.scan_skin_browser_dirs(std::slice::from_ref(&skins))
         .assert_skin_browser_entries(&["Classic", "Packed"])
@@ -1272,30 +1254,26 @@ fn skin_browser_selects_default_and_installed_skin_paths() {
         .assert_skin_reload_count(3)
         .reload_skin()
         .assert_skin_reload_count(4);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn startup_config_loads_directory_and_wsz_skins() {
-    let root = unique_temp_dir("xmms-rs-skin-startup");
+    let root = temp_dir("xmms-rs-skin-startup");
     let dir_skin = root.join("base-2.9.1");
     let wsz_skin = root.join("base-2.9.1.wsz");
     write_one_pixel_skin(&dir_skin, "#070809");
     fs::create_dir_all(&root).unwrap();
     write_one_pixel_wsz(&wsz_skin, "#0a0b0c");
 
-    UiE2e::start_player(PlayerSettings::default().with_skin(dir_skin.display().to_string()))
+    player(PlayerSettings::default().with_skin(dir_skin.display().to_string()))
         .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff070809);
-    UiE2e::start_player(PlayerSettings::default().with_skin(wsz_skin.display().to_string()))
+    player(PlayerSettings::default().with_skin(wsz_skin.display().to_string()))
         .assert_active_skin_pixel(SkinPixmapKind::Main, 0, 0, 0xff0a0b0c);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn skin_browser_search_path_covers_user_legacy_system_and_env_dirs() {
-    let root = unique_temp_dir("xmms-rs-skin-browser-paths");
+    let root = temp_dir("xmms-rs-skin-browser-paths");
     let user_config = root.join("config");
     let home = root.join("home");
     let system = root.join("system").join("Skins");
@@ -1318,7 +1296,7 @@ fn skin_browser_search_path_covers_user_legacy_system_and_env_dirs() {
         &system,
         Some(&format!("{}:{}", env_one.display(), env_two.display())),
     );
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
     app.scan_skin_browser_dirs(&dirs)
         .assert_skin_browser_entries(&["Skin", "Skin", "Skin", "Skin", "Skin"]);
 
@@ -1327,13 +1305,11 @@ fn skin_browser_search_path_covers_user_legacy_system_and_env_dirs() {
     assert_eq!(dirs[2], system);
     assert_eq!(dirs[3], env_one);
     assert_eq!(dirs[4], env_two);
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn output_device_picker_groups_and_deduplicates_system_devices() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.open_output_device_picker()
         .assert_window_visible(Window::OutputDevicePicker)
@@ -1349,7 +1325,7 @@ fn output_device_picker_groups_and_deduplicates_system_devices() {
 
 #[test]
 fn output_device_picker_preserves_automatic_system_default() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.set_output_devices(vec![OutputDevice::system(
         "speaker",
@@ -1368,7 +1344,7 @@ fn output_device_picker_preserves_automatic_system_default() {
 
 #[test]
 fn output_device_picker_switches_system_device_without_stopping_playback() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_timed_entry("file:///music/output", "Output", 10_000)
         .press_shortcut(Shortcut::Play)
@@ -1387,7 +1363,7 @@ fn output_device_picker_switches_system_device_without_stopping_playback() {
 
 #[test]
 fn mpris_root_and_player_properties_match_xmms_contract() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_volume(40));
+    let mut app = player(PlayerSettings::default().with_volume(40));
 
     app.add_playlist_uri("file:///music/one.ogg")
         .assert_mpris_identity()
@@ -1409,7 +1385,7 @@ fn mpris_root_and_player_properties_match_xmms_contract() {
 
 #[test]
 fn mpris_volume_seek_and_set_position_update_player_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_timed_entry("file:///music/mpris", "MPRIS", 10_000)
         .set_mpris_volume(0.25)
@@ -1434,7 +1410,7 @@ fn mpris_volume_seek_and_set_position_update_player_state() {
 
 #[test]
 fn mpris_transport_methods_drive_playlist_and_playback() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_playlist_uri("file:///music/one.ogg")
         .add_playlist_uri("file:///music/two.ogg")
@@ -1456,7 +1432,7 @@ fn mpris_transport_methods_drive_playlist_and_playback() {
 
 #[test]
 fn mpris_raise_quit_and_next_previous_methods_emit_expected_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_playlist_uri("file:///music/one.ogg")
         .add_playlist_uri("file:///music/two.ogg")
@@ -1472,56 +1448,9 @@ fn mpris_raise_quit_and_next_previous_methods_emit_expected_state() {
         .assert_mpris_event(MprisEvent::QuitRequested);
 }
 
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
-}
-
-fn one_pixel_xpm(color: &str) -> String {
-    format!(
-        r#"/* XPM */
-static char * main_xpm[] = {{
-"1 1 1 1",
-". c {color}",
-"."}};
-"#
-    )
-}
-
-fn write_one_pixel_skin(dir: &Path, color: &str) {
-    fs::create_dir_all(dir).unwrap();
-    fs::write(dir.join("main.xpm"), one_pixel_xpm(color)).unwrap();
-}
-
-fn write_one_pixel_wsz(path: &Path, color: &str) {
-    let file = File::create(path).unwrap();
-    let mut archive = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    archive.start_file("base-2.9.1/main.xpm", options).unwrap();
-    archive.write_all(one_pixel_xpm(color).as_bytes()).unwrap();
-    archive.finish().unwrap();
-}
-
-fn write_solid_main_png_skin(dir: &Path, color: [u8; 3]) {
-    fs::create_dir_all(dir).unwrap();
-    let mut image = image::RgbaImage::new(MAIN_WINDOW_WIDTH as u32, MAIN_WINDOW_HEIGHT as u32);
-    for pixel in image.pixels_mut() {
-        *pixel = image::Rgba([color[0], color[1], color[2], 0xff]);
-    }
-    image.save(dir.join("main.png")).unwrap();
-}
-
-fn file_uri(path: &Path) -> String {
-    format!("file://{}", path.to_string_lossy())
-}
-
 #[test]
 fn transport_buttons_update_player_state_and_position() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.click(MainTarget::PLAY)
         .assert_player_state(PlayerState::Stopped)
@@ -1556,7 +1485,7 @@ fn transport_buttons_update_player_state_and_position() {
 
 #[test]
 fn playlist_footer_transport_buttons_update_player_state_and_position() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.add_timed_entry("file:///music/playlist-footer-one", "Footer One", 10_000)
         .add_timed_entry("file:///music/playlist-footer-two", "Footer Two", 12_000)
@@ -1580,7 +1509,7 @@ fn playlist_footer_transport_buttons_update_player_state_and_position() {
 
 #[test]
 fn docked_playlist_footer_transport_buttons_use_current_geometry() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.add_timed_entry(
         "file:///music/docked-playlist-footer",
@@ -1595,7 +1524,7 @@ fn docked_playlist_footer_transport_buttons_use_current_geometry() {
 
 #[test]
 fn playlist_footer_scroll_buttons_update_scroll_offset() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     for index in 0..30 {
         app.accept_open_location(&format!("file:///tmp/footer-scroll-{index:02}.mp3"));
@@ -1611,7 +1540,7 @@ fn playlist_footer_scroll_buttons_update_scroll_offset() {
 
 #[test]
 fn mono_stereo_indicator_tracks_stream_channel_count() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.assert_main_channels(0)
         .set_stream_channels(2)
@@ -1622,7 +1551,7 @@ fn mono_stereo_indicator_tracks_stream_channel_count() {
 
 #[test]
 fn shuffle_and_repeat_buttons_toggle_playlist_modes() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.assert_shuffle(false)
         .click(MainTarget::SHUFFLE)
@@ -1639,7 +1568,7 @@ fn shuffle_and_repeat_buttons_toggle_playlist_modes() {
 
 #[test]
 fn volume_balance_and_position_sliders_update_player_values() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.click(MainTarget::volume(0)).assert_volume(0);
     app.click(MainTarget::volume(51)).assert_volume(100);
@@ -1658,7 +1587,7 @@ fn volume_balance_and_position_sliders_update_player_values() {
 
 #[test]
 fn playlist_button_opens_and_closes_playlist_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_detached(true));
+    let mut app = detached_playlist_app();
 
     app.assert_window_visible(Window::Player)
         .assert_window_hidden(Window::Playlist);
@@ -1672,7 +1601,7 @@ fn playlist_button_opens_and_closes_playlist_window() {
 
 #[test]
 fn equalizer_button_opens_and_closes_equalizer_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_detached(true));
+    let mut app = detached_equalizer_app();
 
     app.assert_window_visible(Window::Player)
         .assert_window_hidden(Window::Equalizer);
@@ -1686,7 +1615,7 @@ fn equalizer_button_opens_and_closes_equalizer_window() {
 
 #[test]
 fn equalizer_top_right_buttons_shade_and_close_equalizer_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_detached(true));
+    let mut app = detached_equalizer_app();
 
     app.click(MainTarget::EQUALIZER)
         .assert_window_visible(Window::Equalizer)
@@ -1706,7 +1635,7 @@ fn equalizer_top_right_buttons_shade_and_close_equalizer_window() {
 
 #[test]
 fn shaded_equalizer_volume_and_balance_sliders_update_shared_player_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
+    let mut app = equalizer_app();
 
     app.click_panel(PanelTarget::EqualizerShade)
         .assert_equalizer_shaded()
@@ -1724,7 +1653,7 @@ fn shaded_equalizer_volume_and_balance_sliders_update_shared_player_state() {
 
 #[test]
 fn equalizer_buttons_sliders_and_presets_update_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
+    let mut app = equalizer_app();
 
     app.assert_equalizer_active(true)
         .click_panel(PanelTarget::EqualizerOn)
@@ -1754,7 +1683,7 @@ fn equalizer_buttons_sliders_and_presets_update_state() {
 
 #[test]
 fn equalizer_all_bands_expose_c_compatible_gstreamer_db_mapping() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true));
+    let mut app = equalizer_app();
 
     app.drag_equalizer_preamp(0)
         .assert_equalizer_preamp_position(0)
@@ -1783,7 +1712,7 @@ fn equalizer_all_bands_expose_c_compatible_gstreamer_db_mapping() {
 
 #[test]
 fn playlist_top_right_buttons_shade_and_close_playlist_window() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_detached(true));
+    let mut app = detached_playlist_app();
 
     app.click(MainTarget::PLAYLIST)
         .assert_window_visible(Window::Playlist)
@@ -1803,11 +1732,7 @@ fn playlist_top_right_buttons_shade_and_close_playlist_window() {
 
 #[test]
 fn floating_panel_titlebars_are_draggable_without_breaking_buttons() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_playlist_visible(true)
-            .with_equalizer_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.assert_panel_title_draggable(PanelKind::Equalizer)
         .assert_panel_title_button_not_draggable(PanelKind::Equalizer)
@@ -1817,11 +1742,7 @@ fn floating_panel_titlebars_are_draggable_without_breaking_buttons() {
 
 #[test]
 fn docked_panel_size_respects_equalizer_detached_and_docked_state() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.assert_panel_detached(PanelKind::Equalizer, false)
         .assert_docked_panel_size((
@@ -1844,11 +1765,7 @@ fn docked_panel_size_respects_equalizer_detached_and_docked_state() {
 
 #[test]
 fn docked_panel_size_respects_playlist_detached_and_docked_state() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.detach_panel(PanelKind::Playlist)
         .assert_panel_detached(PanelKind::Playlist, true)
@@ -1866,7 +1783,7 @@ fn docked_panel_size_respects_playlist_detached_and_docked_state() {
 
 #[test]
 fn docking_resized_floating_playlist_resets_width_but_preserves_height() {
-    let mut app = UiE2e::start_player(
+    let mut app = player(
         PlayerSettings::default()
             .with_playlist_visible(true)
             .with_playlist_detached(true),
@@ -1882,22 +1799,22 @@ fn docking_resized_floating_playlist_resets_width_but_preserves_height() {
 
 #[test]
 fn visualization_modes_can_be_selected_from_rust_e2e() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
-
-    app.assert_visualization_mode(VisMode::Analyzer)
-        .set_visualization_mode(VisMode::Scope)
-        .assert_visualization_mode(VisMode::Scope)
-        .set_visualization_mode(VisMode::Off)
-        .assert_visualization_mode(VisMode::Off)
-        .set_visualization_mode(VisMode::Milkdrop)
-        .assert_visualization_mode(VisMode::Milkdrop)
-        .set_visualization_mode(VisMode::Analyzer)
-        .assert_visualization_mode(VisMode::Analyzer);
+    let mut app = default_app();
+    app.assert_visualization_mode(VisMode::Analyzer);
+    for mode in [
+        VisMode::Scope,
+        VisMode::Off,
+        VisMode::Milkdrop,
+        VisMode::Analyzer,
+    ] {
+        app.set_visualization_mode(mode)
+            .assert_visualization_mode(mode);
+    }
 }
 
 #[test]
 fn visualization_analyzer_styles_can_be_selected_from_rust_e2e() {
-    let mut app = UiE2e::start_player(
+    let mut app = player(
         PlayerSettings::default().with_visualization_analyzer_style(VisAnalyzerStyle::Lines),
     );
 
@@ -1908,15 +1825,14 @@ fn visualization_analyzer_styles_can_be_selected_from_rust_e2e() {
 
 #[test]
 fn visualization_analyzer_modes_can_be_selected_from_rust_e2e() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default().with_visualization_analyzer_mode(VisAnalyzerMode::Fire),
-    );
+    let mut app =
+        player(PlayerSettings::default().with_visualization_analyzer_mode(VisAnalyzerMode::Fire));
 
-    app.assert_visualization_analyzer_mode(VisAnalyzerMode::Fire)
-        .set_visualization_analyzer_mode(VisAnalyzerMode::VerticalLines)
-        .assert_visualization_analyzer_mode(VisAnalyzerMode::VerticalLines)
-        .set_visualization_analyzer_mode(VisAnalyzerMode::Normal)
-        .assert_visualization_analyzer_mode(VisAnalyzerMode::Normal);
+    app.assert_visualization_analyzer_mode(VisAnalyzerMode::Fire);
+    for mode in [VisAnalyzerMode::VerticalLines, VisAnalyzerMode::Normal] {
+        app.set_visualization_analyzer_mode(mode)
+            .assert_visualization_analyzer_mode(mode);
+    }
 }
 
 #[test]
@@ -1928,17 +1844,16 @@ fn visualization_scope_modes_can_be_selected_from_rust_e2e() {
     );
 
     app.assert_visualization_mode(VisMode::Scope)
-        .assert_visualization_scope_mode(VisScopeMode::Dot)
-        .set_visualization_scope_mode(VisScopeMode::Solid)
-        .assert_visualization_scope_mode(VisScopeMode::Solid)
-        .set_visualization_scope_mode(VisScopeMode::Line)
-        .assert_visualization_scope_mode(VisScopeMode::Line);
+        .assert_visualization_scope_mode(VisScopeMode::Dot);
+    for mode in [VisScopeMode::Solid, VisScopeMode::Line] {
+        app.set_visualization_scope_mode(mode)
+            .assert_visualization_scope_mode(mode);
+    }
 }
 
 #[test]
 fn visualization_peaks_and_falloff_can_be_selected_from_rust_e2e() {
-    let mut app =
-        UiE2e::start_player(PlayerSettings::default().with_visualization_peaks_enabled(false));
+    let mut app = player(PlayerSettings::default().with_visualization_peaks_enabled(false));
 
     app.assert_visualization_peaks_enabled(false)
         .assert_visualization_peak_cleared()
@@ -1952,9 +1867,7 @@ fn visualization_peaks_and_falloff_can_be_selected_from_rust_e2e() {
 
 #[test]
 fn visualization_windowshade_vu_mode_can_be_selected_from_rust_e2e() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default().with_visualization_vu_mode(VisVuMode::Smooth),
-    );
+    let mut app = player(PlayerSettings::default().with_visualization_vu_mode(VisVuMode::Smooth));
 
     app.assert_visualization_vu_mode(VisVuMode::Smooth)
         .set_visualization_vu_mode(VisVuMode::Normal)
@@ -1963,8 +1876,7 @@ fn visualization_windowshade_vu_mode_can_be_selected_from_rust_e2e() {
 
 #[test]
 fn visualization_refresh_divisor_throttles_data_ticks_from_rust_e2e() {
-    let mut app =
-        UiE2e::start_player(PlayerSettings::default().with_visualization_refresh_divisor(2));
+    let mut app = player(PlayerSettings::default().with_visualization_refresh_divisor(2));
 
     app.assert_visualization_refresh_divisor(2)
         .feed_visualization_data(4, 1.0)
@@ -1978,7 +1890,7 @@ fn visualization_refresh_divisor_throttles_data_ticks_from_rust_e2e() {
 
 #[test]
 fn preferences_audio_page_applies_output_volume_and_balance_immediately() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.open_preferences_page(PreferencesPage::Audio)
         .assert_window_visible(Window::Preferences)
@@ -2052,7 +1964,7 @@ fn preferences_visualization_controls_follow_selected_mode_sensitivity() {
 
 #[test]
 fn local_file_playback_requests_gstreamer_uri_instead_of_only_toggling_ui_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.drop_on_main(["file:///music/local-song.ogg"])
         .assert_player_state(PlayerState::Playing)
@@ -2061,11 +1973,7 @@ fn local_file_playback_requests_gstreamer_uri_instead_of_only_toggling_ui_state(
 
 #[test]
 fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.open_preferences_page(PreferencesPage::Options)
         .assert_preferences_page(PreferencesPage::Options)
@@ -2115,7 +2023,7 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
 
 #[test]
 fn preferences_docking_changes_mode_without_changing_visibility() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.open_preferences_page(PreferencesPage::Options)
         .set_preference_playlist_docked(false)
@@ -2136,7 +2044,7 @@ fn preferences_docking_changes_mode_without_changing_visibility() {
 
 #[test]
 fn player_buttons_control_visibility_for_current_docking_mode() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.open_preferences_page(PreferencesPage::Options)
         .set_preference_playlist_docked(false)
@@ -2161,7 +2069,7 @@ fn player_buttons_control_visibility_for_current_docking_mode() {
 
 #[test]
 fn preferences_font_and_title_pages_apply_text_controls_immediately() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.open_preferences_page(PreferencesPage::Fonts)
         .set_preference_playlist_font("Monospace")
@@ -2180,7 +2088,7 @@ fn preferences_font_and_title_pages_apply_text_controls_immediately() {
 
 #[test]
 fn title_format_updates_main_title_and_shaded_playlist_info() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.add_playlist_uri("file:///music/Artist%20Name%20-%20Track_Name.ogg")
         .press_shortcut(Shortcut::PlayFirst)
@@ -2197,7 +2105,7 @@ fn title_format_updates_main_title_and_shaded_playlist_info() {
 
 #[test]
 fn playlist_font_preference_and_visualization_feed_render_state() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.set_preference_playlist_font("Monospace")
         .assert_playlist_row_font("Monospace")
@@ -2209,7 +2117,7 @@ fn playlist_font_preference_and_visualization_feed_render_state() {
 
 #[test]
 fn stop_clears_visualization_immediately() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.set_visualization_mode(VisMode::Analyzer)
         .feed_visualization_data(4, 0.9)
@@ -2222,7 +2130,7 @@ fn stop_clears_visualization_immediately() {
 
 #[test]
 fn title_format_respects_percent_twenty_conversion_preference() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.add_playlist_uri("file:///music/Artist%20Name%20-%20Track_Name.ogg")
         .press_shortcut(Shortcut::PlayFirst)
@@ -2235,7 +2143,7 @@ fn title_format_respects_percent_twenty_conversion_preference() {
 
 #[test]
 fn preferences_visualization_page_applies_controls_immediately() {
-    let mut app = UiE2e::start_player(PlayerSettings::default());
+    let mut app = default_app();
 
     app.open_preferences_page(PreferencesPage::Visualization)
         .set_visualization_mode(VisMode::Scope)
@@ -2259,7 +2167,7 @@ fn preferences_visualization_page_applies_controls_immediately() {
 
 #[test]
 fn playlist_bottom_buttons_open_their_submenus() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.assert_no_playlist_menu()
         .click_panel(PanelTarget::PlaylistAdd)
@@ -2281,7 +2189,7 @@ fn playlist_bottom_buttons_open_their_submenus() {
 
 #[test]
 fn playlist_add_menu_url_opens_location_prompt_and_adds_entry() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.accept_open_location("file:///tmp/existing-url-base.mp3")
         .click_panel(PanelTarget::PlaylistAdd)
@@ -2295,7 +2203,7 @@ fn playlist_add_menu_url_opens_location_prompt_and_adds_entry() {
 
 #[test]
 fn playlist_add_menu_file_opens_file_dialog_and_adds_entries() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.accept_open_location("file:///tmp/existing-file-base.mp3")
         .click_panel(PanelTarget::PlaylistAdd)
@@ -2313,13 +2221,13 @@ fn playlist_add_menu_file_opens_file_dialog_and_adds_entries() {
 
 #[test]
 fn playlist_add_menu_directory_opens_directory_dialog_and_adds_entries() {
-    let music_dir = unique_temp_dir("xmms-rs-add-menu-dir");
+    let music_dir = temp_dir("xmms-rs-add-menu-dir");
     fs::create_dir_all(&music_dir).unwrap();
     fs::write(music_dir.join("track-one.mp3"), b"audio").unwrap();
     fs::write(music_dir.join("ignored.txt"), b"text").unwrap();
     let dir_uri = format!("file://{}", music_dir.display());
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
     app.accept_open_location("file:///tmp/existing-dir-base.mp3")
         .click_panel(PanelTarget::PlaylistAdd)
         .activate_playlist_menu_item(1)
@@ -2327,13 +2235,11 @@ fn playlist_add_menu_directory_opens_directory_dialog_and_adds_entries() {
         .accept_playlist_add_directory_dialog(&dir_uri)
         .assert_playlist_len(2)
         .assert_playlist_entry(0, "file:///tmp/existing-dir-base.mp3");
-
-    fs::remove_dir_all(music_dir).unwrap();
 }
 
 #[test]
 fn playlist_select_menu_items_update_row_selection() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     for index in 0..3 {
         app.accept_open_location(&format!("file:///tmp/select-{index}.mp3"));
@@ -2359,7 +2265,7 @@ fn playlist_select_menu_items_update_row_selection() {
 
 #[test]
 fn playlist_remove_and_list_menu_items_modify_entries() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     for index in 0..4 {
         app.accept_open_location(&format!("file:///tmp/remove-{index}.mp3"));
@@ -2384,7 +2290,7 @@ fn playlist_remove_and_list_menu_items_modify_entries() {
 
 #[test]
 fn playlist_context_actions_select_and_remove_entries() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     for index in 0..3 {
         app.accept_open_location(&format!("file:///tmp/context-{index}.mp3"));
@@ -2407,7 +2313,7 @@ fn playlist_context_actions_select_and_remove_entries() {
 
 #[test]
 fn playlist_delete_key_removes_selected_entries_only() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     for index in 0..4 {
         app.accept_open_location(&format!("file:///tmp/delete-key-{index}.mp3"));
@@ -2425,14 +2331,14 @@ fn playlist_delete_key_removes_selected_entries_only() {
 
 #[test]
 fn playlist_context_remove_dead_keeps_existing_local_files_and_urls() {
-    let root = unique_temp_dir("xmms-rs-context-dead");
+    let root = temp_dir("xmms-rs-context-dead");
     fs::create_dir_all(&root).unwrap();
     let existing = root.join("existing.mp3");
     fs::write(&existing, b"audio").unwrap();
     let missing = root.join("missing.mp3");
     let existing_uri = format!("file://{}", existing.display());
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
     app.accept_open_location(existing.to_str().unwrap())
         .accept_open_location(&format!("file://{}", missing.display()))
         .accept_open_location("https://example.test/live.mp3")
@@ -2440,13 +2346,11 @@ fn playlist_context_remove_dead_keeps_existing_local_files_and_urls() {
         .assert_playlist_len(2)
         .assert_playlist_entry(0, &existing_uri)
         .assert_playlist_entry(1, "https://example.test/live.mp3");
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn playlist_context_physical_delete_removes_selected_local_files() {
-    let root = unique_temp_dir("xmms-rs-context-physical-delete");
+    let root = temp_dir("xmms-rs-context-physical-delete");
     fs::create_dir_all(&root).unwrap();
     let keep = root.join("keep.mp3");
     let delete = root.join("delete.mp3");
@@ -2454,7 +2358,7 @@ fn playlist_context_physical_delete_removes_selected_local_files() {
     fs::write(&delete, b"delete").unwrap();
     let keep_uri = format!("file://{}", keep.display());
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
     app.accept_open_location(keep.to_str().unwrap())
         .accept_open_location(delete.to_str().unwrap())
         .select_playlist_entry(1)
@@ -2464,12 +2368,11 @@ fn playlist_context_physical_delete_removes_selected_local_files() {
 
     assert!(keep.exists());
     assert!(!delete.exists());
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn playlist_search_selects_matching_rows_and_tracks_query_editing() {
-    let mut disabled = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut disabled = playlist_app();
     disabled
         .start_playlist_search()
         .assert_playlist_search_active(false)
@@ -2518,11 +2421,11 @@ fn playlist_search_selects_matching_rows_and_tracks_query_editing() {
 
 #[test]
 fn playlist_list_save_opens_dialog_and_writes_m3u() {
-    let root = unique_temp_dir("xmms-rs-playlist-save");
+    let root = temp_dir("xmms-rs-playlist-save");
     fs::create_dir_all(&root).unwrap();
     let playlist_path = root.join("saved.m3u");
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
     app.accept_open_location("file:///tmp/save-one.mp3")
         .accept_open_location("https://example.test/save-two.ogg")
         .click_panel(PanelTarget::PlaylistList)
@@ -2534,12 +2437,11 @@ fn playlist_list_save_opens_dialog_and_writes_m3u() {
     assert!(saved.contains("#EXTM3U"));
     assert!(saved.contains("file:///tmp/save-one.mp3"));
     assert!(saved.contains("https://example.test/save-two.ogg"));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn playlist_list_load_opens_dialog_and_replaces_entries_from_m3u() {
-    let root = unique_temp_dir("xmms-rs-playlist-load");
+    let root = temp_dir("xmms-rs-playlist-load");
     fs::create_dir_all(&root).unwrap();
     let playlist_path = root.join("loaded.m3u");
     fs::write(
@@ -2548,7 +2450,7 @@ fn playlist_list_load_opens_dialog_and_replaces_entries_from_m3u() {
     )
     .unwrap();
 
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
     app.accept_open_location("file:///tmp/original.mp3")
         .click_panel(PanelTarget::PlaylistList)
         .activate_playlist_menu_item(2)
@@ -2559,13 +2461,11 @@ fn playlist_list_load_opens_dialog_and_replaces_entries_from_m3u() {
         .assert_playlist_title(0, "Loaded Title")
         .assert_playlist_length_ms(0, 42_000)
         .assert_playlist_entry(1, "https://example.test/loaded-two.ogg");
-
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn playlist_can_resize_from_default_dimensions() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.assert_playlist_size(275, 232)
         .resize_playlist(325, 280)
@@ -2578,7 +2478,7 @@ fn playlist_can_resize_from_default_dimensions() {
 
 #[test]
 fn playlist_startup_size_opens_playlist_at_requested_dimensions() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_detached(true));
+    let mut app = detached_playlist_app();
 
     app.start_playlist_size(325, 280)
         .assert_window_visible(Window::Playlist)
@@ -2587,7 +2487,7 @@ fn playlist_startup_size_opens_playlist_at_requested_dimensions() {
 
 #[test]
 fn resized_playlist_bottom_buttons_use_current_geometry() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.resize_playlist(325, 280)
         .click_panel(PanelTarget::PlaylistAdd)
@@ -2601,7 +2501,7 @@ fn resized_playlist_bottom_buttons_use_current_geometry() {
 
 #[test]
 fn resized_playlist_title_buttons_use_current_width() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     app.resize_playlist(325, 280)
         .click_panel(PanelTarget::PlaylistShade)
@@ -2663,7 +2563,7 @@ fn docked_playlist_resizes_vertically_only() {
 
 #[test]
 fn playlist_scrollbar_drag_updates_visible_rows() {
-    let mut app = UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true));
+    let mut app = playlist_app();
 
     for index in 0..30 {
         app.accept_open_location(&format!("file:///tmp/scroll-{index:02}.mp3"));
@@ -2712,11 +2612,7 @@ fn startup_settings_can_open_equalizer_and_playlist() {
 
 #[test]
 fn startup_settings_show_docked_equalizer_and_playlist_in_main_window_stack() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_playlist_visible(true)
-            .with_equalizer_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.assert_window_visible(Window::Player)
         .assert_window_hidden(Window::Equalizer)
@@ -2726,11 +2622,7 @@ fn startup_settings_show_docked_equalizer_and_playlist_in_main_window_stack() {
 
 #[test]
 fn docked_equalizer_and_playlist_can_be_shaded_from_main_window_stack() {
-    let mut app = UiE2e::start_player(
-        PlayerSettings::default()
-            .with_equalizer_visible(true)
-            .with_playlist_visible(true),
-    );
+    let mut app = docked_panels_app();
 
     app.assert_docked_panel_size((275, 464))
         .click_docked_panel(PanelTarget::EqualizerShade)

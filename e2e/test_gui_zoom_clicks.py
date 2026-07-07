@@ -28,19 +28,20 @@ from gui import (
     PLAYLIST_FOOTER_RECTS,
     PLAYLIST_MENU_RECTS,
     EqualizerControl,
+    MAIN_PLAYER_BASE_HEIGHT,
     MainButton,
     MainToggleButton,
     MainWindow,
     PlaylistFooterButton,
     PlaylistMenuButton,
-    SkinRect,
     click_skin_rect,
+    offset_rect,
+    open_panel,
     run_xdotool,
 )
 
 pytest: Any = import_module("pytest")
 
-MAIN_PLAYER_BASE_HEIGHT = 116
 EQUALIZER_WINDOW_TITLE = "XMMS Renascene Rust Equalizer"
 PLAYLIST_WINDOW_TITLE = "XMMS Renascene Rust Playlist"
 ZOOM_LEVELS = [1.0, 1.5, 2.0]
@@ -98,38 +99,6 @@ def assert_main_button_point_uses_dynamic_geometry(main_window: MainWindow, butt
     assert main_window.main_button_point(button) == expected_point
 
 
-def offset_rect(rect: SkinRect, y_offset: int) -> SkinRect:
-    return SkinRect(rect.x, rect.y + y_offset, rect.width, rect.height)
-
-
-def visible_windows(title: str) -> list[str]:
-    result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
-
-
-def open_panel_at_zoom(
-    main_window: MainWindow,
-    toggle: MainToggleButton,
-    title: str,
-) -> tuple[str, int]:
-    main_window.focus_main_window()
-    before_height = main_window.geometry().height
-    main_window.click_main_toggle(toggle)
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        windows = visible_windows(title)
-        if windows:
-            time.sleep(0.25)
-            return windows[0], 0
-        if main_window.geometry().height > before_height:
-            time.sleep(0.25)
-            return main_window.window_id, MAIN_PLAYER_BASE_HEIGHT
-        time.sleep(0.1)
-    raise AssertionError(f"panel {title!r} did not open at zoomed size")
-
-
 @pytest.mark.parametrize("button", [MainButton.PLAY], ids=["play"])
 def test_gui_zoomed_main_button_click_uses_dynamic_geometry(
     zoomed_main_window: MainWindow,
@@ -154,7 +123,7 @@ def test_gui_zoomed_equalizer_button_click_uses_dynamic_panel_geometry(
     frontend, zoom = zoom_case
     assert_initial_geometry_uses_zoom(zoomed_main_window, zoom)
 
-    equalizer_window, equalizer_y = open_panel_at_zoom(
+    equalizer_window, equalizer_y = open_panel(
         zoomed_main_window,
         MainToggleButton.EQUALIZER,
         EQUALIZER_WINDOW_TITLE,
@@ -181,7 +150,7 @@ def test_gui_zoomed_playlist_buttons_click_using_dynamic_panel_geometry(
     _frontend, zoom = zoom_case
     assert_initial_geometry_uses_zoom(zoomed_main_window, zoom)
 
-    playlist_window, playlist_y = open_panel_at_zoom(
+    playlist_window, playlist_y = open_panel(
         zoomed_main_window,
         MainToggleButton.PLAYLIST,
         PLAYLIST_WINDOW_TITLE,

@@ -6,6 +6,7 @@ use crate::app::view_model::{
     volume_to_position, MainPlayerViewModel,
 };
 use crate::app_log_info;
+use crate::config::TimerMode;
 use crate::player::PlayerState;
 use crate::render::{
     MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState, VisualizationRenderState,
@@ -35,6 +36,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         app.main_pressed_push,
         app.main_pressed_toggle,
         app.main_pressed_slider,
+        config.timer_mode,
         app.visualization_render_state(),
     );
     let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
@@ -74,8 +76,15 @@ fn main_render_state(
     pressed_push: Option<MainPushButton>,
     pressed_toggle: Option<MainToggleButton>,
     pressed_slider: Option<MainSlider>,
+    timer_mode: TimerMode,
     visualization: VisualizationRenderState,
 ) -> MainWindowRenderState {
+    let (shaded_time_min, shaded_time_sec) = shaded_time_parts(
+        view_model.player_state,
+        playback_position_ms,
+        duration_ms,
+        timer_mode,
+    );
     MainWindowRenderState {
         title: if view_model.title.is_empty() {
             "XMMS Renascene".to_string()
@@ -107,10 +116,84 @@ fn main_render_state(
         pressed_push,
         pressed_toggle,
         pressed_slider,
-        time_digits: [NumberDisplay::BLANK; 5],
+        time_digits: time_digits(
+            view_model.player_state,
+            playback_position_ms,
+            duration_ms,
+            timer_mode,
+        ),
+        shaded_time_min,
+        shaded_time_sec,
         visualization,
         ..MainWindowRenderState::default()
     }
+}
+
+fn display_time_ms(position_ms: i64, duration_ms: Option<i64>, timer_mode: TimerMode) -> i64 {
+    let elapsed = position_ms.max(0);
+    if let (TimerMode::Remaining, Some(duration)) =
+        (timer_mode, duration_ms.filter(|duration| *duration > 0))
+    {
+        return (duration - elapsed).max(0);
+    }
+    elapsed
+}
+
+fn display_seconds(position_ms: i64, duration_ms: Option<i64>, timer_mode: TimerMode) -> i64 {
+    let mut seconds = display_time_ms(position_ms, duration_ms, timer_mode) / 1000;
+    if seconds > i64::from(99 * 60) {
+        seconds /= 60;
+    }
+    seconds.max(0)
+}
+
+fn showing_remaining(duration_ms: Option<i64>, timer_mode: TimerMode) -> bool {
+    timer_mode == TimerMode::Remaining && duration_ms.is_some_and(|duration| duration > 0)
+}
+
+fn time_digits(
+    player_state: PlayerState,
+    position_ms: i64,
+    duration_ms: Option<i64>,
+    timer_mode: TimerMode,
+) -> [i32; 5] {
+    if player_state == PlayerState::Stopped {
+        return [NumberDisplay::BLANK; 5];
+    }
+    let seconds = display_seconds(position_ms, duration_ms, timer_mode);
+    let minutes = seconds / 60;
+    [
+        if showing_remaining(duration_ms, timer_mode) {
+            NumberDisplay::DASH
+        } else {
+            NumberDisplay::BLANK
+        },
+        ((minutes / 10) % 10) as i32,
+        (minutes % 10) as i32,
+        ((seconds % 60) / 10) as i32,
+        (seconds % 10) as i32,
+    ]
+}
+
+fn shaded_time_parts(
+    player_state: PlayerState,
+    position_ms: i64,
+    duration_ms: Option<i64>,
+    timer_mode: TimerMode,
+) -> (String, String) {
+    if player_state == PlayerState::Stopped {
+        return ("   ".to_string(), "  ".to_string());
+    }
+    let seconds = display_seconds(position_ms, duration_ms, timer_mode);
+    let prefix = if showing_remaining(duration_ms, timer_mode) {
+        '-'
+    } else {
+        ' '
+    };
+    (
+        format!("{prefix}{:02}", seconds / 60),
+        format!("{:02}", seconds % 60),
+    )
 }
 
 fn current_position_ms(app: &EguiFrontendState) -> i64 {
@@ -420,6 +503,7 @@ mod tests {
             Some(MainPushButton::Play),
             Some(MainToggleButton::Repeat),
             Some(MainSlider::Volume),
+            TimerMode::Elapsed,
             VisualizationRenderState::default(),
         );
 
@@ -461,10 +545,94 @@ mod tests {
             None,
             None,
             None,
+            TimerMode::Elapsed,
             visualization.clone(),
         );
 
         assert_eq!(state.visualization, visualization);
+    }
+
+    #[test]
+    fn main_render_state_formats_elapsed_and_remaining_time() {
+        let view_model = MainPlayerViewModel {
+            title: "Song".to_string(),
+            player_state: PlayerState::Playing,
+            volume: 100,
+            balance: 0,
+            shuffle: false,
+            repeat: false,
+            shaded: false,
+            bitrate_text: "128".to_string(),
+            frequency_text: "44".to_string(),
+            channels_text: "2".to_string(),
+        };
+        let state = main_render_state(
+            &view_model,
+            65_000,
+            Some(130_000),
+            false,
+            false,
+            None,
+            None,
+            None,
+            TimerMode::Elapsed,
+            VisualizationRenderState::default(),
+        );
+        assert_eq!(state.time_digits, [NumberDisplay::BLANK, 0, 1, 0, 5]);
+        assert_eq!(
+            (state.shaded_time_min, state.shaded_time_sec),
+            (" 01".to_string(), "05".to_string())
+        );
+
+        let state = main_render_state(
+            &view_model,
+            65_000,
+            Some(130_000),
+            false,
+            false,
+            None,
+            None,
+            None,
+            TimerMode::Remaining,
+            VisualizationRenderState::default(),
+        );
+        assert_eq!(state.time_digits, [NumberDisplay::DASH, 0, 1, 0, 5]);
+        assert_eq!(
+            (state.shaded_time_min, state.shaded_time_sec),
+            ("-01".to_string(), "05".to_string())
+        );
+    }
+
+    #[test]
+    fn main_render_state_blanks_time_when_stopped() {
+        let state = main_render_state(
+            &MainPlayerViewModel {
+                title: "Song".to_string(),
+                player_state: PlayerState::Stopped,
+                volume: 100,
+                balance: 0,
+                shuffle: false,
+                repeat: false,
+                shaded: false,
+                bitrate_text: "128".to_string(),
+                frequency_text: "44".to_string(),
+                channels_text: "2".to_string(),
+            },
+            65_000,
+            Some(130_000),
+            false,
+            false,
+            None,
+            None,
+            None,
+            TimerMode::Elapsed,
+            VisualizationRenderState::default(),
+        );
+        assert_eq!(state.time_digits, [NumberDisplay::BLANK; 5]);
+        assert_eq!(
+            (state.shaded_time_min, state.shaded_time_sec),
+            ("   ".to_string(), "  ".to_string())
+        );
     }
 
     #[test]

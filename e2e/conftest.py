@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -17,7 +17,7 @@ from typing import Any
 pytest: Any = import_module("pytest")
 
 control_socket: Any = import_module("control_socket")
-from gui import MainWindow
+from gui import MainWindow, parse_xdotool_int
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -220,38 +220,56 @@ def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
     yield from start_gtk_process(tmp_path)
 
 
+def generate_sine_track(path: Path, frequency: int, duration: float) -> Path:
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={frequency}:duration={duration}",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            str(path),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    if not path.is_file() or path.stat().st_size == 0:
+        raise AssertionError(f"ffmpeg did not create {path}")
+    return path
+
+
+def generate_sine_tracks(
+    tracks_dir: Path,
+    specs: Iterable[tuple[str, int, float]],
+    *,
+    skip_message: str = "ffmpeg is required to create E2E audio tracks",
+) -> list[Path]:
+    if not command_exists("ffmpeg"):
+        pytest.skip(skip_message)
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    return [
+        generate_sine_track(tracks_dir / filename, frequency, duration)
+        for filename, frequency, duration in specs
+    ]
+
+
 @pytest.fixture
 def generated_tracks(tmp_path: Path) -> list[Path]:
-    if not command_exists("ffmpeg"):
-        pytest.skip("ffmpeg is required to create E2E audio tracks")
-    tracks_dir = tmp_path / "tracks"
-    tracks_dir.mkdir(parents=True, exist_ok=True)
-    tracks: list[Path] = []
-    for index in range(18):
-        path = tracks_dir / f"xmms-e2e-track-{index:02}.wav"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                f"sine=frequency={440 + index * 20}:duration=2.0",
-                "-ac",
-                "2",
-                "-ar",
-                "44100",
-                str(path),
-            ],
-            check=True,
-        )
-        if not path.is_file() or path.stat().st_size == 0:
-            raise AssertionError(f"ffmpeg did not create {path}")
-        tracks.append(path)
-    return tracks
+    return generate_sine_tracks(
+        tmp_path / "tracks",
+        [
+            (f"xmms-e2e-track-{index:02}.wav", 440 + index * 20, 2.0)
+            for index in range(18)
+        ],
+    )
 
 
 @pytest.fixture
@@ -401,66 +419,3 @@ def test_output(request: Any) -> Iterator[TestOutput]:
 def e2e_screenshot_dir(test_output: TestOutput) -> Path:
     return test_output.directory
 
-
-def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["xdotool", *args],
-        text=True,
-        capture_output=True,
-        check=check,
-    )
-
-
-def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float = 10.0) -> str:
-    deadline = time.monotonic() + timeout
-    last_error = ""
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise AssertionError(f"application exited before window appeared: {process.returncode}")
-        result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-        if result.returncode == 0:
-            windows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            if windows:
-                return windows[0]
-        last_error = (result.stderr or result.stdout).strip()
-        time.sleep(0.1)
-    raise TimeoutError(f"window named {title!r} did not appear; last xdotool output: {last_error}")
-
-
-def parse_xdotool_int(value: str, source_line: str) -> int:
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise AssertionError(f"invalid integer value in xdotool geometry: {source_line!r}") from exc
-
-
-def window_geometry(window_id: str) -> dict[str, int]:
-    result = run_xdotool("getwindowgeometry", "--shell", window_id)
-    geometry: dict[str, int] = {}
-    for line in result.stdout.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key in {"X", "Y", "WIDTH", "HEIGHT", "SCREEN"}:
-            geometry[key] = parse_xdotool_int(value, line)
-    missing = {"X", "Y", "WIDTH", "HEIGHT"} - set(geometry)
-    if missing:
-        raise AssertionError(f"missing geometry keys {missing} from: {result.stdout!r}")
-    return geometry
-
-
-def click_window_coordinate(window_id: str, x: int, y: int) -> None:
-    # Some Xvfb setups have no window manager, so activation may fail; the click
-    # itself uses coordinates relative to the target window and is the important part.
-    run_xdotool("windowactivate", "--sync", window_id, check=False)
-    run_xdotool("mousemove", "--window", window_id, str(x), str(y), "click", "1")
-
-
-def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        return_code = process.poll()
-        if return_code is not None:
-            return return_code
-        time.sleep(0.05)
-    raise TimeoutError("application did not exit after coordinate click")

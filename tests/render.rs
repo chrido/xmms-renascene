@@ -1,7 +1,9 @@
+mod common;
+
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use cairo::{Context, Format, ImageSurface};
+use common::temp_dir;
 use xmms_renascene::render::{
     render_equalizer_state, render_main_player_reset, render_main_player_state,
     render_playlist_frame, render_playlist_rows, render_visualization, surface_from_xpm,
@@ -17,18 +19,66 @@ fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    std::env::temp_dir().join(format!(
-        "{prefix}-{}-{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    ))
+fn default_skin() -> DefaultSkin {
+    DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap()
+}
+
+fn render_with_skin<F>(skin: &DefaultSkin, width: i32, height: i32, render: F) -> ImageSurface
+where
+    F: FnOnce(&Context, &DefaultSkin),
+{
+    let surface = ImageSurface::create(Format::ARgb32, width, height).unwrap();
+    let cr = Context::new(&surface).unwrap();
+    render(&cr, skin);
+    drop(cr);
+    surface.flush();
+    surface
+}
+
+fn render_default_skin<F>(width: i32, height: i32, render: F) -> (DefaultSkin, ImageSurface)
+where
+    F: FnOnce(&Context, &DefaultSkin),
+{
+    let skin = default_skin();
+    let surface = render_with_skin(&skin, width, height, render);
+    (skin, surface)
+}
+
+fn pixel_u32(surface: &mut ImageSurface, x: usize, y: usize) -> u32 {
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = y * stride + x * 4;
+    u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
+}
+
+fn pixel_rgb(surface: &mut ImageSurface, x: usize, y: usize) -> [u8; 3] {
+    let stride = surface.stride() as usize;
+    let data = surface.data().unwrap();
+    let offset = y * stride + x * 4;
+    [data[offset + 2], data[offset + 1], data[offset]]
+}
+
+fn render_playlist_frame_surface<F>(
+    width: i32,
+    height: i32,
+    shaded: bool,
+    render_rows: F,
+) -> (DefaultSkin, ImageSurface)
+where
+    F: FnOnce(&Context, &DefaultSkin),
+{
+    render_default_skin(width, height, |cr, skin| {
+        assert!(render_playlist_frame(
+            cr, skin, true, shaded, width, height, None, None, None, None
+        )
+        .unwrap());
+        render_rows(cr, skin);
+    })
 }
 
 #[test]
 fn renders_main_default_skin_to_cairo_surface() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let skin = default_skin();
     let main = skin.get(SkinPixmapKind::Main).unwrap();
     let surface = surface_from_xpm(main).unwrap();
 
@@ -67,21 +117,18 @@ fn renders_reset_state_widgets_over_main_skin() {
 
 #[test]
 fn main_volume_slider_knob_is_vertically_centered_like_original() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface =
-        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_main_player_state(
-        &cr,
-        &skin,
-        &MainWindowRenderState {
-            volume_position: 0,
-            ..MainWindowRenderState::default()
-        }
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    let (skin, mut surface) =
+        render_default_skin(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, |cr, skin| {
+            assert!(render_main_player_state(
+                cr,
+                skin,
+                &MainWindowRenderState {
+                    volume_position: 0,
+                    ..MainWindowRenderState::default()
+                }
+            )
+            .unwrap());
+        });
 
     let volume = skin.get(SkinPixmapKind::Volume).unwrap();
     let (dx, dy, expected) = (0..14_usize)
@@ -93,38 +140,27 @@ fn main_volume_slider_knob_is_vertically_centered_like_original() {
                 .map(|pixel| (x, y, pixel))
         })
         .expect("default volume skin should contain visible slider knob pixels");
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
     let centered_y = 57 + 1;
-    let offset = (centered_y as usize + dy) * stride + (107 + dx) * 4;
-    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
-
-    assert_eq!(actual, expected);
+    assert_eq!(pixel_u32(&mut surface, 107 + dx, centered_y + dy), expected);
 }
 
 #[test]
 fn main_stream_info_text_is_drawn_at_original_positions() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
+    let (skin, mut surface) =
+        render_default_skin(MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, |cr, skin| {
+            assert!(render_main_player_state(
+                cr,
+                skin,
+                &MainWindowRenderState {
+                    bitrate_text: "192".to_string(),
+                    frequency_text: "44".to_string(),
+                    ..MainWindowRenderState::default()
+                }
+            )
+            .unwrap());
+        });
     let main = skin.get(SkinPixmapKind::Main).unwrap();
     let text = skin.get(SkinPixmapKind::Text).unwrap();
-    let mut surface =
-        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_main_player_state(
-        &cr,
-        &skin,
-        &MainWindowRenderState {
-            bitrate_text: "192".to_string(),
-            frequency_text: "44".to_string(),
-            ..MainWindowRenderState::default()
-        }
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
-
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
     for (dest_x, digit) in [(111_usize, 1_usize), (156_usize, 4_usize)] {
         let (dx, dy, expected) = (0..6_usize)
             .flat_map(|y| (0..5_usize).map(move |x| (x, y)))
@@ -134,17 +170,13 @@ fn main_stream_info_text_is_drawn_at_original_positions() {
                 (expected != background).then_some((x, y, expected))
             })
             .expect("default text skin should differ from the main background");
-        let offset = (43 + dy) * stride + (dest_x + dx) * 4;
-        let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
-
-        assert_eq!(actual, expected);
+        assert_eq!(pixel_u32(&mut surface, dest_x + dx, 43 + dy), expected);
     }
 }
 
 #[test]
 fn main_balance_slider_bar_uses_original_frame_offset() {
-    let tmp = unique_temp_dir("xmms-rs-balance-bar-offset");
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = temp_dir("xmms-rs-balance-bar-offset");
     let mut balance = image::RgbaImage::new(68, 433);
     for pixel in balance.pixels_mut() {
         *pixel = image::Rgba([0, 0, 0, 255]);
@@ -153,35 +185,24 @@ fn main_balance_slider_bar_uses_original_frame_offset() {
     balance.save(tmp.join("balance.png")).unwrap();
 
     let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
-    let mut surface =
-        ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_main_player_state(
-        &cr,
-        &skin,
-        &MainWindowRenderState {
-            balance_position: 0,
-            ..MainWindowRenderState::default()
-        }
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    let mut surface = render_with_skin(&skin, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, |cr, skin| {
+        assert!(render_main_player_state(
+            cr,
+            skin,
+            &MainWindowRenderState {
+                balance_position: 0,
+                ..MainWindowRenderState::default()
+            }
+        )
+        .unwrap());
+    });
 
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
-    let offset = 57 * stride + 177 * 4;
-    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
-
-    assert_eq!(actual, 0xff44bbdd);
-
-    std::fs::remove_dir_all(tmp).unwrap();
+    assert_eq!(pixel_u32(&mut surface, 177, 57), 0xff44bbdd);
 }
 
 #[test]
 fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
-    let tmp = unique_temp_dir("xmms-rs-eq-slider-align");
-    std::fs::create_dir_all(&tmp).unwrap();
+    let tmp = temp_dir("xmms-rs-eq-slider-align");
     let mut eqmain = image::RgbaImage::new(275, 315);
     for pixel in eqmain.pixels_mut() {
         *pixel = image::Rgba([0, 0, 0, 255]);
@@ -190,186 +211,126 @@ fn equalizer_vertical_slider_knob_is_horizontally_centered_like_original() {
     eqmain.save(tmp.join("eqmain.png")).unwrap();
 
     let skin = DefaultSkin::load_from_dir(&tmp).unwrap();
-    let mut surface = ImageSurface::create(
-        Format::ARgb32,
+    let mut surface = render_with_skin(
+        &skin,
         EQUALIZER_WINDOW_WIDTH,
         EQUALIZER_WINDOW_HEIGHT,
-    )
-    .unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_equalizer_state(
-        &cr,
-        &skin,
-        &EqualizerRenderState {
-            preamp_position: 0,
-            ..EqualizerRenderState::default()
-        }
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
-
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
-    let old_offset = 38 * stride + 21 * 4;
-    let centered_offset = 38 * stride + (21 + 1) * 4;
-    let old_pixel = u32::from_ne_bytes(data[old_offset..old_offset + 4].try_into().unwrap());
-    let centered_pixel = u32::from_ne_bytes(
-        data[centered_offset..centered_offset + 4]
-            .try_into()
-            .unwrap(),
+        |cr, skin| {
+            assert!(render_equalizer_state(
+                cr,
+                skin,
+                &EqualizerRenderState {
+                    preamp_position: 0,
+                    ..EqualizerRenderState::default()
+                }
+            )
+            .unwrap());
+        },
     );
 
-    assert_eq!(old_pixel, 0xff000000);
-    assert_eq!(centered_pixel, 0xffee1122);
-
-    std::fs::remove_dir_all(tmp).unwrap();
+    assert_eq!(pixel_u32(&mut surface, 21, 38), 0xff000000);
+    assert_eq!(pixel_u32(&mut surface, 22, 38), 0xffee1122);
 }
 
 #[test]
 fn renders_playlist_rows_with_selected_background() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(
-        Format::ARgb32,
+    let (skin, mut surface) = render_playlist_frame_surface(
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
-    )
-    .unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_playlist_frame(
-        &cr,
-        &skin,
-        true,
         false,
-        PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT,
-        None,
-        None,
-        None,
-        None
-    )
-    .unwrap());
-    assert!(render_playlist_rows(
-        &cr,
-        &skin,
-        &PlaylistRowsRenderState {
-            entries: vec![
-                PlaylistRowRenderEntry {
-                    title: "First".to_string(),
-                    length_ms: 61_000,
-                    selected: true,
-                    current: false,
+        |cr, skin| {
+            assert!(render_playlist_rows(
+                cr,
+                skin,
+                &PlaylistRowsRenderState {
+                    entries: vec![
+                        PlaylistRowRenderEntry {
+                            title: "First".to_string(),
+                            length_ms: 61_000,
+                            selected: true,
+                            current: false,
+                        },
+                        PlaylistRowRenderEntry {
+                            title: "Second".to_string(),
+                            length_ms: -1,
+                            selected: false,
+                            current: true,
+                        },
+                    ],
+                    scroll_offset: 0,
+                    scrollbar_dragging: false,
+                    search_query: Some("Beta".to_string()),
+                    show_numbers: true,
+                    font_family: "Helvetica".to_string(),
+                    width: PLAYLIST_DEFAULT_WIDTH,
+                    height: PLAYLIST_DEFAULT_HEIGHT,
                 },
-                PlaylistRowRenderEntry {
-                    title: "Second".to_string(),
-                    length_ms: -1,
-                    selected: false,
-                    current: true,
-                },
-            ],
-            scroll_offset: 0,
-            scrollbar_dragging: false,
-            search_query: Some("Beta".to_string()),
-            show_numbers: true,
-            font_family: "Helvetica".to_string(),
-            width: PLAYLIST_DEFAULT_WIDTH,
-            height: PLAYLIST_DEFAULT_HEIGHT,
+                RenderPass::Bitmap
+            )
+            .unwrap());
         },
-        RenderPass::Bitmap
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    );
 
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
-    let offset = 21 * stride + 150 * 4;
-    let selected = skin.playlist_colors().selected_bg;
-    assert_eq!(data[offset], selected[2]);
-    assert_eq!(data[offset + 1], selected[1]);
-    assert_eq!(data[offset + 2], selected[0]);
+    assert_eq!(
+        pixel_rgb(&mut surface, 150, 21),
+        skin.playlist_colors().selected_bg
+    );
 }
 
 #[test]
 fn playlist_search_overlay_stays_inside_row_area() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(
-        Format::ARgb32,
+    let (skin, mut surface) = render_playlist_frame_surface(
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
-    )
-    .unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_playlist_frame(
-        &cr,
-        &skin,
-        true,
         false,
-        PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT,
-        None,
-        None,
-        None,
-        None
-    )
-    .unwrap());
-    assert!(render_playlist_rows(
-        &cr,
-        &skin,
-        &PlaylistRowsRenderState {
-            entries: vec![],
-            scroll_offset: 0,
-            scrollbar_dragging: false,
-            search_query: Some("needle".to_string()),
-            show_numbers: true,
-            font_family: "Helvetica".to_string(),
-            width: PLAYLIST_DEFAULT_WIDTH,
-            height: PLAYLIST_DEFAULT_HEIGHT,
+        |cr, skin| {
+            assert!(render_playlist_rows(
+                cr,
+                skin,
+                &PlaylistRowsRenderState {
+                    entries: vec![],
+                    scroll_offset: 0,
+                    scrollbar_dragging: false,
+                    search_query: Some("needle".to_string()),
+                    show_numbers: true,
+                    font_family: "Helvetica".to_string(),
+                    width: PLAYLIST_DEFAULT_WIDTH,
+                    height: PLAYLIST_DEFAULT_HEIGHT,
+                },
+                RenderPass::Bitmap
+            )
+            .unwrap());
         },
-        RenderPass::Bitmap
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    );
 
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
     let colors = skin.playlist_colors();
     let y = (PLAYLIST_DEFAULT_HEIGHT - 48) as usize;
-    let color_at = |x: usize| {
-        let offset = y * stride + x * 4;
-        [data[offset + 2], data[offset + 1], data[offset]]
-    };
-
-    assert_eq!(color_at(20), colors.selected_bg);
-    assert_ne!(color_at(10), colors.selected_bg);
+    assert_eq!(pixel_rgb(&mut surface, 20, y), colors.selected_bg);
+    assert_ne!(pixel_rgb(&mut surface, 10, y), colors.selected_bg);
     assert_ne!(
-        color_at((PLAYLIST_DEFAULT_WIDTH - 18) as usize),
+        pixel_rgb(&mut surface, (PLAYLIST_DEFAULT_WIDTH - 18) as usize, y),
         colors.selected_bg
     );
 }
 
 #[test]
 fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
     let width = PLAYLIST_DEFAULT_WIDTH + 14;
-    let mut surface = ImageSurface::create(Format::ARgb32, width, 14).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_playlist_frame(
-        &cr,
-        &skin,
-        true,
-        true,
-        width,
-        PLAYLIST_DEFAULT_HEIGHT,
-        Some(""),
-        None,
-        None,
-        None
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    let mut surface = render_with_skin(&default_skin(), width, 14, |cr, skin| {
+        assert!(render_playlist_frame(
+            cr,
+            skin,
+            true,
+            true,
+            width,
+            PLAYLIST_DEFAULT_HEIGHT,
+            Some(""),
+            None,
+            None,
+            None
+        )
+        .unwrap());
+    });
 
     let stride = surface.stride() as usize;
     let data = surface.data().unwrap();
@@ -388,55 +349,42 @@ fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
 
 #[test]
 fn equalizer_graph_uses_skin_color_ramp() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(
-        Format::ARgb32,
+    let (skin, mut surface) = render_default_skin(
         EQUALIZER_WINDOW_WIDTH,
         EQUALIZER_WINDOW_HEIGHT,
-    )
-    .unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_equalizer_state(&cr, &skin, &EqualizerRenderState::default()).unwrap());
-    drop(cr);
-    surface.flush();
+        |cr, skin| {
+            assert!(render_equalizer_state(cr, skin, &EqualizerRenderState::default()).unwrap());
+        },
+    );
 
     let expected = skin
         .get(SkinPixmapKind::EqMain)
         .unwrap()
         .pixel_argb(115, 303)
         .unwrap();
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
-    let offset = 26 * stride + 88 * 4;
-    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
-
+    let actual = pixel_u32(&mut surface, 88, 26);
     assert_eq!(actual & 0x00ff_ffff, expected & 0x00ff_ffff);
     assert_ne!(actual & 0x00ff_ffff, 0x0000_ff00);
 }
 
 #[test]
 fn shaded_equalizer_draws_volume_and_balance_slider_handles() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface =
-        ImageSurface::create(Format::ARgb32, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_equalizer_state(
-        &cr,
-        &skin,
-        &EqualizerRenderState {
-            shaded: true,
-            volume_position: 45,
-            balance_position: 30,
-            ..EqualizerRenderState::default()
-        }
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    let (skin, mut surface) =
+        render_default_skin(EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, |cr, skin| {
+            assert!(render_equalizer_state(
+                cr,
+                skin,
+                &EqualizerRenderState {
+                    shaded: true,
+                    volume_position: 45,
+                    balance_position: 30,
+                    ..EqualizerRenderState::default()
+                }
+            )
+            .unwrap());
+        });
 
     let eq_ex = skin.get(SkinPixmapKind::EqEx).unwrap();
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
     for (source_x, dest_x) in [(4_usize, 61_usize + 45), (17_usize, 164_usize + 30)] {
         let (dx, dy, expected) = (0..7_usize)
             .flat_map(|y| (0..3_usize).map(move |x| (x, y)))
@@ -447,32 +395,27 @@ fn shaded_equalizer_draws_volume_and_balance_slider_handles() {
                     .map(|pixel| (x, y, pixel))
             })
             .expect("default eq_ex skin should contain visible shaded slider knob pixels");
-        let offset = (4 + dy) * stride + (dest_x + dx) * 4;
-        let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
-        assert_eq!(actual, expected);
+        assert_eq!(pixel_u32(&mut surface, dest_x + dx, 4 + dy), expected);
     }
 }
 
 #[test]
 fn shaded_playlist_title_uses_skin_bitmap_text() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(Format::ARgb32, PLAYLIST_DEFAULT_WIDTH, 14).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_playlist_frame(
-        &cr,
-        &skin,
-        true,
-        true,
-        PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT,
-        Some("A"),
-        None,
-        None,
-        None
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
+    let (skin, mut surface) = render_default_skin(PLAYLIST_DEFAULT_WIDTH, 14, |cr, skin| {
+        assert!(render_playlist_frame(
+            cr,
+            skin,
+            true,
+            true,
+            PLAYLIST_DEFAULT_WIDTH,
+            PLAYLIST_DEFAULT_HEIGHT,
+            Some("A"),
+            None,
+            None,
+            None
+        )
+        .unwrap());
+    });
 
     let text = skin.get(SkinPixmapKind::Text).unwrap();
     let expected = (0..6_usize)
@@ -483,56 +426,42 @@ fn shaded_playlist_title_uses_skin_bitmap_text() {
                 .map(|pixel| (x, y, pixel))
         })
         .expect("default text skin should contain visible A pixels");
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
-    let offset = (4 + expected.1) * stride + (4 + expected.0) * 4;
-    let actual = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
-
-    assert_eq!(actual, expected.2);
+    assert_eq!(
+        pixel_u32(&mut surface, 4 + expected.0, 4 + expected.1),
+        expected.2
+    );
 }
 
 #[test]
 fn playlist_footer_info_uses_original_textbox_position() {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(
-        Format::ARgb32,
+    let mut surface = render_with_skin(
+        &default_skin(),
         PLAYLIST_DEFAULT_WIDTH,
         PLAYLIST_DEFAULT_HEIGHT,
-    )
-    .unwrap();
-    let cr = Context::new(&surface).unwrap();
-    assert!(render_playlist_frame(
-        &cr,
-        &skin,
-        true,
-        false,
-        PLAYLIST_DEFAULT_WIDTH,
-        PLAYLIST_DEFAULT_HEIGHT,
-        None,
-        Some("1:23/4:56"),
-        Some(" 01"),
-        Some("23")
-    )
-    .unwrap());
-    drop(cr);
-    surface.flush();
-
-    let stride = surface.stride() as usize;
-    let data = surface.data().unwrap();
+        |cr, skin| {
+            assert!(render_playlist_frame(
+                cr,
+                skin,
+                true,
+                false,
+                PLAYLIST_DEFAULT_WIDTH,
+                PLAYLIST_DEFAULT_HEIGHT,
+                None,
+                Some("1:23/4:56"),
+                Some(" 01"),
+                Some("23")
+            )
+            .unwrap());
+        },
+    );
     let old_y = PLAYLIST_DEFAULT_HEIGHT as usize - 9;
     let new_y = PLAYLIST_DEFAULT_HEIGHT as usize - 28;
     let x = PLAYLIST_DEFAULT_WIDTH as usize - 143;
     let old_row_pixels = (0..85)
-        .map(|dx| {
-            let offset = old_y * stride + (x + dx) * 4;
-            u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
-        })
+        .map(|dx| pixel_u32(&mut surface, x + dx, old_y))
         .collect::<Vec<_>>();
     let new_row_pixels = (0..85)
-        .map(|dx| {
-            let offset = new_y * stride + (x + dx) * 4;
-            u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap())
-        })
+        .map(|dx| pixel_u32(&mut surface, x + dx, new_y))
         .collect::<Vec<_>>();
 
     assert_ne!(old_row_pixels, new_row_pixels);
@@ -542,12 +471,9 @@ fn playlist_footer_info_uses_original_textbox_position() {
 }
 
 fn rendered_visualization_bytes(state: VisualizationRenderState) -> Vec<u8> {
-    let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
-    let mut surface = ImageSurface::create(Format::ARgb32, 76, 16).unwrap();
-    let cr = Context::new(&surface).unwrap();
-    render_visualization(&cr, &skin, 0, 0, 76, &state).unwrap();
-    drop(cr);
-    surface.flush();
+    let mut surface = render_with_skin(&default_skin(), 76, 16, |cr, skin| {
+        render_visualization(cr, skin, 0, 0, 76, &state).unwrap();
+    });
     let bytes = surface.data().unwrap().to_vec();
     bytes
 }

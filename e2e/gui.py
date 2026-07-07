@@ -12,6 +12,8 @@ from pathlib import Path
 
 
 BASE_MAIN_WIDTH = 275
+MAIN_PLAYER_BASE_HEIGHT = 116
+EQUALIZER_WINDOW_HEIGHT = 116
 
 
 class MainButton(str, Enum):
@@ -112,6 +114,10 @@ class WindowGeometry:
     height: int
 
 
+PANEL_SHADE_RECT = SkinRect(254, 3, 9, 9)
+PANEL_CLOSE_RECT = SkinRect(264, 3, 9, 9)
+
+
 MAIN_BUTTON_RECTS: dict[MainButton, SkinRect] = {
     MainButton.MENU: SkinRect(6, 3, 9, 9),
     MainButton.MINIMIZE: SkinRect(244, 3, 9, 9),
@@ -175,6 +181,10 @@ PLAYLIST_MENU_RECTS: dict[PlaylistMenuButton, SkinRect] = {
     PlaylistMenuButton.MISC: SkinRect(99, PLAYLIST_DEFAULT_HEIGHT - 29, 25, 18),
     PlaylistMenuButton.LIST: SkinRect(PLAYLIST_DEFAULT_WIDTH - 46, PLAYLIST_DEFAULT_HEIGHT - 29, 23, 18),
 }
+
+
+def offset_rect(rect: SkinRect, y_offset: int) -> SkinRect:
+    return SkinRect(rect.x, rect.y + y_offset, rect.width, rect.height)
 
 
 def equalizer_slider_rect(slider: EqualizerSlider) -> SkinRect:
@@ -251,6 +261,13 @@ def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float
     return wait_for_visible_window(title, timeout=timeout, process=process)
 
 
+def visible_windows(title: str) -> list[str]:
+    result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def wait_for_visible_window(
     title: str,
     *,
@@ -262,11 +279,10 @@ def wait_for_visible_window(
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
             raise AssertionError(f"application exited before window appeared: {process.returncode}")
+        windows = visible_windows(title)
+        if windows:
+            return windows[0]
         result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-        if result.returncode == 0:
-            windows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            if windows:
-                return windows[0]
         last_error = (result.stderr or result.stdout).strip()
         time.sleep(0.1)
     raise TimeoutError(f"window named {title!r} did not appear; last xdotool output: {last_error}")
@@ -275,9 +291,7 @@ def wait_for_visible_window(
 def wait_for_no_visible_window(title: str, *, timeout: float = 10.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-        windows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        if result.returncode != 0 or not windows:
+        if not visible_windows(title):
             return
         time.sleep(0.1)
     raise TimeoutError(f"window named {title!r} remained visible")
@@ -658,6 +672,35 @@ class MainWindow:
     def close_window(self, window_id: str) -> None:
         run_xdotool("windowclose", window_id)
         wait_for_no_visible_window("Preferences", timeout=3.0)
+
+
+def open_panel(
+    main_window: MainWindow,
+    toggle: MainToggleButton,
+    title: str,
+    *,
+    timeout: float = 5.0,
+    settle_delay: float = 0.25,
+    on_open: Callable[[], object] | None = None,
+) -> tuple[str, int]:
+    main_window.focus_main_window()
+    before_height = main_window.geometry().height
+    main_window.click_main_toggle(toggle)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        windows = visible_windows(title)
+        if windows:
+            time.sleep(settle_delay)
+            if on_open is not None:
+                on_open()
+            return windows[0], 0
+        if main_window.geometry().height > before_height:
+            time.sleep(settle_delay)
+            if on_open is not None:
+                on_open()
+            return main_window.window_id, MAIN_PLAYER_BASE_HEIGHT
+        time.sleep(0.1)
+    raise AssertionError(f"panel {title!r} did not open")
 
 
 def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:
