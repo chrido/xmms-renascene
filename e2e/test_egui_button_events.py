@@ -16,9 +16,8 @@ from typing import Any
 
 from conftest import (
     EGUI_FRONTEND,
-    REPO_ROOT,
     assert_app_log_contains,
-    command_exists,
+    generate_sine_tracks,
     start_gui_process,
     wait_for_main_window_with_log,
 )
@@ -105,36 +104,13 @@ PLAYLIST_FOOTER_EVENTS = [
 @pytest.fixture(scope="module")
 def egui_event_tracks(tmp_path_factory: Any) -> list[Path]:
     """Small generated playlist used by per-button playback event tests."""
-    if not command_exists("ffmpeg"):
-        pytest.skip("ffmpeg is required to create E2E audio tracks")
-    tracks_dir = tmp_path_factory.mktemp("egui-button-event-tracks")
-    tracks: list[Path] = []
-    for index in range(3):
-        path = tracks_dir / f"egui-button-event-track-{index:02}.wav"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                f"sine=frequency={523 + index * 41}:duration=1.0",
-                "-ac",
-                "2",
-                "-ar",
-                "44100",
-                str(path),
-            ],
-            cwd=REPO_ROOT,
-            check=True,
-        )
-        if not path.is_file() or path.stat().st_size == 0:
-            raise AssertionError(f"ffmpeg did not create {path}")
-        tracks.append(path)
-    return tracks
+    return generate_sine_tracks(
+        tmp_path_factory.mktemp("egui-button-event-tracks"),
+        [
+            (f"egui-button-event-track-{index:02}.wav", 523 + index * 41, 1.0)
+            for index in range(3)
+        ],
+    )
 
 
 @pytest.fixture

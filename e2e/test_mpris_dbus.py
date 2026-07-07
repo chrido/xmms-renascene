@@ -20,9 +20,9 @@ pytestmark = pytest.mark.no_xdotool
 
 from conftest import (  # noqa: E402 - import after optional dbus-next dependency check.
     GUI_FRONTENDS,
-    REPO_ROOT,
     GuiFrontend,
     command_exists,
+    generate_sine_tracks,
     read_process_log,
     start_gui_process,
 )
@@ -77,37 +77,13 @@ def dbus_session() -> Iterator[DbusSession]:
 
 @pytest.fixture
 def mpris_tracks(tmp_path: Path) -> dict[str, Path]:
-    if not command_exists("ffmpeg"):
-        pytest.skip("ffmpeg is required to create MPRIS E2E audio tracks")
-    tracks_dir = tmp_path / "mpris-tracks"
-    tracks_dir.mkdir(parents=True, exist_ok=True)
-    tracks: dict[str, Path] = {}
-    for index, name in enumerate(["one", "two", "opened"]):
-        path = tracks_dir / f"{name}.wav"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                f"sine=frequency={440 + index * 110}:duration=4.0",
-                "-ac",
-                "2",
-                "-ar",
-                "44100",
-                str(path),
-            ],
-            cwd=REPO_ROOT,
-            check=True,
-        )
-        if not path.is_file() or path.stat().st_size == 0:
-            raise AssertionError(f"ffmpeg did not create {path}")
-        tracks[name] = path
-    return tracks
+    names = ["one", "two", "opened"]
+    tracks = generate_sine_tracks(
+        tmp_path / "mpris-tracks",
+        [(f"{name}.wav", 440 + index * 110, 4.0) for index, name in enumerate(names)],
+        skip_message="ffmpeg is required to create MPRIS E2E audio tracks",
+    )
+    return dict(zip(names, tracks, strict=True))
 
 
 @contextlib.contextmanager
@@ -192,10 +168,10 @@ def test_mpris_introspection_and_initial_properties(
 
                 assert await client.get_player_property("PlaybackStatus") == "Stopped"
                 assert await client.get_player_property("Rate") == 1.0
-                assert await client.get_player_property("CanControl") is True
-                assert await client.get_player_property("CanPlay") is True
-                assert await client.get_player_property("CanPause") is True
-                assert await client.get_player_property("CanSeek") is True
+                assert await client.get_player_property("CanControl")
+                assert await client.get_player_property("CanPlay")
+                assert await client.get_player_property("CanPause")
+                assert await client.get_player_property("CanSeek")
 
                 metadata = await client.get_player_property("Metadata")
                 assert variant_value(metadata["mpris:trackid"]) == "/org/xmms/Track/0"

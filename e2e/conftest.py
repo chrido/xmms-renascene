@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
@@ -220,38 +220,56 @@ def gtk_app(tmp_path: Path) -> Iterator[subprocess.Popen[bytes]]:
     yield from start_gtk_process(tmp_path)
 
 
+def generate_sine_track(path: Path, frequency: int, duration: float) -> Path:
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency={frequency}:duration={duration}",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            str(path),
+        ],
+        cwd=REPO_ROOT,
+        check=True,
+    )
+    if not path.is_file() or path.stat().st_size == 0:
+        raise AssertionError(f"ffmpeg did not create {path}")
+    return path
+
+
+def generate_sine_tracks(
+    tracks_dir: Path,
+    specs: Iterable[tuple[str, int, float]],
+    *,
+    skip_message: str = "ffmpeg is required to create E2E audio tracks",
+) -> list[Path]:
+    if not command_exists("ffmpeg"):
+        pytest.skip(skip_message)
+    tracks_dir.mkdir(parents=True, exist_ok=True)
+    return [
+        generate_sine_track(tracks_dir / filename, frequency, duration)
+        for filename, frequency, duration in specs
+    ]
+
+
 @pytest.fixture
 def generated_tracks(tmp_path: Path) -> list[Path]:
-    if not command_exists("ffmpeg"):
-        pytest.skip("ffmpeg is required to create E2E audio tracks")
-    tracks_dir = tmp_path / "tracks"
-    tracks_dir.mkdir(parents=True, exist_ok=True)
-    tracks: list[Path] = []
-    for index in range(18):
-        path = tracks_dir / f"xmms-e2e-track-{index:02}.wav"
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-f",
-                "lavfi",
-                "-i",
-                f"sine=frequency={440 + index * 20}:duration=2.0",
-                "-ac",
-                "2",
-                "-ar",
-                "44100",
-                str(path),
-            ],
-            check=True,
-        )
-        if not path.is_file() or path.stat().st_size == 0:
-            raise AssertionError(f"ffmpeg did not create {path}")
-        tracks.append(path)
-    return tracks
+    return generate_sine_tracks(
+        tmp_path / "tracks",
+        [
+            (f"xmms-e2e-track-{index:02}.wav", 440 + index * 20, 2.0)
+            for index in range(18)
+        ],
+    )
 
 
 @pytest.fixture
