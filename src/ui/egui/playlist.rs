@@ -218,8 +218,10 @@ fn add_playlist_resize_handle(
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
     }
     if response.drag_started() {
-        let pointer = response
-            .interact_pointer_pos()
+        let pointer = ui
+            .ctx()
+            .input(|input| input.pointer.press_origin())
+            .or_else(|| response.interact_pointer_pos())
             .unwrap_or(rect.right_bottom());
         let local_y = ((pointer.y - base_rect.top()) / app.scale_factor).round() as i32;
         app.playlist_resize_start = Some(app.playlist_height - local_y);

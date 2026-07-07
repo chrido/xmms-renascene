@@ -1500,23 +1500,46 @@ fn show_detached_snapshot(
     update_detached_playlist_menu_interaction(ui, shared, snapshot, rect);
     if let Some(pos) = response.interact_pointer_pos() {
         if response.drag_started() && detached_playlist_resize_region(snapshot, rect, pos) {
-            let local_x = ((pos.x - rect.left()) / snapshot.scale_factor).round() as i32;
-            let local_y = ((pos.y - rect.top()) / snapshot.scale_factor).round() as i32;
+            // Use the press origin (not the post-threshold pointer position) so the
+            // drag-start offset does not silently absorb the initial threshold motion.
+            let origin = ui
+                .ctx()
+                .input(|input| input.pointer.press_origin())
+                .unwrap_or(pos);
+            let local_x = ((origin.x - rect.left()) / snapshot.scale_factor).round() as i32;
+            let local_y = ((origin.y - rect.top()) / snapshot.scale_factor).round() as i32;
             let mut state = shared.lock().expect("detached viewport state poisoned");
             state.playlist_resize_start =
                 Some((snapshot.width - local_x, snapshot.height - local_y));
             ui.ctx().request_repaint();
             return;
         }
-        let primary_pressed = response.is_pointer_button_down_on()
-            && ui
-                .ctx()
-                .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary));
-        if primary_pressed && detached_panel_titlebar_drag_region(snapshot, rect, pos) {
+    }
+    // Start a window drag when the press begins on the titlebar (outside the
+    // shade/close buttons). Use the raw press without requiring the response's
+    // hover-established interaction flag: when a WM-less X server delivers a warp
+    // and press in the same frame, egui may not attribute the press to this
+    // widget, but the primary button-pressed edge and press origin are still set.
+    let press_origin = ui.ctx().input(|input| {
+        input
+            .pointer
+            .button_pressed(egui::PointerButton::Primary)
+            .then(|| input.pointer.press_origin())
+            .flatten()
+    });
+    if let Some(pos) = press_origin {
+        if detached_panel_titlebar_drag_region(snapshot, rect, pos) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             return;
         }
-        if primary_pressed {
+    }
+    // Dispatch skinned button / row activations on the click release rather than
+    // on the press edge. In a WM-less X server the synthetic press+release can be
+    // coalesced into a single egui frame, so `is_pointer_button_down_on()` is
+    // already false while the press edge fires; keying off `clicked()` (which is
+    // still reported in that case) makes detached clicks reliable.
+    if response.clicked() || response.double_clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
             handle_detached_panel_click(shared, snapshot, rect, pos);
             let ctrl = ui
                 .ctx()

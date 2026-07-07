@@ -222,8 +222,22 @@ def click_detached_skin_rect_without_activation_click(
     time.sleep(0.1)
     main_window.focus_main_window()
     run_xdotool("windowfocus", detached_window_id, check=False)
+    # focus_main_window() raises the main window to the top of the (WM-less) X11
+    # stack, and the main window still overlaps the moved detached window. Raise
+    # the detached target back above it so the coordinate click lands on the
+    # detached window rather than the overlapping main window. Raising only
+    # changes stacking order; it is not a pointer activation click.
+    run_xdotool("windowraise", detached_window_id, check=False)
+    time.sleep(0.1)
     geometry = window_geometry(detached_window_id)
-    run_xdotool("mousemove", str(geometry.x + x), str(geometry.y + y), "mousedown", "1")
+    # Move the pointer to the target first (as its own event) and let the egui
+    # viewport process the CursorMoved / establish hover before the press. When
+    # the move and the button press are sent in a single xdotool invocation the
+    # press can be processed before the hover position updates, so egui does not
+    # attribute the press to the hovered widget and the click is dropped.
+    run_xdotool("mousemove", str(geometry.x + x), str(geometry.y + y))
+    time.sleep(0.1)
+    run_xdotool("mousedown", "1")
     time.sleep(0.05)
     run_xdotool("mouseup", "1")
 
