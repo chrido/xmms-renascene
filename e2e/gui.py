@@ -180,7 +180,10 @@ PLAYLIST_MENU_RECTS: dict[PlaylistMenuButton, SkinRect] = {
 def equalizer_slider_rect(slider: EqualizerSlider) -> SkinRect:
     if slider is EqualizerSlider.PREAMP:
         return SkinRect(21, 38, 14, 63)
-    band = int(slider.value.split("_", 1)[1])
+    try:
+        band = int(slider.value.split("_", 1)[1])
+    except (IndexError, ValueError) as exc:
+        raise AssertionError(f"invalid equalizer slider value: {slider.value!r}") from exc
     return SkinRect(78 + band * 18, 38, 14, 63)
 
 
@@ -367,6 +370,45 @@ def drag_playlist_scrollbar_to_bottom(window_id: str, base_y: int = 0) -> None:
         time.sleep(0.05)
         run_xdotool("mousemove", "--window", window_id, str(x), str(end_y))
         time.sleep(0.05)
+    finally:
+        run_xdotool("mouseup", "1", check=False)
+
+
+def drag_playlist_resize_handle(
+    window_id: str,
+    *,
+    base_y: int = 0,
+    delta_x: int = 0,
+    delta_y: int = 58,
+    base_width: int = PLAYLIST_DEFAULT_WIDTH,
+) -> None:
+    geometry = window_geometry(window_id)
+    scale = geometry.width / base_width
+    start_x = round((PLAYLIST_DEFAULT_WIDTH - 5) * scale)
+    start_y = round((base_y + PLAYLIST_DEFAULT_HEIGHT - 5) * scale)
+    run_xdotool("windowactivate", "--sync", window_id, check=False)
+    run_xdotool("mousemove", "--window", window_id, str(start_x), str(start_y))
+    run_xdotool("mousedown", "1")
+    try:
+        time.sleep(0.1)
+        step_count = 8
+        total_x = round(delta_x * scale)
+        total_y = round(delta_y * scale)
+        previous_x = 0
+        previous_y = 0
+        for step in range(1, step_count + 1):
+            next_x = round(total_x * step / step_count)
+            next_y = round(total_y * step / step_count)
+            run_xdotool(
+                "mousemove_relative",
+                "--",
+                str(next_x - previous_x),
+                str(next_y - previous_y),
+            )
+            previous_x = next_x
+            previous_y = next_y
+            time.sleep(0.05)
+        time.sleep(0.2)
     finally:
         run_xdotool("mouseup", "1", check=False)
 

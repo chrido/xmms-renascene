@@ -533,8 +533,11 @@ impl AppController {
     }
 
     pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> Vec<AppEffect> {
-        self.state.player.apply_playback_event(&event);
-        vec![AppEffect::QueueRender(RenderTarget::All)]
+        if self.state.player.apply_playback_event(&event) {
+            vec![AppEffect::QueueRender(RenderTarget::All)]
+        } else {
+            Vec::new()
+        }
     }
 
     pub fn handle_playlist_eof(&mut self) -> Vec<AppEffect> {

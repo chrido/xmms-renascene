@@ -6,16 +6,20 @@ use cairo::{Context, Format, ImageSurface};
 
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
-    balance_to_eq_shaded_position, balance_to_position, volume_to_eq_shaded_position,
+    balance_to_eq_shaded_position, balance_to_position, ellipsize_chars, format_duration,
+    formatted_current_title as shared_formatted_current_title, formatted_playlist_entry_title,
+    playlist_footer_info as shared_playlist_footer_info,
+    playlist_rows_render_state as shared_playlist_rows_render_state, volume_to_eq_shaded_position,
     volume_to_position,
 };
 use crate::app_state::AppState;
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, render_equalizer_state,
     render_main_player_state, render_playlist_frame, render_playlist_rows, DockedPanelState,
-    EqualizerRenderState, MainWindowRenderState, PlaylistRowsRenderState, RenderPass,
-    PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
+    EqualizerRenderState, MainWindowRenderState, RenderPass, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH,
 };
+use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
 
 use super::skin_texture::cairo_surface_to_color_image;
@@ -71,11 +75,11 @@ fn screenshot_state(
         main_shaded: app_state.config.main_shaded,
         equalizer_visible: app_state.config.equalizer_visible,
         equalizer_detached: app_state.config.equalizer_detached,
-        equalizer_focused: true,
+        equalizer_focused: false,
         equalizer_shaded: app_state.config.equalizer_shaded,
         playlist_visible: app_state.config.playlist_visible,
         playlist_detached: app_state.config.playlist_detached,
-        playlist_focused: true,
+        playlist_focused: false,
         playlist_shaded: app_state.config.playlist_shaded,
         playlist_width,
         playlist_height,
@@ -113,10 +117,21 @@ fn render_docked_screenshot_pass(
             &MainWindowRenderState {
                 focused: docked_state.main_focused,
                 shaded: docked_state.main_shaded,
+                title: screenshot_current_title(app_state),
+                bitrate_text: screenshot_bitrate_text(app_state),
+                frequency_text: screenshot_frequency_text(app_state),
+                play_status: match app_state.player.state() {
+                    crate::player::PlayerState::Playing => PlayStatusValue::Playing,
+                    crate::player::PlayerState::Paused => PlayStatusValue::Paused,
+                    crate::player::PlayerState::Stopped => PlayStatusValue::Stopped,
+                },
+                channels: app_state.player.channels(),
                 volume_position: volume_to_position(app_state.player.volume()),
                 balance_position: balance_to_position(app_state.player.balance()),
                 equalizer_selected: docked_state.equalizer_visible,
                 playlist_selected: docked_state.playlist_visible,
+                shuffle_selected: app_state.playlist.shuffle(),
+                repeat_selected: app_state.playlist.repeat(),
                 ..MainWindowRenderState::default()
             },
         )?;
@@ -151,6 +166,10 @@ fn render_docked_screenshot_pass(
         cr.save()?;
         cr.translate(0.0, f64::from(y));
         if pass.is_bitmap() {
+            let shaded_info =
+                screenshot_shaded_playlist_info(app_state, docked_state.playlist_width);
+            let footer_info = shared_playlist_footer_info(app_state);
+            let (footer_min, footer_sec) = screenshot_playlist_footer_time_parts(app_state);
             rendered |= render_playlist_frame(
                 cr,
                 skin,
@@ -158,44 +177,93 @@ fn render_docked_screenshot_pass(
                 docked_state.playlist_shaded,
                 docked_state.playlist_width,
                 docked_state.playlist_height,
-                None,
-                None,
-                None,
-                None,
+                Some(&shaded_info),
+                Some(&footer_info),
+                Some(&footer_min),
+                Some(&footer_sec),
             )?;
         }
         if !docked_state.playlist_shaded {
-            rendered |= render_playlist_rows(
-                cr,
-                skin,
-                &PlaylistRowsRenderState {
-                    entries: app_state
-                        .playlist
-                        .entries()
-                        .iter()
-                        .enumerate()
-                        .map(|(index, entry)| crate::render::PlaylistRowRenderEntry {
-                            title: entry.title.clone(),
-                            length_ms: entry.length_ms,
-                            selected: entry.selected,
-                            current: app_state.playlist.position() == Some(index),
-                        })
-                        .collect(),
-                    scroll_offset: 0,
-                    scrollbar_dragging: false,
-                    search_query: None,
-                    show_numbers: app_state.config.show_numbers_in_pl,
-                    font_family: app_state.config.playlist_font.clone(),
-                    width: docked_state.playlist_width,
-                    height: docked_state.playlist_height,
-                },
-                pass,
-            )?;
+            let rows = shared_playlist_rows_render_state(
+                app_state,
+                0,
+                false,
+                None,
+                docked_state.playlist_width,
+                docked_state.playlist_height,
+            );
+            rendered |= render_playlist_rows(cr, skin, &rows, pass)?;
         }
         cr.restore()?;
     }
 
     Ok(rendered)
+}
+
+fn screenshot_current_title(app_state: &AppState) -> String {
+    shared_formatted_current_title(app_state)
+}
+
+fn screenshot_bitrate_text(app_state: &AppState) -> String {
+    let bitrate = app_state.player.bitrate();
+    if bitrate <= 0 {
+        return "   ".to_string();
+    }
+    if bitrate < 1000 {
+        format!("{bitrate:>3}")
+    } else {
+        format!("{:>2}H", bitrate / 100)
+    }
+}
+
+fn screenshot_frequency_text(app_state: &AppState) -> String {
+    let frequency = app_state.player.frequency();
+    if frequency <= 0 {
+        return "  ".to_string();
+    }
+    let khz = if frequency >= 1000 {
+        (frequency + 500) / 1000
+    } else {
+        frequency
+    };
+    format!("{khz:>2}")
+}
+
+fn screenshot_playlist_footer_time_parts(app_state: &AppState) -> (String, String) {
+    if app_state.player.state() == crate::player::PlayerState::Stopped {
+        return ("   ".to_string(), "  ".to_string());
+    }
+    let total_seconds = app_state.config.playback_position_ms.max(0) / 1_000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    (format!("{minutes:>3}"), format!("{seconds:02}"))
+}
+
+fn screenshot_shaded_playlist_info(app_state: &AppState, width: i32) -> String {
+    let Some(position) = app_state.playlist.position() else {
+        return String::new();
+    };
+    let Some(entry) = app_state.playlist.entries().get(position) else {
+        return String::new();
+    };
+
+    let title = formatted_playlist_entry_title(app_state, entry);
+    let prefix = if app_state.config.show_numbers_in_pl {
+        format!("{}. ", position + 1)
+    } else {
+        String::new()
+    };
+    let suffix = if entry.length_ms >= 0 {
+        format!(" {}", format_duration(entry.length_ms))
+    } else {
+        String::new()
+    };
+    let max_len = ((width - 35) / 5)
+        .saturating_sub(prefix.len() as i32)
+        .saturating_sub(suffix.len() as i32)
+        .max(0) as usize;
+    let title = ellipsize_chars(&title, max_len);
+    format!("{prefix}{title:<max_len$}{suffix}")
 }
 
 #[cfg(test)]

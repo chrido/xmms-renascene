@@ -518,20 +518,32 @@ impl Player {
         self.vis_data_valid
     }
 
-    pub fn apply_playback_event(&mut self, event: &PlaybackEvent) {
+    pub fn apply_playback_event(&mut self, event: &PlaybackEvent) -> bool {
         match event {
             PlaybackEvent::Tags(tags) => {
+                let before = (self.bitrate, self.frequency, self.channels);
                 self.set_stream_info(tags.bitrate, None, None);
+                before != (self.bitrate, self.frequency, self.channels)
             }
             PlaybackEvent::StreamInfo(info) => {
+                let before = (self.bitrate, self.frequency, self.channels);
                 self.set_stream_info(info.bitrate, info.frequency, info.channels);
+                before != (self.bitrate, self.frequency, self.channels)
             }
-            PlaybackEvent::Spectrum(data) => self.set_visualization_data(*data),
-            PlaybackEvent::EndOfStream | PlaybackEvent::Error(_) => self.stop(),
+            PlaybackEvent::Spectrum(data) => {
+                self.set_visualization_data(*data);
+                true
+            }
+            PlaybackEvent::EndOfStream | PlaybackEvent::Error(_) => {
+                self.stop();
+                true
+            }
             PlaybackEvent::DurationChanged(duration) => {
+                let changed = self.duration_ms != *duration;
                 self.duration_ms = *duration;
+                changed
             }
-            PlaybackEvent::AsyncDone => {}
+            PlaybackEvent::AsyncDone => false,
         }
     }
 }

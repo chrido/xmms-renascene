@@ -1,6 +1,7 @@
 //! egui main menu and lightweight prompt/dialog windows.
 
 use crate::app::command::{PlaylistCommand, UiCommand};
+use crate::app::view_model::parse_time_ms;
 
 use super::app::EguiFrontendState;
 
@@ -30,46 +31,66 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
     if !app.main_menu_open {
         return;
     }
-    let mut open = app.main_menu_open;
+    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        app.dispatch(UiCommand::SetMainMenuVisible(false));
+        return;
+    }
+
     let mut close_after_click = false;
-    egui::Window::new("XMMS Menu")
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_pos(egui::pos2(0.0, 16.0 * app.scale_factor))
+    let dropdown_pos = egui::pos2(6.0 * app.scale_factor, 15.0 * app.scale_factor);
+    let response = egui::Area::new(egui::Id::new("xmms-egui-main-menu-dropdown"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(dropdown_pos)
+        .constrain(false)
         .show(ctx, |ui| {
-            ui.set_min_width(180.0);
-            if ui.button("Open Files...").clicked() {
-                close_after_click = true;
-                app.dispatch(PlaylistCommand::ExecuteMenu {
-                    kind: crate::playlist::PlaylistMenuKind::Add,
-                    index: 2,
-                });
-            }
-            if ui.button("Open Location...").clicked() {
-                close_after_click = true;
-                app.prompt_open = Some(EguiPrompt::OpenLocation);
-                app.prompt_text.clear();
-            }
-            if ui.button("Preferences").clicked() {
-                close_after_click = true;
-                app.dispatch(UiCommand::SetPreferencesVisible(true));
-            }
-            if ui.button("Skin Browser").clicked() {
-                close_after_click = true;
-                app.dispatch(UiCommand::SetSkinBrowserVisible(true));
-            }
-            if ui.button("Skin Editor").clicked() {
-                close_after_click = true;
-                app.runtime
-                    .pending_messages
-                    .push("skin editor is GTK-only for now".to_string());
-            }
-            if ui.button("Quit").clicked() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(180.0);
+                if ui.button("Open Files...").clicked() {
+                    close_after_click = true;
+                    app.dispatch(PlaylistCommand::ExecuteMenu {
+                        kind: crate::playlist::PlaylistMenuKind::Add,
+                        index: 2,
+                    });
+                }
+                if ui.button("Open Location...").clicked() {
+                    close_after_click = true;
+                    app.prompt_open = Some(EguiPrompt::OpenLocation);
+                    app.prompt_text.clear();
+                }
+                if ui.button("Preferences").clicked() {
+                    close_after_click = true;
+                    app.dispatch(UiCommand::SetPreferencesVisible(true));
+                }
+                if ui.button("Skin Browser").clicked() {
+                    close_after_click = true;
+                    app.dispatch(UiCommand::SetSkinBrowserVisible(true));
+                }
+                if ui.button("Skin Editor").clicked() {
+                    close_after_click = true;
+                    app.runtime
+                        .pending_messages
+                        .push("skin editor is GTK-only for now".to_string());
+                }
+                if ui.button("Quit").clicked() {
+                    close_after_click = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
         });
-    app.dispatch(UiCommand::SetMainMenuVisible(open && !close_after_click));
+
+    let clicked_outside = ctx.input(|input| {
+        input.pointer.any_released()
+            && input.pointer.latest_pos().is_some_and(|pos| {
+                let menu_button_rect = egui::Rect::from_min_size(
+                    egui::pos2(6.0 * app.scale_factor, 3.0 * app.scale_factor),
+                    egui::vec2(9.0 * app.scale_factor, 9.0 * app.scale_factor),
+                );
+                !response.response.rect.contains(pos) && !menu_button_rect.contains(pos)
+            })
+    });
+    if close_after_click || clicked_outside {
+        app.dispatch(UiCommand::SetMainMenuVisible(false));
+    }
 }
 
 pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -77,6 +98,8 @@ pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
         return;
     };
     let mut open = true;
+    let mut cancel_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    let mut accept_requested = ctx.input(|input| input.key_pressed(egui::Key::Enter));
     egui::Window::new(prompt.title())
         .open(&mut open)
         .collapsible(false)
@@ -87,15 +110,16 @@ pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
                 .on_hover_text(prompt.placeholder());
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
-                    app.prompt_open = None;
-                    app.prompt_text.clear();
+                    cancel_requested = true;
                 }
                 if ui.button("OK").clicked() {
-                    accept_prompt(app, prompt);
+                    accept_requested = true;
                 }
             });
         });
-    if !open {
+    if accept_requested {
+        accept_prompt(app, prompt);
+    } else if cancel_requested || !open {
         app.prompt_open = None;
         app.prompt_text.clear();
     }
@@ -112,7 +136,7 @@ fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
             app.dispatch(crate::app::command::PlayerCommand::Play);
         }
         EguiPrompt::JumpToTime => {
-            if let Some(ms) = parse_prompt_time_ms(&text) {
+            if let Some(ms) = parse_time_ms(&text) {
                 app.dispatch(crate::app::command::PlayerCommand::SeekToMs(ms));
             } else {
                 app.runtime
@@ -123,18 +147,6 @@ fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
     }
     app.prompt_open = None;
     app.prompt_text.clear();
-}
-
-pub fn parse_prompt_time_ms(text: &str) -> Option<i64> {
-    let text = text.trim();
-    if let Some((minutes, seconds)) = text.split_once(':') {
-        let minutes = minutes.trim().parse::<i64>().ok()?;
-        let seconds = seconds.trim().parse::<i64>().ok()?;
-        return Some((minutes * 60 + seconds).max(0) * 1_000);
-    }
-    text.parse::<i64>()
-        .ok()
-        .map(|seconds| seconds.max(0) * 1_000)
 }
 
 pub fn show_pending_messages(ctx: &egui::Context, app: &mut EguiFrontendState) {
@@ -164,8 +176,10 @@ mod tests {
 
     #[test]
     fn parses_prompt_times_like_gtk_helpers() {
-        assert_eq!(parse_prompt_time_ms("42"), Some(42_000));
-        assert_eq!(parse_prompt_time_ms("1:23"), Some(83_000));
-        assert_eq!(parse_prompt_time_ms("nope"), None);
+        assert_eq!(parse_time_ms("42"), Some(42_000));
+        assert_eq!(parse_time_ms("1:23"), Some(83_000));
+        assert_eq!(parse_time_ms(""), None);
+        assert_eq!(parse_time_ms("1:2:3"), None);
+        assert_eq!(parse_time_ms("nope"), None);
     }
 }

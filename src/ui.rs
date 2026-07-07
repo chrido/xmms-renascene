@@ -15,19 +15,31 @@ use crate::app::command::{
     UiCommand,
 };
 use crate::app::effect::AppEffect;
+pub use crate::app::equalizer_actions::EqualizerPresetAction;
+use crate::app::equalizer_actions::{
+    EQUALIZER_CONFIGURE_PRESET_ITEM, EQUALIZER_PRESET_MENU_SECTIONS,
+};
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
-use crate::app::playlist_actions::PlaylistMenuCommand;
+pub use crate::app::playlist_actions::PlaylistSortAction;
+use crate::app::playlist_actions::{
+    playlist_row_click_commands, PlaylistMenuCommand, PLAYLIST_SORT_MENU_ITEMS,
+};
+use crate::app::preferences_model::{
+    normalize_title_format, set_scale_factor as set_config_scale_factor, title_format_preview,
+};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
-    eq_slider_position_to_pixel, format_duration, format_title_for_preferences, parse_time_ms,
+    eq_slider_position_to_pixel, format_duration,
+    formatted_current_title as shared_formatted_current_title,
+    formatted_playlist_entry_title as shared_formatted_playlist_entry_title, parse_time_ms,
     playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
-    position_to_balance, position_to_volume, scale_event_coords, volume_to_eq_shaded_position,
-    volume_to_position,
+    playlist_rows_render_state as shared_playlist_rows_render_state, position_to_balance,
+    position_to_volume, scale_event_coords, volume_to_eq_shaded_position, volume_to_position,
 };
 use crate::app_state::AppState;
 use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
@@ -57,10 +69,10 @@ use crate::render::{
     render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
     surface_from_xpm, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
     MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
-    PlaylistMenuRenderState, PlaylistRowRenderEntry, PlaylistRowsRenderState, RenderPass,
-    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
-    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderPass, VisualizationRenderState,
+    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
+    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
@@ -92,6 +104,13 @@ pub(crate) mod gtk_frontend;
 mod style;
 
 use file_info::{file_info_details_for_entry, show_file_info_dialog, FileInfoDetails};
+use gtk_frontend::equalizer_window::{
+    build_equalizer_presets_popover, show_docked_equalizer_presets_menu,
+    show_equalizer_presets_menu,
+};
+use gtk_frontend::playlist_menu::{build_playlist_sort_popover, show_playlist_sort_menu};
+use gtk_frontend::playlist_window::build_playlist_window;
+use gtk_frontend::preferences::{build_preferences_window, sync_preferences_options_controls};
 use style::{
     refresh_xmms_skin_css, style_color_shelf_button, style_skin_color_button,
     style_skin_editor_custom_color_button,
@@ -464,6 +483,75 @@ fn build_preview_window(
     }
     window.add_controller(click);
 
+    let docked_playlist_resize_drag = Rc::new(Cell::new(None::<(i32, f64)>));
+    let resize_drag = gtk::GestureDrag::new();
+    resize_drag.set_button(1);
+    resize_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let drawing_area = drawing_area.clone();
+        let main_state = Rc::clone(&main_state);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
+        resize_drag.connect_drag_begin(move |gesture, start_x, start_y| {
+            let mut state = main_state.borrow_mut();
+            let (base_x, base_y) = event_to_base_coords(&drawing_area, &state, start_x, start_y);
+            let Some((PanelKind::Playlist, panel_x, panel_y)) =
+                state.docked_panel_at(base_x, base_y)
+            else {
+                docked_playlist_resize_drag.set(None);
+                return;
+            };
+            if !state.playlist_resize_region(panel_x, panel_y) {
+                docked_playlist_resize_drag.set(None);
+                return;
+            }
+            let start_height = state.playlist_ui.height;
+            let scale = state.scale_factor();
+            if state.begin_docked_playlist_resize(panel_y) {
+                docked_playlist_resize_drag.set(Some((start_height, scale)));
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                drawing_area.queue_draw();
+            }
+        });
+    }
+    {
+        let drawing_area = drawing_area.clone();
+        let window = window.clone();
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
+        resize_drag.connect_drag_update(move |_gesture, _offset_x, offset_y| {
+            let Some((start_height, scale)) = docked_playlist_resize_drag.get() else {
+                return;
+            };
+            let base_delta_y = (offset_y / scale).round() as i32;
+            let changed = main_state
+                .borrow_mut()
+                .set_playlist_size(PLAYLIST_MIN_WIDTH, start_height + base_delta_y);
+            if changed {
+                sync_panel_windows(&panel_windows, &main_state.borrow());
+                resize_main_window(&window, &drawing_area, &main_state.borrow());
+                drawing_area.queue_draw();
+            }
+        });
+    }
+    {
+        let drawing_area = drawing_area.clone();
+        let window = window.clone();
+        let panel_windows = Rc::clone(&panel_windows);
+        let main_state = Rc::clone(&main_state);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
+        resize_drag.connect_drag_end(move |_gesture, _offset_x, _offset_y| {
+            if docked_playlist_resize_drag.take().is_none() {
+                return;
+            }
+            main_state.borrow_mut().end_docked_playlist_resize();
+            sync_panel_windows(&panel_windows, &main_state.borrow());
+            resize_main_window(&window, &drawing_area, &main_state.borrow());
+            drawing_area.queue_draw();
+        });
+    }
+    window.add_controller(resize_drag);
+
     let motion = gtk::EventControllerMotion::new();
     motion.set_propagation_phase(gtk::PropagationPhase::Capture);
     let main_hover_base = Rc::new(Cell::new(None::<(i32, i32)>));
@@ -473,10 +561,13 @@ fn build_preview_window(
         let panel_windows = Rc::clone(&panel_windows);
         let main_state = Rc::clone(&main_state);
         let main_hover_base = Rc::clone(&main_hover_base);
+        let docked_playlist_resize_drag = Rc::clone(&docked_playlist_resize_drag);
         motion.connect_motion(move |_motion, x, y| {
             let (x, y) = event_to_base_coords(&drawing_area, &main_state.borrow(), x, y);
             main_hover_base.set(Some((x, y)));
-            if main_state.borrow().is_docked_playlist_resizing() {
+            if docked_playlist_resize_drag.get().is_none()
+                && main_state.borrow().is_docked_playlist_resizing()
+            {
                 if main_state.borrow_mut().docked_playlist_resize_motion(y) {
                     sync_panel_windows(&panel_windows, &main_state.borrow());
                     resize_main_window(&window, &drawing_area, &main_state.borrow());
@@ -1685,135 +1776,6 @@ fn build_equalizer_window(
     (window, drawing_area)
 }
 
-fn build_playlist_window(
-    app: &gtk::Application,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-    open_location_window: &gtk::ApplicationWindow,
-) -> (gtk::ApplicationWindow, gtk::DrawingArea) {
-    let (playlist_width, playlist_height) = main_state.borrow().playlist_size();
-    let window = gtk::ApplicationWindow::builder()
-        .application(app)
-        .title("XMMS Renascene Rust Playlist")
-        .resizable(true)
-        .decorated(false)
-        .default_width(playlist_width * DEFAULT_SCALE)
-        .default_height(playlist_height * DEFAULT_SCALE)
-        .build();
-    let drawing_area = gtk::DrawingArea::builder()
-        .content_width(playlist_width * DEFAULT_SCALE)
-        .content_height(playlist_height * DEFAULT_SCALE)
-        .focusable(true)
-        .build();
-    let state = Rc::clone(main_state);
-    drawing_area.set_draw_func(move |_area, cr, width, height| {
-        let state = state.borrow();
-        let skin = state.active_skin();
-        let shaded = state.playlist_ui.panel.shaded;
-        let focused = state.playlist_focused();
-        let playlist_width = state.playlist_ui.width;
-        let playlist_height = state.playlist_ui.height;
-        let base_height = if shaded {
-            MAIN_TITLEBAR_HEIGHT
-        } else {
-            playlist_height
-        };
-        match render_scaled(
-            cr,
-            width,
-            height,
-            playlist_width,
-            base_height,
-            |cr, pass| {
-                if pass.is_bitmap() {
-                    render_playlist_frame(
-                        cr,
-                        skin,
-                        focused,
-                        shaded,
-                        playlist_width,
-                        playlist_height,
-                        Some(&state.shaded_playlist_info()),
-                        Some(&state.playlist_footer_info()),
-                        Some(&state.playlist_footer_time_min_text()),
-                        Some(&state.playlist_footer_time_sec_text()),
-                    )?;
-                }
-                if !shaded {
-                    let row_state = state.playlist_rows_render_state();
-                    render_playlist_rows(cr, skin, &row_state, pass)?;
-                }
-                if pass.is_text() {
-                    if let Some(menu) = state.playlist_menu() {
-                        let (x, y, w, h) =
-                            playlist_menu_rect(menu, playlist_width, playlist_height);
-                        let render_state = PlaylistMenuRenderState {
-                            kind: menu.render_kind(),
-                            hover: state.playlist_menu_hover(),
-                        };
-                        paint_scaled(cr, x, y, w, h, |menu_cr| {
-                            render_playlist_menu(menu_cr, skin, render_state).map(|_| ())
-                        })?;
-                    }
-                }
-                Ok(())
-            },
-        ) {
-            Ok(()) => app_log_trace!(
-                render,
-                "gtk playlist",
-                width,
-                height,
-                playlist_width,
-                playlist_height
-            ),
-            Err(err) => eprintln!("xmms-rs: failed to render playlist preview: {err}"),
-        }
-    });
-
-    add_file_drop_controller(&drawing_area, Rc::clone(main_state), false, false);
-    add_playlist_context_menu(&drawing_area, Rc::clone(main_state), main_area.clone());
-    add_playlist_key_controller(&drawing_area, Rc::clone(main_state));
-
-    {
-        let main_state = Rc::clone(main_state);
-        drawing_area.connect_resize(move |area, width, height| {
-            let mut state = main_state.borrow_mut();
-            if !state.is_panel_detached(PanelKind::Playlist) {
-                return;
-            }
-            let scale = state.scale_factor();
-            let base_height = if state.playlist_ui.panel.shaded {
-                state.playlist_ui.height
-            } else {
-                unscale_dim(height, scale).max(PLAYLIST_MIN_HEIGHT)
-            };
-            if state.set_playlist_size(
-                unscale_dim(width, scale).max(PLAYLIST_MIN_WIDTH),
-                base_height,
-            ) {
-                area.queue_draw();
-            }
-        });
-    }
-    add_panel_click_controller(
-        &window,
-        &drawing_area,
-        Rc::clone(main_state),
-        main_area.clone(),
-        PanelKind::Playlist,
-        None,
-        Some(open_location_window.clone()),
-        Some(build_playlist_sort_popover(
-            &drawing_area,
-            main_state,
-            main_area,
-        )),
-    );
-    window.set_child(Some(&drawing_area));
-    (window, drawing_area)
-}
-
 fn add_playlist_key_controller(
     area: &gtk::DrawingArea,
     main_state: Rc<RefCell<MainWindowUiState>>,
@@ -2129,1258 +2091,6 @@ fn show_playlist_delete_confirmation(
     window.present();
 }
 
-fn build_playlist_sort_popover(
-    parent: &gtk::DrawingArea,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-) -> gtk::Popover {
-    let popover = gtk::Popover::builder()
-        .autohide(true)
-        .has_arrow(false)
-        .build();
-    style_xmms_popover(&popover);
-    popover.set_parent(parent);
-    let menu_box = xmms_menu_box(0);
-    for (label, action) in [
-        ("Sort List: By Title", PlaylistSortAction::ListByTitle),
-        ("Sort List: By Filename", PlaylistSortAction::ListByFilename),
-        (
-            "Sort List: By Path + Filename",
-            PlaylistSortAction::ListByPath,
-        ),
-        ("Sort List: By Date", PlaylistSortAction::ListByDate),
-        (
-            "Sort Selection: By Title",
-            PlaylistSortAction::SelectionByTitle,
-        ),
-        (
-            "Sort Selection: By Filename",
-            PlaylistSortAction::SelectionByFilename,
-        ),
-        (
-            "Sort Selection: By Path + Filename",
-            PlaylistSortAction::SelectionByPath,
-        ),
-        (
-            "Sort Selection: By Date",
-            PlaylistSortAction::SelectionByDate,
-        ),
-        ("Randomize List", PlaylistSortAction::RandomizeList),
-        ("Reverse List", PlaylistSortAction::ReverseList),
-    ] {
-        let item = xmms_menu_button(label);
-        {
-            let main_state = Rc::clone(main_state);
-            let parent = parent.clone();
-            let main_area = main_area.clone();
-            let popover = popover.clone();
-            item.connect_clicked(move |_| {
-                main_state
-                    .borrow_mut()
-                    .activate_playlist_sort_action(action);
-                popover.popdown();
-                parent.queue_draw();
-                main_area.queue_draw();
-            });
-        }
-        menu_box.append(&item);
-    }
-    popover.set_child(Some(&menu_box));
-    popover
-}
-
-fn show_playlist_sort_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
-    let width = area.allocated_width().max(1) as f64;
-    let height = area.allocated_height().max(1) as f64;
-    let rect = gtk::gdk::Rectangle::new(
-        (99.0 * (width / f64::from(PLAYLIST_DEFAULT_WIDTH))) as i32,
-        (f64::from(PLAYLIST_DEFAULT_HEIGHT - 29) * (height / f64::from(PLAYLIST_DEFAULT_HEIGHT)))
-            as i32,
-        25,
-        1,
-    );
-    popover.set_pointing_to(Some(&rect));
-    popover.popup();
-}
-
-fn build_equalizer_presets_popover(
-    parent: &gtk::DrawingArea,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-) -> gtk::Popover {
-    let action_group = gtk::gio::SimpleActionGroup::new();
-    let menu = gtk::gio::Menu::new();
-
-    for (label, actions) in [
-        (
-            "Load",
-            &[
-                ("Preset", EqualizerPresetAction::LoadPreset),
-                ("Auto-load preset", EqualizerPresetAction::LoadAutoPreset),
-                ("Default", EqualizerPresetAction::LoadDefault),
-                ("Zero", EqualizerPresetAction::LoadZero),
-                ("From file", EqualizerPresetAction::LoadFromFile),
-                (
-                    "From WinAMP EQF file",
-                    EqualizerPresetAction::LoadFromWinampFile,
-                ),
-            ][..],
-        ),
-        (
-            "Import",
-            &[("WinAMP Presets", EqualizerPresetAction::ImportWinampPresets)][..],
-        ),
-        (
-            "Save",
-            &[
-                ("Preset", EqualizerPresetAction::SavePreset),
-                ("Auto-load preset", EqualizerPresetAction::SaveAutoPreset),
-                ("Default", EqualizerPresetAction::SaveDefault),
-                ("To file", EqualizerPresetAction::SaveToFile),
-                (
-                    "To WinAMP EQF file",
-                    EqualizerPresetAction::SaveToWinampFile,
-                ),
-            ][..],
-        ),
-        (
-            "Delete",
-            &[
-                ("Preset", EqualizerPresetAction::DeletePreset),
-                ("Auto-load preset", EqualizerPresetAction::DeleteAutoPreset),
-            ][..],
-        ),
-    ] {
-        let submenu = gtk::gio::Menu::new();
-        for (child_label, action) in actions {
-            let action_name = equalizer_preset_action_name(*action);
-            submenu.append(
-                Some(child_label),
-                Some(&format!("eq-presets.{action_name}")),
-            );
-            install_equalizer_preset_action(
-                &action_group,
-                *action,
-                action_name,
-                parent,
-                main_state,
-                main_area,
-            );
-        }
-        if label == "Load" {
-            let winamp_section = gtk::gio::Menu::new();
-            for (index, preset) in winamp_original_presets().into_iter().enumerate() {
-                let action_name = format!("load-winamp-original-preset-{index}");
-                winamp_section.append(
-                    Some(&preset.name),
-                    Some(&format!("eq-presets.{action_name}")),
-                );
-                install_equalizer_direct_preset_action(
-                    &action_group,
-                    action_name,
-                    preset,
-                    parent,
-                    main_state,
-                    main_area,
-                );
-            }
-            submenu.append_section(Some("Winamp original presets"), &winamp_section);
-
-            let preset_section = gtk::gio::Menu::new();
-            for (index, preset) in main_state
-                .borrow()
-                .sorted_equalizer_presets(false)
-                .into_iter()
-                .filter(|preset| !preset.name.eq_ignore_ascii_case("Default"))
-                .enumerate()
-            {
-                let action_name = format!("load-named-preset-{index}");
-                preset_section.append(
-                    Some(&preset.name),
-                    Some(&format!("eq-presets.{action_name}")),
-                );
-                install_equalizer_named_preset_action(
-                    &action_group,
-                    action_name,
-                    preset.name,
-                    parent,
-                    main_state,
-                    main_area,
-                );
-            }
-            if preset_section.n_items() > 0 {
-                submenu.append_section(Some("Presets"), &preset_section);
-            }
-        }
-        menu.append_submenu(Some(label), &submenu);
-    }
-
-    install_equalizer_preset_action(
-        &action_group,
-        EqualizerPresetAction::Configure,
-        equalizer_preset_action_name(EqualizerPresetAction::Configure),
-        parent,
-        main_state,
-        main_area,
-    );
-    menu.append(
-        Some("Configure Equalizer"),
-        Some(&format!(
-            "eq-presets.{}",
-            equalizer_preset_action_name(EqualizerPresetAction::Configure)
-        )),
-    );
-
-    parent.insert_action_group("eq-presets", Some(&action_group));
-    let popover_menu = gtk::PopoverMenu::from_model_full(&menu, gtk::PopoverMenuFlags::NESTED);
-    popover_menu.set_autohide(true);
-    popover_menu.set_has_arrow(false);
-    let popover: gtk::Popover = popover_menu.upcast();
-    style_xmms_popover(&popover);
-    popover.set_parent(parent);
-    popover
-}
-
-fn install_equalizer_preset_action(
-    group: &gtk::gio::SimpleActionGroup,
-    action: EqualizerPresetAction,
-    action_name: &'static str,
-    parent: &gtk::DrawingArea,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-) {
-    let simple_action = gtk::gio::SimpleAction::new(action_name, None);
-    let main_state = Rc::clone(main_state);
-    let parent = parent.clone();
-    let main_area = main_area.clone();
-    simple_action.connect_activate(move |_, _| {
-        activate_equalizer_preset_action(
-            action,
-            &parent,
-            Rc::clone(&main_state),
-            parent.clone(),
-            main_area.clone(),
-        );
-    });
-    group.add_action(&simple_action);
-}
-
-fn install_equalizer_direct_preset_action(
-    group: &gtk::gio::SimpleActionGroup,
-    action_name: String,
-    preset: EqualizerPreset,
-    parent: &gtk::DrawingArea,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-) {
-    let simple_action = gtk::gio::SimpleAction::new(&action_name, None);
-    let main_state = Rc::clone(main_state);
-    let parent = parent.clone();
-    let main_area = main_area.clone();
-    simple_action.connect_activate(move |_, _| {
-        main_state
-            .borrow_mut()
-            .apply_equalizer_preset_values(&preset);
-        parent.queue_draw();
-        main_area.queue_draw();
-    });
-    group.add_action(&simple_action);
-}
-
-fn install_equalizer_named_preset_action(
-    group: &gtk::gio::SimpleActionGroup,
-    action_name: String,
-    preset_name: String,
-    parent: &gtk::DrawingArea,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_area: &gtk::DrawingArea,
-) {
-    let simple_action = gtk::gio::SimpleAction::new(&action_name, None);
-    let main_state = Rc::clone(main_state);
-    let parent = parent.clone();
-    let main_area = main_area.clone();
-    simple_action.connect_activate(move |_, _| {
-        main_state
-            .borrow_mut()
-            .load_named_equalizer_preset(&preset_name, false);
-        parent.queue_draw();
-        main_area.queue_draw();
-    });
-    group.add_action(&simple_action);
-}
-
-fn equalizer_preset_action_name(action: EqualizerPresetAction) -> &'static str {
-    match action {
-        EqualizerPresetAction::LoadPreset => "load-preset",
-        EqualizerPresetAction::LoadAutoPreset => "load-auto-preset",
-        EqualizerPresetAction::LoadDefault => "load-default",
-        EqualizerPresetAction::LoadZero => "load-zero",
-        EqualizerPresetAction::LoadFromFile => "load-from-file",
-        EqualizerPresetAction::LoadFromWinampFile => "load-from-winamp-file",
-        EqualizerPresetAction::ImportWinampPresets => "import-winamp-presets",
-        EqualizerPresetAction::SavePreset => "save-preset",
-        EqualizerPresetAction::SaveAutoPreset => "save-auto-preset",
-        EqualizerPresetAction::SaveDefault => "save-default",
-        EqualizerPresetAction::SaveToFile => "save-to-file",
-        EqualizerPresetAction::SaveToWinampFile => "save-to-winamp-file",
-        EqualizerPresetAction::DeletePreset => "delete-preset",
-        EqualizerPresetAction::DeleteAutoPreset => "delete-auto-preset",
-        EqualizerPresetAction::Configure => "configure",
-    }
-}
-
-fn build_preferences_window(
-    app: &gtk::Application,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    main_window: &gtk::ApplicationWindow,
-    main_area: &gtk::DrawingArea,
-    equalizer_window: &gtk::ApplicationWindow,
-    equalizer_area: &gtk::DrawingArea,
-    playlist_window: &gtk::ApplicationWindow,
-    playlist_area: &gtk::DrawingArea,
-) -> gtk::ApplicationWindow {
-    let (default_width, default_height) = preferences_window_default_size();
-    let window = skinned_application_window(
-        app,
-        "Preferences",
-        default_width,
-        default_height,
-        &["xmms-preferences"],
-    );
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    root.add_css_class("xmms-skinned-window");
-    root.add_css_class("xmms-preferences");
-    root.set_margin_top(10);
-    root.set_margin_bottom(10);
-    root.set_margin_start(10);
-    root.set_margin_end(10);
-
-    let notebook = gtk::Notebook::new();
-    notebook.set_vexpand(true);
-    let preferences_changed: PreferencesChanged = Rc::new({
-        let main_state = Rc::clone(main_state);
-        let main_window = main_window.clone();
-        let main_area = main_area.clone();
-        let equalizer_window = equalizer_window.clone();
-        let equalizer_area = equalizer_area.clone();
-        let playlist_window = playlist_window.clone();
-        let playlist_area = playlist_area.clone();
-        move || {
-            sync_single_panel_window_from_state(
-                PanelKind::Equalizer,
-                &equalizer_window,
-                &equalizer_area,
-                &main_state,
-            );
-            sync_single_panel_window_from_state(
-                PanelKind::Playlist,
-                &playlist_window,
-                &playlist_area,
-                &main_state,
-            );
-            resize_main_window(&main_window, &main_area, &main_state.borrow());
-            main_area.queue_draw();
-        }
-    });
-
-    for (page, label, page_widget) in [
-        (
-            PreferencesPage::Audio,
-            "Audio I/O Plugins",
-            build_preferences_audio_page(main_state, Some(Rc::clone(&preferences_changed))),
-        ),
-        (
-            PreferencesPage::Visualization,
-            "Visualization Plugins",
-            build_preferences_visualization_page(main_state, Some(Rc::clone(&preferences_changed))),
-        ),
-        (
-            PreferencesPage::Options,
-            "Options",
-            build_preferences_options_page(main_state, Some(Rc::clone(&preferences_changed))),
-        ),
-        (
-            PreferencesPage::Fonts,
-            "Fonts",
-            build_preferences_fonts_page(main_state, Some(Rc::clone(&preferences_changed))),
-        ),
-        (
-            PreferencesPage::Title,
-            "Title",
-            build_preferences_title_page(main_state, Some(Rc::clone(&preferences_changed))),
-        ),
-    ] {
-        let scrolled = gtk::ScrolledWindow::new();
-        scrolled.add_css_class("xmms-skinned-window");
-        scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
-        scrolled.set_vexpand(true);
-        scrolled.set_child(Some(&page_widget));
-        notebook.append_page(&scrolled, Some(&gtk::Label::new(Some(label))));
-        if page == PreferencesPage::Options {
-            notebook.set_current_page(Some(2));
-        }
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        notebook.connect_switch_page(move |_notebook, _page_widget, page_num| {
-            let page = match page_num {
-                0 => PreferencesPage::Audio,
-                1 => PreferencesPage::Visualization,
-                2 => PreferencesPage::Options,
-                3 => PreferencesPage::Fonts,
-                _ => PreferencesPage::Title,
-            };
-            main_state.borrow_mut().set_preferences_page(page);
-        });
-    }
-    root.append(&notebook);
-
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    buttons.set_halign(gtk::Align::End);
-    let reset = gtk::Button::with_label("Reset to Defaults");
-    {
-        let main_state = Rc::clone(main_state);
-        let preferences_changed = Rc::clone(&preferences_changed);
-        reset.connect_clicked(move |_| {
-            main_state.borrow_mut().reset_preferences_to_defaults();
-            preferences_changed();
-        });
-    }
-    buttons.append(&reset);
-    root.append(&buttons);
-    window.set_child(Some(&root));
-
-    bind_visibility_window!(&window, main_state, set_preferences_visible);
-
-    window
-}
-
-fn prefs_page_box() -> gtk::Box {
-    let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    page.set_margin_top(8);
-    page.set_margin_bottom(8);
-    page.set_margin_start(8);
-    page.set_margin_end(8);
-    page
-}
-
-fn prefs_frame(title: &str, parent: &gtk::Box) -> gtk::Box {
-    let frame = gtk::Frame::new(Some(title));
-    frame.set_margin_top(6);
-    frame.set_margin_bottom(6);
-    frame.set_margin_start(6);
-    frame.set_margin_end(6);
-    parent.append(&frame);
-
-    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    box_.set_margin_top(8);
-    box_.set_margin_bottom(8);
-    box_.set_margin_start(8);
-    box_.set_margin_end(8);
-    frame.set_child(Some(&box_));
-    box_
-}
-
-fn prefs_grid() -> gtk::Grid {
-    let grid = gtk::Grid::new();
-    grid.set_row_spacing(6);
-    grid.set_column_spacing(12);
-    grid
-}
-
-fn prefs_label(text: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(text));
-    label.set_xalign(0.0);
-    label.set_wrap(true);
-    label
-}
-
-fn prefs_attach_label(grid: &gtk::Grid, label: &str, child: &impl IsA<gtk::Widget>, row: i32) {
-    grid.attach(&prefs_label(label), 0, row, 1, 1);
-    grid.attach(child, 1, row, 1, 1);
-    child.set_hexpand(true);
-}
-
-fn find_spin_button_by_name(root: &impl IsA<gtk::Widget>, name: &str) -> Option<gtk::SpinButton> {
-    let root = root.as_ref();
-    if root.widget_name() == name {
-        if let Ok(spin) = root.clone().downcast::<gtk::SpinButton>() {
-            return Some(spin);
-        }
-    }
-
-    let mut child = root.first_child();
-    while let Some(widget) = child {
-        if let Some(spin) = find_spin_button_by_name(&widget, name) {
-            return Some(spin);
-        }
-        child = widget.next_sibling();
-    }
-    None
-}
-
-fn set_spin_value_if_changed(spin: &gtk::SpinButton, value: i32) {
-    if spin.value_as_int() != value {
-        spin.set_value(value as f64);
-    }
-}
-
-fn sync_preferences_options_controls(
-    preferences_window: &gtk::ApplicationWindow,
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-) {
-    let (volume, balance) = {
-        let state = main_state.borrow();
-        (state.volume(), state.balance())
-    };
-    if let Some(spin) = find_spin_button_by_name(preferences_window, PREFERENCES_VOLUME_WIDGET) {
-        set_spin_value_if_changed(&spin, volume);
-    }
-    if let Some(spin) = find_spin_button_by_name(preferences_window, PREFERENCES_BALANCE_WIDGET) {
-        set_spin_value_if_changed(&spin, balance);
-    }
-}
-
-fn prefs_check(label: &str, active: bool) -> gtk::CheckButton {
-    let check = gtk::CheckButton::with_label(label);
-    check.set_halign(gtk::Align::Start);
-    check.set_active(active);
-    check
-}
-
-fn build_preferences_audio_page(
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    on_change: Option<PreferencesChanged>,
-) -> gtk::Box {
-    let page = prefs_page_box();
-    let input = prefs_frame("Input Plugins", &page);
-    input.append(&prefs_label("GStreamer input support (built in)"));
-    input.append(&prefs_label(
-        "File, URI, and stream decoding are provided by installed GStreamer plugins.",
-    ));
-
-    let output = prefs_frame("Output Plugin", &page);
-    let grid = prefs_grid();
-    output.append(&grid);
-    let output_combo = gtk::ComboBoxText::new();
-    output_combo.append(Some("auto"), "Automatic (System Default)");
-    if let Ok(devices) = list_gstreamer_output_devices() {
-        for device in devices {
-            output_combo.append(Some(&device.id), &device.display_name);
-        }
-    }
-    if let Some(device) = main_state.borrow().preference_output_device() {
-        if !output_combo.set_active_id(Some(device)) {
-            output_combo.append(Some(device), device);
-            output_combo.set_active_id(Some(device));
-        }
-    } else {
-        output_combo.set_active_id(Some("auto"));
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        output_combo.connect_changed(move |combo| {
-            let selected = combo.active_id().map(|id| id.to_string());
-            let device = selected.filter(|id| id != "auto");
-            main_state.borrow_mut().set_preference_output_device(device);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Output device:", &output_combo, 0);
-
-    let configure = gtk::Button::with_label("Configure");
-    configure.connect_clicked(|_| {
-        eprintln!("xmms-rs: output device configuration is handled by the system audio settings");
-    });
-    grid.attach(&configure, 1, 1, 1, 1);
-    page
-}
-
-fn build_preferences_options_page(
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    on_change: Option<PreferencesChanged>,
-) -> gtk::Box {
-    let page = prefs_page_box();
-    let box_ = prefs_frame("Options", &page);
-    let grid = prefs_grid();
-    box_.append(&grid);
-
-    let volume = gtk::SpinButton::with_range(0.0, 100.0, 1.0);
-    volume.set_widget_name(PREFERENCES_VOLUME_WIDGET);
-    volume.set_value(main_state.borrow().volume() as f64);
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        volume.connect_value_changed(move |spin| {
-            main_state
-                .borrow_mut()
-                .set_preference_volume(spin.value_as_int());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Volume:", &volume, 0);
-
-    let balance = gtk::SpinButton::with_range(-100.0, 100.0, 1.0);
-    balance.set_widget_name(PREFERENCES_BALANCE_WIDGET);
-    balance.set_value(main_state.borrow().balance() as f64);
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        balance.connect_value_changed(move |spin| {
-            main_state
-                .borrow_mut()
-                .set_preference_balance(spin.value_as_int());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Balance:", &balance, 1);
-
-    let (scale, zoom_text) = {
-        let state = main_state.borrow();
-        let scale = state.app_state.config.scale_factor.clamp(1.0, 5.0);
-        (scale, format!("{scale:.1}x"))
-    };
-    let zoom = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 5.0, 0.1);
-    zoom.set_digits(1);
-    zoom.set_draw_value(false);
-    zoom.set_value(scale);
-    let zoom_value = gtk::Entry::new();
-    zoom_value.set_editable(false);
-    zoom_value.set_width_chars(5);
-    zoom_value.set_hexpand(false);
-    zoom_value.set_text(&zoom_text);
-    zoom.set_hexpand(true);
-    let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    zoom_box.set_hexpand(true);
-    zoom_box.append(&zoom);
-    zoom_box.append(&zoom_value);
-    {
-        let main_state = Rc::clone(main_state);
-        let zoom_value = zoom_value.clone();
-        let on_change = on_change.clone();
-        zoom.connect_value_changed(move |scale| {
-            let value = scale.value().clamp(1.0, 5.0);
-            zoom_value.set_text(&format!("{value:.1}x"));
-            main_state.borrow_mut().set_preference_scale_factor(value);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    grid.attach(&prefs_label("Zoom level:"), 0, 2, 2, 1);
-    grid.attach(&zoom_box, 0, 3, 2, 1);
-
-    let pause_time = gtk::SpinButton::with_range(0.0, 1000.0, 1.0);
-    pause_time.set_value(main_state.borrow().preference_pause_between_songs_time() as f64);
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        pause_time.connect_value_changed(move |spin| {
-            main_state
-                .borrow_mut()
-                .set_preference_pause_between_songs_time(spin.value_as_int());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Pause between songs time (seconds):", &pause_time, 4);
-
-    let mouse_wheel = gtk::SpinButton::with_range(1.0, 100.0, 1.0);
-    mouse_wheel.set_value(main_state.borrow().preference_mouse_wheel_change() as f64);
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        mouse_wheel.connect_value_changed(move |spin| {
-            main_state
-                .borrow_mut()
-                .set_preference_mouse_wheel_change(spin.value_as_int());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Mouse Wheel adjusts Volume by (%):", &mouse_wheel, 5);
-
-    let checks = {
-        let state = main_state.borrow();
-        [
-            ("Repeat", state.repeat(), PreferenceCheck::Repeat),
-            ("Shuffle", state.shuffle(), PreferenceCheck::Shuffle),
-            (
-                "No playlist advance",
-                state.preference_no_playlist_advance(),
-                PreferenceCheck::NoAdvance,
-            ),
-            (
-                "Pause between songs",
-                state.preference_pause_between_songs(),
-                PreferenceCheck::PauseBetweenSongs,
-            ),
-            (
-                "Stop with fadeout",
-                state.preference_stop_with_fadeout(),
-                PreferenceCheck::StopWithFadeout,
-            ),
-            (
-                "Time remaining",
-                state.preference_timer_remaining(),
-                PreferenceCheck::TimerRemaining,
-            ),
-            (
-                "Dock playlist",
-                !state.is_panel_detached(PanelKind::Playlist),
-                PreferenceCheck::DockPlaylist,
-            ),
-            (
-                "Dock equalizer",
-                !state.is_panel_detached(PanelKind::Equalizer),
-                PreferenceCheck::DockEqualizer,
-            ),
-            (
-                "Convert %20 to space",
-                state.preference_convert_twenty(),
-                PreferenceCheck::ConvertTwenty,
-            ),
-            (
-                "Convert underscore to space",
-                state.preference_convert_underscore(),
-                PreferenceCheck::ConvertUnderscore,
-            ),
-            (
-                "Show numbers in playlist",
-                state.preference_show_numbers_in_playlist(),
-                PreferenceCheck::ShowNumbers,
-            ),
-            (
-                "Vim-style playlist navigation",
-                state.preference_vim_playlist_navigation(),
-                PreferenceCheck::VimPlaylistNavigation,
-            ),
-        ]
-    };
-    for (index, (label, active, action)) in checks.into_iter().enumerate() {
-        let check = prefs_check(label, active);
-        {
-            let main_state = Rc::clone(main_state);
-            let on_change = on_change.clone();
-            check.connect_toggled(move |check| {
-                let mut state = main_state.borrow_mut();
-                match action {
-                    PreferenceCheck::Repeat => state.set_preference_repeat(check.is_active()),
-                    PreferenceCheck::Shuffle => state.set_preference_shuffle(check.is_active()),
-                    PreferenceCheck::NoAdvance => {
-                        state.set_preference_no_playlist_advance(check.is_active())
-                    }
-                    PreferenceCheck::PauseBetweenSongs => {
-                        state.set_preference_pause_between_songs(check.is_active())
-                    }
-                    PreferenceCheck::StopWithFadeout => {
-                        state.set_preference_stop_with_fadeout(check.is_active())
-                    }
-                    PreferenceCheck::TimerRemaining => {
-                        state.set_preference_timer_remaining(check.is_active())
-                    }
-                    PreferenceCheck::DockPlaylist => {
-                        state.set_preference_playlist_docked(check.is_active())
-                    }
-                    PreferenceCheck::DockEqualizer => {
-                        state.set_preference_equalizer_docked(check.is_active())
-                    }
-                    PreferenceCheck::ConvertTwenty => {
-                        state.set_preference_convert_twenty(check.is_active())
-                    }
-                    PreferenceCheck::ConvertUnderscore => {
-                        state.set_preference_convert_underscore(check.is_active())
-                    }
-                    PreferenceCheck::ShowNumbers => {
-                        state.set_preference_show_numbers_in_playlist(check.is_active())
-                    }
-                    PreferenceCheck::VimPlaylistNavigation => {
-                        state.set_preference_vim_playlist_navigation(check.is_active())
-                    }
-                }
-                drop(state);
-                if let Some(on_change) = &on_change {
-                    on_change();
-                }
-            });
-        }
-        grid.attach(&check, (index % 2) as i32, 6 + (index / 2) as i32, 1, 1);
-    }
-    page
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PreferenceCheck {
-    Repeat,
-    Shuffle,
-    NoAdvance,
-    PauseBetweenSongs,
-    StopWithFadeout,
-    TimerRemaining,
-    DockPlaylist,
-    DockEqualizer,
-    ConvertTwenty,
-    ConvertUnderscore,
-    ShowNumbers,
-    VimPlaylistNavigation,
-}
-
-fn build_preferences_fonts_page(
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    on_change: Option<PreferencesChanged>,
-) -> gtk::Box {
-    let page = prefs_page_box();
-    let playlist = prefs_frame("Playlist", &page);
-    let grid = prefs_grid();
-    playlist.append(&grid);
-    let playlist_font = gtk::ComboBoxText::with_entry();
-    for font in ["Helvetica", "Sans", "Serif", "Monospace"] {
-        playlist_font.append(Some(font), font);
-    }
-    let current_font = main_state.borrow().preference_playlist_font().to_string();
-    if !playlist_font.set_active_id(Some(&current_font)) {
-        playlist_font.append(Some(&current_font), &current_font);
-        playlist_font.set_active_id(Some(&current_font));
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        playlist_font.connect_changed(move |combo| {
-            if let Some(font) = combo.active_id() {
-                main_state.borrow_mut().set_preference_playlist_font(&font);
-                if let Some(on_change) = &on_change {
-                    on_change();
-                }
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Playlist font family:", &playlist_font, 0);
-    playlist.append(&prefs_label("XMMS used a Helvetica bold 10px playlist font. This port keeps the original fixed row height, so only the family is configurable."));
-
-    let main = prefs_frame("Main Window", &page);
-    let mainwin_font = gtk::Entry::new();
-    mainwin_font.set_editable(false);
-    mainwin_font.set_text(main_state.borrow().preference_mainwin_font());
-    main.append(&mainwin_font);
-    main.append(&prefs_label(
-        "The main window uses the skin bitmap font, matching XMMS skins.",
-    ));
-    let skin_browser = gtk::Button::with_label("Open Skin Browser");
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        skin_browser.connect_clicked(move |_| {
-            main_state.borrow_mut().set_skin_browser_visible(true);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    main.append(&skin_browser);
-    page
-}
-
-fn build_preferences_title_page(
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    on_change: Option<PreferencesChanged>,
-) -> gtk::Box {
-    let page = prefs_page_box();
-    let box_ = prefs_frame("Title", &page);
-    let grid = prefs_grid();
-    box_.append(&grid);
-    let title = gtk::Entry::new();
-    title.set_text(main_state.borrow().preference_title_format());
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        title.connect_changed(move |entry| {
-            main_state
-                .borrow_mut()
-                .set_preference_title_format(entry.text().as_str());
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Title format:", &title, 0);
-    box_.append(&prefs_label("Original XMMS tokens include %p artist, %a album, %g genre, %f filename, and %t title. The current decoder uses embedded titles when available and stores this format for compatibility."));
-    page
-}
-
-fn build_preferences_visualization_page(
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    on_change: Option<PreferencesChanged>,
-) -> gtk::Box {
-    let page = prefs_page_box();
-    let box_ = prefs_frame("Visualization", &page);
-    let grid = prefs_grid();
-    box_.append(&grid);
-    box_.append(&prefs_label(
-        "Controls that do not affect the selected visualization mode are disabled.",
-    ));
-
-    let mode = gtk::ComboBoxText::new();
-    for (id, label) in [
-        ("analyzer", "Analyzer"),
-        ("scope", "Scope"),
-        ("milkdrop", "MilkDrop-inspired"),
-        ("off", "Off"),
-    ] {
-        mode.append(Some(id), label);
-    }
-    mode.set_active_id(Some(match main_state.borrow().visualization_mode() {
-        VisMode::Scope => "scope",
-        VisMode::Milkdrop => "milkdrop",
-        VisMode::Off => "off",
-        VisMode::Analyzer => "analyzer",
-    }));
-    prefs_attach_label(&grid, "Visualization mode:", &mode, 0);
-
-    let analyzer_mode = gtk::ComboBoxText::new();
-    for (id, label) in [
-        ("normal", "Analyzer normal"),
-        ("fire", "Analyzer fire"),
-        ("vlines", "Analyzer vertical lines"),
-    ] {
-        analyzer_mode.append(Some(id), label);
-    }
-    analyzer_mode.set_active_id(Some(
-        match main_state.borrow().visualization_analyzer_mode() {
-            VisAnalyzerMode::Fire => "fire",
-            VisAnalyzerMode::VerticalLines => "vlines",
-            VisAnalyzerMode::Normal => "normal",
-        },
-    ));
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        analyzer_mode.connect_changed(move |combo| {
-            let mode = match combo.active_id().as_deref() {
-                Some("fire") => VisAnalyzerMode::Fire,
-                Some("vlines") => VisAnalyzerMode::VerticalLines,
-                _ => VisAnalyzerMode::Normal,
-            };
-            main_state
-                .borrow_mut()
-                .set_visualization_analyzer_mode(mode);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Analyzer mode:", &analyzer_mode, 1);
-
-    let style = gtk::ComboBoxText::new();
-    style.append(Some("bars"), "Analyzer bars");
-    style.append(Some("lines"), "Analyzer lines");
-    style.set_active_id(Some(
-        match main_state.borrow().visualization_analyzer_style() {
-            VisAnalyzerStyle::Lines => "lines",
-            VisAnalyzerStyle::Bars => "bars",
-        },
-    ));
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        style.connect_changed(move |combo| {
-            let style = match combo.active_id().as_deref() {
-                Some("lines") => VisAnalyzerStyle::Lines,
-                _ => VisAnalyzerStyle::Bars,
-            };
-            main_state
-                .borrow_mut()
-                .set_visualization_analyzer_style(style);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Analyzer style:", &style, 2);
-
-    let scope = gtk::ComboBoxText::new();
-    for (id, label) in [
-        ("dot", "Dot scope"),
-        ("line", "Line scope"),
-        ("solid", "Solid scope"),
-    ] {
-        scope.append(Some(id), label);
-    }
-    scope.set_active_id(Some(match main_state.borrow().visualization_scope_mode() {
-        VisScopeMode::Dot => "dot",
-        VisScopeMode::Solid => "solid",
-        VisScopeMode::Line => "line",
-    }));
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        scope.connect_changed(move |combo| {
-            let mode = match combo.active_id().as_deref() {
-                Some("dot") => VisScopeMode::Dot,
-                Some("solid") => VisScopeMode::Solid,
-                _ => VisScopeMode::Line,
-            };
-            main_state.borrow_mut().set_visualization_scope_mode(mode);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Scope mode:", &scope, 3);
-
-    let peaks = prefs_check(
-        "Show analyzer peaks",
-        main_state.borrow().visualization_peaks_enabled(),
-    );
-    grid.attach(&peaks, 1, 4, 1, 1);
-
-    let falloff = falloff_combo(main_state.borrow().visualization_analyzer_falloff());
-    let peaks_falloff = falloff_combo(main_state.borrow().visualization_peaks_falloff());
-    {
-        let main_state = Rc::clone(main_state);
-        let peaks_falloff = peaks_falloff.clone();
-        let on_change = on_change.clone();
-        falloff.connect_changed(move |combo| {
-            let analyzer = falloff_from_combo(combo);
-            let peaks = falloff_from_combo(&peaks_falloff);
-            main_state
-                .borrow_mut()
-                .set_visualization_falloff(analyzer, peaks);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        let falloff = falloff.clone();
-        let on_change = on_change.clone();
-        peaks_falloff.connect_changed(move |combo| {
-            let analyzer = falloff_from_combo(&falloff);
-            let peaks = falloff_from_combo(combo);
-            main_state
-                .borrow_mut()
-                .set_visualization_falloff(analyzer, peaks);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Analyzer falloff:", &falloff, 5);
-    prefs_attach_label(&grid, "Peaks falloff:", &peaks_falloff, 6);
-
-    let vu = gtk::ComboBoxText::new();
-    vu.append(Some("normal"), "Normal");
-    vu.append(Some("smooth"), "Smooth");
-    vu.set_active_id(Some(match main_state.borrow().visualization_vu_mode() {
-        VisVuMode::Smooth => "smooth",
-        VisVuMode::Normal => "normal",
-    }));
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        vu.connect_changed(move |combo| {
-            let mode = match combo.active_id().as_deref() {
-                Some("smooth") => VisVuMode::Smooth,
-                _ => VisVuMode::Normal,
-            };
-            main_state.borrow_mut().set_visualization_vu_mode(mode);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "WindowShade VU mode:", &vu, 7);
-
-    let refresh = gtk::ComboBoxText::new();
-    for (id, label) in [
-        ("full", "Full"),
-        ("half", "Half"),
-        ("quarter", "Quarter"),
-        ("eighth", "Eighth"),
-    ] {
-        refresh.append(Some(id), label);
-    }
-    refresh.set_active_id(Some(
-        match main_state.borrow().visualization_refresh_divisor() {
-            8.. => "eighth",
-            4..=7 => "quarter",
-            2..=3 => "half",
-            _ => "full",
-        },
-    ));
-    {
-        let main_state = Rc::clone(main_state);
-        let on_change = on_change.clone();
-        refresh.connect_changed(move |combo| {
-            let divisor = match combo.active_id().as_deref() {
-                Some("eighth") => 8,
-                Some("quarter") => 4,
-                Some("half") => 2,
-                _ => 1,
-            };
-            main_state
-                .borrow_mut()
-                .set_visualization_refresh_divisor(divisor);
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    prefs_attach_label(&grid, "Refresh rate:", &refresh, 8);
-
-    update_visualization_preference_sensitivity(
-        &mode,
-        &analyzer_mode,
-        &style,
-        &scope,
-        &peaks,
-        &falloff,
-        &peaks_falloff,
-        &vu,
-        &refresh,
-    );
-    {
-        let main_state = Rc::clone(main_state);
-        let analyzer_mode = analyzer_mode.clone();
-        let style = style.clone();
-        let scope = scope.clone();
-        let peaks = peaks.clone();
-        let falloff = falloff.clone();
-        let peaks_falloff = peaks_falloff.clone();
-        let vu = vu.clone();
-        let refresh = refresh.clone();
-        let on_change = on_change.clone();
-        mode.connect_changed(move |combo| {
-            let mode = match combo.active_id().as_deref() {
-                Some("scope") => VisMode::Scope,
-                Some("milkdrop") => VisMode::Milkdrop,
-                Some("off") => VisMode::Off,
-                _ => VisMode::Analyzer,
-            };
-            main_state.borrow_mut().set_visualization_mode(mode);
-            update_visualization_preference_sensitivity(
-                combo,
-                &analyzer_mode,
-                &style,
-                &scope,
-                &peaks,
-                &falloff,
-                &peaks_falloff,
-                &vu,
-                &refresh,
-            );
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    {
-        let main_state = Rc::clone(main_state);
-        let mode = mode.clone();
-        let analyzer_mode = analyzer_mode.clone();
-        let style = style.clone();
-        let scope = scope.clone();
-        let falloff = falloff.clone();
-        let peaks_falloff = peaks_falloff.clone();
-        let vu = vu.clone();
-        let refresh = refresh.clone();
-        let on_change = on_change.clone();
-        peaks.connect_toggled(move |check| {
-            main_state
-                .borrow_mut()
-                .set_visualization_peaks_enabled(check.is_active());
-            update_visualization_preference_sensitivity(
-                &mode,
-                &analyzer_mode,
-                &style,
-                &scope,
-                check,
-                &falloff,
-                &peaks_falloff,
-                &vu,
-                &refresh,
-            );
-            if let Some(on_change) = &on_change {
-                on_change();
-            }
-        });
-    }
-    page
-}
-
-fn update_visualization_preference_sensitivity(
-    mode: &gtk::ComboBoxText,
-    analyzer_mode: &gtk::ComboBoxText,
-    analyzer_style: &gtk::ComboBoxText,
-    scope_mode: &gtk::ComboBoxText,
-    peaks: &gtk::CheckButton,
-    analyzer_falloff: &gtk::ComboBoxText,
-    peaks_falloff: &gtk::ComboBoxText,
-    vu: &gtk::ComboBoxText,
-    refresh: &gtk::ComboBoxText,
-) {
-    let mode = match mode.active_id().as_deref() {
-        Some("scope") => VisMode::Scope,
-        Some("milkdrop") => VisMode::Milkdrop,
-        Some("off") => VisMode::Off,
-        _ => VisMode::Analyzer,
-    };
-    let sensitivity = visualization_preference_sensitivity(mode, peaks.is_active());
-    analyzer_mode.set_sensitive(sensitivity.analyzer_mode);
-    analyzer_style.set_sensitive(sensitivity.analyzer_style);
-    peaks.set_sensitive(sensitivity.analyzer_peaks);
-    analyzer_falloff.set_sensitive(sensitivity.analyzer_falloff);
-    peaks_falloff.set_sensitive(sensitivity.peaks_falloff);
-    scope_mode.set_sensitive(sensitivity.scope_mode);
-    vu.set_sensitive(sensitivity.windowshade_vu);
-    refresh.set_sensitive(sensitivity.refresh_rate);
-}
-
-fn falloff_combo(active: VisFalloffSpeed) -> gtk::ComboBoxText {
-    let combo = gtk::ComboBoxText::new();
-    for (id, label) in [
-        ("slowest", "Slowest"),
-        ("slow", "Slow"),
-        ("medium", "Medium"),
-        ("fast", "Fast"),
-        ("fastest", "Fastest"),
-    ] {
-        combo.append(Some(id), label);
-    }
-    combo.set_active_id(Some(falloff_id(active)));
-    combo
-}
-
-fn falloff_id(speed: VisFalloffSpeed) -> &'static str {
-    match speed {
-        VisFalloffSpeed::Slowest => "slowest",
-        VisFalloffSpeed::Slow => "slow",
-        VisFalloffSpeed::Fast => "fast",
-        VisFalloffSpeed::Fastest => "fastest",
-        VisFalloffSpeed::Medium => "medium",
-    }
-}
-
-fn falloff_from_combo(combo: &gtk::ComboBoxText) -> VisFalloffSpeed {
-    match combo.active_id().as_deref() {
-        Some("slowest") => VisFalloffSpeed::Slowest,
-        Some("slow") => VisFalloffSpeed::Slow,
-        Some("fast") => VisFalloffSpeed::Fast,
-        Some("fastest") => VisFalloffSpeed::Fastest,
-        _ => VisFalloffSpeed::Medium,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PromptKind {
     OpenLocation,
@@ -3414,6 +2124,410 @@ impl PromptKind {
             Self::OpenLocation => state.accept_open_location(text),
             Self::JumpTime => state.accept_jump_time(text),
         }
+    }
+}
+
+impl PlaylistMenuKind {
+    fn render_kind(self) -> PlaylistMenuRenderKind {
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelAction {
+    None,
+    Changed,
+    OpenDirectoryDialog,
+    OpenFileDialog,
+    OpenLocationWindow,
+    OpenPlaylistLoadDialog,
+    OpenPlaylistSaveDialog,
+    ShowPlaylistSortMenu,
+    ShowFileInfo,
+    ShowPlaylistMenu(PlaylistMenuKind),
+    ShowEqualizerPresets,
+}
+
+struct GtkPanelActionContext<'a> {
+    window: &'a gtk::ApplicationWindow,
+    area: &'a gtk::DrawingArea,
+    main_state: &'a Rc<RefCell<MainWindowUiState>>,
+    open_location_window: Option<&'a gtk::ApplicationWindow>,
+    playlist_sort_menu: Option<&'a gtk::Popover>,
+    equalizer_presets_menu: Option<&'a gtk::Popover>,
+    equalizer_presets_docked: bool,
+}
+
+fn apply_panel_action(
+    action: PanelAction,
+    context: GtkPanelActionContext<'_>,
+    on_changed: impl FnOnce(),
+) {
+    match action {
+        PanelAction::None => {}
+        PanelAction::Changed => on_changed(),
+        PanelAction::OpenDirectoryDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_directory_dialog_visible(true);
+            show_playlist_add_directory_dialog(
+                context.window,
+                Rc::clone(context.main_state),
+                context.area.clone(),
+            );
+        }
+        PanelAction::OpenFileDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_file_dialog_visible(true);
+            show_playlist_add_file_dialog(
+                context.window,
+                Rc::clone(context.main_state),
+                context.area.clone(),
+            );
+        }
+        PanelAction::OpenLocationWindow => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_open_location_visible(true);
+            if let Some(open_location_window) = context.open_location_window {
+                open_location_window.present();
+            }
+        }
+        PanelAction::OpenPlaylistLoadDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_playlist_load_dialog_visible(true);
+            show_playlist_load_dialog(
+                context.window,
+                Rc::clone(context.main_state),
+                context.area.clone(),
+            );
+        }
+        PanelAction::OpenPlaylistSaveDialog => {
+            context
+                .main_state
+                .borrow_mut()
+                .set_playlist_save_dialog_visible(true);
+            show_playlist_save_dialog(context.window, Rc::clone(context.main_state));
+        }
+        PanelAction::ShowFileInfo => {
+            show_file_info_dialog(context.window, Rc::clone(context.main_state));
+        }
+        PanelAction::ShowPlaylistSortMenu => {
+            if let Some(popover) = context.playlist_sort_menu {
+                show_playlist_sort_menu(popover, context.area);
+            }
+            context.area.queue_draw();
+        }
+        PanelAction::ShowPlaylistMenu(_) => {
+            context.area.queue_draw();
+        }
+        PanelAction::ShowEqualizerPresets => {
+            if let Some(popover) = context.equalizer_presets_menu {
+                if context.equalizer_presets_docked {
+                    show_docked_equalizer_presets_menu(
+                        popover,
+                        context.area,
+                        &context.main_state.borrow(),
+                    );
+                } else {
+                    show_equalizer_presets_menu(popover, context.area);
+                }
+            }
+            context.area.queue_draw();
+        }
+    }
+}
+
+fn add_panel_click_controller(
+    window: &gtk::ApplicationWindow,
+    area: &gtk::DrawingArea,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    main_area: gtk::DrawingArea,
+    kind: PanelKind,
+    equalizer_presets_menu: Option<gtk::Popover>,
+    open_location_window: Option<gtk::ApplicationWindow>,
+    playlist_sort_menu: Option<gtk::Popover>,
+) {
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let window = window.clone();
+        let main_state = Rc::clone(&main_state);
+        click.connect_pressed(move |gesture, n_press, x, y| {
+            area.grab_focus();
+            let (base_x, base_y) =
+                panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            if n_press >= 2
+                && kind == PanelKind::Equalizer
+                && main_state
+                    .borrow()
+                    .panel_title_drag_region(kind, base_x, base_y)
+            {
+                main_state.borrow_mut().toggle_equalizer_shaded();
+                sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+                area.queue_draw();
+                return;
+            }
+            if !main_state
+                .borrow()
+                .panel_title_drag_region(kind, base_x, base_y)
+            {
+                if kind == PanelKind::Equalizer
+                    && main_state.borrow_mut().equalizer_press(base_x, base_y)
+                {
+                    area.queue_draw();
+                } else if kind == PanelKind::Playlist {
+                    if n_press >= 2
+                        && main_state
+                            .borrow_mut()
+                            .activate_playlist_entry_at(base_x, base_y)
+                    {
+                        area.queue_draw();
+                        return;
+                    }
+                    let ctrl_pressed = gesture
+                        .current_event_state()
+                        .contains(gtk::gdk::ModifierType::CONTROL_MASK);
+                    if main_state.borrow_mut().playlist_press_with_ctrl(
+                        base_x,
+                        base_y,
+                        ctrl_pressed,
+                    ) {
+                        area.queue_draw();
+                        return;
+                    }
+                    if main_state
+                        .borrow_mut()
+                        .playlist_scrollbar_press(base_x, base_y)
+                    {
+                        area.queue_draw();
+                        return;
+                    }
+                    if main_state.borrow().playlist_resize_region(base_x, base_y) {
+                        return;
+                    }
+                }
+                return;
+            }
+
+            main_state.borrow_mut().set_panel_dragging(kind, true);
+            area.queue_draw();
+            let Some(device) = gesture.current_event_device() else {
+                return;
+            };
+            let Some(surface) = window.surface() else {
+                return;
+            };
+            let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
+                return;
+            };
+            toplevel.begin_move(
+                &device,
+                gesture.current_button() as i32,
+                x,
+                y,
+                gesture.current_event_time(),
+            );
+        });
+    }
+    {
+        let area = area.clone();
+        let window = window.clone();
+        let main_area = main_area.clone();
+        let main_state = Rc::clone(&main_state);
+        click.connect_released(move |_gesture, _n_press, x, y| {
+            let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            main_state.borrow_mut().set_panel_dragging(kind, false);
+            area.queue_draw();
+            let action = if kind == PanelKind::Equalizer {
+                let title_action = main_state.borrow_mut().panel_click(kind, x, y);
+                if title_action == PanelAction::None {
+                    main_state.borrow_mut().equalizer_release(x, y)
+                } else {
+                    title_action
+                }
+            } else if main_state.borrow_mut().playlist_scrollbar_release() {
+                PanelAction::Changed
+            } else if main_state.borrow().playlist_menu_pressed() {
+                main_state.borrow_mut().playlist_release(x, y)
+            } else if main_state.borrow_mut().playlist_entry_release() {
+                PanelAction::Changed
+            } else {
+                main_state.borrow_mut().panel_click(kind, x, y)
+            };
+            apply_panel_action(
+                action,
+                GtkPanelActionContext {
+                    window: &window,
+                    area: &area,
+                    main_state: &main_state,
+                    open_location_window: open_location_window.as_ref(),
+                    playlist_sort_menu: playlist_sort_menu.as_ref(),
+                    equalizer_presets_menu: equalizer_presets_menu.as_ref(),
+                    equalizer_presets_docked: false,
+                },
+                || {
+                    sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+                    main_area.queue_draw();
+                },
+            );
+        });
+    }
+    window.add_controller(click);
+
+    let floating_playlist_resize_drag = Rc::new(Cell::new(None::<(i32, i32, f64)>));
+    let resize_drag = gtk::GestureDrag::new();
+    resize_drag.set_button(1);
+    resize_drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        let floating_playlist_resize_drag = Rc::clone(&floating_playlist_resize_drag);
+        resize_drag.connect_drag_begin(move |gesture, start_x, start_y| {
+            if kind != PanelKind::Playlist {
+                floating_playlist_resize_drag.set(None);
+                return;
+            }
+            let state = main_state.borrow();
+            let (base_x, base_y) =
+                panel_event_to_base_coords(kind, &area, &state, start_x, start_y);
+            if !state.is_panel_detached(kind) || !state.playlist_resize_region(base_x, base_y) {
+                floating_playlist_resize_drag.set(None);
+                return;
+            }
+            let (start_width, start_height) = state.playlist_size();
+            floating_playlist_resize_drag.set(Some((
+                start_width,
+                start_height,
+                state.scale_factor(),
+            )));
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            area.queue_draw();
+        });
+    }
+    {
+        let area = area.clone();
+        let window = window.clone();
+        let main_state = Rc::clone(&main_state);
+        let main_area = main_area.clone();
+        let floating_playlist_resize_drag = Rc::clone(&floating_playlist_resize_drag);
+        resize_drag.connect_drag_update(move |_gesture, offset_x, offset_y| {
+            let Some((start_width, start_height, scale)) = floating_playlist_resize_drag.get()
+            else {
+                return;
+            };
+            let base_delta_x = (offset_x / scale).round() as i32;
+            let base_delta_y = (offset_y / scale).round() as i32;
+            let changed = main_state
+                .borrow_mut()
+                .set_playlist_size(start_width + base_delta_x, start_height + base_delta_y);
+            if changed {
+                sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+                main_area.queue_draw();
+                area.queue_draw();
+            }
+        });
+    }
+    {
+        let area = area.clone();
+        let window = window.clone();
+        let main_state = Rc::clone(&main_state);
+        let main_area = main_area.clone();
+        let floating_playlist_resize_drag = Rc::clone(&floating_playlist_resize_drag);
+        resize_drag.connect_drag_end(move |_gesture, _offset_x, _offset_y| {
+            if floating_playlist_resize_drag.take().is_none() {
+                return;
+            }
+            sync_single_panel_window_from_state(kind, &window, &area, &main_state);
+            main_area.queue_draw();
+            area.queue_draw();
+        });
+    }
+    window.add_controller(resize_drag);
+
+    let motion = gtk::EventControllerMotion::new();
+    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let panel_hover_base = Rc::new(Cell::new(None::<(i32, i32)>));
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        let panel_hover_base = Rc::clone(&panel_hover_base);
+        motion.connect_motion(move |_motion, x, y| {
+            let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
+            panel_hover_base.set(Some((x, y)));
+            match kind {
+                PanelKind::Equalizer => {
+                    if main_state.borrow_mut().equalizer_motion(x, y) {
+                        area.queue_draw();
+                    }
+                }
+                PanelKind::Playlist => {
+                    let scrolled = main_state.borrow_mut().playlist_scrollbar_motion(x, y);
+                    let menu_changed = main_state.borrow_mut().playlist_motion(x, y);
+                    if scrolled || menu_changed {
+                        area.queue_draw();
+                    }
+                }
+            }
+        });
+    }
+    window.add_controller(motion);
+
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        let panel_hover_base = Rc::clone(&panel_hover_base);
+        scroll.connect_scroll(move |scroll, _dx, dy| {
+            let hover = panel_hover_base.get().or_else(|| {
+                scroll
+                    .current_event()
+                    .and_then(|event| event.position())
+                    .map(|(event_x, event_y)| {
+                        panel_event_to_base_coords(
+                            kind,
+                            &area,
+                            &main_state.borrow(),
+                            event_x,
+                            event_y,
+                        )
+                    })
+            });
+            let Some((x, y)) = hover else {
+                return gtk::glib::Propagation::Proceed;
+            };
+            let changed = match kind {
+                PanelKind::Equalizer => main_state.borrow_mut().equalizer_scroll(x, y, dy),
+                PanelKind::Playlist => main_state.borrow_mut().playlist_scroll(dy),
+            };
+            if changed {
+                area.queue_draw();
+                gtk::glib::Propagation::Stop
+            } else {
+                gtk::glib::Propagation::Proceed
+            }
+        });
+    }
+    window.add_controller(scroll);
+
+    {
+        let area = area.clone();
+        let main_state = Rc::clone(&main_state);
+        window.connect_is_active_notify(move |window| {
+            main_state
+                .borrow_mut()
+                .set_panel_focused(kind, window.is_active());
+            area.queue_draw();
+        });
     }
 }
 
@@ -5492,801 +4606,6 @@ pub enum PlaylistContextAction {
     InvertSelection,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaylistSortAction {
-    ListByTitle,
-    ListByFilename,
-    ListByPath,
-    ListByDate,
-    SelectionByTitle,
-    SelectionByFilename,
-    SelectionByPath,
-    SelectionByDate,
-    RandomizeList,
-    ReverseList,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EqualizerPresetAction {
-    LoadPreset,
-    LoadAutoPreset,
-    LoadDefault,
-    LoadZero,
-    LoadFromFile,
-    LoadFromWinampFile,
-    ImportWinampPresets,
-    SavePreset,
-    SaveAutoPreset,
-    SaveDefault,
-    SaveToFile,
-    SaveToWinampFile,
-    DeletePreset,
-    DeleteAutoPreset,
-    Configure,
-}
-
-impl PlaylistMenuKind {
-    fn render_kind(self) -> PlaylistMenuRenderKind {
-        self
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PanelAction {
-    None,
-    Changed,
-    OpenDirectoryDialog,
-    OpenFileDialog,
-    OpenLocationWindow,
-    OpenPlaylistLoadDialog,
-    OpenPlaylistSaveDialog,
-    ShowPlaylistSortMenu,
-    ShowFileInfo,
-    ShowPlaylistMenu(PlaylistMenuKind),
-    ShowEqualizerPresets,
-}
-
-struct GtkPanelActionContext<'a> {
-    window: &'a gtk::ApplicationWindow,
-    area: &'a gtk::DrawingArea,
-    main_state: &'a Rc<RefCell<MainWindowUiState>>,
-    open_location_window: Option<&'a gtk::ApplicationWindow>,
-    playlist_sort_menu: Option<&'a gtk::Popover>,
-    equalizer_presets_menu: Option<&'a gtk::Popover>,
-    equalizer_presets_docked: bool,
-}
-
-fn apply_panel_action(
-    action: PanelAction,
-    context: GtkPanelActionContext<'_>,
-    on_changed: impl FnOnce(),
-) {
-    match action {
-        PanelAction::None => {}
-        PanelAction::Changed => on_changed(),
-        PanelAction::OpenDirectoryDialog => {
-            context
-                .main_state
-                .borrow_mut()
-                .set_directory_dialog_visible(true);
-            show_playlist_add_directory_dialog(
-                context.window,
-                Rc::clone(context.main_state),
-                context.area.clone(),
-            );
-        }
-        PanelAction::OpenFileDialog => {
-            context
-                .main_state
-                .borrow_mut()
-                .set_file_dialog_visible(true);
-            show_playlist_add_file_dialog(
-                context.window,
-                Rc::clone(context.main_state),
-                context.area.clone(),
-            );
-        }
-        PanelAction::OpenLocationWindow => {
-            context
-                .main_state
-                .borrow_mut()
-                .set_open_location_visible(true);
-            if let Some(open_location_window) = context.open_location_window {
-                open_location_window.present();
-            }
-        }
-        PanelAction::OpenPlaylistLoadDialog => {
-            context
-                .main_state
-                .borrow_mut()
-                .set_playlist_load_dialog_visible(true);
-            show_playlist_load_dialog(
-                context.window,
-                Rc::clone(context.main_state),
-                context.area.clone(),
-            );
-        }
-        PanelAction::OpenPlaylistSaveDialog => {
-            context
-                .main_state
-                .borrow_mut()
-                .set_playlist_save_dialog_visible(true);
-            show_playlist_save_dialog(context.window, Rc::clone(context.main_state));
-        }
-        PanelAction::ShowFileInfo => {
-            show_file_info_dialog(context.window, Rc::clone(context.main_state));
-        }
-        PanelAction::ShowPlaylistSortMenu => {
-            if let Some(popover) = context.playlist_sort_menu {
-                show_playlist_sort_menu(popover, context.area);
-            }
-            context.area.queue_draw();
-        }
-        PanelAction::ShowPlaylistMenu(_) => {
-            context.area.queue_draw();
-        }
-        PanelAction::ShowEqualizerPresets => {
-            if let Some(popover) = context.equalizer_presets_menu {
-                if context.equalizer_presets_docked {
-                    show_docked_equalizer_presets_menu(
-                        popover,
-                        context.area,
-                        &context.main_state.borrow(),
-                    );
-                } else {
-                    show_equalizer_presets_menu(popover, context.area);
-                }
-            }
-            context.area.queue_draw();
-        }
-    }
-}
-
-fn add_panel_click_controller(
-    window: &gtk::ApplicationWindow,
-    area: &gtk::DrawingArea,
-    main_state: Rc<RefCell<MainWindowUiState>>,
-    main_area: gtk::DrawingArea,
-    kind: PanelKind,
-    equalizer_presets_menu: Option<gtk::Popover>,
-    open_location_window: Option<gtk::ApplicationWindow>,
-    playlist_sort_menu: Option<gtk::Popover>,
-) {
-    let click = gtk::GestureClick::new();
-    click.set_button(1);
-    click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    {
-        let area = area.clone();
-        let window = window.clone();
-        let main_state = Rc::clone(&main_state);
-        click.connect_pressed(move |gesture, n_press, x, y| {
-            area.grab_focus();
-            let (base_x, base_y) =
-                panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
-            if n_press >= 2
-                && kind == PanelKind::Equalizer
-                && main_state
-                    .borrow()
-                    .panel_title_drag_region(kind, base_x, base_y)
-            {
-                main_state.borrow_mut().toggle_equalizer_shaded();
-                sync_single_panel_window_from_state(kind, &window, &area, &main_state);
-                area.queue_draw();
-                return;
-            }
-            if !main_state
-                .borrow()
-                .panel_title_drag_region(kind, base_x, base_y)
-            {
-                if kind == PanelKind::Equalizer
-                    && main_state.borrow_mut().equalizer_press(base_x, base_y)
-                {
-                    area.queue_draw();
-                } else if kind == PanelKind::Playlist {
-                    if n_press >= 2
-                        && main_state
-                            .borrow_mut()
-                            .activate_playlist_entry_at(base_x, base_y)
-                    {
-                        area.queue_draw();
-                        return;
-                    }
-                    let ctrl_pressed = gesture
-                        .current_event_state()
-                        .contains(gtk::gdk::ModifierType::CONTROL_MASK);
-                    if main_state.borrow_mut().playlist_press_with_ctrl(
-                        base_x,
-                        base_y,
-                        ctrl_pressed,
-                    ) {
-                        area.queue_draw();
-                        return;
-                    }
-                    if main_state
-                        .borrow_mut()
-                        .playlist_scrollbar_press(base_x, base_y)
-                    {
-                        area.queue_draw();
-                        return;
-                    }
-                    if main_state.borrow().playlist_resize_region(base_x, base_y) {
-                        let Some(device) = gesture.current_event_device() else {
-                            return;
-                        };
-                        let Some(surface) = window.surface() else {
-                            return;
-                        };
-                        let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
-                            return;
-                        };
-                        toplevel.begin_resize(
-                            gtk::gdk::SurfaceEdge::SouthEast,
-                            Some(&device),
-                            gesture.current_button() as i32,
-                            x,
-                            y,
-                            gesture.current_event_time(),
-                        );
-                    }
-                }
-                return;
-            }
-
-            main_state.borrow_mut().set_panel_dragging(kind, true);
-            area.queue_draw();
-            let Some(device) = gesture.current_event_device() else {
-                return;
-            };
-            let Some(surface) = window.surface() else {
-                return;
-            };
-            let Ok(toplevel) = surface.downcast::<gtk::gdk::Toplevel>() else {
-                return;
-            };
-            toplevel.begin_move(
-                &device,
-                gesture.current_button() as i32,
-                x,
-                y,
-                gesture.current_event_time(),
-            );
-        });
-    }
-    {
-        let area = area.clone();
-        let window = window.clone();
-        let main_state = Rc::clone(&main_state);
-        click.connect_released(move |_gesture, _n_press, x, y| {
-            let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
-            main_state.borrow_mut().set_panel_dragging(kind, false);
-            area.queue_draw();
-            let action = if kind == PanelKind::Equalizer {
-                let title_action = main_state.borrow_mut().panel_click(kind, x, y);
-                if title_action == PanelAction::None {
-                    main_state.borrow_mut().equalizer_release(x, y)
-                } else {
-                    title_action
-                }
-            } else if main_state.borrow_mut().playlist_scrollbar_release() {
-                PanelAction::Changed
-            } else if main_state.borrow().playlist_menu_pressed() {
-                main_state.borrow_mut().playlist_release(x, y)
-            } else if main_state.borrow_mut().playlist_entry_release() {
-                PanelAction::Changed
-            } else {
-                main_state.borrow_mut().panel_click(kind, x, y)
-            };
-            apply_panel_action(
-                action,
-                GtkPanelActionContext {
-                    window: &window,
-                    area: &area,
-                    main_state: &main_state,
-                    open_location_window: open_location_window.as_ref(),
-                    playlist_sort_menu: playlist_sort_menu.as_ref(),
-                    equalizer_presets_menu: equalizer_presets_menu.as_ref(),
-                    equalizer_presets_docked: false,
-                },
-                || {
-                    sync_single_panel_window_from_state(kind, &window, &area, &main_state);
-                    main_area.queue_draw();
-                },
-            );
-        });
-    }
-    window.add_controller(click);
-
-    let motion = gtk::EventControllerMotion::new();
-    motion.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let panel_hover_base = Rc::new(Cell::new(None::<(i32, i32)>));
-    {
-        let area = area.clone();
-        let main_state = Rc::clone(&main_state);
-        let panel_hover_base = Rc::clone(&panel_hover_base);
-        motion.connect_motion(move |_motion, x, y| {
-            let (x, y) = panel_event_to_base_coords(kind, &area, &main_state.borrow(), x, y);
-            panel_hover_base.set(Some((x, y)));
-            match kind {
-                PanelKind::Equalizer => {
-                    if main_state.borrow_mut().equalizer_motion(x, y) {
-                        area.queue_draw();
-                    }
-                }
-                PanelKind::Playlist => {
-                    let scrolled = main_state.borrow_mut().playlist_scrollbar_motion(x, y);
-                    let menu_changed = main_state.borrow_mut().playlist_motion(x, y);
-                    if scrolled || menu_changed {
-                        area.queue_draw();
-                    }
-                }
-            }
-        });
-    }
-    window.add_controller(motion);
-
-    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
-    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
-    {
-        let area = area.clone();
-        let main_state = Rc::clone(&main_state);
-        let panel_hover_base = Rc::clone(&panel_hover_base);
-        scroll.connect_scroll(move |scroll, _dx, dy| {
-            let hover = panel_hover_base.get().or_else(|| {
-                scroll
-                    .current_event()
-                    .and_then(|event| event.position())
-                    .map(|(event_x, event_y)| {
-                        panel_event_to_base_coords(
-                            kind,
-                            &area,
-                            &main_state.borrow(),
-                            event_x,
-                            event_y,
-                        )
-                    })
-            });
-            let Some((x, y)) = hover else {
-                return gtk::glib::Propagation::Proceed;
-            };
-            let changed = match kind {
-                PanelKind::Equalizer => main_state.borrow_mut().equalizer_scroll(x, y, dy),
-                PanelKind::Playlist => main_state.borrow_mut().playlist_scroll(dy),
-            };
-            if changed {
-                area.queue_draw();
-                gtk::glib::Propagation::Stop
-            } else {
-                gtk::glib::Propagation::Proceed
-            }
-        });
-    }
-    window.add_controller(scroll);
-
-    {
-        let area = area.clone();
-        let main_state = Rc::clone(&main_state);
-        window.connect_is_active_notify(move |window| {
-            main_state
-                .borrow_mut()
-                .set_panel_focused(kind, window.is_active());
-            area.queue_draw();
-        });
-    }
-}
-
-fn show_equalizer_presets_menu(popover: &gtk::Popover, area: &gtk::DrawingArea) {
-    let scale_x = area.allocated_width().max(1) as f64 / f64::from(EQUALIZER_WINDOW_WIDTH);
-    let scale_y = area.allocated_height().max(1) as f64 / f64::from(EQUALIZER_WINDOW_HEIGHT);
-    let rect = gtk::gdk::Rectangle::new(
-        (217.0 * scale_x) as i32,
-        (30.0 * scale_y) as i32,
-        (44.0 * scale_x).max(1.0) as i32,
-        1,
-    );
-    popover.set_pointing_to(Some(&rect));
-    popover.popup();
-}
-
-fn show_docked_equalizer_presets_menu(
-    popover: &gtk::Popover,
-    area: &gtk::DrawingArea,
-    state: &MainWindowUiState,
-) {
-    let (base_width, base_height) = state.docked_panel_size();
-    let scale_x = area.allocated_width().max(1) as f64 / f64::from(base_width);
-    let scale_y = area.allocated_height().max(1) as f64 / f64::from(base_height);
-    let y_offset = main_window_height(state.shaded);
-    let rect = gtk::gdk::Rectangle::new(
-        (217.0 * scale_x) as i32,
-        (f64::from(y_offset + 30) * scale_y) as i32,
-        (44.0 * scale_x).max(1.0) as i32,
-        1,
-    );
-    popover.set_pointing_to(Some(&rect));
-    popover.popup();
-}
-
-fn activate_equalizer_preset_action(
-    action: EqualizerPresetAction,
-    parent: &gtk::DrawingArea,
-    main_state: Rc<RefCell<MainWindowUiState>>,
-    equalizer_area: gtk::DrawingArea,
-    main_area: gtk::DrawingArea,
-) {
-    match action {
-        EqualizerPresetAction::LoadPreset => show_equalizer_preset_list_dialog(
-            parent,
-            "Load preset",
-            false,
-            false,
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::LoadAutoPreset => show_equalizer_preset_list_dialog(
-            parent,
-            "Load auto-preset",
-            true,
-            false,
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::LoadDefault => {
-            main_state.borrow_mut().load_equalizer_default_preset();
-            queue_equalizer_areas(&equalizer_area, &main_area);
-        }
-        EqualizerPresetAction::LoadZero => {
-            main_state.borrow_mut().load_equalizer_zero_preset();
-            queue_equalizer_areas(&equalizer_area, &main_area);
-        }
-        EqualizerPresetAction::LoadFromFile => show_equalizer_file_dialog(
-            parent,
-            "Load equalizer preset",
-            gtk::FileChooserAction::Open,
-            "Open",
-            move |state, path| state.load_equalizer_preset_file(path).map(|_| ()),
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::LoadFromWinampFile => show_equalizer_file_dialog(
-            parent,
-            "Load WinAMP equalizer preset",
-            gtk::FileChooserAction::Open,
-            "Open",
-            move |state, path| state.load_equalizer_winamp_file(path).map(|_| ()),
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::ImportWinampPresets => show_equalizer_file_dialog(
-            parent,
-            "Import WinAMP equalizer presets",
-            gtk::FileChooserAction::Open,
-            "Import",
-            move |state, path| state.import_equalizer_winamp_file(path).map(|_| ()),
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::SavePreset => show_equalizer_save_name_dialog(
-            parent,
-            "Save preset",
-            None,
-            false,
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::SaveAutoPreset => {
-            let default_name = main_state.borrow().current_playlist_basename();
-            show_equalizer_save_name_dialog(
-                parent,
-                "Save auto-preset",
-                default_name,
-                true,
-                main_state,
-                equalizer_area,
-                main_area,
-            );
-        }
-        EqualizerPresetAction::SaveDefault => {
-            if let Err(err) = main_state.borrow_mut().save_equalizer_default_preset() {
-                eprintln!("xmms-rs: failed to save default equalizer preset: {err}");
-            }
-        }
-        EqualizerPresetAction::SaveToFile => show_equalizer_file_dialog(
-            parent,
-            "Save equalizer preset",
-            gtk::FileChooserAction::Save,
-            "Save",
-            move |state, path| state.save_equalizer_preset_file(path).map(|_| ()),
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::SaveToWinampFile => show_equalizer_file_dialog(
-            parent,
-            "Save WinAMP equalizer preset",
-            gtk::FileChooserAction::Save,
-            "Save",
-            move |state, path| state.save_equalizer_winamp_file(path).map(|_| ()),
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::DeletePreset => show_equalizer_preset_list_dialog(
-            parent,
-            "Delete preset",
-            false,
-            true,
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::DeleteAutoPreset => show_equalizer_preset_list_dialog(
-            parent,
-            "Delete auto-preset",
-            true,
-            true,
-            main_state,
-            equalizer_area,
-            main_area,
-        ),
-        EqualizerPresetAction::Configure => {
-            show_equalizer_configure_dialog(parent, main_state, equalizer_area, main_area);
-        }
-    }
-}
-
-fn queue_equalizer_areas(equalizer_area: &gtk::DrawingArea, main_area: &gtk::DrawingArea) {
-    equalizer_area.queue_draw();
-    main_area.queue_draw();
-}
-
-fn area_window(parent: &gtk::DrawingArea) -> Option<gtk::Window> {
-    parent
-        .root()
-        .and_then(|root| root.downcast::<gtk::Window>().ok())
-}
-
-fn show_equalizer_file_dialog(
-    parent: &gtk::DrawingArea,
-    title: &'static str,
-    action: gtk::FileChooserAction,
-    accept: &'static str,
-    handler: impl Fn(&mut MainWindowUiState, &Path) -> io::Result<()> + 'static,
-    main_state: Rc<RefCell<MainWindowUiState>>,
-    equalizer_area: gtk::DrawingArea,
-    main_area: gtk::DrawingArea,
-) {
-    let parent_window = area_window(parent);
-    let dialog = gtk::FileChooserNative::new(
-        Some(title),
-        parent_window.as_ref(),
-        action,
-        Some(accept),
-        Some("Cancel"),
-    );
-    let dialog_for_response = dialog.clone();
-    dialog.connect_response(move |dialog, response| {
-        if response == gtk::ResponseType::Accept {
-            if let Some(path) = dialog.file().and_then(|file| file.path()) {
-                if let Err(err) = handler(&mut main_state.borrow_mut(), &path) {
-                    eprintln!(
-                        "xmms-rs: equalizer file action failed for {}: {err}",
-                        path.display()
-                    );
-                }
-            }
-        }
-        queue_equalizer_areas(&equalizer_area, &main_area);
-        dialog_for_response.destroy();
-    });
-    dialog.show();
-}
-
-fn show_equalizer_save_name_dialog(
-    parent: &gtk::DrawingArea,
-    title: &'static str,
-    default_name: Option<String>,
-    automatic: bool,
-    main_state: Rc<RefCell<MainWindowUiState>>,
-    equalizer_area: gtk::DrawingArea,
-    main_area: gtk::DrawingArea,
-) {
-    let window = skinned_window(title, 320, 90, &[]);
-    window.set_modal(true);
-    if let Some(parent_window) = area_window(parent) {
-        window.set_transient_for(Some(&parent_window));
-    }
-    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    layout.add_css_class("xmms-skinned-window");
-    layout.set_margin_top(8);
-    layout.set_margin_bottom(8);
-    layout.set_margin_start(8);
-    layout.set_margin_end(8);
-    let entry = gtk::Entry::new();
-    entry.set_text(default_name.as_deref().unwrap_or(""));
-    layout.append(&entry);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let ok = gtk::Button::with_label("Ok");
-    let cancel = gtk::Button::with_label("Cancel");
-    {
-        let window = window.clone();
-        let entry = entry.clone();
-        ok.connect_clicked(move |_| {
-            let name = entry.text().trim().to_string();
-            if !name.is_empty() {
-                if let Err(err) = main_state
-                    .borrow_mut()
-                    .save_named_equalizer_preset(name, automatic)
-                {
-                    eprintln!("xmms-rs: failed to save equalizer preset: {err}");
-                }
-            }
-            queue_equalizer_areas(&equalizer_area, &main_area);
-            window.close();
-        });
-    }
-    {
-        let window = window.clone();
-        cancel.connect_clicked(move |_| window.close());
-    }
-    buttons.append(&ok);
-    buttons.append(&cancel);
-    layout.append(&buttons);
-    window.set_child(Some(&layout));
-    window.present();
-}
-
-fn show_equalizer_preset_list_dialog(
-    parent: &gtk::DrawingArea,
-    title: &'static str,
-    automatic: bool,
-    delete_mode: bool,
-    main_state: Rc<RefCell<MainWindowUiState>>,
-    equalizer_area: gtk::DrawingArea,
-    main_area: gtk::DrawingArea,
-) {
-    let window = skinned_window(title, 350, 300, &[]);
-    window.set_modal(true);
-    if let Some(parent_window) = area_window(parent) {
-        window.set_transient_for(Some(&parent_window));
-    }
-    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    layout.add_css_class("xmms-skinned-window");
-    layout.set_margin_top(8);
-    layout.set_margin_bottom(8);
-    layout.set_margin_start(8);
-    layout.set_margin_end(8);
-    let presets = main_state.borrow().sorted_equalizer_presets(automatic);
-    if delete_mode {
-        let mut checks = Vec::new();
-        for preset in presets {
-            let check = gtk::CheckButton::with_label(&preset.name);
-            layout.append(&check);
-            checks.push((preset.name, check));
-        }
-        let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let delete = gtk::Button::with_label("Delete");
-        let close = gtk::Button::with_label("Close");
-        {
-            let window = window.clone();
-            delete.connect_clicked(move |_| {
-                let names: Vec<String> = checks
-                    .iter()
-                    .filter(|(_, check)| check.is_active())
-                    .map(|(name, _)| name.clone())
-                    .collect();
-                if let Err(err) = main_state
-                    .borrow_mut()
-                    .delete_named_equalizer_presets(names, automatic)
-                {
-                    eprintln!("xmms-rs: failed to delete equalizer presets: {err}");
-                }
-                queue_equalizer_areas(&equalizer_area, &main_area);
-                window.close();
-            });
-        }
-        {
-            let window = window.clone();
-            close.connect_clicked(move |_| window.close());
-        }
-        buttons.append(&delete);
-        buttons.append(&close);
-        layout.append(&buttons);
-    } else {
-        for preset in presets {
-            let button = gtk::Button::with_label(&preset.name);
-            {
-                let window = window.clone();
-                let name = preset.name.clone();
-                let main_state = Rc::clone(&main_state);
-                let equalizer_area = equalizer_area.clone();
-                let main_area = main_area.clone();
-                button.connect_clicked(move |_| {
-                    main_state
-                        .borrow_mut()
-                        .load_named_equalizer_preset(&name, automatic);
-                    queue_equalizer_areas(&equalizer_area, &main_area);
-                    window.close();
-                });
-            }
-            layout.append(&button);
-        }
-        let close = gtk::Button::with_label("Cancel");
-        {
-            let window = window.clone();
-            close.connect_clicked(move |_| window.close());
-        }
-        layout.append(&close);
-    }
-    window.set_child(Some(&layout));
-    window.present();
-}
-
-fn show_equalizer_configure_dialog(
-    parent: &gtk::DrawingArea,
-    main_state: Rc<RefCell<MainWindowUiState>>,
-    equalizer_area: gtk::DrawingArea,
-    main_area: gtk::DrawingArea,
-) {
-    let window = skinned_window("Configure Equalizer", 360, 140, &[]);
-    window.set_modal(true);
-    if let Some(parent_window) = area_window(parent) {
-        window.set_transient_for(Some(&parent_window));
-    }
-    let layout = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    layout.add_css_class("xmms-skinned-window");
-    layout.set_margin_top(8);
-    layout.set_margin_bottom(8);
-    layout.set_margin_start(8);
-    layout.set_margin_end(8);
-    let default_file = gtk::Entry::new();
-    let extension = gtk::Entry::new();
-    {
-        let state = main_state.borrow();
-        default_file.set_text(&state.app_state.config.eqpreset_default_file);
-        extension.set_text(&state.app_state.config.eqpreset_extension);
-    }
-    layout.append(&gtk::Label::new(Some("Directory preset file:")));
-    layout.append(&default_file);
-    layout.append(&gtk::Label::new(Some("File preset extension:")));
-    layout.append(&extension);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    let ok = gtk::Button::with_label("Ok");
-    let cancel = gtk::Button::with_label("Cancel");
-    {
-        let window = window.clone();
-        ok.connect_clicked(move |_| {
-            let mut state = main_state.borrow_mut();
-            let default_file = default_file
-                .text()
-                .trim()
-                .trim_start_matches('.')
-                .to_string();
-            let extension = extension.text().trim().trim_start_matches('.').to_string();
-            state.update_config_via_store(|config| {
-                config.eqpreset_default_file = default_file;
-                config.eqpreset_extension = extension;
-            });
-            queue_equalizer_areas(&equalizer_area, &main_area);
-            window.close();
-        });
-    }
-    {
-        let window = window.clone();
-        cancel.connect_clicked(move |_| window.close());
-    }
-    buttons.append(&ok);
-    buttons.append(&cancel);
-    layout.append(&buttons);
-    window.set_child(Some(&layout));
-    window.present();
-}
-
 fn panel_event_to_base_coords(
     kind: PanelKind,
     area: &gtk::DrawingArea,
@@ -7323,34 +5642,17 @@ impl MainWindowUiState {
     }
 
     fn playlist_rows_render_state(&self) -> PlaylistRowsRenderState {
-        let current = self.app_state.playlist.position();
-        let entries = self
-            .app_state
-            .playlist
-            .entries()
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| PlaylistRowRenderEntry {
-                title: self.formatted_playlist_entry_title(entry),
-                length_ms: entry.length_ms,
-                selected: entry.selected,
-                current: current == Some(index),
-            })
-            .collect();
-
-        PlaylistRowsRenderState {
-            entries,
-            scroll_offset: self.playlist_ui.scroll_offset,
-            scrollbar_dragging: matches!(
+        shared_playlist_rows_render_state(
+            &self.app_state,
+            self.playlist_ui.scroll_offset,
+            matches!(
                 self.playlist_ui.pointer,
                 PlaylistPointer::DraggingScrollbar { .. }
             ),
-            search_query: self.playlist_ui.search.active_query().map(str::to_owned),
-            show_numbers: self.app_state.config.show_numbers_in_pl,
-            font_family: self.app_state.config.playlist_font.clone(),
-            width: self.playlist_ui.width,
-            height: self.playlist_ui.height,
-        }
+            self.playlist_ui.search.active_query().map(str::to_owned),
+            self.playlist_ui.width,
+            self.playlist_ui.height,
+        )
     }
 
     fn bitrate_text(&self) -> String {
@@ -7379,13 +5681,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn formatted_current_title(&self) -> String {
-        let Some(position) = self.app_state.playlist.position() else {
-            return "XMMS Renascene".to_string();
-        };
-        let Some(entry) = self.app_state.playlist.entries().get(position) else {
-            return "XMMS Renascene".to_string();
-        };
-        self.formatted_playlist_entry_title(entry)
+        shared_formatted_current_title(&self.app_state)
     }
 
     fn equalizer_drag_info_text(&self) -> Option<String> {
@@ -7413,12 +5709,7 @@ impl MainWindowUiState {
     }
 
     fn formatted_playlist_entry_title(&self, entry: &crate::playlist::PlaylistEntry) -> String {
-        format_title_for_preferences(
-            &self.app_state.config.title_format,
-            &entry.filename,
-            &entry.title,
-            &self.app_state.config,
-        )
+        shared_formatted_playlist_entry_title(&self.app_state, entry)
     }
 
     pub(crate) fn shaded_playlist_info(&self) -> String {
@@ -8264,19 +6555,13 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn double_fractional_scale(&mut self) {
-        let scale = (self.app_state.config.scale_factor * 2.0).clamp(1.0, 5.0);
-        self.update_config_via_store(|config| {
-            config.scale_factor = scale;
-            config.doublesize = scale > 1.0;
-        });
+        let scale = self.app_state.config.scale_factor * 2.0;
+        self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn halve_fractional_scale(&mut self) {
-        let scale = (self.app_state.config.scale_factor / 2.0).clamp(1.0, 5.0);
-        self.update_config_via_store(|config| {
-            config.scale_factor = scale;
-            config.doublesize = scale > 1.0;
-        });
+        let scale = self.app_state.config.scale_factor / 2.0;
+        self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn double_size(&self) -> bool {
@@ -9404,8 +7689,8 @@ impl MainWindowUiState {
             return false;
         };
         if ctrl_pressed {
-            if let Some(entry) = self.app_state.playlist.entries_mut().get_mut(index) {
-                entry.selected = !entry.selected;
+            for command in playlist_row_click_commands(index, false, true) {
+                self.dispatch_store_command(command);
             }
             self.playlist_ui.last_click = None;
             self.playlist_ui.pending_double_click = None;
@@ -9423,7 +7708,9 @@ impl MainWindowUiState {
 
         self.playlist_ui.last_click = Some((index, now));
         self.playlist_ui.pending_double_click = is_double_click.then_some(index);
-        self.select_single_playlist_entry(index);
+        for command in playlist_row_click_commands(index, false, false) {
+            self.dispatch_store_command(command);
+        }
         self.playlist_ui.pointer = PlaylistPointer::DraggingEntry {
             index,
             moved: false,
@@ -9443,12 +7730,12 @@ impl MainWindowUiState {
     }
 
     fn activate_playlist_entry(&mut self, index: usize) {
-        self.select_single_playlist_entry(index);
         self.playlist_ui.last_click = None;
         self.playlist_ui.pending_double_click = None;
         self.playlist_ui.pointer = PlaylistPointer::Idle;
-        self.dispatch_store_command(PlaylistCommand::SetPosition(index));
-        self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+        for command in playlist_row_click_commands(index, true, false) {
+            self.dispatch_store_command_and_apply_local_effects(command);
+        }
     }
 
     pub(crate) fn playlist_motion(&mut self, x: i32, y: i32) -> bool {
@@ -9577,27 +7864,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn activate_playlist_sort_action(&mut self, action: PlaylistSortAction) -> bool {
-        let command = match action {
-            PlaylistSortAction::ListByTitle => PlaylistCommand::Sort(PlaylistSortKey::Title),
-            PlaylistSortAction::ListByFilename => PlaylistCommand::Sort(PlaylistSortKey::Filename),
-            PlaylistSortAction::ListByPath => PlaylistCommand::Sort(PlaylistSortKey::Path),
-            PlaylistSortAction::ListByDate => PlaylistCommand::Sort(PlaylistSortKey::Date),
-            PlaylistSortAction::SelectionByTitle => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Title)
-            }
-            PlaylistSortAction::SelectionByFilename => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Filename)
-            }
-            PlaylistSortAction::SelectionByPath => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Path)
-            }
-            PlaylistSortAction::SelectionByDate => {
-                PlaylistCommand::SortSelected(PlaylistSortKey::Date)
-            }
-            PlaylistSortAction::RandomizeList => PlaylistCommand::Randomize,
-            PlaylistSortAction::ReverseList => PlaylistCommand::Reverse,
-        };
-        self.dispatch_store_command(command);
+        self.dispatch_store_command(action.command());
         self.clamp_playlist_scroll_offset();
         true
     }
@@ -9759,8 +8026,9 @@ impl MainWindowUiState {
     }
 
     fn select_single_playlist_entry(&mut self, index: usize) {
-        self.dispatch_store_command(PlaylistCommand::SelectNone);
-        self.dispatch_store_command(PlaylistCommand::ToggleEntrySelection(index));
+        for command in playlist_row_click_commands(index, false, false) {
+            self.dispatch_store_command(command);
+        }
     }
 
     fn scroll_playlist_entry_into_view(&mut self, index: usize) {
@@ -10083,11 +8351,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_scale_factor(&mut self, scale: f64) {
-        let scale = scale.clamp(1.0, 5.0);
-        self.update_config_via_store(|config| {
-            config.scale_factor = scale;
-            config.doublesize = scale > 1.0;
-        });
+        self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn set_preference_repeat(&mut self, enabled: bool) {
@@ -10244,11 +8508,7 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preference_title_format(&mut self, format: &str) {
         self.update_config_via_store(|config| {
-            config.title_format = if format.trim().is_empty() {
-                "%p - %t".to_string()
-            } else {
-                format.trim().to_string()
-            };
+            config.title_format = normalize_title_format(format);
         });
     }
 

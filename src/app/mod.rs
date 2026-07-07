@@ -6,10 +6,13 @@
 pub mod command;
 pub mod controller;
 pub mod effect;
+pub mod equalizer_actions;
+pub mod file_info;
 pub mod input;
 pub mod logging;
 pub mod panel;
 pub mod playlist_actions;
+pub mod preferences_model;
 pub mod preview;
 pub mod screenshot_scenarios;
 pub mod services;

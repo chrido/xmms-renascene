@@ -379,17 +379,72 @@ fn draw_playlist_footer_time(
     render_text(cr, skin, seconds, width - 64, height - 15, 10)
 }
 
-fn set_playlist_font(cr: &Context, family: &str) {
-    cr.select_font_face(
-        if family.trim().is_empty() {
-            "Helvetica"
-        } else {
-            family.trim()
-        },
-        cairo::FontSlant::Normal,
-        cairo::FontWeight::Bold,
-    );
-    cr.set_font_size(9.0);
+fn set_playlist_font(cr: &Context, descriptor: &str) {
+    let parsed = PlaylistFont::parse(descriptor);
+    cr.select_font_face(&parsed.family, parsed.slant, parsed.weight);
+    cr.set_font_size(parsed.size);
+    apply_crisp_font_options(cr);
+}
+
+/// Enable full hinting and metric hinting so the small playlist font rasterizes
+/// on the pixel grid instead of looking soft/blurry.
+fn apply_crisp_font_options(cr: &Context) {
+    let options = cairo::FontOptions::new().expect("cairo font options");
+    let mut options = options;
+    options.set_antialias(cairo::Antialias::Gray);
+    options.set_hint_style(cairo::HintStyle::Full);
+    options.set_hint_metrics(cairo::HintMetrics::On);
+    cr.set_font_options(&options);
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct PlaylistFont {
+    family: String,
+    slant: cairo::FontSlant,
+    weight: cairo::FontWeight,
+    size: f64,
+}
+
+impl PlaylistFont {
+    /// Parse a Pango-style font descriptor: `FAMILY [STYLE-OPTIONS] [SIZE]`,
+    /// e.g. "Sans Bold 11", "Helvetica Italic 9", or a bare family "Helvetica".
+    /// Style keywords and a trailing point size are honored so the preferences
+    /// font field actually changes the rendered playlist text.
+    fn parse(descriptor: &str) -> Self {
+        let mut family_parts: Vec<&str> = Vec::new();
+        let mut slant = cairo::FontSlant::Normal;
+        let mut weight = cairo::FontWeight::Normal;
+        let mut size: Option<f64> = None;
+
+        for token in descriptor.split_whitespace() {
+            match token.to_ascii_lowercase().as_str() {
+                "bold" => weight = cairo::FontWeight::Bold,
+                "italic" | "oblique" => slant = cairo::FontSlant::Italic,
+                "normal" | "regular" | "roman" | "medium" | "book" | "light" => {}
+                _ => {
+                    if let Ok(value) = token.parse::<f64>() {
+                        if value > 0.0 {
+                            size = Some(value);
+                            continue;
+                        }
+                    }
+                    family_parts.push(token);
+                }
+            }
+        }
+
+        let family = family_parts.join(" ");
+        Self {
+            family: if family.trim().is_empty() {
+                "Helvetica".to_string()
+            } else {
+                family
+            },
+            slant,
+            weight,
+            size: size.unwrap_or(9.0),
+        }
+    }
 }
 
 fn format_duration(length_ms: i64) -> String {
@@ -583,5 +638,35 @@ fn playlist_menu_border_source(kind: PlaylistMenuRenderKind) -> (i32, i32) {
         PlaylistMenuRenderKind::Select => (150, 111),
         PlaylistMenuRenderKind::Misc => (200, 111),
         PlaylistMenuRenderKind::List => (250, 111),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlaylistFont;
+
+    #[test]
+    fn parses_bare_family_as_normal_weight() {
+        let font = PlaylistFont::parse("Helvetica");
+        assert_eq!(font.family, "Helvetica");
+        assert_eq!(font.slant, cairo::FontSlant::Normal);
+        assert_eq!(font.weight, cairo::FontWeight::Normal);
+        assert_eq!(font.size, 9.0);
+    }
+
+    #[test]
+    fn parses_style_and_size_from_descriptor() {
+        let font = PlaylistFont::parse("DejaVu Sans Bold Italic 11");
+        assert_eq!(font.family, "DejaVu Sans");
+        assert_eq!(font.slant, cairo::FontSlant::Italic);
+        assert_eq!(font.weight, cairo::FontWeight::Bold);
+        assert_eq!(font.size, 11.0);
+    }
+
+    #[test]
+    fn empty_descriptor_falls_back_to_default_family() {
+        let font = PlaylistFont::parse("   ");
+        assert_eq!(font.family, "Helvetica");
+        assert_eq!(font.size, 9.0);
     }
 }
