@@ -179,21 +179,27 @@ def test_mpris_introspection_and_initial_properties(
     mpris_tracks: dict[str, Path],
 ) -> None:
     async def body(client: MprisClient, _process: subprocess.Popen[bytes]) -> None:
-        assert await client.get_root_property("Identity") == "XMMS Renascene"
-        assert await client.get_root_property("DesktopEntry") == "org.xmms.Renascene"
+        for name, expected in [
+            ("Identity", "XMMS Renascene"),
+            ("DesktopEntry", "org.xmms.Renascene"),
+        ]:
+            assert await client.get_root_property(name) == expected
         assert "file" in await client.get_root_property("SupportedUriSchemes")
 
-        assert await client.get_player_property("PlaybackStatus") == "Stopped"
-        assert await client.get_player_property("Rate") == 1.0
-        assert await client.get_player_property("CanControl")
-        assert await client.get_player_property("CanPlay")
-        assert await client.get_player_property("CanPause")
-        assert await client.get_player_property("CanSeek")
+        for name, expected in [("PlaybackStatus", "Stopped"), ("Rate", 1.0)]:
+            assert await client.get_player_property(name) == expected
+        for name in ["CanControl", "CanPlay", "CanPause", "CanSeek"]:
+            assert await client.get_player_property(name)
 
         metadata = await client.get_player_property("Metadata")
-        assert variant_value(metadata["mpris:trackid"]) == "/org/xmms/Track/0"
-        assert variant_value(metadata["xesam:url"]) == track_uri(mpris_tracks["one"])
-        assert variant_value(metadata["xesam:title"]) == "one"
+        assert {
+            key: variant_value(metadata[key])
+            for key in ["mpris:trackid", "xesam:url", "xesam:title"]
+        } == {
+            "mpris:trackid": "/org/xmms/Track/0",
+            "xesam:url": track_uri(mpris_tracks["one"]),
+            "xesam:title": "one",
+        }
 
     run_mpris_test(
         tmp_path,

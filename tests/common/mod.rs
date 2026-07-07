@@ -96,23 +96,66 @@ pub fn file_uri(path: &Path) -> String {
 }
 
 pub fn app() -> UiE2e {
-    UiE2e::start_player(PlayerSettings::default())
+    player(PlayerSettings::default())
+}
+
+pub fn player(settings: PlayerSettings) -> UiE2e {
+    UiE2e::start_player(settings)
 }
 
 pub fn playlist_app() -> UiE2e {
-    UiE2e::start_player(PlayerSettings::default().with_playlist_visible(true))
+    player(PlayerSettings::default().with_playlist_visible(true))
 }
 
 pub fn equalizer_app() -> UiE2e {
-    UiE2e::start_player(PlayerSettings::default().with_equalizer_visible(true))
+    player(PlayerSettings::default().with_equalizer_visible(true))
 }
 
-pub fn seed_playlist<'a, I>(app: &'a mut UiE2e, entries: I) -> &'a mut UiE2e
+pub fn docked_panels_app() -> UiE2e {
+    player(
+        PlayerSettings::default()
+            .with_equalizer_visible(true)
+            .with_playlist_visible(true),
+    )
+}
+
+pub fn detached_playlist_app() -> UiE2e {
+    player(PlayerSettings::default().with_playlist_detached(true))
+}
+
+pub fn detached_equalizer_app() -> UiE2e {
+    player(PlayerSettings::default().with_equalizer_detached(true))
+}
+
+pub fn seed_playlist<I, U, T>(app: &mut UiE2e, entries: I) -> &mut UiE2e
 where
-    I: IntoIterator<Item = (&'a str, &'a str, i64)>,
+    I: IntoIterator<Item = (U, T, i64)>,
+    U: AsRef<str>,
+    T: AsRef<str>,
 {
     for (uri, title, duration_ms) in entries {
-        app.add_timed_entry(uri, title, duration_ms);
+        app.add_timed_entry(uri.as_ref(), title.as_ref(), duration_ms);
+    }
+    app
+}
+
+pub fn date_order_files(prefix: &str) -> (TempDir, PathBuf, PathBuf) {
+    let dir = temp_dir(prefix);
+    let older = dir.join("older.ogg");
+    let newer = dir.join("newer.ogg");
+    fs::write(&older, b"old").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&newer, b"new").unwrap();
+    (dir, older, newer)
+}
+
+pub fn assert_playlist_order<'a, I, U>(app: &'a mut UiE2e, expected: I) -> &'a mut UiE2e
+where
+    I: IntoIterator<Item = U>,
+    U: AsRef<str>,
+{
+    for (index, uri) in expected.into_iter().enumerate() {
+        app.assert_playlist_entry(index, uri.as_ref());
     }
     app
 }
