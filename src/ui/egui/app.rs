@@ -1498,14 +1498,22 @@ fn show_detached_snapshot(
         return;
     }
     update_detached_playlist_menu_interaction(ui, shared, snapshot, rect);
-    if let Some(pos) = response.interact_pointer_pos() {
-        if response.drag_started() && detached_playlist_resize_region(snapshot, rect, pos) {
-            // Use the press origin (not the post-threshold pointer position) so the
-            // drag-start offset does not silently absorb the initial threshold motion.
-            let origin = ui
-                .ctx()
-                .input(|input| input.pointer.press_origin())
-                .unwrap_or(pos);
+    // Compute the primary press-origin for this frame once. Under a WM-less /
+    // software-rendered X server the synthetic press+drag can be coalesced or
+    // delivered before hover is established, so egui never attributes the drag to
+    // this widget and `response.drag_started()` stays false. The press-origin edge
+    // is still reported, so keying grabs off it (rather than drag_started) makes
+    // resize and titlebar drags reliable; using the origin (not the post-threshold
+    // pointer) avoids absorbing the initial threshold motion.
+    let press_origin = ui.ctx().input(|input| {
+        input
+            .pointer
+            .button_pressed(egui::PointerButton::Primary)
+            .then(|| input.pointer.press_origin())
+            .flatten()
+    });
+    if let Some(origin) = press_origin {
+        if detached_playlist_resize_region(snapshot, rect, origin) {
             let local_x = ((origin.x - rect.left()) / snapshot.scale_factor).round() as i32;
             let local_y = ((origin.y - rect.top()) / snapshot.scale_factor).round() as i32;
             let mut state = shared.lock().expect("detached viewport state poisoned");
@@ -1516,17 +1524,7 @@ fn show_detached_snapshot(
         }
     }
     // Start a window drag when the press begins on the titlebar (outside the
-    // shade/close buttons). Use the raw press without requiring the response's
-    // hover-established interaction flag: when a WM-less X server delivers a warp
-    // and press in the same frame, egui may not attribute the press to this
-    // widget, but the primary button-pressed edge and press origin are still set.
-    let press_origin = ui.ctx().input(|input| {
-        input
-            .pointer
-            .button_pressed(egui::PointerButton::Primary)
-            .then(|| input.pointer.press_origin())
-            .flatten()
-    });
+    // shade/close buttons).
     if let Some(pos) = press_origin {
         if detached_panel_titlebar_drag_region(snapshot, rect, pos) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);

@@ -217,14 +217,25 @@ fn add_playlist_resize_handle(
     if response.hovered() || app.playlist_resize_start.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
     }
-    if response.drag_started() {
-        let pointer = ui
-            .ctx()
-            .input(|input| input.pointer.press_origin())
-            .or_else(|| response.interact_pointer_pos())
-            .unwrap_or(rect.right_bottom());
-        let local_y = ((pointer.y - base_rect.top()) / app.scale_factor).round() as i32;
-        app.playlist_resize_start = Some(app.playlist_height - local_y);
+    // Start the resize on the primary press edge whose origin lies on the handle,
+    // rather than on egui's `drag_started()`. Under a WM-less/software-rendered X
+    // server the synthetic press+drag can be coalesced or delivered before hover
+    // is established, so egui never attributes the drag to the handle and
+    // `drag_started()` stays false. The press-origin edge is still reported, so
+    // this makes the resize grab reliable while the press-origin (not the
+    // post-threshold pointer) avoids absorbing the initial threshold motion.
+    let press_origin = ui.ctx().input(|input| {
+        input
+            .pointer
+            .button_pressed(egui::PointerButton::Primary)
+            .then(|| input.pointer.press_origin())
+            .flatten()
+    });
+    if let Some(origin) = press_origin {
+        if rect.contains(origin) {
+            let local_y = ((origin.y - base_rect.top()) / app.scale_factor).round() as i32;
+            app.playlist_resize_start = Some(app.playlist_height - local_y);
+        }
     }
     if let Some(offset_y) = app.playlist_resize_start {
         if ui.ctx().input(|input| input.pointer.primary_down()) {
@@ -237,9 +248,6 @@ fn add_playlist_resize_handle(
         } else {
             app.playlist_resize_start = None;
         }
-    }
-    if response.drag_stopped() {
-        app.playlist_resize_start = None;
     }
 }
 
