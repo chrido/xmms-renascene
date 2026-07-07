@@ -8,7 +8,7 @@ import contextlib
 import select
 import subprocess
 import time
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -113,6 +113,31 @@ async def connect_client_for_process(process: subprocess.Popen[bytes], dbus_sess
         raise AssertionError(f"{exc}\n\nApplication log:\n{read_process_log(process)}") from exc
 
 
+async def with_mpris_client(
+    tmp_path: Path,
+    frontend: GuiFrontend,
+    dbus_session: DbusSession,
+    extra_args: list[str] | None,
+    body: Callable[[MprisClient, subprocess.Popen[bytes]], Awaitable[None]],
+) -> None:
+    with launched_mpris_app(tmp_path, frontend, dbus_session, extra_args) as process:
+        client = await connect_client_for_process(process, dbus_session)
+        try:
+            await body(client, process)
+        finally:
+            client.disconnect()
+
+
+def run_mpris_test(
+    tmp_path: Path,
+    frontend: GuiFrontend,
+    dbus_session: DbusSession,
+    body: Callable[[MprisClient, subprocess.Popen[bytes]], Awaitable[None]],
+    extra_args: list[str] | None = None,
+) -> None:
+    asyncio.run(with_mpris_client(tmp_path, frontend, dbus_session, extra_args, body))
+
+
 async def wait_properties_changed(
     queue: asyncio.Queue[Any],
     property_name: str,
@@ -153,34 +178,30 @@ def test_mpris_introspection_and_initial_properties(
     dbus_session: DbusSession,
     mpris_tracks: dict[str, Path],
 ) -> None:
-    async def body() -> None:
-        with launched_mpris_app(
-            tmp_path,
-            frontend,
-            dbus_session,
-            [str(mpris_tracks["one"])],
-        ) as process:
-            client = await connect_client_for_process(process, dbus_session)
-            try:
-                assert await client.get_root_property("Identity") == "XMMS Renascene"
-                assert await client.get_root_property("DesktopEntry") == "org.xmms.Renascene"
-                assert "file" in await client.get_root_property("SupportedUriSchemes")
+    async def body(client: MprisClient, _process: subprocess.Popen[bytes]) -> None:
+        assert await client.get_root_property("Identity") == "XMMS Renascene"
+        assert await client.get_root_property("DesktopEntry") == "org.xmms.Renascene"
+        assert "file" in await client.get_root_property("SupportedUriSchemes")
 
-                assert await client.get_player_property("PlaybackStatus") == "Stopped"
-                assert await client.get_player_property("Rate") == 1.0
-                assert await client.get_player_property("CanControl")
-                assert await client.get_player_property("CanPlay")
-                assert await client.get_player_property("CanPause")
-                assert await client.get_player_property("CanSeek")
+        assert await client.get_player_property("PlaybackStatus") == "Stopped"
+        assert await client.get_player_property("Rate") == 1.0
+        assert await client.get_player_property("CanControl")
+        assert await client.get_player_property("CanPlay")
+        assert await client.get_player_property("CanPause")
+        assert await client.get_player_property("CanSeek")
 
-                metadata = await client.get_player_property("Metadata")
-                assert variant_value(metadata["mpris:trackid"]) == "/org/xmms/Track/0"
-                assert variant_value(metadata["xesam:url"]) == track_uri(mpris_tracks["one"])
-                assert variant_value(metadata["xesam:title"]) == "one"
-            finally:
-                client.disconnect()
+        metadata = await client.get_player_property("Metadata")
+        assert variant_value(metadata["mpris:trackid"]) == "/org/xmms/Track/0"
+        assert variant_value(metadata["xesam:url"]) == track_uri(mpris_tracks["one"])
+        assert variant_value(metadata["xesam:title"]) == "one"
 
-    asyncio.run(body())
+    run_mpris_test(
+        tmp_path,
+        frontend,
+        dbus_session,
+        body,
+        [str(mpris_tracks["one"])],
+    )
 
 
 @pytest.mark.parametrize("frontend", GUI_FRONTENDS, ids=[frontend.name for frontend in GUI_FRONTENDS])
@@ -190,36 +211,32 @@ def test_mpris_transport_methods_drive_playback(
     dbus_session: DbusSession,
     mpris_tracks: dict[str, Path],
 ) -> None:
-    async def body() -> None:
-        with launched_mpris_app(
-            tmp_path,
-            frontend,
-            dbus_session,
-            [str(mpris_tracks["one"]), str(mpris_tracks["two"])],
-        ) as process:
-            client = await connect_client_for_process(process, dbus_session)
-            try:
-                await client.player.call_play()
-                await client.wait_player_property("PlaybackStatus", "Playing")
+    async def body(client: MprisClient, _process: subprocess.Popen[bytes]) -> None:
+        await client.player.call_play()
+        await client.wait_player_property("PlaybackStatus", "Playing")
 
-                await client.player.call_next()
-                await client.wait_metadata_url(track_uri(mpris_tracks["two"]))
+        await client.player.call_next()
+        await client.wait_metadata_url(track_uri(mpris_tracks["two"]))
 
-                await client.player.call_previous()
-                await client.wait_metadata_url(track_uri(mpris_tracks["one"]))
+        await client.player.call_previous()
+        await client.wait_metadata_url(track_uri(mpris_tracks["one"]))
 
-                await client.player.call_pause()
-                await client.wait_player_property("PlaybackStatus", "Paused")
+        await client.player.call_pause()
+        await client.wait_player_property("PlaybackStatus", "Paused")
 
-                await client.player.call_play_pause()
-                await client.wait_player_property("PlaybackStatus", "Playing")
+        await client.player.call_play_pause()
+        await client.wait_player_property("PlaybackStatus", "Playing")
 
-                await client.player.call_stop()
-                await client.wait_player_property("PlaybackStatus", "Stopped")
-            finally:
-                client.disconnect()
+        await client.player.call_stop()
+        await client.wait_player_property("PlaybackStatus", "Stopped")
 
-    asyncio.run(body())
+    run_mpris_test(
+        tmp_path,
+        frontend,
+        dbus_session,
+        body,
+        [str(mpris_tracks["one"]), str(mpris_tracks["two"])],
+    )
 
 
 @pytest.mark.parametrize("frontend", GUI_FRONTENDS, ids=[frontend.name for frontend in GUI_FRONTENDS])
@@ -229,25 +246,20 @@ def test_mpris_open_uri_and_volume_property(
     dbus_session: DbusSession,
     mpris_tracks: dict[str, Path],
 ) -> None:
-    async def body() -> None:
-        with launched_mpris_app(tmp_path, frontend, dbus_session) as process:
-            client = await connect_client_for_process(process, dbus_session)
-            try:
-                opened_uri = track_uri(mpris_tracks["opened"])
-                await client.player.call_open_uri(opened_uri)
-                await client.wait_player_property("PlaybackStatus", "Playing")
-                metadata = await client.wait_metadata_url(opened_uri)
-                assert variant_value(metadata["xesam:title"]) == "opened"
+    async def body(client: MprisClient, _process: subprocess.Popen[bytes]) -> None:
+        opened_uri = track_uri(mpris_tracks["opened"])
+        await client.player.call_open_uri(opened_uri)
+        await client.wait_player_property("PlaybackStatus", "Playing")
+        metadata = await client.wait_metadata_url(opened_uri)
+        assert variant_value(metadata["xesam:title"]) == "opened"
 
-                await client.set_player_property("Volume", "d", 0.25)
-                await client.wait_player_property_predicate(
-                    "Volume",
-                    lambda value: abs(value - 0.25) < 0.001,
-                )
-            finally:
-                client.disconnect()
+        await client.set_player_property("Volume", "d", 0.25)
+        await client.wait_player_property_predicate(
+            "Volume",
+            lambda value: abs(value - 0.25) < 0.001,
+        )
 
-    asyncio.run(body())
+    run_mpris_test(tmp_path, frontend, dbus_session, body)
 
 
 @pytest.mark.parametrize("frontend", GUI_FRONTENDS, ids=[frontend.name for frontend in GUI_FRONTENDS])
@@ -257,45 +269,41 @@ def test_mpris_seek_and_properties_signals(
     dbus_session: DbusSession,
     mpris_tracks: dict[str, Path],
 ) -> None:
-    async def body() -> None:
-        with launched_mpris_app(
-            tmp_path,
-            frontend,
-            dbus_session,
-            [str(mpris_tracks["one"])],
-        ) as process:
-            client = await connect_client_for_process(process, dbus_session)
-            try:
-                seeked: asyncio.Queue[int] = asyncio.Queue()
-                props_changed: asyncio.Queue[Any] = asyncio.Queue()
-                client.player.on_seeked(lambda position: seeked.put_nowait(position))
-                client.props.on_properties_changed(
-                    lambda interface_name, changed, invalidated: props_changed.put_nowait(
-                        (interface_name, changed, invalidated)
-                    )
-                )
+    async def body(client: MprisClient, _process: subprocess.Popen[bytes]) -> None:
+        seeked: asyncio.Queue[int] = asyncio.Queue()
+        props_changed: asyncio.Queue[Any] = asyncio.Queue()
+        client.player.on_seeked(lambda position: seeked.put_nowait(position))
+        client.props.on_properties_changed(
+            lambda interface_name, changed, invalidated: props_changed.put_nowait(
+                (interface_name, changed, invalidated)
+            )
+        )
 
-                await client.player.call_play()
-                _interface_name, changed, _invalidated = await wait_properties_changed(
-                    props_changed,
-                    "PlaybackStatus",
-                )
-                assert variant_value(changed["PlaybackStatus"]) == "Playing"
+        await client.player.call_play()
+        _interface_name, changed, _invalidated = await wait_properties_changed(
+            props_changed,
+            "PlaybackStatus",
+        )
+        assert variant_value(changed["PlaybackStatus"]) == "Playing"
 
-                before_seek_position = await client.get_player_property("Position")
-                await client.player.call_seek(1_000_000)
-                relative_seek_position = await wait_seeked(seeked)
-                assert relative_seek_position >= before_seek_position + 1_000_000
-                assert relative_seek_position <= before_seek_position + 1_750_000
-                assert await client.get_player_property("Position") >= relative_seek_position
+        before_seek_position = await client.get_player_property("Position")
+        await client.player.call_seek(1_000_000)
+        relative_seek_position = await wait_seeked(seeked)
+        assert relative_seek_position >= before_seek_position + 1_000_000
+        assert relative_seek_position <= before_seek_position + 1_750_000
+        assert await client.get_player_property("Position") >= relative_seek_position
 
-                await client.player.call_set_position("/org/xmms/Track/0", 2_000_000)
-                assert await wait_seeked(seeked, 2_000_000) == 2_000_000
-                assert await client.get_player_property("Position") >= 2_000_000
-            finally:
-                client.disconnect()
+        await client.player.call_set_position("/org/xmms/Track/0", 2_000_000)
+        assert await wait_seeked(seeked, 2_000_000) == 2_000_000
+        assert await client.get_player_property("Position") >= 2_000_000
 
-    asyncio.run(body())
+    run_mpris_test(
+        tmp_path,
+        frontend,
+        dbus_session,
+        body,
+        [str(mpris_tracks["one"])],
+    )
 
 
 @pytest.mark.parametrize("frontend", GUI_FRONTENDS, ids=[frontend.name for frontend in GUI_FRONTENDS])
@@ -304,13 +312,8 @@ def test_mpris_raise_method_succeeds(
     frontend: GuiFrontend,
     dbus_session: DbusSession,
 ) -> None:
-    async def body() -> None:
-        with launched_mpris_app(tmp_path, frontend, dbus_session) as process:
-            client = await connect_client_for_process(process, dbus_session)
-            try:
-                await client.root.call_raise()
-                assert process.poll() is None
-            finally:
-                client.disconnect()
+    async def body(client: MprisClient, process: subprocess.Popen[bytes]) -> None:
+        await client.root.call_raise()
+        assert process.poll() is None
 
-    asyncio.run(body())
+    run_mpris_test(tmp_path, frontend, dbus_session, body)
