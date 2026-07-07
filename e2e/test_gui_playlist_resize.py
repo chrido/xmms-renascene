@@ -18,6 +18,7 @@ from conftest import (
     wait_for_main_window_with_log,
 )
 from gui import (
+    MAIN_PLAYER_BASE_HEIGHT,
     MainWindow,
     drag_playlist_resize_handle,
     wait_for_visible_window,
@@ -26,7 +27,6 @@ from gui import (
 
 pytest: Any = import_module("pytest")
 
-MAIN_PLAYER_BASE_HEIGHT = 116
 GTK_PLAYLIST_TITLE = "XMMS Renascene Rust Playlist"
 EGUI_PLAYLIST_TITLE = "Playlist"
 

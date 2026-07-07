@@ -17,7 +17,7 @@ from typing import Any
 pytest: Any = import_module("pytest")
 
 control_socket: Any = import_module("control_socket")
-from gui import MainWindow
+from gui import MainWindow, parse_xdotool_int
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -401,66 +401,3 @@ def test_output(request: Any) -> Iterator[TestOutput]:
 def e2e_screenshot_dir(test_output: TestOutput) -> Path:
     return test_output.directory
 
-
-def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["xdotool", *args],
-        text=True,
-        capture_output=True,
-        check=check,
-    )
-
-
-def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float = 10.0) -> str:
-    deadline = time.monotonic() + timeout
-    last_error = ""
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise AssertionError(f"application exited before window appeared: {process.returncode}")
-        result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-        if result.returncode == 0:
-            windows = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-            if windows:
-                return windows[0]
-        last_error = (result.stderr or result.stdout).strip()
-        time.sleep(0.1)
-    raise TimeoutError(f"window named {title!r} did not appear; last xdotool output: {last_error}")
-
-
-def parse_xdotool_int(value: str, source_line: str) -> int:
-    try:
-        return int(value)
-    except ValueError as exc:
-        raise AssertionError(f"invalid integer value in xdotool geometry: {source_line!r}") from exc
-
-
-def window_geometry(window_id: str) -> dict[str, int]:
-    result = run_xdotool("getwindowgeometry", "--shell", window_id)
-    geometry: dict[str, int] = {}
-    for line in result.stdout.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key in {"X", "Y", "WIDTH", "HEIGHT", "SCREEN"}:
-            geometry[key] = parse_xdotool_int(value, line)
-    missing = {"X", "Y", "WIDTH", "HEIGHT"} - set(geometry)
-    if missing:
-        raise AssertionError(f"missing geometry keys {missing} from: {result.stdout!r}")
-    return geometry
-
-
-def click_window_coordinate(window_id: str, x: int, y: int) -> None:
-    # Some Xvfb setups have no window manager, so activation may fail; the click
-    # itself uses coordinates relative to the target window and is the important part.
-    run_xdotool("windowactivate", "--sync", window_id, check=False)
-    run_xdotool("mousemove", "--window", window_id, str(x), str(y), "click", "1")
-
-
-def wait_for_process_exit(process: subprocess.Popen[bytes], timeout: float = 5.0) -> int:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        return_code = process.poll()
-        if return_code is not None:
-            return return_code
-        time.sleep(0.05)
-    raise TimeoutError("application did not exit after coordinate click")

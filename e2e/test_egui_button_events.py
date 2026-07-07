@@ -30,22 +30,24 @@ from gui import (
     MainButton,
     MainToggleButton,
     MainWindow,
+    PANEL_CLOSE_RECT,
+    PANEL_SHADE_RECT,
     PlaylistFooterButton,
     PlaylistMenuButton,
     SkinRect,
     click_skin_rect,
+    offset_rect,
+    open_panel,
     run_xdotool,
     scaled_skin_point,
     screenshot_window,
+    visible_windows,
     wait_for_visible_window,
     window_geometry,
 )
 
 pytest: Any = import_module("pytest")
 
-MAIN_PLAYER_BASE_HEIGHT = 116
-PANEL_SHADE_RECT = SkinRect(254, 3, 9, 9)
-PANEL_CLOSE_RECT = SkinRect(264, 3, 9, 9)
 PLAYLIST_MISC_SORT_ITEM_RECT = SkinRect(98, 166, 25, 18)
 PLAYLIST_ADD_FIRST_ITEM_RECT = SkinRect(11, 166, 25, 18)
 
@@ -177,28 +179,10 @@ def egui_detached_main_window(
     return wait_for_main_window_with_log(egui_detached_app_with_event_tracks)
 
 
-def offset_rect(rect: SkinRect, y_offset: int) -> SkinRect:
-    return SkinRect(rect.x, rect.y + y_offset, rect.width, rect.height)
-
-
 def open_docked_panel(main_window: MainWindow, toggle: MainToggleButton) -> int:
-    main_window.focus_main_window()
-    before_height = main_window.geometry().height
-    main_window.click_main_toggle(toggle)
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        if main_window.geometry().height > before_height:
-            time.sleep(0.25)
-            return MAIN_PLAYER_BASE_HEIGHT
-        time.sleep(0.1)
-    raise AssertionError(f"egui panel for {toggle.value} did not open")
-
-
-def visible_windows(title: str) -> list[str]:
-    result = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    title = "Equalizer" if toggle is MainToggleButton.EQUALIZER else "Playlist"
+    _window_id, panel_y = open_panel(main_window, toggle, title)
+    return panel_y
 
 
 def wait_for_detached_panel_window(

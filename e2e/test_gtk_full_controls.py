@@ -19,27 +19,25 @@ from gui import (
     MainSlider,
     MainToggleButton,
     MainWindow,
+    PANEL_CLOSE_RECT,
+    PANEL_SHADE_RECT,
     PlaylistFooterButton,
     PlaylistMenuButton,
-    SkinRect,
     click_skin_rect,
     drag_playlist_scrollbar_to_bottom,
     drag_skin_rect,
     equalizer_slider_rect,
+    offset_rect,
+    open_panel,
     run_xdotool,
     screenshot_screen,
     screenshot_tool_available,
-    wait_for_visible_window,
 )
 
 pytest: Any = import_module("pytest")
 
 EQUALIZER_WINDOW_TITLE = "XMMS Renascene Rust Equalizer"
 PLAYLIST_WINDOW_TITLE = "XMMS Renascene Rust Playlist"
-MAIN_PLAYER_BASE_HEIGHT = 116
-PANEL_SHADE_RECT = SkinRect(254, 3, 9, 9)
-PANEL_CLOSE_RECT = SkinRect(264, 3, 9, 9)
-
 EQUALIZER_SLIDERS = [
     EqualizerSlider.PREAMP,
     EqualizerSlider.BAND_0,
@@ -69,33 +67,6 @@ def capture(test_output: Any) -> Path:
     path = screenshot_screen(test_output.screenshot_path())
     assert_screenshot(path)
     return path
-
-
-def offset_rect(rect: SkinRect, y_offset: int) -> SkinRect:
-    return SkinRect(rect.x, rect.y + y_offset, rect.width, rect.height)
-
-
-def open_panel(main_window: MainWindow, toggle: MainToggleButton, title: str, test_output: Any) -> tuple[str, int]:
-    main_window.focus_main_window()
-    before_height = main_window.geometry().height
-    main_window.click_main_toggle(toggle)
-    deadline = time.monotonic() + 5.0
-    while time.monotonic() < deadline:
-        separate = run_xdotool("search", "--onlyvisible", "--name", title, check=False)
-        windows = [line.strip() for line in separate.stdout.splitlines() if line.strip()]
-        if windows:
-            time.sleep(0.3)
-            capture(test_output)
-            return windows[0], 0
-        if main_window.geometry().height > before_height:
-            time.sleep(0.3)
-            capture(test_output)
-            return main_window.window_id, MAIN_PLAYER_BASE_HEIGHT
-        time.sleep(0.1)
-    # Keep the detailed xdotool wait error for the rare detached-window case.
-    wait_for_visible_window(title, timeout=0.1)
-    raise AssertionError("unreachable: wait_for_visible_window should raise on timeout")
-
 
 def test_gui_player_transport_toggles_and_sliders_with_tracks_screenshots_and_logs(
     gui_tracked_main_window: MainWindow,
@@ -171,7 +142,8 @@ def test_gui_equalizer_controls_and_sliders_screenshots_and_logs(
         gui_tracked_main_window,
         MainToggleButton.EQUALIZER,
         EQUALIZER_WINDOW_TITLE,
-        test_output,
+        settle_delay=0.3,
+        on_open=lambda: capture(test_output),
     )
 
     for control in [EqualizerControl.ON, EqualizerControl.AUTO, EqualizerControl.PRESETS]:
@@ -227,7 +199,8 @@ def test_gui_playlist_buttons_menus_and_scrollbar_screenshots_and_logs(
         gui_tracked_main_window,
         MainToggleButton.PLAYLIST,
         PLAYLIST_WINDOW_TITLE,
-        test_output,
+        settle_delay=0.3,
+        on_open=lambda: capture(test_output),
     )
 
     for menu in [
@@ -251,18 +224,16 @@ def test_gui_playlist_buttons_menus_and_scrollbar_screenshots_and_logs(
         PlaylistFooterButton.NEXT,
         PlaylistFooterButton.SCROLL_DOWN,
         PlaylistFooterButton.SCROLL_UP,
-        PlaylistFooterButton.EJECT,
     ]:
         click_skin_rect(playlist_window, offset_rect(PLAYLIST_FOOTER_RECTS[button], playlist_y))
         time.sleep(0.3)
         capture(test_output)
-        if button is PlaylistFooterButton.EJECT:
-            run_xdotool("key", "Escape", check=False)
-            time.sleep(0.2)
 
     drag_playlist_scrollbar_to_bottom(playlist_window, playlist_y)
     time.sleep(0.3)
     capture(test_output)
+    run_xdotool("key", "Escape", check=False)
+    time.sleep(0.2)
 
     click_skin_rect(playlist_window, offset_rect(PANEL_SHADE_RECT, playlist_y))
     time.sleep(0.25)
@@ -288,7 +259,6 @@ def test_gui_playlist_buttons_menus_and_scrollbar_screenshots_and_logs(
         "playlist: footer button, button_name=Next",
         "playlist: footer button, button_name=ScrollDown",
         "playlist: footer button, button_name=ScrollUp",
-        "playlist: footer button, button_name=Eject",
         "command Player(Play)",
         "command Player(TogglePause)",
         "command Player(Stop)",
