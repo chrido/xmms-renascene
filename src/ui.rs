@@ -5597,9 +5597,20 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_playback_backend(&mut self, backend: SharedPlaybackBackend) {
+        self.output_device_groups = backend.borrow().output_device_groups();
         {
+            let mut backend = backend.borrow_mut();
+            let selection = self
+                .app_state
+                .config
+                .output_device
+                .as_deref()
+                .map(OutputDeviceSelection::System)
+                .unwrap_or(OutputDeviceSelection::Automatic);
+            if let Err(err) = backend.select_output_device(selection) {
+                eprintln!("xmms-rs: failed to apply saved output device: {err}");
+            }
             let player = &self.app_state.player;
-            let backend = backend.borrow();
             let _ = backend.set_volume(player.volume());
             let _ = backend.set_balance(player.balance());
             let _ = backend.set_equalizer(EqualizerBackendState {
@@ -5607,6 +5618,7 @@ impl MainWindowUiState {
                 preamp_position: self.equalizer.preamp_position,
                 band_positions: self.equalizer.band_positions,
             });
+            self.output_device_groups = backend.output_device_groups();
         }
         self.playback_backend = Some(backend);
     }
@@ -8360,9 +8372,11 @@ impl MainWindowUiState {
                 .as_deref()
                 .map(OutputDeviceSelection::System)
                 .unwrap_or(OutputDeviceSelection::Automatic);
-            if let Err(err) = backend.borrow_mut().select_output_device(selection) {
+            let mut backend = backend.borrow_mut();
+            if let Err(err) = backend.select_output_device(selection) {
                 eprintln!("xmms-rs: failed to switch output device: {err}");
             }
+            self.output_device_groups = backend.output_device_groups();
         }
         self.sync_equalizer_to_backend();
         self.update_config_via_store(|config| config.output_device = device);

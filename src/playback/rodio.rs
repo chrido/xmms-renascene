@@ -58,6 +58,10 @@ pub struct LocalAudioSource {
 
 pub struct RodioMetadataProbe;
 
+const RODIO_ALSA_PIPEWIRE_ID: &str = "rodio-alsa-pipewire";
+const RODIO_ALSA_PULSE_ID: &str = "rodio-alsa-pulse";
+const RODIO_ALSA_SYSTEM_ID: &str = "rodio-alsa-system";
+
 impl RodioBackend {
     pub fn new() -> Result<Self, String> {
         let (sink, output_device) = open_rodio_sink(None)?;
@@ -488,8 +492,9 @@ fn duration_to_millis(duration: Duration) -> i64 {
 }
 
 fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDevice), String> {
+    let cpal_device_id = configure_alsa_backend_for_selection(device_id)?;
     let host = cpal::default_host();
-    let device = match device_id {
+    let device = match cpal_device_id {
         Some(id) => host
             .output_devices()
             .map_err(|err| format!("failed to enumerate rodio/cpal output devices: {err}"))?
@@ -500,7 +505,9 @@ fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDe
             .ok_or_else(|| "rodio/cpal default output device not found".to_string())?,
     };
     let name = device_name(&device).unwrap_or_else(|| device_id.unwrap_or("unknown").to_string());
-    let output_device = OutputDevice::system(&name, &name, "cpal", false);
+    let output_device = device_id
+        .and_then(rodio_alsa_backend_device)
+        .unwrap_or_else(|| OutputDevice::system(&name, &name, "cpal", false));
     let selected_name = output_device.display_name.clone();
     let requested = device_id.unwrap_or("default").to_string();
     crate::app_log_info!(
@@ -529,11 +536,30 @@ fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDe
 }
 
 fn list_cpal_output_devices() -> Vec<OutputDevice> {
+    let mut devices = vec![
+        OutputDevice::system(
+            RODIO_ALSA_PIPEWIRE_ID,
+            "PipeWire (via ALSA plugin)",
+            "cpal",
+            false,
+        ),
+        OutputDevice::system(
+            RODIO_ALSA_PULSE_ID,
+            "PulseAudio (via ALSA plugin)",
+            "cpal",
+            false,
+        ),
+        OutputDevice::system(
+            RODIO_ALSA_SYSTEM_ID,
+            "System ALSA default",
+            "cpal",
+            false,
+        ),
+    ];
     let host = cpal::default_host();
     let default_name = host
         .default_output_device()
         .and_then(|device| device_name(&device));
-    let mut devices = Vec::new();
     if let Some(name) = default_name.clone() {
         devices.push(OutputDevice::system(
             &name,
@@ -558,6 +584,108 @@ fn list_cpal_output_devices() -> Vec<OutputDevice> {
         devices.push(default_output_device());
     }
     devices
+}
+
+fn configure_alsa_backend_for_selection<'a>(device_id: Option<&'a str>) -> Result<Option<&'a str>, String> {
+    match device_id {
+        None => {
+            configure_alsa_virtual_backend(auto_alsa_backend());
+            Ok(None)
+        }
+        Some(RODIO_ALSA_PIPEWIRE_ID) => {
+            configure_alsa_virtual_backend(Some("pipewire"));
+            Ok(None)
+        }
+        Some(RODIO_ALSA_PULSE_ID) => {
+            configure_alsa_virtual_backend(Some("pulse"));
+            Ok(None)
+        }
+        Some(RODIO_ALSA_SYSTEM_ID) => {
+            configure_alsa_virtual_backend(None);
+            Ok(None)
+        }
+        Some(other) => Ok(Some(other)),
+    }
+}
+
+fn auto_alsa_backend() -> Option<&'static str> {
+    ["pipewire", "pulse"]
+        .into_iter()
+        .find(|backend| alsa_pcm_plugin_exists(backend))
+}
+
+fn configure_alsa_virtual_backend(backend_name: Option<&str>) {
+    match backend_name {
+        Some(backend_name) => match write_alsa_backend_config(backend_name) {
+            Ok(path) => {
+                std::env::set_var("ALSA_CONFIG_PATH", &path);
+                let config_path = path.display().to_string();
+                crate::app_log_info!(
+                    backend,
+                    "rodio using ALSA plugin",
+                    backend_name,
+                    config_path
+                );
+            }
+            Err(err) => eprintln!("xmms-rs: failed to write rodio ALSA config: {err}"),
+        },
+        None => {
+            std::env::remove_var("ALSA_CONFIG_PATH");
+            crate::app_log_info!(backend, "rodio using system ALSA default");
+        }
+    }
+}
+
+fn write_alsa_backend_config(backend: &str) -> Result<PathBuf, String> {
+    let dir = std::env::current_dir()
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("target");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
+    let path = dir.join(format!("rodio-{backend}.asoundrc"));
+    std::fs::write(
+        &path,
+        format!(
+            "</usr/share/alsa/alsa.conf>\n\npcm.!default {{\n    type {backend}\n}}\nctl.!default {{\n    type {backend}\n}}\n"
+        ),
+    )
+    .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    Ok(path)
+}
+
+fn alsa_pcm_plugin_exists(name: &str) -> bool {
+    [
+        format!("/usr/lib/alsa-lib/libasound_module_pcm_{name}.so"),
+        format!("/usr/lib64/alsa-lib/libasound_module_pcm_{name}.so"),
+        format!("/usr/lib/x86_64-linux-gnu/alsa-lib/libasound_module_pcm_{name}.so"),
+        format!("/usr/lib/aarch64-linux-gnu/alsa-lib/libasound_module_pcm_{name}.so"),
+    ]
+    .into_iter()
+    .any(|path| std::path::Path::new(&path).exists())
+}
+
+fn rodio_alsa_backend_device(id: &str) -> Option<OutputDevice> {
+    match id {
+        RODIO_ALSA_PIPEWIRE_ID => Some(OutputDevice::system(
+            RODIO_ALSA_PIPEWIRE_ID,
+            "PipeWire (via ALSA plugin)",
+            "cpal",
+            false,
+        )),
+        RODIO_ALSA_PULSE_ID => Some(OutputDevice::system(
+            RODIO_ALSA_PULSE_ID,
+            "PulseAudio (via ALSA plugin)",
+            "cpal",
+            false,
+        )),
+        RODIO_ALSA_SYSTEM_ID => Some(OutputDevice::system(
+            RODIO_ALSA_SYSTEM_ID,
+            "System ALSA default",
+            "cpal",
+            false,
+        )),
+        _ => None,
+    }
 }
 
 fn rodio_debug_enabled() -> bool {
