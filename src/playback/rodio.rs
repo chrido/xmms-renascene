@@ -119,9 +119,18 @@ impl RodioBackend {
         self.inner.borrow().equalizer
     }
 
+    fn stop_current_locked(inner: &mut RodioBackendInner) {
+        inner.output.player().stop();
+        inner.current_uri = None;
+        inner.state = PlayerState::Stopped;
+        inner.duration_ms = None;
+        inner.stream_info = StreamInfo::default();
+        inner.eos_emitted = false;
+    }
+
     fn record_error(&self, message: String) -> Result<(), String> {
         let mut inner = self.inner.borrow_mut();
-        inner.state = PlayerState::Stopped;
+        Self::stop_current_locked(&mut inner);
         inner
             .pending_events
             .push(PlaybackEvent::Error(message.clone()));
@@ -138,6 +147,11 @@ impl PlaybackBackend for RodioBackend {
         crate::app_log_info!(backend, "rodio play_uri_at", uri, start_ms);
         if start_ms < 0 {
             return Err("seek position must be non-negative".to_string());
+        }
+
+        {
+            let mut inner = self.inner.borrow_mut();
+            Self::stop_current_locked(&mut inner);
         }
 
         let source = match resolve_local_audio_source(uri) {
@@ -549,12 +563,7 @@ fn list_cpal_output_devices() -> Vec<OutputDevice> {
             "cpal",
             false,
         ),
-        OutputDevice::system(
-            RODIO_ALSA_SYSTEM_ID,
-            "System ALSA default",
-            "cpal",
-            false,
-        ),
+        OutputDevice::system(RODIO_ALSA_SYSTEM_ID, "System ALSA default", "cpal", false),
     ];
     let host = cpal::default_host();
     let default_name = host
@@ -586,7 +595,9 @@ fn list_cpal_output_devices() -> Vec<OutputDevice> {
     devices
 }
 
-fn configure_alsa_backend_for_selection<'a>(device_id: Option<&'a str>) -> Result<Option<&'a str>, String> {
+fn configure_alsa_backend_for_selection<'a>(
+    device_id: Option<&'a str>,
+) -> Result<Option<&'a str>, String> {
     match device_id {
         None => {
             configure_alsa_virtual_backend(auto_alsa_backend());
@@ -920,6 +931,33 @@ mod tests {
             vec![PlaybackEvent::Error(err)]
         );
         assert_eq!(backend.state(), PlayerState::Stopped);
+    }
+
+    #[test]
+    fn rodio_backend_stops_existing_track_when_next_uri_fails() {
+        let backend = RodioBackend::new_detached_for_tests();
+        {
+            let mut inner = backend.inner.borrow_mut();
+            inner.current_uri = Some("file:///tmp/playing.mp3".to_string());
+            inner.state = PlayerState::Playing;
+            inner.duration_ms = Some(10_000);
+            inner.stream_info = StreamInfo {
+                bitrate: None,
+                frequency: Some(44_100),
+                channels: Some(2),
+            };
+        }
+
+        let err = backend
+            .play_uri("content://media/external/audio/1")
+            .unwrap_err();
+
+        assert!(err.contains("not supported"));
+        assert_eq!(backend.current_uri(), None);
+        assert_eq!(backend.state(), PlayerState::Stopped);
+        assert_eq!(backend.duration_ms(), None);
+        assert_eq!(backend.stream_info(), StreamInfo::default());
+        assert_eq!(backend.poll_events().unwrap(), vec![PlaybackEvent::Error(err)]);
     }
 
     #[test]
