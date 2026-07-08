@@ -24,8 +24,8 @@ that can run behind the same playback abstraction as GStreamer.
 First-step deliverable:
 
 - A `rodio-backend` Cargo feature builds on a normal development machine.
-- The app's audio runtime talks to `Box<dyn PlaybackBackend>` instead of a
-  concrete `GStreamerBackend` where playback effects are handled.
+- The audio layer exposes a `Box<dyn PlaybackBackend>` factory for GStreamer or
+  rodio. Frontend effect-handler migration to own that trait object is Step 2.
 - GStreamer remains the default desktop backend.
 - Rodio can play local seekable media through the backend abstraction.
 - Android-only work such as APK packaging, emulator E2E, `content://` platform
@@ -492,58 +492,58 @@ normal host machine before doing any Android packaging or emulator work.
 
 TODO:
 
-- [ ] Add optional `rodio` dependency and `rodio-backend` Cargo feature.
-- [ ] Keep `gstreamer-backend` as the desktop default feature.
-- [ ] Expand `src/playback/backend.rs` from a command-only trait into the full
+- [x] Add optional `rodio` dependency and `rodio-backend` Cargo feature.
+- [x] Keep `gstreamer-backend` as the desktop default feature.
+- [x] Expand `src/playback/backend.rs` from a command-only trait into the full
       runtime boundary:
-  - [ ] `play_uri(uri, start_ms)`
-  - [ ] `pause()` / `resume()` / `stop()`
-  - [ ] `seek(position_ms)`
-  - [ ] `poll_events()`
-  - [ ] `position_ms()` / `duration_ms()` / `stream_info()` / `state()`
-  - [ ] `set_volume()` / `set_balance()` / `set_equalizer()`
-  - [ ] optional output-device methods with harmless defaults
-- [ ] Move or re-export backend-neutral types through `src/playback/model.rs`:
-  - [ ] `PlayerState`
-  - [ ] `PlaybackEvent`
-  - [ ] `PlaybackTags`
-  - [ ] `StreamInfo`
-  - [ ] `OutputDevice` and related grouping/selection types
-  - [ ] `EqualizerBackendState`
-- [ ] Add a backend factory that can select `Auto`, `GStreamer`, or `Rodio`.
-- [ ] Implement the expanded trait for the existing `GStreamerBackend` without
+  - [x] `play_uri(uri, start_ms)`
+  - [x] `pause()` / `resume()` / `stop()`
+  - [x] `seek(position_ms)`
+  - [x] `poll_events()`
+  - [x] `position_ms()` / `duration_ms()` / `stream_info()` / `state()`
+  - [x] `set_volume()` / `set_balance()` / `set_equalizer()`
+  - [x] optional output-device methods with harmless defaults
+- [x] Move or re-export backend-neutral types through `src/playback/model.rs`:
+  - [x] `PlayerState`
+  - [x] `PlaybackEvent`
+  - [x] `PlaybackTags`
+  - [x] `StreamInfo`
+  - [x] `OutputDevice` and related grouping/selection types
+  - [x] `EqualizerBackendState`
+- [x] Add a backend factory that can select `Auto`, `GStreamer`, or `Rodio`.
+- [x] Implement the expanded trait for the existing `GStreamerBackend` without
       changing desktop behavior.
-- [ ] Add `src/playback/rodio.rs` with `RodioBackend`.
-- [ ] Implement platform-independent local URI resolution:
-  - [ ] support plain absolute paths if the app passes them,
-  - [ ] support existing `file://` playlist URIs,
-  - [ ] return a clear error for unsupported schemes such as `content://` and
+- [x] Add `src/playback/rodio.rs` with `RodioBackend`.
+- [x] Implement platform-independent local URI resolution:
+  - [x] support plain absolute paths if the app passes them,
+  - [x] support existing `file://` playlist URIs,
+  - [x] return a clear error for unsupported schemes such as `content://` and
         `http://` for now.
-- [ ] Implement rodio playback basics:
-  - [ ] create and retain `rodio::MixerDeviceSink`,
-  - [ ] create/recreate `rodio::Player` per track or stop/reset,
-  - [ ] decode with `rodio::Decoder::try_from(File)` for seekable local files,
-  - [ ] capture duration, sample rate, and channel count before appending,
-  - [ ] append the decoded source,
-  - [ ] apply start seek when requested,
-  - [ ] map volume 0..100 to rodio volume 0.0..1.0.
-- [ ] Synthesize backend events that GStreamer currently provides via bus
+- [x] Implement rodio playback basics:
+  - [x] create and retain `rodio::MixerDeviceSink`,
+  - [x] create/recreate `rodio::Player` per track or stop/reset,
+  - [x] decode with `rodio::Decoder::try_from(File)` for seekable local files,
+  - [x] capture duration, sample rate, and channel count before appending,
+  - [x] append the decoded source,
+  - [x] apply start seek when requested,
+  - [x] map volume 0..100 to rodio volume 0.0..1.0.
+- [x] Synthesize backend events that GStreamer currently provides via bus
       messages:
-  - [ ] `DurationChanged`,
-  - [ ] `StreamInfo`,
-  - [ ] `EndOfStream` when `rodio::Player::empty()` transitions while playing,
-  - [ ] `Error` for decode/open/device failures.
-- [ ] Implement position/duration queries using rodio state:
-  - [ ] `position_ms()` from `Player::get_pos()`,
-  - [ ] `duration_ms()` from decoded `Source::total_duration()`.
-- [ ] Store, but do not audibly apply, Android-v1-deferred controls:
-  - [ ] balance,
-  - [ ] equalizer/preamp,
-  - [ ] spectrum analyzer data.
-- [ ] Add `AudioMetadataProbe` boundary for playlist duration indexing.
-- [ ] Add `RodioMetadataProbe` for local seekable files using
+  - [x] `DurationChanged`,
+  - [x] `StreamInfo`,
+  - [x] `EndOfStream` when `rodio::Player::empty()` transitions while playing,
+  - [x] `Error` for decode/open/device failures.
+- [x] Implement position/duration queries using rodio state:
+  - [x] `position_ms()` from `Player::get_pos()`,
+  - [x] `duration_ms()` from decoded `Source::total_duration()`.
+- [x] Store, but do not audibly apply, Android-v1-deferred controls:
+  - [x] balance,
+  - [x] equalizer/preamp,
+  - [x] spectrum analyzer data is a no-data/no-op path for Step 1.
+- [x] Add `AudioMetadataProbe` boundary for playlist duration indexing.
+- [x] Add `RodioMetadataProbe` for local seekable files using
       `rodio::Decoder`/`Source::total_duration()`.
-- [ ] Keep `content://`, streaming URLs, Android lifecycle, APK packaging, and
+- [x] Keep `content://`, streaming URLs, Android lifecycle, APK packaging, and
       Android E2E as later steps.
 
 Deliverable: a platform-independent rodio backend that can be built and tested
