@@ -85,7 +85,9 @@ impl AudioMetadataProbe for NoopMetadataProbe {
 }
 
 pub fn create_backend(kind: PlaybackBackendKind) -> Result<Box<dyn PlaybackBackend>, String> {
-    match resolve_backend_kind(kind)? {
+    let resolved = resolve_backend_kind(kind)?;
+    crate::app_log_info!(backend, "selected playback backend {resolved:?}");
+    match resolved {
         #[cfg(feature = "gstreamer-backend")]
         PlaybackBackendKind::GStreamer => Ok(Box::new(crate::player::GStreamerBackend::new()?)),
         #[cfg(feature = "rodio-backend")]

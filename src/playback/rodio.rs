@@ -57,10 +57,13 @@ pub struct RodioMetadataProbe;
 
 impl RodioBackend {
     pub fn new() -> Result<Self, String> {
+        crate::app_log_info!(backend, "rodio opening default output device");
         let mut sink = DeviceSinkBuilder::from_default_device()
             .and_then(|builder| builder.open_sink_or_fallback())
             .map_err(|err| format!("failed to open default rodio audio output: {err}"))?;
         sink.log_on_drop(false);
+        let config = format!("{:?}", sink.config());
+        crate::app_log_info!(backend, "rodio opened output", config);
         let player = RodioPlayer::connect_new(sink.mixer());
         Ok(Self::from_output(RodioOutput::Device { sink, player }))
     }
@@ -126,6 +129,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn play_uri_at(&self, uri: &str, start_ms: i64) -> Result<(), String> {
+        crate::app_log_info!(backend, "rodio play_uri_at", uri, start_ms);
         if start_ms < 0 {
             return Err("seek position must be non-negative".to_string());
         }
@@ -159,13 +163,31 @@ impl PlaybackBackend for RodioBackend {
             frequency: Some(decoder.sample_rate().get() as i32),
             channels: Some(decoder.channels().get() as i32),
         };
+        let path = source.path.display().to_string();
+        let duration_ms_log = duration_ms
+            .map(|duration| duration.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let frequency = stream_info.frequency.unwrap_or_default();
+        let channels = stream_info.channels.unwrap_or_default();
+        crate::app_log_info!(
+            backend,
+            "rodio decoded source",
+            path,
+            duration_ms_log,
+            frequency,
+            channels
+        );
 
         let mut inner = self.inner.borrow_mut();
         inner.output.recreate_player();
         let player = inner.output.player();
         player.set_volume(percent_to_rodio_volume(inner.volume));
         player.append(decoder);
+        let queued_sources = player.len();
+        let player_empty = player.empty();
+        crate::app_log_info!(backend, "rodio appended source", queued_sources, player_empty);
         if start_ms > 0 {
+            crate::app_log_info!(backend, "rodio start seek", start_ms);
             if let Err(err) = player.try_seek(Duration::from_millis(start_ms as u64)) {
                 let message = format!("failed to seek rodio source: {err}");
                 inner.state = PlayerState::Stopped;
@@ -176,6 +198,7 @@ impl PlaybackBackend for RodioBackend {
             }
         }
         player.play();
+        crate::app_log_info!(backend, "rodio playback started");
 
         inner.current_uri = Some(uri.to_string());
         inner.state = PlayerState::Playing;
@@ -224,6 +247,7 @@ impl PlaybackBackend for RodioBackend {
         if position_ms < 0 {
             return Err("seek position must be non-negative".to_string());
         }
+        crate::app_log_info!(backend, "rodio seek", position_ms);
         self.inner
             .borrow()
             .output
@@ -235,10 +259,9 @@ impl PlaybackBackend for RodioBackend {
     fn set_volume(&self, volume: i32) -> Result<(), String> {
         let mut inner = self.inner.borrow_mut();
         inner.volume = volume.clamp(0, 100);
-        inner
-            .output
-            .player()
-            .set_volume(percent_to_rodio_volume(inner.volume));
+        let rodio_volume = percent_to_rodio_volume(inner.volume);
+        inner.output.player().set_volume(rodio_volume);
+        crate::app_log_info!(backend, "rodio set volume", volume, rodio_volume);
         Ok(())
     }
 
@@ -258,8 +281,10 @@ impl PlaybackBackend for RodioBackend {
             && !inner.eos_emitted
             && inner.output.player().empty()
         {
+            let pos_ms = duration_to_millis(inner.output.player().get_pos());
             inner.eos_emitted = true;
             inner.state = PlayerState::Stopped;
+            crate::app_log_info!(backend, "rodio synthetic eos", pos_ms);
             inner.pending_events.push(PlaybackEvent::EndOfStream);
         }
         Ok(std::mem::take(&mut inner.pending_events))
