@@ -102,27 +102,15 @@ pub fn resolve_backend_kind(kind: PlaybackBackendKind) -> Result<PlaybackBackend
 }
 
 fn default_backend_kind() -> Result<PlaybackBackendKind, String> {
-    #[cfg(all(target_os = "android", feature = "rodio-backend"))]
-    {
+    if cfg!(target_os = "android") && cfg!(feature = "rodio-backend") {
         return Ok(PlaybackBackendKind::Rodio);
     }
-
-    #[cfg(all(not(target_os = "android"), feature = "gstreamer-backend"))]
-    {
+    if cfg!(feature = "gstreamer-backend") {
         return Ok(PlaybackBackendKind::GStreamer);
     }
-
-    #[cfg(feature = "rodio-backend")]
-    {
+    if cfg!(feature = "rodio-backend") {
         return Ok(PlaybackBackendKind::Rodio);
     }
-
-    #[cfg(feature = "gstreamer-backend")]
-    {
-        return Ok(PlaybackBackendKind::GStreamer);
-    }
-
-    #[allow(unreachable_code)]
     Err("no playback backend feature is enabled".to_string())
 }
 
