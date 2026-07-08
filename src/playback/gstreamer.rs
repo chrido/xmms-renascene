@@ -5,7 +5,8 @@
 
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{
-    EqualizerBackendState, PlaybackEvent, PlayerState, StreamInfo,
+    EqualizerBackendState, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
+    PlayerState, StreamInfo,
 };
 use crate::player::GStreamerBackend;
 
@@ -71,6 +72,23 @@ impl PlaybackBackend for GStreamerBackend {
 
     fn current_uri(&self) -> Option<String> {
         GStreamerBackend::uri(self)
+    }
+
+    fn output_device_groups(&self) -> OutputDeviceGroups {
+        crate::player::group_output_devices(
+            crate::player::list_gstreamer_output_devices().unwrap_or_default(),
+        )
+    }
+
+    fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> Result<(), String> {
+        match selection {
+            OutputDeviceSelection::Automatic => self.rebuild_output_sink("autoaudiosink", None),
+            OutputDeviceSelection::System(id) => self.rebuild_output_sink("autoaudiosink", Some(id)),
+        }
+    }
+
+    fn current_output_device(&self) -> Option<OutputDevice> {
+        None
     }
 }
 

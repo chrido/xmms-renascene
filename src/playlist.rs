@@ -464,10 +464,7 @@ impl Playlist {
         Ok(changed)
     }
 
-    pub fn index_missing_durations_with_probe<P>(
-        &mut self,
-        probe: &P,
-    ) -> Result<usize, String>
+    pub fn index_missing_durations_with_probe<P>(&mut self, probe: &P) -> Result<usize, String>
     where
         P: crate::playback::backend::AudioMetadataProbe + ?Sized,
     {

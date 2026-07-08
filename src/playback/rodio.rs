@@ -13,13 +13,12 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ::rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
 use crate::audio_model::EQUALIZER_BANDS;
 use crate::playback::backend::{AudioMetadataProbe, PlaybackBackend};
 use crate::playback::model::{
-    EqualizerBackendState, OutputDevice, OutputDeviceGroups, PlaybackEvent, PlayerState,
-    StreamInfo,
+    EqualizerBackendState, OutputDevice, OutputDeviceGroups, PlaybackEvent, PlayerState, StreamInfo,
 };
 use crate::playlist::{DurationIndexItem, DurationIndexResult};
 
@@ -113,7 +112,9 @@ impl RodioBackend {
     fn record_error(&self, message: String) -> Result<(), String> {
         let mut inner = self.inner.borrow_mut();
         inner.state = PlayerState::Stopped;
-        inner.pending_events.push(PlaybackEvent::Error(message.clone()));
+        inner
+            .pending_events
+            .push(PlaybackEvent::Error(message.clone()));
         Err(message)
     }
 }
@@ -167,7 +168,9 @@ impl PlaybackBackend for RodioBackend {
             if let Err(err) = player.try_seek(Duration::from_millis(start_ms as u64)) {
                 let message = format!("failed to seek rodio source: {err}");
                 inner.state = PlayerState::Stopped;
-                inner.pending_events.push(PlaybackEvent::Error(message.clone()));
+                inner
+                    .pending_events
+                    .push(PlaybackEvent::Error(message.clone()));
                 return Err(message);
             }
         }
@@ -181,7 +184,9 @@ impl PlaybackBackend for RodioBackend {
         inner
             .pending_events
             .push(PlaybackEvent::DurationChanged(duration_ms));
-        inner.pending_events.push(PlaybackEvent::StreamInfo(stream_info));
+        inner
+            .pending_events
+            .push(PlaybackEvent::StreamInfo(stream_info));
         Ok(())
     }
 
@@ -248,7 +253,9 @@ impl PlaybackBackend for RodioBackend {
 
     fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
         let mut inner = self.inner.borrow_mut();
-        if inner.state == PlayerState::Playing && !inner.eos_emitted && inner.output.player().empty()
+        if inner.state == PlayerState::Playing
+            && !inner.eos_emitted
+            && inner.output.player().empty()
         {
             inner.eos_emitted = true;
             inner.state = PlayerState::Stopped;
@@ -316,7 +323,10 @@ impl AudioMetadataProbe for RodioMetadataProbe {
         Ok(Some(DurationIndexResult {
             index: item.index,
             uri: item.uri.clone(),
-            length_ms: decoder.total_duration().map(duration_to_millis).unwrap_or(-1),
+            length_ms: decoder
+                .total_duration()
+                .map(duration_to_millis)
+                .unwrap_or(-1),
             title: None,
         }))
     }
@@ -349,7 +359,10 @@ pub fn resolve_local_audio_source(uri: &str) -> Result<LocalAudioSource, String>
     let path = if let Some(rest) = uri.strip_prefix("file://") {
         file_uri_path(rest)?
     } else if uri.contains("://") {
-        let scheme = uri.split_once("://").map(|(scheme, _)| scheme).unwrap_or(uri);
+        let scheme = uri
+            .split_once("://")
+            .map(|(scheme, _)| scheme)
+            .unwrap_or(uri);
         return Err(format!(
             "URI scheme '{scheme}' is not supported by the platform-independent rodio backend"
         ));
@@ -557,7 +570,10 @@ mod tests {
         backend.inner.borrow_mut().state = PlayerState::Playing;
         backend.force_player_empty_for_tests();
 
-        assert_eq!(backend.poll_events().unwrap(), vec![PlaybackEvent::EndOfStream]);
+        assert_eq!(
+            backend.poll_events().unwrap(),
+            vec![PlaybackEvent::EndOfStream]
+        );
         assert_eq!(backend.poll_events().unwrap(), Vec::new());
         assert_eq!(backend.state(), PlayerState::Stopped);
     }
@@ -565,7 +581,9 @@ mod tests {
     #[test]
     fn rodio_backend_queues_error_event_for_play_failures() {
         let backend = RodioBackend::new_detached_for_tests();
-        let err = backend.play_uri("content://media/external/audio/1").unwrap_err();
+        let err = backend
+            .play_uri("content://media/external/audio/1")
+            .unwrap_err();
 
         assert!(err.contains("not supported"));
         assert_eq!(
