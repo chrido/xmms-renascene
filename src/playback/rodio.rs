@@ -158,7 +158,12 @@ where
         self.preamp_gain = settings.preamp_gain();
         let sample_rate = self.inner.sample_rate().get() as f32;
         let template = std::array::from_fn(|band| {
-            Biquad::peaking(sample_rate, EQ_FREQUENCIES_HZ[band], EQ_Q, settings.band_db(band))
+            Biquad::peaking(
+                sample_rate,
+                EQ_FREQUENCIES_HZ[band],
+                EQ_Q,
+                settings.band_db(band),
+            )
         });
         for channel_filters in &mut self.filters {
             *channel_filters = template;
@@ -386,8 +391,9 @@ impl PlaybackBackend for RodioBackend {
         };
 
         let duration_ms = decoder.total_duration().map(duration_to_millis);
+        let bitrate = estimate_bitrate_kbps(&source.path, duration_ms);
         let stream_info = StreamInfo {
-            bitrate: None,
+            bitrate,
             frequency: Some(decoder.sample_rate().get() as i32),
             channels: Some(decoder.channels().get() as i32),
         };
@@ -395,6 +401,7 @@ impl PlaybackBackend for RodioBackend {
         let duration_ms_log = duration_ms
             .map(|duration| duration.to_string())
             .unwrap_or_else(|| "unknown".to_string());
+        let bitrate = stream_info.bitrate.unwrap_or_default();
         let frequency = stream_info.frequency.unwrap_or_default();
         let channels = stream_info.channels.unwrap_or_default();
         crate::app_log_info!(
@@ -402,6 +409,7 @@ impl PlaybackBackend for RodioBackend {
             "rodio decoded source",
             path,
             duration_ms_log,
+            bitrate,
             frequency,
             channels
         );
@@ -725,6 +733,13 @@ fn percent_to_rodio_volume(percent: i32) -> f32 {
 
 fn duration_to_millis(duration: Duration) -> i64 {
     duration.as_millis().min(i64::MAX as u128) as i64
+}
+
+fn estimate_bitrate_kbps(path: &PathBuf, duration_ms: Option<i64>) -> Option<i32> {
+    let duration_ms = duration_ms.filter(|duration| *duration > 0)? as u128;
+    let bytes = std::fs::metadata(path).ok()?.len() as u128;
+    let kbps = ((bytes * 8) + (duration_ms / 2)) / duration_ms;
+    i32::try_from(kbps).ok().filter(|value| *value > 0)
 }
 
 fn db_to_gain(db: f64) -> f32 {
@@ -1120,11 +1135,12 @@ mod tests {
         assert_eq!(backend.current_uri(), Some(uri));
         assert_eq!(backend.state(), PlayerState::Playing);
         assert_eq!(backend.duration_ms(), Some(500));
+        assert_eq!(backend.stream_info().bitrate, Some(129));
         assert_eq!(backend.stream_info().frequency, Some(8_000));
         assert_eq!(backend.stream_info().channels, Some(1));
         assert!(events.contains(&PlaybackEvent::DurationChanged(Some(500))));
         assert!(events.contains(&PlaybackEvent::StreamInfo(StreamInfo {
-            bitrate: None,
+            bitrate: Some(129),
             frequency: Some(8_000),
             channels: Some(1),
         })));
@@ -1228,7 +1244,10 @@ mod tests {
 
         let sample = source.next().unwrap();
 
-        assert!(sample > 0.25, "expected +10 dB preamp to boost sample, got {sample}");
+        assert!(
+            sample > 0.25,
+            "expected +10 dB preamp to boost sample, got {sample}"
+        );
     }
 
     #[test]
