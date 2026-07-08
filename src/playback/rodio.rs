@@ -57,7 +57,8 @@ pub struct RodioMetadataProbe;
 
 impl RodioBackend {
     pub fn new() -> Result<Self, String> {
-        let mut sink = DeviceSinkBuilder::open_default_sink()
+        let mut sink = DeviceSinkBuilder::from_default_device()
+            .and_then(|builder| builder.open_sink_or_fallback())
             .map_err(|err| format!("failed to open default rodio audio output: {err}"))?;
         sink.log_on_drop(false);
         let player = RodioPlayer::connect_new(sink.mixer());
