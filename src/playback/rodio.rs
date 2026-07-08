@@ -9,6 +9,7 @@ use std::fs::File;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -16,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
-use crate::audio_model::EQUALIZER_BANDS;
+use crate::audio_model::{equalizer_position_to_db, EqualizerBandPositions, EQUALIZER_BANDS};
 use crate::playback::backend::{AudioMetadataProbe, PlaybackBackend};
 use crate::playback::model::{
     EqualizerBackendState, OutputDevice, OutputDeviceGroups, PlaybackEvent, PlayerState, StreamInfo,
@@ -38,6 +39,7 @@ struct RodioBackendInner {
     volume: i32,
     balance: i32,
     equalizer: EqualizerBackendState,
+    dsp_settings: SharedDspSettings,
     output_device: OutputDevice,
     last_debug_log: Option<Instant>,
 }
@@ -56,11 +58,215 @@ pub struct LocalAudioSource {
     pub path: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    fn identity() -> Self {
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn peaking(sample_rate: f32, frequency: f32, q: f32, gain_db: f32) -> Self {
+        if gain_db.abs() < 0.001 || frequency <= 0.0 || frequency >= sample_rate * 0.5 {
+            return Self::identity();
+        }
+        let omega = 2.0 * std::f32::consts::PI * frequency / sample_rate;
+        let sin = omega.sin();
+        let cos = omega.cos();
+        let alpha = sin / (2.0 * q.max(0.001));
+        let a = 10.0_f32.powf(gain_db / 40.0);
+
+        let b0 = 1.0 + alpha * a;
+        let b1 = -2.0 * cos;
+        let b2 = 1.0 - alpha * a;
+        let a0 = 1.0 + alpha / a;
+        let a1 = -2.0 * cos;
+        let a2 = 1.0 - alpha / a;
+
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: a1 / a0,
+            a2: a2 / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let output = self.b0 * input + self.z1;
+        self.z1 = self.b1 * input - self.a1 * output + self.z2;
+        self.z2 = self.b2 * input - self.a2 * output;
+        output
+    }
+}
+
+struct RodioDspSource<S> {
+    inner: S,
+    settings: SharedDspSettings,
+    seen_version: u64,
+    preamp_gain: f32,
+    next_channel: usize,
+    filters: Vec<[Biquad; EQUALIZER_BANDS]>,
+}
+
+impl<S> RodioDspSource<S>
+where
+    S: Source,
+{
+    fn new(inner: S, settings: SharedDspSettings) -> Self {
+        let channels = usize::from(inner.channels().get()).max(1);
+        let mut source = Self {
+            inner,
+            settings,
+            seen_version: u64::MAX,
+            preamp_gain: 1.0,
+            next_channel: 0,
+            filters: vec![[Biquad::identity(); EQUALIZER_BANDS]; channels],
+        };
+        source.refresh_filters_if_needed();
+        source
+    }
+
+    fn refresh_filters_if_needed(&mut self) {
+        let settings = self
+            .settings
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        if settings.version == self.seen_version {
+            return;
+        }
+        self.seen_version = settings.version;
+        self.preamp_gain = settings.preamp_gain();
+        let sample_rate = self.inner.sample_rate().get() as f32;
+        let template = std::array::from_fn(|band| {
+            Biquad::peaking(sample_rate, EQ_FREQUENCIES_HZ[band], EQ_Q, settings.band_db(band))
+        });
+        for channel_filters in &mut self.filters {
+            *channel_filters = template;
+        }
+    }
+}
+
+impl<S> Iterator for RodioDspSource<S>
+where
+    S: Source,
+{
+    type Item = rodio::Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.refresh_filters_if_needed();
+        let channel = self.next_channel;
+        self.next_channel = (self.next_channel + 1) % self.filters.len().max(1);
+        let mut sample = self.inner.next()? as f32;
+        for filter in &mut self.filters[channel] {
+            sample = filter.process(sample);
+        }
+        Some((sample * self.preamp_gain).clamp(-1.0, 1.0) as rodio::Sample)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl<S> Source for RodioDspSource<S>
+where
+    S: Source,
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> rodio::ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.next_channel = 0;
+        self.inner.try_seek(pos)
+    }
+}
+
 pub struct RodioMetadataProbe;
 
 const RODIO_ALSA_PIPEWIRE_ID: &str = "rodio-alsa-pipewire";
 const RODIO_ALSA_PULSE_ID: &str = "rodio-alsa-pulse";
 const RODIO_ALSA_SYSTEM_ID: &str = "rodio-alsa-system";
+const EQ_FREQUENCIES_HZ: [f32; EQUALIZER_BANDS] = [
+    60.0, 170.0, 310.0, 600.0, 1_000.0, 3_000.0, 6_000.0, 12_000.0, 14_000.0, 16_000.0,
+];
+const EQ_Q: f32 = 1.0;
+
+type SharedDspSettings = Arc<Mutex<RodioDspSettings>>;
+
+#[derive(Debug, Clone)]
+struct RodioDspSettings {
+    version: u64,
+    active: bool,
+    preamp_position: i32,
+    band_positions: EqualizerBandPositions,
+}
+
+impl RodioDspSettings {
+    fn from_equalizer(state: EqualizerBackendState) -> Self {
+        Self {
+            version: 0,
+            active: state.active,
+            preamp_position: state.preamp_position,
+            band_positions: state.band_positions,
+        }
+    }
+
+    fn update(&mut self, state: EqualizerBackendState) {
+        self.version = self.version.wrapping_add(1);
+        self.active = state.active;
+        self.preamp_position = state.preamp_position;
+        self.band_positions = state.band_positions;
+    }
+
+    fn preamp_gain(&self) -> f32 {
+        if self.active {
+            db_to_gain(equalizer_position_to_db(self.preamp_position))
+        } else {
+            1.0
+        }
+    }
+
+    fn band_db(&self, band: usize) -> f32 {
+        if self.active {
+            equalizer_position_to_db(self.band_positions[band]) as f32
+        } else {
+            0.0
+        }
+    }
+}
 
 impl RodioBackend {
     pub fn new() -> Result<Self, String> {
@@ -73,6 +279,11 @@ impl RodioBackend {
     }
 
     fn from_output(output: RodioOutput, output_device: OutputDevice) -> Self {
+        let equalizer = EqualizerBackendState {
+            active: false,
+            preamp_position: 0,
+            band_positions: [0; EQUALIZER_BANDS],
+        };
         Self {
             inner: RefCell::new(RodioBackendInner {
                 output,
@@ -84,11 +295,8 @@ impl RodioBackend {
                 eos_emitted: false,
                 volume: 100,
                 balance: 0,
-                equalizer: EqualizerBackendState {
-                    active: false,
-                    preamp_position: 0,
-                    band_positions: [0; EQUALIZER_BANDS],
-                },
+                equalizer,
+                dsp_settings: Arc::new(Mutex::new(RodioDspSettings::from_equalizer(equalizer))),
                 output_device,
                 last_debug_log: None,
             }),
@@ -202,7 +410,8 @@ impl PlaybackBackend for RodioBackend {
         inner.output.recreate_player();
         let player = inner.output.player();
         player.set_volume(percent_to_rodio_volume(inner.volume));
-        player.append(decoder);
+        let dsp_settings = Arc::clone(&inner.dsp_settings);
+        player.append(RodioDspSource::new(decoder, dsp_settings));
         let queued_sources = player.len();
         let player_empty = player.empty();
         crate::app_log_info!(
@@ -296,7 +505,20 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn set_equalizer(&self, state: EqualizerBackendState) -> Result<(), String> {
-        self.inner.borrow_mut().equalizer = state;
+        let mut inner = self.inner.borrow_mut();
+        inner.equalizer = state;
+        inner
+            .dsp_settings
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .update(state);
+        let preamp_db = if state.active {
+            equalizer_position_to_db(state.preamp_position)
+        } else {
+            0.0
+        };
+        let active = state.active;
+        crate::app_log_info!(backend, "rodio set equalizer", active, preamp_db);
         Ok(())
     }
 
@@ -503,6 +725,10 @@ fn percent_to_rodio_volume(percent: i32) -> f32 {
 
 fn duration_to_millis(duration: Duration) -> i64 {
     duration.as_millis().min(i64::MAX as u128) as i64
+}
+
+fn db_to_gain(db: f64) -> f32 {
+    10.0_f32.powf(db as f32 / 20.0)
 }
 
 fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDevice), String> {
@@ -957,11 +1183,14 @@ mod tests {
         assert_eq!(backend.state(), PlayerState::Stopped);
         assert_eq!(backend.duration_ms(), None);
         assert_eq!(backend.stream_info(), StreamInfo::default());
-        assert_eq!(backend.poll_events().unwrap(), vec![PlaybackEvent::Error(err)]);
+        assert_eq!(
+            backend.poll_events().unwrap(),
+            vec![PlaybackEvent::Error(err)]
+        );
     }
 
     #[test]
-    fn rodio_backend_stores_first_step_noop_controls() {
+    fn rodio_backend_stores_and_shares_equalizer_controls() {
         let backend = RodioBackend::new_detached_for_tests();
         backend.set_volume(150).unwrap();
         backend.set_balance(-150).unwrap();
@@ -975,5 +1204,69 @@ mod tests {
         assert_eq!(backend.volume(), 100);
         assert_eq!(backend.balance(), -100);
         assert_eq!(backend.equalizer(), equalizer);
+        let settings = backend.inner.borrow().dsp_settings.clone();
+        let settings = settings.lock().unwrap();
+        assert!(settings.active);
+        assert_eq!(settings.preamp_position, 42);
+        assert_eq!(settings.band_positions, [7; EQUALIZER_BANDS]);
+    }
+
+    #[test]
+    fn rodio_dsp_source_applies_preamp_gain() {
+        let state = EqualizerBackendState {
+            active: true,
+            preamp_position: 25,
+            band_positions: [50; EQUALIZER_BANDS],
+        };
+        let settings = Arc::new(Mutex::new(RodioDspSettings::from_equalizer(state)));
+        let source = rodio::buffer::SamplesBuffer::new(
+            std::num::NonZero::new(1).unwrap(),
+            std::num::NonZero::new(44_100).unwrap(),
+            vec![0.1],
+        );
+        let mut source = RodioDspSource::new(source, settings);
+
+        let sample = source.next().unwrap();
+
+        assert!(sample > 0.25, "expected +10 dB preamp to boost sample, got {sample}");
+    }
+
+    #[test]
+    fn rodio_dsp_source_applies_equalizer_bands() {
+        let mut bands = [50; EQUALIZER_BANDS];
+        bands[4] = 20; // boost the 1 kHz band.
+        let boosted = EqualizerBackendState {
+            active: true,
+            preamp_position: 50,
+            band_positions: bands,
+        };
+        let flat = EqualizerBackendState {
+            active: false,
+            preamp_position: 50,
+            band_positions: [50; EQUALIZER_BANDS],
+        };
+        let sine = (0..1_000)
+            .map(|n| {
+                let phase = 2.0 * std::f32::consts::PI * 1_000.0 * n as f32 / 44_100.0;
+                0.1 * phase.sin()
+            })
+            .collect::<Vec<_>>();
+        let make_source = |state| {
+            let settings = Arc::new(Mutex::new(RodioDspSettings::from_equalizer(state)));
+            let source = rodio::buffer::SamplesBuffer::new(
+                std::num::NonZero::new(1).unwrap(),
+                std::num::NonZero::new(44_100).unwrap(),
+                sine.clone(),
+            );
+            RodioDspSource::new(source, settings)
+        };
+
+        let boosted_sum: f32 = make_source(boosted).map(f32::abs).sum();
+        let flat_sum: f32 = make_source(flat).map(f32::abs).sum();
+
+        assert!(
+            boosted_sum > flat_sum * 1.2,
+            "expected 1 kHz EQ boost to increase amplitude, flat={flat_sum}, boosted={boosted_sum}"
+        );
     }
 }
