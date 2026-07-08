@@ -109,6 +109,13 @@ impl RodioBackend {
     pub fn equalizer(&self) -> EqualizerBackendState {
         self.inner.borrow().equalizer
     }
+
+    fn record_error(&self, message: String) -> Result<(), String> {
+        let mut inner = self.inner.borrow_mut();
+        inner.state = PlayerState::Stopped;
+        inner.pending_events.push(PlaybackEvent::Error(message.clone()));
+        Err(message)
+    }
 }
 
 impl PlaybackBackend for RodioBackend {
@@ -121,19 +128,28 @@ impl PlaybackBackend for RodioBackend {
             return Err("seek position must be non-negative".to_string());
         }
 
-        let source = resolve_local_audio_source(uri)?;
-        let file = File::open(&source.path).map_err(|err| {
-            format!(
-                "failed to open local audio file {}: {err}",
-                source.path.display()
-            )
-        })?;
-        let decoder = Decoder::try_from(file).map_err(|err| {
-            format!(
-                "failed to decode local audio file {} with rodio: {err}",
-                source.path.display()
-            )
-        })?;
+        let source = match resolve_local_audio_source(uri) {
+            Ok(source) => source,
+            Err(err) => return self.record_error(err),
+        };
+        let file = match File::open(&source.path) {
+            Ok(file) => file,
+            Err(err) => {
+                return self.record_error(format!(
+                    "failed to open local audio file {}: {err}",
+                    source.path.display()
+                ));
+            }
+        };
+        let decoder = match Decoder::try_from(file) {
+            Ok(decoder) => decoder,
+            Err(err) => {
+                return self.record_error(format!(
+                    "failed to decode local audio file {} with rodio: {err}",
+                    source.path.display()
+                ));
+            }
+        };
 
         let duration_ms = decoder.total_duration().map(duration_to_millis);
         let stream_info = StreamInfo {
@@ -148,9 +164,12 @@ impl PlaybackBackend for RodioBackend {
         player.set_volume(percent_to_rodio_volume(inner.volume));
         player.append(decoder);
         if start_ms > 0 {
-            player
-                .try_seek(Duration::from_millis(start_ms as u64))
-                .map_err(|err| format!("failed to seek rodio source: {err}"))?;
+            if let Err(err) = player.try_seek(Duration::from_millis(start_ms as u64)) {
+                let message = format!("failed to seek rodio source: {err}");
+                inner.state = PlayerState::Stopped;
+                inner.pending_events.push(PlaybackEvent::Error(message.clone()));
+                return Err(message);
+            }
         }
         player.play();
 
@@ -540,6 +559,19 @@ mod tests {
 
         assert_eq!(backend.poll_events().unwrap(), vec![PlaybackEvent::EndOfStream]);
         assert_eq!(backend.poll_events().unwrap(), Vec::new());
+        assert_eq!(backend.state(), PlayerState::Stopped);
+    }
+
+    #[test]
+    fn rodio_backend_queues_error_event_for_play_failures() {
+        let backend = RodioBackend::new_detached_for_tests();
+        let err = backend.play_uri("content://media/external/audio/1").unwrap_err();
+
+        assert!(err.contains("not supported"));
+        assert_eq!(
+            backend.poll_events().unwrap(),
+            vec![PlaybackEvent::Error(err)]
+        );
         assert_eq!(backend.state(), PlayerState::Stopped);
     }
 
