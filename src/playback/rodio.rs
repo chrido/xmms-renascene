@@ -9,7 +9,7 @@ use std::fs::File;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,6 +39,7 @@ struct RodioBackendInner {
     balance: i32,
     equalizer: EqualizerBackendState,
     output_device: OutputDevice,
+    last_debug_log: Option<Instant>,
 }
 
 enum RodioOutput {
@@ -85,6 +86,7 @@ impl RodioBackend {
                     band_positions: [0; EQUALIZER_BANDS],
                 },
                 output_device,
+                last_debug_log: None,
             }),
         }
     }
@@ -282,6 +284,28 @@ impl PlaybackBackend for RodioBackend {
 
     fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
         let mut inner = self.inner.borrow_mut();
+        if rodio_debug_enabled()
+            && inner
+                .last_debug_log
+                .is_none_or(|last| last.elapsed() >= Duration::from_millis(1_000))
+        {
+            let player = inner.output.player();
+            let pos_ms = duration_to_millis(player.get_pos());
+            let queued_sources = player.len();
+            let player_empty = player.empty();
+            let player_paused = player.is_paused();
+            let state = format!("{:?}", inner.state);
+            crate::app_log_info!(
+                backend,
+                "rodio poll",
+                state,
+                pos_ms,
+                queued_sources,
+                player_empty,
+                player_paused
+            );
+            inner.last_debug_log = Some(Instant::now());
+        }
         if inner.state == PlayerState::Playing
             && !inner.eos_emitted
             && inner.output.player().empty()
@@ -479,10 +503,24 @@ fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDe
     let output_device = OutputDevice::system(&name, &name, "cpal", false);
     let selected_name = output_device.display_name.clone();
     let requested = device_id.unwrap_or("default").to_string();
-    crate::app_log_info!(backend, "rodio opening output device", requested, selected_name);
+    crate::app_log_info!(
+        backend,
+        "rodio opening output device",
+        requested,
+        selected_name
+    );
+    if rodio_debug_enabled() {
+        log_supported_output_configs(&device, &selected_name);
+    }
 
-    let mut sink = DeviceSinkBuilder::from_device(device)
-        .and_then(|builder| builder.open_sink_or_fallback())
+    let mut builder = DeviceSinkBuilder::from_device(device)
+        .map_err(|err| format!("failed to configure rodio audio output {selected_name}: {err}"))?;
+    if let Some(sample_format) = requested_sample_format()? {
+        crate::app_log_info!(backend, "rodio forcing sample format {sample_format:?}");
+        builder = builder.with_sample_format(sample_format);
+    }
+    let mut sink = builder
+        .open_sink_or_fallback()
         .map_err(|err| format!("failed to open rodio audio output {selected_name}: {err}"))?;
     sink.log_on_drop(false);
     let config = format!("{:?}", sink.config());
@@ -497,7 +535,12 @@ fn list_cpal_output_devices() -> Vec<OutputDevice> {
         .and_then(|device| device_name(&device));
     let mut devices = Vec::new();
     if let Some(name) = default_name.clone() {
-        devices.push(OutputDevice::system(&name, &format!("{name} (default)"), "cpal", false));
+        devices.push(OutputDevice::system(
+            &name,
+            &format!("{name} (default)"),
+            "cpal",
+            false,
+        ));
     }
     match host.output_devices() {
         Ok(output_devices) => {
@@ -515,6 +558,57 @@ fn list_cpal_output_devices() -> Vec<OutputDevice> {
         devices.push(default_output_device());
     }
     devices
+}
+
+fn rodio_debug_enabled() -> bool {
+    std::env::var("XMMS_RODIO_DEBUG").is_ok_and(|value| value != "0")
+}
+
+fn requested_sample_format() -> Result<Option<cpal::SampleFormat>, String> {
+    let Ok(value) = std::env::var("XMMS_RODIO_SAMPLE_FORMAT") else {
+        return Ok(None);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "" => Ok(None),
+        "i8" => Ok(Some(cpal::SampleFormat::I8)),
+        "i16" => Ok(Some(cpal::SampleFormat::I16)),
+        "i32" => Ok(Some(cpal::SampleFormat::I32)),
+        "i64" => Ok(Some(cpal::SampleFormat::I64)),
+        "u8" => Ok(Some(cpal::SampleFormat::U8)),
+        "u16" => Ok(Some(cpal::SampleFormat::U16)),
+        "u32" => Ok(Some(cpal::SampleFormat::U32)),
+        "u64" => Ok(Some(cpal::SampleFormat::U64)),
+        "f32" => Ok(Some(cpal::SampleFormat::F32)),
+        "f64" => Ok(Some(cpal::SampleFormat::F64)),
+        other => Err(format!(
+            "unsupported XMMS_RODIO_SAMPLE_FORMAT '{other}', expected i16, f32, etc."
+        )),
+    }
+}
+
+fn log_supported_output_configs(device: &cpal::Device, selected_name: &str) {
+    match device.supported_output_configs() {
+        Ok(configs) => {
+            for config in configs.take(24) {
+                let channels = config.channels();
+                let min_rate = config.min_sample_rate();
+                let max_rate = config.max_sample_rate();
+                let sample_format = format!("{:?}", config.sample_format());
+                crate::app_log_info!(
+                    backend,
+                    "rodio supported output config",
+                    selected_name,
+                    channels,
+                    min_rate,
+                    max_rate,
+                    sample_format
+                );
+            }
+        }
+        Err(err) => eprintln!(
+            "xmms-rs: failed to list rodio/cpal supported output configs for {selected_name}: {err}"
+        ),
+    }
 }
 
 fn device_name(device: &cpal::Device) -> Option<String> {
