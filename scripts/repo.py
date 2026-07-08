@@ -4,6 +4,7 @@
 
 import asyncio
 import contextlib
+import glob
 import logging
 import os
 import shlex
@@ -39,6 +40,59 @@ SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
 def _configure_gtk_environment() -> None:
     os.environ["GDK_DISABLE"] = os.environ.get("XMMS_GDK_DISABLE", "gl")
     os.environ["GSK_RENDERER"] = os.environ.get("XMMS_GSK_RENDERER", "cairo")
+
+
+def _alsa_pcm_plugin_exists(name: str) -> bool:
+    patterns = [
+        f"/usr/lib*/alsa-lib/libasound_module_pcm_{name}.so",
+        f"/usr/lib/*/alsa-lib/libasound_module_pcm_{name}.so",
+    ]
+    return any(glob.glob(pattern) for pattern in patterns)
+
+
+def _select_rodio_alsa_backend() -> str | None:
+    requested = os.environ.get("XMMS_RODIO_ALSA_BACKEND", "auto").strip().lower()
+    if requested in {"", "auto"}:
+        for candidate in ("pipewire", "pulse"):
+            if _alsa_pcm_plugin_exists(candidate):
+                return candidate
+        return None
+    if requested in {"system", "default", "alsa", "none"}:
+        return None
+    if requested in {"pipewire", "pulse"}:
+        if not _alsa_pcm_plugin_exists(requested):
+            logging.warning(
+                "Requested XMMS_RODIO_ALSA_BACKEND=%s, but the ALSA %s plugin was not found",
+                requested,
+                requested,
+            )
+        return requested
+    logging.warning(
+        "Unknown XMMS_RODIO_ALSA_BACKEND=%s; expected auto, pipewire, pulse, or system",
+        requested,
+    )
+    return None
+
+
+def _configure_rodio_audio_environment() -> None:
+    backend = _select_rodio_alsa_backend()
+    if backend is None:
+        logging.info("Using system ALSA default for rodio/cpal audio")
+        return
+    config = REPO_DIR / "target" / f"rodio-{backend}.asoundrc"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "</usr/share/alsa/alsa.conf>\n"
+        "\n"
+        f"pcm.!default {{\n    type {backend}\n}}\n"
+        f"ctl.!default {{\n    type {backend}\n}}\n"
+    )
+    os.environ["ALSA_CONFIG_PATH"] = str(config)
+    logging.info(
+        "Using ALSA %s plugin for rodio/cpal audio via ALSA_CONFIG_PATH=%s",
+        backend,
+        config,
+    )
 
 
 def _app_args(args: tuple[str, ...] | list[str]) -> list[str]:
@@ -156,16 +210,18 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
 
 class RepoTool:
     def _build_selected_app(self) -> None:
-        self._build_gtk_app()
+        self._build_app("gtk", "gstreamer")
 
-    def _build_gtk_app(self) -> None:
+    def _build_app(self, frontend: str, audio_backend: str) -> None:
         required_command("cargo")
-        logging.info("Building Rust application with default GTK frontend...")
-        ["cargo", "build", "--manifest-path", "Cargo.toml", "--quiet"] @ cli_follow | raise_on_error
-
-    def _build_egui_app(self) -> None:
-        required_command("cargo")
-        logging.info("Building Rust application with egui frontend...")
+        feature_by_frontend = {"gtk": "gtk-ui", "egui": "egui-ui"}
+        feature_by_audio_backend = {"gstreamer": "gstreamer-backend", "rodio": "rodio-backend"}
+        features = [feature_by_frontend[frontend], feature_by_audio_backend[audio_backend]]
+        logging.info(
+            "Building Rust application with %s frontend and %s audio backend...",
+            frontend,
+            audio_backend,
+        )
         [
             "cargo",
             "build",
@@ -173,9 +229,15 @@ class RepoTool:
             "Cargo.toml",
             "--no-default-features",
             "--features",
-            "egui-ui,gstreamer-backend",
+            ",".join(features),
             "--quiet",
         ] @ cli_follow | raise_on_error
+
+    def _build_gtk_app(self, audio_backend: str = "gstreamer") -> None:
+        self._build_app("gtk", audio_backend)
+
+    def _build_egui_app(self, audio_backend: str = "gstreamer") -> None:
+        self._build_app("egui", audio_backend)
 
     def _build_frontend_diff_app(self) -> None:
         required_command("cargo")
@@ -196,13 +258,10 @@ class RepoTool:
         if os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
             self._build_selected_app()
 
-    def _build_frontend_unless_skipped(self, frontend: str) -> None:
+    def _build_frontend_unless_skipped(self, frontend: str, audio_backend: str = "gstreamer") -> None:
         if os.environ.get("XMMS_EXEC_SKIP_BUILD") == "1":
             return
-        if frontend == "egui":
-            self._build_egui_app()
-        else:
-            self._build_gtk_app()
+        self._build_app(frontend, audio_backend)
 
     def _exec_app(self, args: tuple[str, ...]) -> None:
         self._ensure_rust_binary()
@@ -271,9 +330,11 @@ class RepoTool:
             raise RuntimeError(f"Screenshot command did not create {screenshot_file}.")
         logging.info("Screenshot saved to %s", screenshot_file)
 
-    def _select_run_frontend(self, args: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:
+    def _select_run_frontend(self, args: tuple[str, ...]) -> tuple[str, str, tuple[str, ...]]:
         frontend = "gtk"
+        audio_backend = "gstreamer"
         explicit_frontend = False
+        explicit_audio_backend = False
         app_args: list[str] = []
         index = 0
         while index < len(args):
@@ -287,6 +348,20 @@ class RepoTool:
                 continue
             if arg == "--egui":
                 frontend = "egui"
+                index += 1
+                continue
+            if arg == "--gstreamer":
+                if explicit_audio_backend and audio_backend != "gstreamer":
+                    raise ValueError("audio backend specified more than once")
+                audio_backend = "gstreamer"
+                explicit_audio_backend = True
+                index += 1
+                continue
+            if arg == "--rodio":
+                if explicit_audio_backend and audio_backend != "rodio":
+                    raise ValueError("audio backend specified more than once")
+                audio_backend = "rodio"
+                explicit_audio_backend = True
                 index += 1
                 continue
             if arg.startswith("--frontend="):
@@ -306,26 +381,34 @@ class RepoTool:
 
         if frontend not in {"gtk", "egui"}:
             raise ValueError(f"unknown frontend '{frontend}', expected 'gtk' or 'egui'")
+        if audio_backend not in {"gstreamer", "rodio"}:
+            raise ValueError(
+                f"unknown audio backend '{audio_backend}', expected 'gstreamer' or 'rodio'"
+            )
         if not explicit_frontend:
             app_args = ["--frontend", frontend, *app_args]
-        return frontend, tuple(app_args)
+        return frontend, audio_backend, tuple(app_args)
 
     async def run(self, *args: str) -> int:
         """Build when needed and start the selected frontend.
 
         Shorthands:
-          ./repo run --gtk  -> build default GTK binary and run --frontend gtk
-          ./repo run --egui -> build egui binary and run --frontend egui
+          ./repo run --gtk              -> build GTK with GStreamer and run --frontend gtk
+          ./repo run --egui             -> build egui with GStreamer and run --frontend egui
+          ./repo run --gtk --rodio      -> build GTK with rodio and run --frontend gtk
+          ./repo run --egui --rodio     -> build egui with rodio and run --frontend egui
         """
         os.chdir(REPO_DIR)
         try:
-            frontend, app_args = self._select_run_frontend(args)
+            frontend, audio_backend, app_args = self._select_run_frontend(args)
         except ValueError as err:
             logging.error("%s", err)
             return 2
         if frontend == "gtk":
             _configure_gtk_environment()
-        self._build_frontend_unless_skipped(frontend)
+        if audio_backend == "rodio":
+            _configure_rodio_audio_environment()
+        self._build_frontend_unless_skipped(frontend, audio_backend)
         self._exec_app(app_args)
         return 0
 
@@ -333,13 +416,15 @@ class RepoTool:
         """Capture a root-window screenshot after starting the selected frontend."""
         os.chdir(REPO_DIR)
         try:
-            frontend, selected_args = self._select_run_frontend(args)
+            frontend, audio_backend, selected_args = self._select_run_frontend(args)
         except ValueError as err:
             logging.error("%s", err)
             return 2
         if frontend == "gtk":
             _configure_gtk_environment()
-        self._build_frontend_unless_skipped(frontend)
+        if audio_backend == "rodio":
+            _configure_rodio_audio_environment()
+        self._build_frontend_unless_skipped(frontend, audio_backend)
         background, app_args = _split_screenshot_args(selected_args)
 
         if os.environ.get("XMMS_SCREENSHOT_UNDER_XVFB") != "1":

@@ -4,7 +4,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "gstreamer-backend")]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,7 +23,6 @@ use crate::app::view_model::{
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
     volume_to_eq_shaded_position,
 };
-#[cfg(feature = "gstreamer-backend")]
 use crate::app_log_info;
 use crate::app_state::AppState;
 use crate::equalizer::{
@@ -35,11 +33,8 @@ use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
 use crate::mpris::{
     app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
-#[cfg(not(feature = "gstreamer-backend"))]
-use crate::player::PlayerState;
-#[cfg(feature = "gstreamer-backend")]
-use crate::player::{GStreamerBackend, PlaybackEvent, PlayerState};
-#[cfg(feature = "gstreamer-backend")]
+use crate::playback::backend::{create_backend, PlaybackBackend, PlaybackBackendKind};
+use crate::playback::model::{EqualizerBackendState, PlaybackEvent, PlayerState};
 use crate::playlist::file_uri_to_path;
 use crate::playlist::{DurationIndexResult, Playlist};
 use crate::render::{
@@ -164,9 +159,7 @@ pub struct EguiFrontendState {
     socket_control: Option<SocketControl>,
     mpris_service: Option<EguiMprisService>,
     controller: AppStore,
-    #[cfg(feature = "gstreamer-backend")]
-    playback_backend: Option<GStreamerBackend>,
-    #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
+    playback_backend: Option<Box<dyn PlaybackBackend>>,
     pending_backend_seek_ms: Option<i64>,
 }
 
@@ -248,8 +241,7 @@ impl EguiFrontendState {
             socket_control,
             mpris_service,
             controller: AppStore::new(app_state),
-            #[cfg(feature = "gstreamer-backend")]
-            playback_backend: GStreamerBackend::new().ok(),
+            playback_backend: create_backend(PlaybackBackendKind::Auto).ok(),
             pending_backend_seek_ms: None,
         };
         state.apply_visualization_preferences();
@@ -526,9 +518,8 @@ impl EguiFrontendState {
     }
 
     pub fn poll_playback_backend(&mut self) {
-        #[cfg(feature = "gstreamer-backend")]
         if let Some(backend) = &self.playback_backend {
-            match backend.poll_bus_events() {
+            match backend.poll_events() {
                 Ok(events) => {
                     let mut backend_ready = false;
                     for event in events {
@@ -549,13 +540,10 @@ impl EguiFrontendState {
                 Err(err) => self.runtime.pending_messages.push(err),
             }
 
-            // Bus messages never carry channel/frequency info, so poll the sink
-            // pad caps each tick (GTK parity) to keep the mono/stereo indicator
-            // and bitrate/frequency display current.
             let stream_info = self
                 .playback_backend
                 .as_ref()
-                .map(|backend| backend.audio_stream_info());
+                .map(|backend| backend.stream_info());
             if let Some(stream_info) = stream_info {
                 let result = self
                     .controller
@@ -578,22 +566,42 @@ impl EguiFrontendState {
     }
 
     fn schedule_missing_local_playlist_durations(&mut self) {
-        #[cfg(feature = "gstreamer-backend")]
-        {
-            let items = self
-                .controller
-                .state()
-                .playlist
-                .missing_duration_items()
-                .into_iter()
-                .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
-                .collect::<Vec<_>>();
-            if items.is_empty() {
-                return;
-            }
+        let items = self
+            .controller
+            .state()
+            .playlist
+            .missing_duration_items()
+            .into_iter()
+            .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
+            .collect::<Vec<_>>();
+        if items.is_empty() {
+            return;
+        }
 
-            let sender = self.duration_index_sender.clone();
-            thread::spawn(move || {
+        let sender = self.duration_index_sender.clone();
+        thread::spawn(move || {
+            #[cfg(feature = "rodio-backend")]
+            {
+                use crate::playback::backend::AudioMetadataProbe as _;
+
+                let probe = crate::playback::rodio::RodioMetadataProbe;
+                for item in items {
+                    match probe.probe(&item) {
+                        Ok(Some(result)) => {
+                            if sender.send(result).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => eprintln!(
+                            "xmms-rs: failed to probe playlist item {} with rodio: {err}",
+                            item.uri
+                        ),
+                    }
+                }
+            }
+            #[cfg(all(not(feature = "rodio-backend"), feature = "gstreamer-backend"))]
+            {
                 if let Err(err) = gstreamer::init() {
                     eprintln!(
                         "xmms-rs: failed to initialize GStreamer for playlist durations: {err}"
@@ -643,16 +651,15 @@ impl EguiFrontendState {
                         return;
                     }
                 }
-            });
-        }
+            }
+        });
     }
 
-    #[cfg(feature = "gstreamer-backend")]
     fn apply_pending_backend_seek(&mut self) {
         if let (Some(backend), Some(position_ms)) =
             (&self.playback_backend, self.pending_backend_seek_ms)
         {
-            match backend.seek_to_ms(position_ms) {
+            match backend.seek(position_ms) {
                 Ok(()) => {
                     app_log_info!(backend, "egui applied pending start seek", position_ms);
                     self.pending_backend_seek_ms = None;
@@ -698,7 +705,6 @@ impl EguiFrontendState {
             &effect,
             AppEffect::StopPlayback | AppEffect::BeginStopFade { .. }
         );
-        #[cfg(feature = "gstreamer-backend")]
         if let Some(backend) = &self.playback_backend {
             match &effect {
                 AppEffect::StartPlaybackUri { uri, position_ms } => {
@@ -733,20 +739,30 @@ impl EguiFrontendState {
                     }
                 }
                 AppEffect::SeekPlayback(position_ms) => {
-                    app_log_info!(backend, "egui seek_to_ms", position_ms);
-                    if let Err(err) = backend.seek_to_ms(*position_ms) {
+                    app_log_info!(backend, "egui seek", position_ms);
+                    if let Err(err) = backend.seek(*position_ms) {
                         self.runtime.pending_messages.push(err);
                     }
                 }
-                AppEffect::SetBackendVolume(volume) => backend.set_volume_percent(*volume),
-                AppEffect::SetBackendBalance(balance) => backend.set_balance_percent(*balance),
+                AppEffect::SetBackendVolume(volume) => {
+                    if let Err(err) = backend.set_volume(*volume) {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+                AppEffect::SetBackendBalance(balance) => {
+                    if let Err(err) = backend.set_balance(*balance) {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
                 AppEffect::SetBackendEqualizer => {
                     let config = &self.controller.state().config;
-                    backend.set_equalizer_from_positions(
-                        config.equalizer_active,
-                        config.equalizer_preamp_pos,
-                        config.equalizer_band_pos,
-                    );
+                    if let Err(err) = backend.set_equalizer(EqualizerBackendState {
+                        active: config.equalizer_active,
+                        preamp_position: config.equalizer_preamp_pos,
+                        band_positions: config.equalizer_band_pos,
+                    }) {
+                        self.runtime.pending_messages.push(err);
+                    }
                 }
                 _ => {}
             }

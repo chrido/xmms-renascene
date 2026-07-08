@@ -55,10 +55,12 @@ use crate::mpris::{
     mpris_root_properties, MprisAppAction, MprisCommand, MprisEvent, MprisPlayerProperties,
     MprisRootProperties,
 };
-use crate::player::{
-    group_output_devices, list_gstreamer_output_devices, GStreamerBackend, OutputDevice,
-    OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlayerState,
+use crate::playback::backend::{create_backend, PlaybackBackend, PlaybackBackendKind};
+use crate::playback::model::{
+    EqualizerBackendState, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
+    PlayerState,
 };
+use crate::player::group_output_devices;
 pub use crate::playlist::PlaylistMenuKind;
 use crate::{app_log_debug, app_log_info, app_log_trace};
 
@@ -115,6 +117,8 @@ use style::{
     refresh_xmms_skin_css, style_color_shelf_button, style_skin_color_button,
     style_skin_editor_custom_color_button,
 };
+
+type SharedPlaybackBackend = Rc<RefCell<Box<dyn PlaybackBackend>>>;
 
 const DEFAULT_SCALE: i32 = 2;
 const STOP_FADE_DURATION_MS: i64 = 1_000;
@@ -217,7 +221,7 @@ fn build_preview_window(
     if let Some(config_dir) = config_path.parent() {
         state.set_equalizer_preset_dir(config_dir.to_path_buf());
     }
-    match GStreamerBackend::new() {
+    match create_backend(PlaybackBackendKind::Auto) {
         Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
         Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
     }
@@ -840,19 +844,19 @@ fn apply_store_effects_gtk(
             AppEffect::SeekPlayback(position_ms) => {
                 state.set_playback_position_ms(position_ms);
                 if let Some(backend) = &state.playback_backend {
-                    if let Err(err) = backend.borrow().seek_to_ms(position_ms) {
+                    if let Err(err) = backend.borrow().seek(position_ms) {
                         eprintln!("xmms-rs: failed to seek playback: {err}");
                     }
                 }
             }
             AppEffect::SetBackendVolume(volume) => {
                 if let Some(backend) = &state.playback_backend {
-                    backend.borrow().set_volume_percent(volume);
+                    let _ = backend.borrow().set_volume(volume);
                 }
             }
             AppEffect::SetBackendBalance(balance) => {
                 if let Some(backend) = &state.playback_backend {
-                    backend.borrow().set_balance_percent(balance);
+                    let _ = backend.borrow().set_balance(balance);
                 }
             }
             AppEffect::SetBackendEqualizer => state.sync_equalizer_to_backend(),
@@ -5172,7 +5176,7 @@ struct SkinBrowserState {
 pub(crate) struct MainWindowUiState {
     app_state: AppState,
     store: AppStore,
-    playback_backend: Option<Rc<RefCell<GStreamerBackend>>>,
+    playback_backend: Option<SharedPlaybackBackend>,
     duration_index_sender: Sender<DurationIndexResult>,
     duration_index_receiver: Receiver<DurationIndexResult>,
     playback_requests: Vec<String>,
@@ -5385,19 +5389,19 @@ impl MainWindowUiState {
                 app_log_info!(backend, "gtk seek_to_ms", position_ms);
                 self.set_playback_position_ms(position_ms);
                 if let Some(backend) = &self.playback_backend {
-                    if let Err(err) = backend.borrow().seek_to_ms(position_ms) {
+                    if let Err(err) = backend.borrow().seek(position_ms) {
                         eprintln!("xmms-rs: failed to seek playback: {err}");
                     }
                 }
             }
             AppEffect::SetBackendVolume(volume) => {
                 if let Some(backend) = &self.playback_backend {
-                    backend.borrow().set_volume_percent(volume);
+                    let _ = backend.borrow().set_volume(volume);
                 }
             }
             AppEffect::SetBackendBalance(balance) => {
                 if let Some(backend) = &self.playback_backend {
-                    backend.borrow().set_balance_percent(balance);
+                    let _ = backend.borrow().set_balance(balance);
                 }
             }
             AppEffect::SetBackendEqualizer => self.sync_equalizer_to_backend(),
@@ -5592,17 +5596,29 @@ impl MainWindowUiState {
         save_fallback_state(&mut self.app_state, config_path, playlist_path)
     }
 
-    pub(crate) fn set_playback_backend(&mut self, backend: Rc<RefCell<GStreamerBackend>>) {
+    pub(crate) fn set_playback_backend(&mut self, backend: SharedPlaybackBackend) {
+        self.output_device_groups = backend.borrow().output_device_groups();
         {
+            let mut backend = backend.borrow_mut();
+            let selection = self
+                .app_state
+                .config
+                .output_device
+                .as_deref()
+                .map(OutputDeviceSelection::System)
+                .unwrap_or(OutputDeviceSelection::Automatic);
+            if let Err(err) = backend.select_output_device(selection) {
+                eprintln!("xmms-rs: failed to apply saved output device: {err}");
+            }
             let player = &self.app_state.player;
-            let backend = backend.borrow();
-            backend.set_volume_percent(player.volume());
-            backend.set_balance_percent(player.balance());
-            backend.set_equalizer_from_positions(
-                self.equalizer.active,
-                self.equalizer.preamp_position,
-                self.equalizer.band_positions,
-            );
+            let _ = backend.set_volume(player.volume());
+            let _ = backend.set_balance(player.balance());
+            let _ = backend.set_equalizer(EqualizerBackendState {
+                active: self.equalizer.active,
+                preamp_position: self.equalizer.preamp_position,
+                band_positions: self.equalizer.band_positions,
+            });
+            self.output_device_groups = backend.output_device_groups();
         }
         self.playback_backend = Some(backend);
     }
@@ -7062,47 +7078,76 @@ impl MainWindowUiState {
 
         let sender = self.duration_index_sender.clone();
         thread::spawn(move || {
-            if let Err(err) = gstreamer::init() {
-                eprintln!("xmms-rs: failed to initialize GStreamer for playlist durations: {err}");
-                return;
+            #[cfg(feature = "rodio-backend")]
+            {
+                use crate::playback::backend::AudioMetadataProbe as _;
+
+                let probe = crate::playback::rodio::RodioMetadataProbe;
+                for item in items {
+                    match probe.probe(&item) {
+                        Ok(Some(result)) => {
+                            if sender.send(result).is_err() {
+                                return;
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(err) => eprintln!(
+                            "xmms-rs: failed to probe playlist item {} with rodio: {err}",
+                            item.uri
+                        ),
+                    }
+                }
             }
-            let discoverer =
-                match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5)) {
-                    Ok(discoverer) => discoverer,
-                    Err(err) => {
-                        eprintln!("xmms-rs: failed to create playlist duration discoverer: {err}");
+            #[cfg(all(not(feature = "rodio-backend"), feature = "gstreamer-backend"))]
+            {
+                if let Err(err) = gstreamer::init() {
+                    eprintln!(
+                        "xmms-rs: failed to initialize GStreamer for playlist durations: {err}"
+                    );
+                    return;
+                }
+                let discoverer =
+                    match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
+                    {
+                        Ok(discoverer) => discoverer,
+                        Err(err) => {
+                            eprintln!(
+                                "xmms-rs: failed to create playlist duration discoverer: {err}"
+                            );
+                            return;
+                        }
+                    };
+
+                for item in items {
+                    let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists())
+                    else {
+                        continue;
+                    };
+                    let info = match discoverer.discover_uri(&item.uri) {
+                        Ok(info) => info,
+                        Err(err) => {
+                            eprintln!(
+                                "xmms-rs: failed to discover playlist item {}: {err}",
+                                path.display()
+                            );
+                            continue;
+                        }
+                    };
+                    let length_ms = info
+                        .duration()
+                        .map(|duration| duration.mseconds() as i64)
+                        .unwrap_or(-1);
+                    if sender
+                        .send(DurationIndexResult {
+                            index: item.index,
+                            uri: item.uri,
+                            length_ms,
+                            title: None,
+                        })
+                        .is_err()
+                    {
                         return;
                     }
-                };
-
-            for item in items {
-                let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists()) else {
-                    continue;
-                };
-                let info = match discoverer.discover_uri(&item.uri) {
-                    Ok(info) => info,
-                    Err(err) => {
-                        eprintln!(
-                            "xmms-rs: failed to discover playlist item {}: {err}",
-                            path.display()
-                        );
-                        continue;
-                    }
-                };
-                let length_ms = info
-                    .duration()
-                    .map(|duration| duration.mseconds() as i64)
-                    .unwrap_or(-1);
-                if sender
-                    .send(DurationIndexResult {
-                        index: item.index,
-                        uri: item.uri,
-                        length_ms,
-                        title: None,
-                    })
-                    .is_err()
-                {
-                    return;
                 }
             }
         });
@@ -7543,11 +7588,11 @@ impl MainWindowUiState {
 
     fn sync_equalizer_to_backend(&self) {
         if let Some(backend) = &self.playback_backend {
-            backend.borrow().set_equalizer_from_positions(
-                self.equalizer.active,
-                self.equalizer.preamp_position,
-                self.equalizer.band_positions,
-            );
+            let _ = backend.borrow().set_equalizer(EqualizerBackendState {
+                active: self.equalizer.active,
+                preamp_position: self.equalizer.preamp_position,
+                band_positions: self.equalizer.band_positions,
+            });
         }
     }
 
@@ -8323,12 +8368,15 @@ impl MainWindowUiState {
 
     pub(crate) fn set_preference_output_device(&mut self, device: Option<String>) {
         if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend
-                .borrow_mut()
-                .rebuild_output_sink("autoaudiosink", device.as_deref())
-            {
+            let selection = device
+                .as_deref()
+                .map(OutputDeviceSelection::System)
+                .unwrap_or(OutputDeviceSelection::Automatic);
+            let mut backend = backend.borrow_mut();
+            if let Err(err) = backend.select_output_device(selection) {
                 eprintln!("xmms-rs: failed to switch output device: {err}");
             }
+            self.output_device_groups = backend.output_device_groups();
         }
         self.sync_equalizer_to_backend();
         self.update_config_via_store(|config| config.output_device = device);
@@ -8640,7 +8688,7 @@ impl MainWindowUiState {
             return;
         }
         if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().seek_to_ms(self.playback_position_ms) {
+            if let Err(err) = backend.borrow().seek(self.playback_position_ms) {
                 eprintln!("xmms-rs: failed to seek playback: {err}");
             }
         }
@@ -8736,7 +8784,7 @@ impl MainWindowUiState {
             return;
         };
         let mut applied_pending_seek = false;
-        match backend.borrow().poll_bus_events() {
+        match backend.borrow().poll_events() {
             Ok(events) => {
                 let mut end_of_stream = false;
                 let mut backend_ready = false;
@@ -8769,7 +8817,7 @@ impl MainWindowUiState {
         }
         let (stream_info, duration_ms) = {
             let backend = backend.borrow();
-            (backend.audio_stream_info(), backend.duration_ms())
+            (backend.stream_info(), backend.duration_ms())
         };
         self.store
             .replace_state_for_migration(self.store_ready_state_snapshot());
@@ -8809,13 +8857,13 @@ impl MainWindowUiState {
 
     fn apply_pending_backend_seek(
         &mut self,
-        backend: &Rc<RefCell<GStreamerBackend>>,
+        backend: &SharedPlaybackBackend,
         log_failure: bool,
     ) -> bool {
         let Some(position_ms) = self.playback_transition.pending_backend_seek_ms() else {
             return false;
         };
-        match backend.borrow().seek_to_ms(position_ms) {
+        match backend.borrow().seek(position_ms) {
             Ok(()) => {
                 app_log_info!(backend, "gtk applied pending start seek", position_ms);
                 self.playback_transition = PlaybackTransitionState::Idle;

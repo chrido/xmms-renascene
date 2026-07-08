@@ -32,6 +32,7 @@ jobs:
             build-essential \
             gstreamer1.0-plugins-base \
             gstreamer1.0-plugins-good \
+            libasound2-dev \
             libgstreamer-plugins-base1.0-dev \
             libgstreamer1.0-dev \
             libgtk-4-dev \
@@ -40,6 +41,65 @@ jobs:
 
       - name: Run unit tests
         run: xvfb-run -a cargo test --locked --all-targets
+
+  frontend-audio-matrix:
+    name: ${{ matrix.frontend }} + ${{ matrix.audio }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - frontend: gtk
+            frontend_feature: gtk-ui
+            audio: gstreamer
+            audio_feature: gstreamer-backend
+            cargo_targets: --all-targets
+          - frontend: gtk
+            frontend_feature: gtk-ui
+            audio: rodio
+            audio_feature: rodio-backend
+            cargo_targets: --all-targets
+          - frontend: egui
+            frontend_feature: egui-ui
+            audio: gstreamer
+            audio_feature: gstreamer-backend
+            cargo_targets: --lib --bins
+          - frontend: egui
+            frontend_feature: egui-ui
+            audio: rodio
+            audio_feature: rodio-backend
+            cargo_targets: --lib --bins
+
+    env:
+      GSK_RENDERER: cairo
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            build-essential \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            libasound2-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer1.0-dev \
+            libgtk-4-dev \
+            pkg-config \
+            xvfb
+
+      - name: Test selected frontend/audio backend combination
+        run: |
+          FEATURES="${{ matrix.frontend_feature }},${{ matrix.audio_feature }}"
+          xvfb-run -a cargo test --locked --no-default-features --features "$FEATURES" ${{ matrix.cargo_targets }}
 
   pye2e-docker:
     name: Python GUI E2E Docker

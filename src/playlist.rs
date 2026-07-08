@@ -464,6 +464,23 @@ impl Playlist {
         Ok(changed)
     }
 
+    pub fn index_missing_durations_with_probe<P>(&mut self, probe: &P) -> Result<usize, String>
+    where
+        P: crate::playback::backend::AudioMetadataProbe + ?Sized,
+    {
+        self.index_missing_durations_with(|item| probe.probe(item))
+    }
+
+    #[cfg(feature = "rodio-backend")]
+    pub fn index_missing_durations_with_rodio(&mut self) -> Result<usize, String> {
+        self.index_missing_durations_with_probe(&crate::playback::rodio::RodioMetadataProbe)
+    }
+
+    #[cfg(not(feature = "rodio-backend"))]
+    pub fn index_missing_durations_with_rodio(&mut self) -> Result<usize, String> {
+        Ok(0)
+    }
+
     #[cfg(feature = "gstreamer-backend")]
     pub fn index_missing_durations_with_gstreamer(&mut self) -> Result<usize, String> {
         gstreamer::init().map_err(|err| format!("failed to initialize GStreamer: {err}"))?;
@@ -1179,6 +1196,47 @@ mod tests {
         assert_eq!(playlist.entries()[0].title, "indexed 0");
         assert_eq!(playlist.entries()[1].length_ms, 2_000);
         assert_eq!(playlist.entries()[1].title, "indexed 1");
+    }
+
+    #[cfg(feature = "rodio-backend")]
+    #[test]
+    fn duration_indexing_with_rodio_updates_playlist_lengths() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let wav = dir.join("playlist-length.wav");
+        fs::write(&wav, test_wav_bytes(8_000, 1, 2_000)).unwrap();
+
+        let mut playlist = Playlist::new();
+        playlist.add_path(&wav);
+
+        let changed = playlist.index_missing_durations_with_rodio().unwrap();
+
+        assert_eq!(changed, 1);
+        assert_eq!(playlist.entries()[0].length_ms, 250);
+    }
+
+    #[cfg(feature = "rodio-backend")]
+    fn test_wav_bytes(sample_rate: u32, channels: u16, frames: u32) -> Vec<u8> {
+        let bits_per_sample = 16u16;
+        let block_align = channels * (bits_per_sample / 8);
+        let byte_rate = sample_rate * u32::from(block_align);
+        let data_size = frames * u32::from(block_align);
+        let mut wav = Vec::with_capacity(44 + data_size as usize);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        wav.extend_from_slice(&byte_rate.to_le_bytes());
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+        wav.resize(44 + data_size as usize, 0);
+        wav
     }
 
     fn unique_temp_dir() -> PathBuf {

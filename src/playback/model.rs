@@ -1,6 +1,9 @@
 //! Frontend/backend-neutral playback data types.
 
-pub use crate::player::{PlaybackEvent, PlaybackTags, PlayerState, StreamInfo};
+pub use crate::player::{
+    OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlaybackTags,
+    PlayerState, StreamInfo,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EqualizerBackendState {

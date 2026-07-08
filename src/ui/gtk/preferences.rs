@@ -244,8 +244,14 @@ fn build_preferences_audio_page(
     output.append(&grid);
     let output_combo = gtk::ComboBoxText::new();
     output_combo.append(Some("auto"), "Automatic (System Default)");
-    if let Ok(devices) = list_gstreamer_output_devices() {
-        for device in devices {
+    {
+        let state = main_state.borrow();
+        for device in state
+            .output_device_groups()
+            .local
+            .iter()
+            .chain(state.output_device_groups().network.iter())
+        {
             output_combo.append(Some(&device.id), &device.display_name);
         }
     }

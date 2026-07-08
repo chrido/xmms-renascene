@@ -4,7 +4,10 @@
 //! while the UI separation proceeds incrementally.
 
 use crate::playback::backend::PlaybackBackend;
-use crate::playback::model::EqualizerBackendState;
+use crate::playback::model::{
+    EqualizerBackendState, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
+    PlayerState, StreamInfo,
+};
 use crate::player::GStreamerBackend;
 
 impl PlaybackBackend for GStreamerBackend {
@@ -45,6 +48,49 @@ impl PlaybackBackend for GStreamerBackend {
             state.band_positions,
         );
         Ok(())
+    }
+
+    fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
+        GStreamerBackend::poll_bus_events(self)
+    }
+
+    fn position_ms(&self) -> Option<i64> {
+        GStreamerBackend::position_ms(self)
+    }
+
+    fn duration_ms(&self) -> Option<i64> {
+        GStreamerBackend::duration_ms(self)
+    }
+
+    fn stream_info(&self) -> StreamInfo {
+        GStreamerBackend::audio_stream_info(self)
+    }
+
+    fn state(&self) -> PlayerState {
+        GStreamerBackend::playback_state(self)
+    }
+
+    fn current_uri(&self) -> Option<String> {
+        GStreamerBackend::uri(self)
+    }
+
+    fn output_device_groups(&self) -> OutputDeviceGroups {
+        crate::player::group_output_devices(
+            crate::player::list_gstreamer_output_devices().unwrap_or_default(),
+        )
+    }
+
+    fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> Result<(), String> {
+        match selection {
+            OutputDeviceSelection::Automatic => self.rebuild_output_sink("autoaudiosink", None),
+            OutputDeviceSelection::System(id) => {
+                self.rebuild_output_sink("autoaudiosink", Some(id))
+            }
+        }
+    }
+
+    fn current_output_device(&self) -> Option<OutputDevice> {
+        None
     }
 }
 

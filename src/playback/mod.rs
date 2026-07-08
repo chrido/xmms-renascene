@@ -8,3 +8,5 @@ pub mod backend;
 #[cfg(feature = "gstreamer-backend")]
 pub mod gstreamer;
 pub mod model;
+#[cfg(feature = "rodio-backend")]
+pub mod rodio;
