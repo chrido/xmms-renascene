@@ -17,7 +17,7 @@ default = ["gtk-ui", "gstreamer-backend"]
 gtk-ui = ["dep:gtk"]
 egui-ui = ["dep:egui", "dep:eframe", "dep:rfd", "dep:zbus"]
 gstreamer-backend = ["dep:gstreamer", "dep:gstreamer-pbutils"]
-rodio-backend = ["dep:rodio"]
+rodio-backend = ["dep:cpal", "dep:rodio"]
 mobile-ui = []
 
 [dependencies]
@@ -26,6 +26,7 @@ cairo = { version = "0.22.0", package = "cairo-rs" }
 flate2 = "1.1.9"
 eframe = { version = "0.35", optional = true, default-features = true }
 egui = { version = "0.35", optional = true }
+cpal = { version = "0.17.3", optional = true }
 gstreamer = { version = "0.25", optional = true }
 gstreamer-pbutils = { version = "0.25", optional = true }
 gtk = { version = "0.11.3", package = "gtk4", features = [

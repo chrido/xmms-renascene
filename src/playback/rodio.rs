@@ -13,6 +13,7 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
 use crate::audio_model::EQUALIZER_BANDS;
@@ -37,6 +38,7 @@ struct RodioBackendInner {
     volume: i32,
     balance: i32,
     equalizer: EqualizerBackendState,
+    output_device: OutputDevice,
 }
 
 enum RodioOutput {
@@ -57,18 +59,15 @@ pub struct RodioMetadataProbe;
 
 impl RodioBackend {
     pub fn new() -> Result<Self, String> {
-        crate::app_log_info!(backend, "rodio opening default output device");
-        let mut sink = DeviceSinkBuilder::from_default_device()
-            .and_then(|builder| builder.open_sink_or_fallback())
-            .map_err(|err| format!("failed to open default rodio audio output: {err}"))?;
-        sink.log_on_drop(false);
-        let config = format!("{:?}", sink.config());
-        crate::app_log_info!(backend, "rodio opened output", config);
+        let (sink, output_device) = open_rodio_sink(None)?;
         let player = RodioPlayer::connect_new(sink.mixer());
-        Ok(Self::from_output(RodioOutput::Device { sink, player }))
+        Ok(Self::from_output(
+            RodioOutput::Device { sink, player },
+            output_device,
+        ))
     }
 
-    fn from_output(output: RodioOutput) -> Self {
+    fn from_output(output: RodioOutput, output_device: OutputDevice) -> Self {
         Self {
             inner: RefCell::new(RodioBackendInner {
                 output,
@@ -85,6 +84,7 @@ impl RodioBackend {
                     preamp_position: 0,
                     band_positions: [0; EQUALIZER_BANDS],
                 },
+                output_device,
             }),
         }
     }
@@ -92,7 +92,7 @@ impl RodioBackend {
     #[cfg(test)]
     fn new_detached_for_tests() -> Self {
         let (player, _source) = RodioPlayer::new();
-        Self::from_output(RodioOutput::Detached { player })
+        Self::from_output(RodioOutput::Detached { player }, default_output_device())
     }
 
     #[cfg(test)]
@@ -185,7 +185,12 @@ impl PlaybackBackend for RodioBackend {
         player.append(decoder);
         let queued_sources = player.len();
         let player_empty = player.empty();
-        crate::app_log_info!(backend, "rodio appended source", queued_sources, player_empty);
+        crate::app_log_info!(
+            backend,
+            "rodio appended source",
+            queued_sources,
+            player_empty
+        );
         if start_ms > 0 {
             crate::app_log_info!(backend, "rodio start seek", start_ms);
             if let Err(err) = player.try_seek(Duration::from_millis(start_ms as u64)) {
@@ -313,14 +318,29 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn output_device_groups(&self) -> OutputDeviceGroups {
-        OutputDeviceGroups {
-            local: vec![default_output_device()],
-            network: Vec::new(),
-        }
+        crate::player::group_output_devices(list_cpal_output_devices())
+    }
+
+    fn select_output_device(
+        &mut self,
+        selection: crate::playback::model::OutputDeviceSelection<'_>,
+    ) -> Result<(), String> {
+        let requested = match selection {
+            crate::playback::model::OutputDeviceSelection::Automatic => None,
+            crate::playback::model::OutputDeviceSelection::System(id) => Some(id),
+        };
+        let (sink, output_device) = open_rodio_sink(requested)?;
+        let player = RodioPlayer::connect_new(sink.mixer());
+        let mut inner = self.inner.borrow_mut();
+        inner.output = RodioOutput::Device { sink, player };
+        inner.output_device = output_device;
+        inner.state = PlayerState::Stopped;
+        inner.current_uri = None;
+        Ok(())
     }
 
     fn current_output_device(&self) -> Option<OutputDevice> {
-        Some(default_output_device())
+        Some(self.inner.borrow().output_device.clone())
     }
 }
 
@@ -443,8 +463,69 @@ fn duration_to_millis(duration: Duration) -> i64 {
     duration.as_millis().min(i64::MAX as u128) as i64
 }
 
+fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDevice), String> {
+    let host = cpal::default_host();
+    let device = match device_id {
+        Some(id) => host
+            .output_devices()
+            .map_err(|err| format!("failed to enumerate rodio/cpal output devices: {err}"))?
+            .find(|device| device_name(device).as_deref() == Some(id))
+            .ok_or_else(|| format!("rodio/cpal output device not found: {id}"))?,
+        None => host
+            .default_output_device()
+            .ok_or_else(|| "rodio/cpal default output device not found".to_string())?,
+    };
+    let name = device_name(&device).unwrap_or_else(|| device_id.unwrap_or("unknown").to_string());
+    let output_device = OutputDevice::system(&name, &name, "cpal", false);
+    let selected_name = output_device.display_name.clone();
+    let requested = device_id.unwrap_or("default").to_string();
+    crate::app_log_info!(backend, "rodio opening output device", requested, selected_name);
+
+    let mut sink = DeviceSinkBuilder::from_device(device)
+        .and_then(|builder| builder.open_sink_or_fallback())
+        .map_err(|err| format!("failed to open rodio audio output {selected_name}: {err}"))?;
+    sink.log_on_drop(false);
+    let config = format!("{:?}", sink.config());
+    crate::app_log_info!(backend, "rodio opened output", selected_name, config);
+    Ok((sink, output_device))
+}
+
+fn list_cpal_output_devices() -> Vec<OutputDevice> {
+    let host = cpal::default_host();
+    let default_name = host
+        .default_output_device()
+        .and_then(|device| device_name(&device));
+    let mut devices = Vec::new();
+    if let Some(name) = default_name.clone() {
+        devices.push(OutputDevice::system(&name, &format!("{name} (default)"), "cpal", false));
+    }
+    match host.output_devices() {
+        Ok(output_devices) => {
+            for device in output_devices {
+                if let Some(name) = device_name(&device) {
+                    if Some(name.as_str()) != default_name.as_deref() {
+                        devices.push(OutputDevice::system(&name, &name, "cpal", false));
+                    }
+                }
+            }
+        }
+        Err(err) => eprintln!("xmms-rs: failed to enumerate rodio/cpal output devices: {err}"),
+    }
+    if devices.is_empty() {
+        devices.push(default_output_device());
+    }
+    devices
+}
+
+fn device_name(device: &cpal::Device) -> Option<String> {
+    device
+        .description()
+        .ok()
+        .map(|description| description.name().to_string())
+}
+
 fn default_output_device() -> OutputDevice {
-    OutputDevice::system("rodio-default", "Default audio output", "rodio", false)
+    OutputDevice::system("rodio-default", "Default audio output", "cpal", false)
 }
 
 fn is_unsupported_uri_error(err: &str) -> bool {

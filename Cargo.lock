@@ -5231,6 +5231,7 @@ version = "0.1.0"
 dependencies = [
  "bzip2",
  "cairo-rs",
+ "cpal",
  "eframe",
  "egui",
  "flate2",
