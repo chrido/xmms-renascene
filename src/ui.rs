@@ -7089,21 +7089,26 @@ impl MainWindowUiState {
             #[cfg(all(not(feature = "rodio-backend"), feature = "gstreamer-backend"))]
             {
                 if let Err(err) = gstreamer::init() {
-                    eprintln!("xmms-rs: failed to initialize GStreamer for playlist durations: {err}");
+                    eprintln!(
+                        "xmms-rs: failed to initialize GStreamer for playlist durations: {err}"
+                    );
                     return;
                 }
-                let discoverer = match gstreamer_pbutils::Discoverer::new(
-                    gstreamer::ClockTime::from_seconds(5),
-                ) {
-                    Ok(discoverer) => discoverer,
-                    Err(err) => {
-                        eprintln!("xmms-rs: failed to create playlist duration discoverer: {err}");
-                        return;
-                    }
-                };
+                let discoverer =
+                    match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
+                    {
+                        Ok(discoverer) => discoverer,
+                        Err(err) => {
+                            eprintln!(
+                                "xmms-rs: failed to create playlist duration discoverer: {err}"
+                            );
+                            return;
+                        }
+                    };
 
                 for item in items {
-                    let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists()) else {
+                    let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists())
+                    else {
                         continue;
                     };
                     let info = match discoverer.discover_uri(&item.uri) {

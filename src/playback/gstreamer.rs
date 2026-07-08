@@ -83,7 +83,9 @@ impl PlaybackBackend for GStreamerBackend {
     fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> Result<(), String> {
         match selection {
             OutputDeviceSelection::Automatic => self.rebuild_output_sink("autoaudiosink", None),
-            OutputDeviceSelection::System(id) => self.rebuild_output_sink("autoaudiosink", Some(id)),
+            OutputDeviceSelection::System(id) => {
+                self.rebuild_output_sink("autoaudiosink", Some(id))
+            }
         }
     }
 

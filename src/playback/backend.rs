@@ -60,7 +60,10 @@ pub trait PlaybackBackend {
         OutputDeviceGroups::default()
     }
 
-    fn select_output_device(&mut self, _selection: OutputDeviceSelection<'_>) -> Result<(), String> {
+    fn select_output_device(
+        &mut self,
+        _selection: OutputDeviceSelection<'_>,
+    ) -> Result<(), String> {
         Ok(())
     }
 
