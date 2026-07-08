@@ -4,6 +4,7 @@
 
 import asyncio
 import contextlib
+import glob
 import logging
 import os
 import shlex
@@ -39,6 +40,59 @@ SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
 def _configure_gtk_environment() -> None:
     os.environ["GDK_DISABLE"] = os.environ.get("XMMS_GDK_DISABLE", "gl")
     os.environ["GSK_RENDERER"] = os.environ.get("XMMS_GSK_RENDERER", "cairo")
+
+
+def _alsa_pcm_plugin_exists(name: str) -> bool:
+    patterns = [
+        f"/usr/lib*/alsa-lib/libasound_module_pcm_{name}.so",
+        f"/usr/lib/*/alsa-lib/libasound_module_pcm_{name}.so",
+    ]
+    return any(glob.glob(pattern) for pattern in patterns)
+
+
+def _select_rodio_alsa_backend() -> str | None:
+    requested = os.environ.get("XMMS_RODIO_ALSA_BACKEND", "auto").strip().lower()
+    if requested in {"", "auto"}:
+        for candidate in ("pipewire", "pulse"):
+            if _alsa_pcm_plugin_exists(candidate):
+                return candidate
+        return None
+    if requested in {"system", "default", "alsa", "none"}:
+        return None
+    if requested in {"pipewire", "pulse"}:
+        if not _alsa_pcm_plugin_exists(requested):
+            logging.warning(
+                "Requested XMMS_RODIO_ALSA_BACKEND=%s, but the ALSA %s plugin was not found",
+                requested,
+                requested,
+            )
+        return requested
+    logging.warning(
+        "Unknown XMMS_RODIO_ALSA_BACKEND=%s; expected auto, pipewire, pulse, or system",
+        requested,
+    )
+    return None
+
+
+def _configure_rodio_audio_environment() -> None:
+    backend = _select_rodio_alsa_backend()
+    if backend is None:
+        logging.info("Using system ALSA default for rodio/cpal audio")
+        return
+    config = REPO_DIR / "target" / f"rodio-{backend}.asoundrc"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(
+        "</usr/share/alsa/alsa.conf>\n"
+        "\n"
+        f"pcm.!default {{\n    type {backend}\n}}\n"
+        f"ctl.!default {{\n    type {backend}\n}}\n"
+    )
+    os.environ["ALSA_CONFIG_PATH"] = str(config)
+    logging.info(
+        "Using ALSA %s plugin for rodio/cpal audio via ALSA_CONFIG_PATH=%s",
+        backend,
+        config,
+    )
 
 
 def _app_args(args: tuple[str, ...] | list[str]) -> list[str]:
@@ -352,6 +406,8 @@ class RepoTool:
             return 2
         if frontend == "gtk":
             _configure_gtk_environment()
+        if audio_backend == "rodio":
+            _configure_rodio_audio_environment()
         self._build_frontend_unless_skipped(frontend, audio_backend)
         self._exec_app(app_args)
         return 0
@@ -366,6 +422,8 @@ class RepoTool:
             return 2
         if frontend == "gtk":
             _configure_gtk_environment()
+        if audio_backend == "rodio":
+            _configure_rodio_audio_environment()
         self._build_frontend_unless_skipped(frontend, audio_backend)
         background, app_args = _split_screenshot_args(selected_args)
 
