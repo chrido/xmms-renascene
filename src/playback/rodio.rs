@@ -6,8 +6,12 @@
 
 use std::cell::RefCell;
 use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
+use std::time::Duration;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ::rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
