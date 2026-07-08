@@ -17,6 +17,7 @@ default = ["gtk-ui", "gstreamer-backend"]
 gtk-ui = ["dep:gtk"]
 egui-ui = ["dep:egui", "dep:eframe", "dep:rfd", "dep:zbus"]
 gstreamer-backend = ["dep:gstreamer", "dep:gstreamer-pbutils"]
+rodio-backend = ["dep:rodio"]
 mobile-ui = []
 
 [dependencies]
@@ -37,6 +38,14 @@ image-extras = { version = "0.1.1", default-features = false, features = [
   "xpm",
 ] }
 rfd = { version = "0.17", optional = true }
+rodio = { version = "0.22.2", optional = true, default-features = false, features = [
+  "playback",
+  "mp3",
+  "mp4",
+  "vorbis",
+  "flac",
+  "wav",
+] }
 serde_json = "1"
 zbus = { version = "5.16", optional = true }
 tar = "0.4.46"

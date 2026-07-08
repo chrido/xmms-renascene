@@ -4,7 +4,9 @@
 //! while the UI separation proceeds incrementally.
 
 use crate::playback::backend::PlaybackBackend;
-use crate::playback::model::EqualizerBackendState;
+use crate::playback::model::{
+    EqualizerBackendState, PlaybackEvent, PlayerState, StreamInfo,
+};
 use crate::player::GStreamerBackend;
 
 impl PlaybackBackend for GStreamerBackend {
@@ -45,6 +47,30 @@ impl PlaybackBackend for GStreamerBackend {
             state.band_positions,
         );
         Ok(())
+    }
+
+    fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
+        GStreamerBackend::poll_bus_events(self)
+    }
+
+    fn position_ms(&self) -> Option<i64> {
+        GStreamerBackend::position_ms(self)
+    }
+
+    fn duration_ms(&self) -> Option<i64> {
+        GStreamerBackend::duration_ms(self)
+    }
+
+    fn stream_info(&self) -> StreamInfo {
+        GStreamerBackend::audio_stream_info(self)
+    }
+
+    fn state(&self) -> PlayerState {
+        GStreamerBackend::playback_state(self)
+    }
+
+    fn current_uri(&self) -> Option<String> {
+        GStreamerBackend::uri(self)
     }
 }
 
