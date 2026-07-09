@@ -2,7 +2,6 @@ mod common;
 
 use std::path::PathBuf;
 
-use cairo::{Context, Format, ImageSurface};
 use common::temp_dir;
 use xmms_renascene::render::{
     render_equalizer_state, render_main_player_reset, render_main_player_state,
@@ -12,6 +11,7 @@ use xmms_renascene::render::{
     MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
     PLAYLIST_DEFAULT_WIDTH,
 };
+use xmms_renascene::render::{Context, Format, ImageSurface};
 use xmms_renascene::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
 use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
@@ -77,7 +77,7 @@ where
 }
 
 #[test]
-fn renders_main_default_skin_to_cairo_surface() {
+fn renders_main_default_skin_to_image_surface() {
     let skin = default_skin();
     let main = skin.get(SkinPixmapKind::Main).unwrap();
     let surface = surface_from_xpm(main).unwrap();
@@ -91,8 +91,8 @@ fn renders_main_default_skin_to_cairo_surface() {
 fn renders_reset_state_widgets_over_main_skin() {
     let skin = DefaultSkin::load_from_dir(&repo_root().join("data").join("defskin")).unwrap();
     let main = skin.get(SkinPixmapKind::Main).unwrap();
-    let mut main_surface = surface_from_xpm(main).unwrap();
-    let mut reset_surface =
+    let main_surface = surface_from_xpm(main).unwrap();
+    let reset_surface =
         ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT).unwrap();
     let cr = Context::new(&reset_surface).unwrap();
 
@@ -316,7 +316,7 @@ fn playlist_search_overlay_stays_inside_row_area() {
 #[test]
 fn shaded_playlist_titlebar_does_not_show_skin_separator_pixels() {
     let width = PLAYLIST_DEFAULT_WIDTH + 14;
-    let mut surface = render_with_skin(&default_skin(), width, 14, |cr, skin| {
+    let surface = render_with_skin(&default_skin(), width, 14, |cr, skin| {
         assert!(render_playlist_frame(
             cr,
             skin,
@@ -471,7 +471,7 @@ fn playlist_footer_info_uses_original_textbox_position() {
 }
 
 fn rendered_visualization_bytes(state: VisualizationRenderState) -> Vec<u8> {
-    let mut surface = render_with_skin(&default_skin(), 76, 16, |cr, skin| {
+    let surface = render_with_skin(&default_skin(), 76, 16, |cr, skin| {
         render_visualization(cr, skin, 0, 0, 76, &state).unwrap();
     });
     let bytes = surface.data().unwrap().to_vec();

@@ -22,7 +22,7 @@ mobile-ui = []
 
 [dependencies]
 bzip2 = "0.6.1"
-cairo = { version = "0.22.0", package = "cairo-rs" }
+fontdue = "0.9"
 flate2 = "1.1.9"
 eframe = { version = "0.35", optional = true, default-features = true }
 egui = { version = "0.35", optional = true }
@@ -40,6 +40,7 @@ image = { version = "0.25.10", default-features = false, features = [
 image-extras = { version = "0.1.1", default-features = false, features = [
   "xpm",
 ] }
+tiny-skia = "0.11"
 rfd = { version = "0.17", optional = true }
 rodio = { version = "0.22.2", optional = true, default-features = false, features = [
   "playback",

@@ -214,11 +214,14 @@ fn add_equalizer_slider_hit(
         ui.id().with(("eq-slider", equalizer_slider_id(slider))),
         egui::Sense::click_and_drag(),
     );
-    if response.is_pointer_button_down_on() || response.dragged() {
+    let pointer_down = response.is_pointer_button_down_on();
+    if pointer_down || response.dragged() {
         app.equalizer_pressed_slider = Some(slider);
         ui.ctx().request_repaint();
     }
-    if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
+    if (response.clicked() || response.dragged() || pointer_down)
+        && response.interact_pointer_pos().is_some()
+    {
         let pointer = response.interact_pointer_pos().unwrap();
         dispatch_equalizer_slider(app, slider, pointer, rect);
     }

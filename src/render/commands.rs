@@ -1,19 +1,18 @@
 //! Frontend-neutral rendering strategy and draw-command model.
 //!
-//! The current GTK frontend continues to use the Cairo renderer for pixel
-//! parity. Future frontends can either display Cairo-rendered bitmaps or consume
-//! draw commands if/when the renderer is migrated.
+//! Frontends display pure Rust software-rendered bitmaps today and can consume
+//! draw commands directly in the future if/when that becomes useful.
 
 use crate::skin::layout::SkinRect;
 use crate::skin::SkinPixmapKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderingStrategy {
-    CairoBitmapFirst,
+    SoftwareBitmapFirst,
     DrawCommandsLater,
 }
 
-pub const MOBILE_RENDERING_STRATEGY: RenderingStrategy = RenderingStrategy::CairoBitmapFirst;
+pub const MOBILE_RENDERING_STRATEGY: RenderingStrategy = RenderingStrategy::SoftwareBitmapFirst;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrawCommand {
@@ -42,10 +41,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mobile_rendering_strategy_starts_with_cairo_bitmap_parity() {
+    fn mobile_rendering_strategy_starts_with_software_bitmap_parity() {
         assert_eq!(
             selected_rendering_strategy(),
-            RenderingStrategy::CairoBitmapFirst
+            RenderingStrategy::SoftwareBitmapFirst
         );
     }
 }

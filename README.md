@@ -92,6 +92,9 @@ Run the helper script to list available commands:
 
 GNU General Public License v2.0 or later. See [COPYING](COPYING) for details.
 
+Bundled third-party assets are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md),
+including the vendored Arimo font files under the SIL Open Font License 1.1.
+
 ## Credits
 
 Originally written by Peter Alm, Thomas Nilsson, Olle Hallnas, and Havard

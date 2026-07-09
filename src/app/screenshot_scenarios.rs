@@ -8,6 +8,7 @@ pub enum ScreenshotScenario {
     MainPlayerShaded,
     PlaylistDefault,
     PlaylistWithSelection,
+    PlaylistSingleSong,
     EqualizerDefault,
     EqualizerNonDefault,
     PreferencesDefault,
@@ -35,6 +36,7 @@ impl ScreenshotScenario {
             Self::MainPlayerShaded => "main-player-shaded",
             Self::PlaylistDefault => "playlist-default",
             Self::PlaylistWithSelection => "playlist-with-selection",
+            Self::PlaylistSingleSong => "playlist-single-song",
             Self::EqualizerDefault => "equalizer-default",
             Self::EqualizerNonDefault => "equalizer-non-default",
             Self::PreferencesDefault => "preferences-default",
@@ -61,6 +63,12 @@ impl ScreenshotScenario {
                 "--playlist",
                 "--screenshot-scenario",
                 "playlist-with-selection",
+            ],
+            Self::PlaylistSingleSong => &[
+                "--reset",
+                "--playlist",
+                "--screenshot-scenario",
+                "playlist-single-song",
             ],
             Self::EqualizerDefault => &[
                 "--reset",
@@ -89,6 +97,7 @@ impl ScreenshotScenario {
             Self::MainPlayerShaded,
             Self::PlaylistDefault,
             Self::PlaylistWithSelection,
+            Self::PlaylistSingleSong,
             Self::EqualizerDefault,
             Self::EqualizerNonDefault,
             Self::PreferencesDefault,
@@ -97,6 +106,12 @@ impl ScreenshotScenario {
 
     pub fn apply_to_app_state(self, state: &mut AppState) {
         match self {
+            Self::PlaylistSingleSong => {
+                state
+                    .playlist
+                    .add_timed_uri("file:///music/one-song.wav", "One Song", 15_000);
+                state.playlist.set_position(0);
+            }
             Self::PlaylistWithSelection => {
                 state.playlist.add_timed_uri(
                     "file:///music/first-demo.ogg",

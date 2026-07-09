@@ -1498,13 +1498,13 @@ impl UiE2e {
         self
     }
 
-    pub fn set_preference_mainwin_font(&mut self, font: &str) -> &mut Self {
-        self.state.set_preference_mainwin_font(font);
+    pub fn set_preference_playlist_font_size(&mut self, size: f64) -> &mut Self {
+        self.state.set_preference_playlist_font_size(size);
         self
     }
 
-    pub fn assert_preference_mainwin_font(&mut self, expected: &str) -> &mut Self {
-        assert_eq!(self.state.preference_mainwin_font(), expected);
+    pub fn assert_preference_playlist_font_size(&mut self, expected: f64) -> &mut Self {
+        assert!((self.state.preference_playlist_font_size() - expected).abs() < 0.05);
         self
     }
 
@@ -1747,8 +1747,8 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_playlist_row_font(&mut self, expected: &str) -> &mut Self {
-        assert_eq!(self.state.preference_playlist_font(), expected);
+    pub fn assert_playlist_row_font_size(&mut self, expected: f64) -> &mut Self {
+        assert!((self.state.preference_playlist_font_size() - expected).abs() < 0.05);
         self
     }
 

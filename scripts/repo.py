@@ -31,6 +31,7 @@ SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
     "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
     "playlist-default": ("--reset", "--playlist", "--screenshot-scenario", "playlist-default"),
     "playlist-with-selection": ("--reset", "--playlist", "--screenshot-scenario", "playlist-with-selection"),
+    "playlist-single-song": ("--reset", "--playlist", "--screenshot-scenario", "playlist-single-song"),
     "equalizer-default": ("--reset", "--equalizer", "--screenshot-scenario", "equalizer-default"),
     "equalizer-non-default": ("--reset", "--equalizer", "--screenshot-scenario", "equalizer-non-default"),
     "preferences-default": ("--reset", "--preferences", "--screenshot-scenario", "preferences-default"),
@@ -562,6 +563,27 @@ class RepoTool:
             logging.error("unexpected diff result: changed=%s max_delta=%s diff_exists=%s", changed, max_delta, diff.is_file())
             return 1
         logging.info("frontend screenshot diff self-test passed")
+        return 0
+
+    def _capture_render_screenshots(self, output_root: Path) -> None:
+        if os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
+            self._build_frontend_diff_app()
+        for frontend in ("gtk", "egui"):
+            for scenario in SCREENSHOT_SCENARIOS:
+                self._write_offscreen_frontend_screenshot(
+                    frontend,
+                    scenario,
+                    output_root / frontend / f"{scenario}.png",
+                )
+
+    async def render_baseline_capture(self, output_dir: str = "sunsetcairo-screenshots/current") -> int:
+        """Capture current offscreen renderer screenshots for all golden scenarios."""
+        os.chdir(REPO_DIR)
+        try:
+            self._capture_render_screenshots(Path(output_dir))
+        except Exception as err:
+            logging.error("render baseline capture failed: %s", err)
+            return 1
         return 0
 
     def _e2e_venv_python(self) -> Path:

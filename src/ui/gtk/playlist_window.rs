@@ -35,7 +35,7 @@ pub(crate) fn build_playlist_window(
         } else {
             playlist_height
         };
-        match render_scaled(
+        match render_scaled_to_gtk(
             cr,
             width,
             height,

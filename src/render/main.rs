@@ -1,4 +1,4 @@
-use cairo::Context;
+use super::Context;
 
 use super::core::{
     blit_skin_rect, blit_surface_rect, render_horizontal_slider, render_sprite_spec, render_text,

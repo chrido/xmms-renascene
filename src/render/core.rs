@@ -1,6 +1,8 @@
 use std::fmt;
 
-use cairo::{Context, Extend, Filter, Format, ImageSurface, Rectangle};
+use super::surface::{
+    BorrowError, Context, Error as SurfaceError, Extend, Filter, Format, ImageSurface, Rectangle,
+};
 
 use crate::skin::layout::{SkinRect, SpriteSpec};
 use crate::skin::widget::TextBox;
@@ -9,23 +11,20 @@ use crate::skin::{DefaultSkin, SkinPixmapKind};
 
 #[derive(Debug)]
 pub enum RenderError {
-    Cairo(cairo::Error),
-    SurfaceData(cairo::BorrowError),
+    Surface(SurfaceError),
+    SurfaceData(BorrowError),
     DimensionTooLarge { width: usize, height: usize },
 }
 
 impl fmt::Display for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RenderError::Cairo(err) => write!(f, "cairo error: {err}"),
+            RenderError::Surface(err) => write!(f, "render surface error: {err}"),
             RenderError::SurfaceData(err) => {
-                write!(f, "could not access cairo surface data: {err}")
+                write!(f, "could not access render surface data: {err}")
             }
             RenderError::DimensionTooLarge { width, height } => {
-                write!(
-                    f,
-                    "image dimensions are too large for cairo: {width}x{height}"
-                )
+                write!(f, "image dimensions are too large: {width}x{height}")
             }
         }
     }
@@ -33,14 +32,14 @@ impl fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-impl From<cairo::Error> for RenderError {
-    fn from(value: cairo::Error) -> Self {
-        RenderError::Cairo(value)
+impl From<SurfaceError> for RenderError {
+    fn from(value: SurfaceError) -> Self {
+        RenderError::Surface(value)
     }
 }
 
-impl From<cairo::BorrowError> for RenderError {
-    fn from(value: cairo::BorrowError) -> Self {
+impl From<BorrowError> for RenderError {
+    fn from(value: BorrowError) -> Self {
         RenderError::SurfaceData(value)
     }
 }
@@ -55,18 +54,11 @@ pub fn surface_from_xpm(image: &XpmImage) -> Result<ImageSurface, RenderError> {
         height: image.height(),
     })?;
 
-    let mut surface = ImageSurface::create(Format::ARgb32, width, height)?;
-    let stride = surface.stride() as usize;
-
-    {
-        let mut data = surface.data()?;
-        for y in 0..image.height() {
-            let row_start = y * stride;
-            for x in 0..image.width() {
-                let pixel = image.pixel_argb(x, y).unwrap_or(0xff00_0000);
-                let offset = row_start + x * 4;
-                data[offset..offset + 4].copy_from_slice(&pixel.to_ne_bytes());
-            }
+    let surface = ImageSurface::create(Format::ARgb32, width, height)?;
+    for y in 0..image.height() {
+        for x in 0..image.width() {
+            let pixel = image.pixel_argb(x, y).unwrap_or(0xff00_0000);
+            surface.set_pixel_argb(x as i32, y as i32, pixel);
         }
     }
 
@@ -97,7 +89,7 @@ pub fn blit_surface_rect(
         return Ok(false);
     };
 
-    let cairo_source_rect = source.create_for_rectangle(Rectangle::new(
+    let source_subsurface = source.create_for_rectangle(Rectangle::new(
         source_rect.x as f64,
         source_rect.y as f64,
         source_rect.width as f64,
@@ -112,7 +104,7 @@ pub fn blit_surface_rect(
         source_rect.height as f64,
     );
     cr.clip();
-    cr.set_source_surface(&cairo_source_rect, dest.0 as f64, dest.1 as f64)?;
+    cr.set_source_surface(&source_subsurface, dest.0 as f64, dest.1 as f64)?;
     let pattern = cr.source();
     pattern.set_extend(Extend::Pad);
     pattern.set_filter(Filter::Nearest);
@@ -148,7 +140,7 @@ impl RenderPass {
 /// Render skin content at its native (1x) resolution into an offscreen buffer,
 /// then scale that single image onto `cr` with nearest-neighbour filtering.
 ///
-/// Skins are drawn as many adjacent slices. Scaling the cairo context and then
+/// Skins are drawn as many adjacent slices. Scaling the drawing context and then
 /// blitting each slice separately makes every slice round its own edges and
 /// reset its own sampling phase, so at fractional scale factors adjacent slices
 /// no longer reconstruct one continuous image: thin seams and texture

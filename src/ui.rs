@@ -63,18 +63,19 @@ use crate::playback::model::{
 use crate::player::group_output_devices;
 pub use crate::playlist::PlaylistMenuKind;
 use crate::{app_log_debug, app_log_info, app_log_trace};
+use gtk::cairo;
 
 use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
 use crate::render::{
-    blit_surface_rect, docked_panel_size, equalizer_window_height, main_window_height,
-    paint_scaled, playlist_window_height, render_equalizer_state, render_main_player_state,
+    docked_panel_size, equalizer_window_height, main_window_height, paint_scaled,
+    playlist_window_height, render_equalizer_state, render_main_player_state,
     render_playlist_frame, render_playlist_menu, render_playlist_rows, render_scaled, scale_dim,
-    surface_from_xpm, DockedPanelState, EqualizerControl, EqualizerRenderState, MainPushButton,
-    MainSlider, MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind,
-    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderPass, VisualizationRenderState,
-    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT,
-    MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
-    PLAYLIST_MIN_WIDTH,
+    surface_from_xpm, Context, DockedPanelState, EqualizerControl, EqualizerRenderState, Format,
+    ImageSurface, MainPushButton, MainSlider, MainToggleButton, MainWindowRenderState,
+    PlaylistMenuRenderKind, PlaylistMenuRenderState, PlaylistRowsRenderState, RenderPass,
+    VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
+    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
 };
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
@@ -151,9 +152,9 @@ pub fn write_player_screenshot(options: PreviewOptions, path: &Path) -> Result<(
     let state = preview_state_from_options(options)?;
     let docked_state = state.docked_panel_state();
     let (width, height) = docked_panel_size(docked_state);
-    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, width, height)
+    let mut surface = ImageSurface::create(Format::ARgb32, width, height)
         .map_err(|err| format!("failed to create screenshot surface: {err}"))?;
-    let cr = cairo::Context::new(&surface)
+    let cr = Context::new(&surface)
         .map_err(|err| format!("failed to create screenshot context: {err}"))?;
     render_docked_ui_state(&cr, state.active_skin(), &state, RenderPass::Bitmap)
         .map_err(|err| format!("failed to render screenshot: {err}"))?;
@@ -306,7 +307,7 @@ fn build_preview_window(
             let state = main_state.borrow();
             let docked_state = state.docked_panel_state();
             let (base_width, base_height) = docked_panel_size(docked_state);
-            match render_scaled(cr, width, height, base_width, base_height, |cr, pass| {
+            match render_scaled_to_gtk(cr, width, height, base_width, base_height, |cr, pass| {
                 render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
             }) {
                 Ok(()) => {
@@ -1054,35 +1055,69 @@ fn preview_state_from_app_state(
     Ok(state)
 }
 
-fn write_surface_png(surface: &mut cairo::ImageSurface, path: &Path) -> io::Result<()> {
+fn write_surface_png(surface: &mut ImageSurface, path: &Path) -> io::Result<()> {
     surface.flush();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    surface.save_png(path)
+}
 
-    let width = surface.width() as u32;
-    let height = surface.height() as u32;
-    let stride = surface.stride() as usize;
-    let data = surface
-        .data()
-        .map_err(|err| io::Error::other(err.to_string()))?;
-    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-
-    for y in 0..height as usize {
-        let row = &data[y * stride..][..width as usize * 4];
-        for pixel in row.chunks_exact(4) {
-            let argb = u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]);
-            rgba.push(((argb >> 16) & 0xff) as u8);
-            rgba.push(((argb >> 8) & 0xff) as u8);
-            rgba.push((argb & 0xff) as u8);
-            rgba.push(((argb >> 24) & 0xff) as u8);
-        }
+fn paint_soft_surface_to_gtk(
+    cr: &gtk::cairo::Context,
+    surface: &ImageSurface,
+) -> Result<(), crate::render::RenderError> {
+    let mut cairo_surface = gtk::cairo::ImageSurface::create(
+        gtk::cairo::Format::ARgb32,
+        surface.width(),
+        surface.height(),
+    )
+    .map_err(|err| {
+        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+    })?;
+    {
+        let source = surface.data()?;
+        let mut dest = cairo_surface.data().map_err(|err| {
+            crate::render::RenderError::SurfaceData(crate::render::BorrowError::new(
+                err.to_string(),
+            ))
+        })?;
+        dest.copy_from_slice(&source);
     }
+    cairo_surface.mark_dirty();
+    cr.set_source_surface(&cairo_surface, 0.0, 0.0)
+        .map_err(|err| {
+            crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+        })?;
+    cr.paint().map_err(|err| {
+        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+    })
+}
 
-    image::RgbaImage::from_raw(width, height, rgba)
-        .ok_or_else(|| io::Error::other("invalid screenshot pixel buffer"))?
-        .save(path)
-        .map_err(io::Error::other)
+fn render_scaled_to_gtk<F>(
+    cr: &gtk::cairo::Context,
+    device_width: i32,
+    device_height: i32,
+    base_width: i32,
+    base_height: i32,
+    draw: F,
+) -> Result<(), crate::render::RenderError>
+where
+    F: Fn(&Context, RenderPass) -> Result<(), crate::render::RenderError>,
+{
+    let surface = ImageSurface::create(Format::ARgb32, device_width, device_height)?;
+    let soft_cr = Context::new(&surface)?;
+    render_scaled(
+        &soft_cr,
+        device_width,
+        device_height,
+        base_width,
+        base_height,
+        draw,
+    )?;
+    drop(soft_cr);
+    surface.flush();
+    paint_soft_surface_to_gtk(cr, &surface)
 }
 
 fn style_xmms_popover(popover: &gtk::Popover) {
@@ -1218,11 +1253,28 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Vim-style playlist navigation",
         ],
         PreferencesPage::Fonts => &[
-            "Playlist font family:",
+            "Playlist font size:",
             "Open Skin Browser",
             "Skin bitmap font",
         ],
         PreferencesPage::Title => &["Title format:"],
+    }
+}
+
+fn playlist_font_size_from_descriptor(descriptor: &str) -> f64 {
+    descriptor
+        .split_whitespace()
+        .filter_map(|token| token.parse::<f64>().ok())
+        .find(|value| *value > 0.0)
+        .unwrap_or(10.0)
+}
+
+fn playlist_font_descriptor_for_size(size: f64) -> String {
+    let size = size.clamp(6.0, 24.0);
+    if (size - size.round()).abs() < 0.05 {
+        format!("Helvetica Bold {}", size.round() as i32)
+    } else {
+        format!("Helvetica Bold {:.1}", size)
     }
 }
 
@@ -1508,7 +1560,7 @@ fn unscale_dim(value: i32, scale: f64) -> i32 {
 }
 
 fn render_docked_ui_state(
-    cr: &gtk::cairo::Context,
+    cr: &Context,
     skin: &DefaultSkin,
     state: &MainWindowUiState,
     pass: RenderPass,
@@ -1746,7 +1798,7 @@ fn build_equalizer_window(
             EQUALIZER_WINDOW_HEIGHT
         };
         let base_width = EQUALIZER_WINDOW_WIDTH;
-        match render_scaled(cr, width, height, base_width, base_height, |cr, pass| {
+        match render_scaled_to_gtk(cr, width, height, base_width, base_height, |cr, pass| {
             if pass.is_bitmap() {
                 render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
             } else {
@@ -4054,13 +4106,30 @@ fn draw_skin_editor_canvas(cr: &cairo::Context, state: &MainWindowUiState) -> Re
 
         if let Some(image) = state.active_skin().get(slot.kind) {
             let surface = surface_from_xpm(image).map_err(|err| err.to_string())?;
-            blit_surface_rect(
-                cr,
-                &surface,
-                SkinRect::new(0, 0, slot.width, slot.height),
-                (slot.x, slot.y),
+            let mut cairo_surface = gtk::cairo::ImageSurface::create(
+                gtk::cairo::Format::ARgb32,
+                slot.width,
+                slot.height,
             )
             .map_err(|err| err.to_string())?;
+            {
+                let source = surface.data().map_err(|err| err.to_string())?;
+                let mut dest = cairo_surface.data().map_err(|err| err.to_string())?;
+                dest.copy_from_slice(&source);
+            }
+            cairo_surface.mark_dirty();
+            cr.save().map_err(|err| err.to_string())?;
+            cr.rectangle(
+                f64::from(slot.x),
+                f64::from(slot.y),
+                f64::from(slot.width),
+                f64::from(slot.height),
+            );
+            cr.clip();
+            cr.set_source_surface(&cairo_surface, f64::from(slot.x), f64::from(slot.y))
+                .map_err(|err| err.to_string())?;
+            cr.paint().map_err(|err| err.to_string())?;
+            cr.restore().map_err(|err| err.to_string())?;
         }
     }
 
@@ -8527,31 +8596,21 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_playlist_font(&mut self, font: &str) {
-        self.update_config_via_store(|config| {
-            config.playlist_font = if font.trim().is_empty() {
-                "Helvetica".to_string()
-            } else {
-                font.trim().to_string()
-            };
-        });
+        self.set_preference_playlist_font_size(playlist_font_size_from_descriptor(font));
     }
 
     pub(crate) fn preference_playlist_font(&self) -> &str {
         &self.app_state.config.playlist_font
     }
 
-    pub(crate) fn set_preference_mainwin_font(&mut self, font: &str) {
+    pub(crate) fn set_preference_playlist_font_size(&mut self, size: f64) {
         self.update_config_via_store(|config| {
-            config.mainwin_font = if font.trim().is_empty() {
-                "Skin bitmap font".to_string()
-            } else {
-                font.trim().to_string()
-            };
+            config.playlist_font = playlist_font_descriptor_for_size(size);
         });
     }
 
-    pub(crate) fn preference_mainwin_font(&self) -> &str {
-        &self.app_state.config.mainwin_font
+    pub(crate) fn preference_playlist_font_size(&self) -> f64 {
+        playlist_font_size_from_descriptor(&self.app_state.config.playlist_font)
     }
 
     pub(crate) fn set_preference_title_format(&mut self, format: &str) {

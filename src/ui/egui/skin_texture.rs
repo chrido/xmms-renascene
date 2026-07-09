@@ -1,24 +1,20 @@
-//! Cairo/image to egui texture helpers.
-
-use cairo::{Context, Format, ImageSurface};
+//! Pure Rust image to egui texture helpers.
 
 use crate::render::{
     equalizer_window_height, playlist_window_height, render_equalizer_state,
     render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
-    render_scaled, EqualizerRenderState, MainWindowRenderState, PlaylistMenuRenderState,
-    PlaylistRowsRenderState, RenderError, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
-    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    render_scaled, Context, EqualizerRenderState, Format, ImageSurface, MainWindowRenderState,
+    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderError, EQUALIZER_WINDOW_WIDTH,
+    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::DefaultSkin;
 
-pub fn cairo_argb_to_egui_rgba(argb: u32) -> [u8; 4] {
+pub fn argb_to_egui_rgba(argb: u32) -> [u8; 4] {
     let [b, g, r, a] = argb.to_ne_bytes();
     [r, g, b, a]
 }
 
-pub fn cairo_surface_to_color_image(
-    surface: &mut ImageSurface,
-) -> Result<egui::ColorImage, RenderError> {
+pub fn surface_to_color_image(surface: &mut ImageSurface) -> Result<egui::ColorImage, RenderError> {
     let width = surface.width() as usize;
     let height = surface.height() as usize;
     let stride = surface.stride() as usize;
@@ -27,9 +23,8 @@ pub fn cairo_surface_to_color_image(
     for y in 0..height {
         let row = &data[y * stride..y * stride + width * 4];
         for pixel in row.chunks_exact(4) {
-            let [r, g, b, a] = cairo_argb_to_egui_rgba(u32::from_ne_bytes([
-                pixel[0], pixel[1], pixel[2], pixel[3],
-            ]));
+            let [r, g, b, a] =
+                argb_to_egui_rgba(u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]));
             rgba.extend_from_slice(&[r, g, b, a]);
         }
     }
@@ -52,7 +47,7 @@ pub fn render_main_player_color_image(
     let cr = Context::new(&surface)?;
     render_main_player_state(&cr, skin, state)?;
     drop(cr);
-    cairo_surface_to_color_image(&mut surface)
+    surface_to_color_image(&mut surface)
 }
 
 pub fn render_equalizer_color_image(
@@ -64,7 +59,7 @@ pub fn render_equalizer_color_image(
     let cr = Context::new(&surface)?;
     render_equalizer_state(&cr, skin, state)?;
     drop(cr);
-    cairo_surface_to_color_image(&mut surface)
+    surface_to_color_image(&mut surface)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -120,7 +115,7 @@ pub fn render_playlist_color_image(
         },
     )?;
     drop(cr);
-    cairo_surface_to_color_image(&mut surface)
+    surface_to_color_image(&mut surface)
 }
 
 pub fn render_playlist_menu_color_image(
@@ -149,7 +144,7 @@ pub fn render_playlist_menu_color_image(
         },
     )?;
     drop(cr);
-    cairo_surface_to_color_image(&mut surface)
+    surface_to_color_image(&mut surface)
 }
 
 pub fn upload_color_image(
@@ -181,9 +176,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cairo_argb_conversion_outputs_rgba() {
+    fn argb_conversion_outputs_rgba() {
         let argb = u32::from_ne_bytes([3, 2, 1, 4]);
-        assert_eq!(cairo_argb_to_egui_rgba(argb), [1, 2, 3, 4]);
+        assert_eq!(argb_to_egui_rgba(argb), [1, 2, 3, 4]);
     }
 
     #[test]
@@ -235,7 +230,7 @@ mod tests {
         .unwrap();
         assert_eq!(base.size, [275, 232]);
 
-        // At 2x zoom the cairo image must be produced at the full device
+        // At 2x zoom the image must be produced at the full device
         // resolution so the vector song-name font is rasterised crisply instead
         // of being upscaled (blurred) by egui.
         let scaled = render_playlist_color_image(
