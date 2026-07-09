@@ -1,4 +1,4 @@
-use cairo::{Context, ImageSurface};
+use super::{Context, ImageSurface};
 
 use super::core::{
     blit_surface_rect, render_horizontal_slider, render_surface_sprite_spec, surface_from_xpm,

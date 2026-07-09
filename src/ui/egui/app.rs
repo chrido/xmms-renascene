@@ -578,6 +578,7 @@ impl EguiFrontendState {
             return;
         }
 
+        #[allow(unused_variables)]
         let sender = self.duration_index_sender.clone();
         thread::spawn(move || {
             #[cfg(feature = "rodio-backend")]

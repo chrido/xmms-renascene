@@ -8,6 +8,7 @@ import glob
 import logging
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from importlib.util import find_spec
@@ -31,6 +32,7 @@ SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
     "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
     "playlist-default": ("--reset", "--playlist", "--screenshot-scenario", "playlist-default"),
     "playlist-with-selection": ("--reset", "--playlist", "--screenshot-scenario", "playlist-with-selection"),
+    "playlist-single-song": ("--reset", "--playlist", "--screenshot-scenario", "playlist-single-song"),
     "equalizer-default": ("--reset", "--equalizer", "--screenshot-scenario", "equalizer-default"),
     "equalizer-non-default": ("--reset", "--equalizer", "--screenshot-scenario", "equalizer-non-default"),
     "preferences-default": ("--reset", "--preferences", "--screenshot-scenario", "preferences-default"),
@@ -562,6 +564,104 @@ class RepoTool:
             logging.error("unexpected diff result: changed=%s max_delta=%s diff_exists=%s", changed, max_delta, diff.is_file())
             return 1
         logging.info("frontend screenshot diff self-test passed")
+        return 0
+
+    def _render_baseline_root(self) -> Path:
+        return REPO_DIR / "sunsetcairo-screenshots"
+
+    def _capture_render_screenshots(self, output_root: Path) -> None:
+        if os.environ.get("XMMS_EXEC_SKIP_BUILD") != "1":
+            self._build_frontend_diff_app()
+        for frontend in ("gtk", "egui"):
+            for scenario in SCREENSHOT_SCENARIOS:
+                self._write_offscreen_frontend_screenshot(
+                    frontend,
+                    scenario,
+                    output_root / frontend / f"{scenario}.png",
+                )
+
+    async def render_baseline_capture(self, output_dir: str = "sunsetcairo-screenshots/current") -> int:
+        """Capture current offscreen renderer screenshots for all golden scenarios."""
+        os.chdir(REPO_DIR)
+        try:
+            self._capture_render_screenshots(Path(output_dir))
+        except Exception as err:
+            logging.error("render baseline capture failed: %s", err)
+            return 1
+        return 0
+
+    async def render_baseline_check(
+        self,
+        baseline_dir: str = "sunsetcairo-screenshots/baseline",
+        current_dir: str = "sunsetcairo-screenshots/current",
+        tolerance: int = 0,
+        playlist_threshold: int = 25000,
+        default_threshold: int = 0,
+    ) -> int:
+        """Capture current screenshots and compare them to the stored renderer baseline."""
+        os.chdir(REPO_DIR)
+        baseline = Path(baseline_dir)
+        current = Path(current_dir)
+        diff = current / "diff"
+        try:
+            self._capture_render_screenshots(current)
+            failed = False
+            for scenario in SCREENSHOT_SCENARIOS:
+                changed, max_delta = _diff_images(
+                    baseline / "egui" / f"{scenario}.png",
+                    current / "egui" / f"{scenario}.png",
+                    diff / f"{scenario}.png",
+                    tolerance,
+                )
+                threshold = playlist_threshold if scenario.startswith("playlist") else default_threshold
+                logging.info(
+                    "%s: changed_pixels=%s max_delta=%s threshold=%s",
+                    scenario,
+                    changed,
+                    max_delta,
+                    threshold,
+                )
+                if changed > threshold:
+                    failed = True
+            return 1 if failed else 0
+        except Exception as err:
+            logging.error("render baseline check failed: %s", err)
+            return 1
+
+    async def render_baseline_update(
+        self,
+        baseline_dir: str = "sunsetcairo-screenshots/baseline",
+        current_dir: str = "sunsetcairo-screenshots/current",
+    ) -> int:
+        """Refresh stored renderer golden screenshots from current offscreen output."""
+        os.chdir(REPO_DIR)
+        baseline = Path(baseline_dir)
+        current = Path(current_dir)
+        try:
+            self._capture_render_screenshots(current)
+            for frontend in ("gtk", "egui"):
+                target = baseline / frontend
+                if target.exists():
+                    shutil.rmtree(target)
+                shutil.copytree(current / frontend, target)
+            diff = baseline / "diff"
+            diff.mkdir(parents=True, exist_ok=True)
+            for scenario in SCREENSHOT_SCENARIOS:
+                _diff_images(
+                    baseline / "gtk" / f"{scenario}.png",
+                    baseline / "egui" / f"{scenario}.png",
+                    diff / f"{scenario}.png",
+                    0,
+                )
+            manifest = baseline / "SHA256SUMS.txt"
+            files = sorted([*baseline.glob("gtk/*.png"), *baseline.glob("egui/*.png"), *baseline.glob("diff/*.png")])
+            import hashlib
+            manifest.write_text(
+                "".join(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(baseline)}\n" for path in files)
+            )
+        except Exception as err:
+            logging.error("render baseline update failed: %s", err)
+            return 1
         return 0
 
     def _e2e_venv_python(self) -> Path:

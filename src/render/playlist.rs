@@ -1,4 +1,4 @@
-use cairo::Context;
+use super::{Antialias, Context, FontOptions, FontSlant, FontWeight, HintMetrics, HintStyle};
 
 use super::core::{
     blit_surface_rect, render_text, set_rgb, surface_from_xpm, RenderError, RenderPass,
@@ -389,19 +389,19 @@ fn set_playlist_font(cr: &Context, descriptor: &str) {
 /// Enable full hinting and metric hinting so the small playlist font rasterizes
 /// on the pixel grid instead of looking soft/blurry.
 fn apply_crisp_font_options(cr: &Context) {
-    let options = cairo::FontOptions::new().expect("cairo font options");
+    let options = FontOptions::new().expect("font options");
     let mut options = options;
-    options.set_antialias(cairo::Antialias::Gray);
-    options.set_hint_style(cairo::HintStyle::Full);
-    options.set_hint_metrics(cairo::HintMetrics::On);
+    options.set_antialias(Antialias::Gray);
+    options.set_hint_style(HintStyle::Full);
+    options.set_hint_metrics(HintMetrics::On);
     cr.set_font_options(&options);
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct PlaylistFont {
     family: String,
-    slant: cairo::FontSlant,
-    weight: cairo::FontWeight,
+    slant: FontSlant,
+    weight: FontWeight,
     size: f64,
 }
 
@@ -412,15 +412,17 @@ impl PlaylistFont {
     /// font field actually changes the rendered playlist text.
     fn parse(descriptor: &str) -> Self {
         let mut family_parts: Vec<&str> = Vec::new();
-        let mut slant = cairo::FontSlant::Normal;
-        let mut weight = cairo::FontWeight::Normal;
+        let mut slant = FontSlant::Normal;
+        let mut weight = FontWeight::Bold;
         let mut size: Option<f64> = None;
 
         for token in descriptor.split_whitespace() {
             match token.to_ascii_lowercase().as_str() {
-                "bold" => weight = cairo::FontWeight::Bold,
-                "italic" | "oblique" => slant = cairo::FontSlant::Italic,
-                "normal" | "regular" | "roman" | "medium" | "book" | "light" => {}
+                "bold" => weight = FontWeight::Bold,
+                "italic" | "oblique" => slant = FontSlant::Italic,
+                "normal" | "regular" | "roman" | "medium" | "book" | "light" => {
+                    weight = FontWeight::Normal
+                }
                 _ => {
                     if let Ok(value) = token.parse::<f64>() {
                         if value > 0.0 {
@@ -442,7 +444,7 @@ impl PlaylistFont {
             },
             slant,
             weight,
-            size: size.unwrap_or(9.0),
+            size: size.unwrap_or(10.0),
         }
     }
 }
@@ -643,23 +645,23 @@ fn playlist_menu_border_source(kind: PlaylistMenuRenderKind) -> (i32, i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::PlaylistFont;
+    use super::{FontSlant, FontWeight, PlaylistFont};
 
     #[test]
-    fn parses_bare_family_as_normal_weight() {
+    fn parses_bare_family_as_original_bold_weight() {
         let font = PlaylistFont::parse("Helvetica");
         assert_eq!(font.family, "Helvetica");
-        assert_eq!(font.slant, cairo::FontSlant::Normal);
-        assert_eq!(font.weight, cairo::FontWeight::Normal);
-        assert_eq!(font.size, 9.0);
+        assert_eq!(font.slant, FontSlant::Normal);
+        assert_eq!(font.weight, FontWeight::Bold);
+        assert_eq!(font.size, 10.0);
     }
 
     #[test]
     fn parses_style_and_size_from_descriptor() {
         let font = PlaylistFont::parse("DejaVu Sans Bold Italic 11");
         assert_eq!(font.family, "DejaVu Sans");
-        assert_eq!(font.slant, cairo::FontSlant::Italic);
-        assert_eq!(font.weight, cairo::FontWeight::Bold);
+        assert_eq!(font.slant, FontSlant::Italic);
+        assert_eq!(font.weight, FontWeight::Bold);
         assert_eq!(font.size, 11.0);
     }
 
@@ -667,6 +669,7 @@ mod tests {
     fn empty_descriptor_falls_back_to_default_family() {
         let font = PlaylistFont::parse("   ");
         assert_eq!(font.family, "Helvetica");
-        assert_eq!(font.size, 9.0);
+        assert_eq!(font.weight, FontWeight::Bold);
+        assert_eq!(font.size, 10.0);
     }
 }

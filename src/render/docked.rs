@@ -1,4 +1,4 @@
-use cairo::Context;
+use super::Context;
 
 use super::core::RenderError;
 use super::equalizer::render_equalizer_background;

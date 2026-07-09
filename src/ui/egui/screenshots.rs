@@ -2,8 +2,6 @@
 
 use std::path::Path;
 
-use cairo::{Context, Format, ImageSurface};
-
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars, format_duration,
@@ -15,20 +13,20 @@ use crate::app::view_model::{
 use crate::app_state::AppState;
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, render_equalizer_state,
-    render_main_player_state, render_playlist_frame, render_playlist_rows, DockedPanelState,
-    EqualizerRenderState, MainWindowRenderState, RenderPass, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH,
+    render_main_player_state, render_playlist_frame, render_playlist_rows, Context,
+    DockedPanelState, EqualizerRenderState, Format, ImageSurface, MainWindowRenderState,
+    RenderPass, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH,
 };
 use crate::skin::widget::PlayStatusValue;
 use crate::skin::DefaultSkin;
 
-use super::skin_texture::cairo_surface_to_color_image;
+use super::skin_texture::surface_to_color_image;
 
 pub fn write_egui_screenshot(options: PreviewOptions, path: &Path) -> Result<(), String> {
     let (skin, app_state, docked_state) = screenshot_state(options)?;
     let mut surface = render_docked_screenshot_surface(&skin, &app_state, docked_state)
         .map_err(|err| format!("failed to render egui screenshot: {err}"))?;
-    let image = cairo_surface_to_color_image(&mut surface)
+    let image = surface_to_color_image(&mut surface)
         .map_err(|err| format!("failed to convert egui screenshot: {err}"))?;
     let width = image.size[0] as u32;
     let height = image.size[1] as u32;
@@ -58,6 +56,12 @@ fn screenshot_state(
 ) -> Result<(DefaultSkin, AppState, DockedPanelState), String> {
     let mut app_state = AppState::default();
     apply_preview_options_to_config(&mut app_state.config, &options)?;
+    for path in &options.positional_paths {
+        app_state
+            .playlist
+            .add_location(path)
+            .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
+    }
     if let Some(scenario) = options.screenshot_scenario {
         scenario.apply_to_app_state(&mut app_state);
     }
