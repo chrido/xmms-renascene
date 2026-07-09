@@ -528,37 +528,27 @@ fn build_preferences_fonts_page(
     let playlist = prefs_frame("Playlist", &page);
     let grid = prefs_grid();
     playlist.append(&grid);
-    let playlist_font = gtk::ComboBoxText::with_entry();
-    for font in ["Helvetica", "Sans", "Serif", "Monospace"] {
-        playlist_font.append(Some(font), font);
-    }
-    let current_font = main_state.borrow().preference_playlist_font().to_string();
-    if !playlist_font.set_active_id(Some(&current_font)) {
-        playlist_font.append(Some(&current_font), &current_font);
-        playlist_font.set_active_id(Some(&current_font));
-    }
+    let playlist_font_size = gtk::SpinButton::with_range(6.0, 24.0, 0.5);
+    playlist_font_size.set_digits(1);
+    playlist_font_size.set_value(main_state.borrow().preference_playlist_font_size());
     {
         let main_state = Rc::clone(main_state);
         let on_change = on_change.clone();
-        playlist_font.connect_changed(move |combo| {
-            if let Some(font) = combo.active_id() {
-                main_state.borrow_mut().set_preference_playlist_font(&font);
-                if let Some(on_change) = &on_change {
-                    on_change();
-                }
+        playlist_font_size.connect_value_changed(move |spin| {
+            main_state
+                .borrow_mut()
+                .set_preference_playlist_font_size(spin.value());
+            if let Some(on_change) = &on_change {
+                on_change();
             }
         });
     }
-    prefs_attach_label(&grid, "Playlist font family:", &playlist_font, 0);
-    playlist.append(&prefs_label("XMMS used a Helvetica bold 10px playlist font. This port keeps the original fixed row height, so only the family is configurable."));
+    prefs_attach_label(&grid, "Playlist font size:", &playlist_font_size, 0);
 
     let main = prefs_frame("Main Window", &page);
-    let mainwin_font = gtk::Entry::new();
-    mainwin_font.set_editable(false);
-    mainwin_font.set_text(main_state.borrow().preference_mainwin_font());
-    main.append(&mainwin_font);
+    main.append(&prefs_label("Skin bitmap font"));
     main.append(&prefs_label(
-        "The main window uses the skin bitmap font, matching XMMS skins.",
+        "The main window uses the active skin bitmap font, matching XMMS skins.",
     ));
     let skin_browser = gtk::Button::with_label("Open Skin Browser");
     {

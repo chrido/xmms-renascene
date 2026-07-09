@@ -2072,12 +2072,10 @@ fn preferences_font_and_title_pages_apply_text_controls_immediately() {
     let mut app = default_app();
 
     app.open_preferences_page(PreferencesPage::Fonts)
-        .set_preference_playlist_font("Monospace")
-        .assert_preference_playlist_font("Monospace")
-        .set_preference_playlist_font("")
-        .assert_preference_playlist_font("Helvetica")
-        .set_preference_mainwin_font("")
-        .assert_preference_mainwin_font("Skin bitmap font")
+        .set_preference_playlist_font_size(12.0)
+        .assert_preference_playlist_font_size(12.0)
+        .set_preference_playlist_font_size(10.0)
+        .assert_preference_playlist_font_size(10.0)
         .open_preferences_page(PreferencesPage::Title)
         .set_preference_title_format("%p/%t")
         .assert_preference_title_format("%p/%t")
@@ -2107,8 +2105,8 @@ fn title_format_updates_main_title_and_shaded_playlist_info() {
 fn playlist_font_preference_and_visualization_feed_render_state() {
     let mut app = default_app();
 
-    app.set_preference_playlist_font("Monospace")
-        .assert_playlist_row_font("Monospace")
+    app.set_preference_playlist_font_size(12.0)
+        .assert_playlist_row_font_size(12.0)
         .set_visualization_mode(VisMode::Analyzer)
         .feed_visualization_data(4, 0.9)
         .tick_visualization(100)

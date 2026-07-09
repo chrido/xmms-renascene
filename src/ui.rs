@@ -1253,11 +1253,28 @@ pub fn preferences_page_parity_controls(page: PreferencesPage) -> &'static [&'st
             "Vim-style playlist navigation",
         ],
         PreferencesPage::Fonts => &[
-            "Playlist font family:",
+            "Playlist font size:",
             "Open Skin Browser",
             "Skin bitmap font",
         ],
         PreferencesPage::Title => &["Title format:"],
+    }
+}
+
+fn playlist_font_size_from_descriptor(descriptor: &str) -> f64 {
+    descriptor
+        .split_whitespace()
+        .filter_map(|token| token.parse::<f64>().ok())
+        .find(|value| *value > 0.0)
+        .unwrap_or(10.0)
+}
+
+fn playlist_font_descriptor_for_size(size: f64) -> String {
+    let size = size.clamp(6.0, 24.0);
+    if (size - size.round()).abs() < 0.05 {
+        format!("Helvetica Bold {}", size.round() as i32)
+    } else {
+        format!("Helvetica Bold {:.1}", size)
     }
 }
 
@@ -8579,31 +8596,21 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_playlist_font(&mut self, font: &str) {
-        self.update_config_via_store(|config| {
-            config.playlist_font = if font.trim().is_empty() {
-                "Helvetica".to_string()
-            } else {
-                font.trim().to_string()
-            };
-        });
+        self.set_preference_playlist_font_size(playlist_font_size_from_descriptor(font));
     }
 
     pub(crate) fn preference_playlist_font(&self) -> &str {
         &self.app_state.config.playlist_font
     }
 
-    pub(crate) fn set_preference_mainwin_font(&mut self, font: &str) {
+    pub(crate) fn set_preference_playlist_font_size(&mut self, size: f64) {
         self.update_config_via_store(|config| {
-            config.mainwin_font = if font.trim().is_empty() {
-                "Skin bitmap font".to_string()
-            } else {
-                font.trim().to_string()
-            };
+            config.playlist_font = playlist_font_descriptor_for_size(size);
         });
     }
 
-    pub(crate) fn preference_mainwin_font(&self) -> &str {
-        &self.app_state.config.mainwin_font
+    pub(crate) fn preference_playlist_font_size(&self) -> f64 {
+        playlist_font_size_from_descriptor(&self.app_state.config.playlist_font)
     }
 
     pub(crate) fn set_preference_title_format(&mut self, format: &str) {

@@ -339,6 +339,7 @@ struct ContextState {
     sx: f64,
     sy: f64,
     font_size: f64,
+    font_family: String,
     font_slant: FontSlant,
     font_weight: FontWeight,
     current_x: f64,
@@ -366,6 +367,7 @@ impl Context {
                 sx: 1.0,
                 sy: 1.0,
                 font_size: 10.0,
+                font_family: "Helvetica".to_string(),
                 font_slant: FontSlant::Normal,
                 font_weight: FontWeight::Normal,
                 current_x: 0.0,
@@ -510,8 +512,9 @@ impl Context {
         Ok(())
     }
 
-    pub fn select_font_face(&self, _family: &str, slant: FontSlant, weight: FontWeight) {
+    pub fn select_font_face(&self, family: &str, slant: FontSlant, weight: FontWeight) {
         let mut state = self.state.borrow_mut();
+        state.font_family = family.to_string();
         state.font_slant = slant;
         state.font_weight = weight;
     }
@@ -528,7 +531,7 @@ impl Context {
 
     pub fn text_extents(&self, text: &str) -> Result<TextExtents, Error> {
         let state = self.state.borrow();
-        let font = font_for(state.font_slant, state.font_weight)?;
+        let font = font_for(&state.font_family, state.font_slant, state.font_weight)?;
         let size = state.font_size as f32;
         let width = text
             .chars()
@@ -557,7 +560,7 @@ impl Context {
 
     pub fn show_text(&self, text: &str) -> Result<(), Error> {
         let state = self.state.borrow().clone();
-        let font = font_for(state.font_slant, state.font_weight)?;
+        let font = font_for(&state.font_family, state.font_slant, state.font_weight)?;
         let scale_x = state.sx.abs() as f32;
         let scale_y = state.sy.abs() as f32;
         let scaled = (scale_x - 1.0).abs() > f32::EPSILON || (scale_y - 1.0).abs() > f32::EPSILON;
@@ -656,29 +659,27 @@ fn argb_to_rgba(argb: u32) -> [u8; 4] {
     [r, g, b, a]
 }
 
-fn font_for(slant: FontSlant, weight: FontWeight) -> Result<&'static Font, Error> {
+fn font_for(_family: &str, slant: FontSlant, weight: FontWeight) -> Result<&'static Font, Error> {
     static REGULAR: OnceLock<Result<Font, String>> = OnceLock::new();
     static BOLD: OnceLock<Result<Font, String>> = OnceLock::new();
     static ITALIC: OnceLock<Result<Font, String>> = OnceLock::new();
     static BOLD_ITALIC: OnceLock<Result<Font, String>> = OnceLock::new();
 
-    let slot = match (slant, weight) {
-        (FontSlant::Normal, FontWeight::Normal) => &REGULAR,
-        (FontSlant::Normal, FontWeight::Bold) => &BOLD,
-        (FontSlant::Italic, FontWeight::Normal) => &ITALIC,
-        (FontSlant::Italic, FontWeight::Bold) => &BOLD_ITALIC,
-    };
-    let bytes: &'static [u8] = match (slant, weight) {
-        (FontSlant::Normal, FontWeight::Normal) => {
-            include_bytes!("../../data/fonts/Arimo-Regular.ttf")
+    let (slot, bytes): (&OnceLock<Result<Font, String>>, &'static [u8]) = match (slant, weight) {
+        (FontSlant::Normal, FontWeight::Normal) => (
+            &REGULAR,
+            include_bytes!("../../data/fonts/Arimo-Regular.ttf"),
+        ),
+        (FontSlant::Normal, FontWeight::Bold) => {
+            (&BOLD, include_bytes!("../../data/fonts/Arimo-Bold.ttf"))
         }
-        (FontSlant::Normal, FontWeight::Bold) => include_bytes!("../../data/fonts/Arimo-Bold.ttf"),
         (FontSlant::Italic, FontWeight::Normal) => {
-            include_bytes!("../../data/fonts/Arimo-Italic.ttf")
+            (&ITALIC, include_bytes!("../../data/fonts/Arimo-Italic.ttf"))
         }
-        (FontSlant::Italic, FontWeight::Bold) => {
-            include_bytes!("../../data/fonts/Arimo-BoldItalic.ttf")
-        }
+        (FontSlant::Italic, FontWeight::Bold) => (
+            &BOLD_ITALIC,
+            include_bytes!("../../data/fonts/Arimo-BoldItalic.ttf"),
+        ),
     };
     slot.get_or_init(|| {
         Font::from_bytes(bytes, fontdue::FontSettings::default()).map_err(|err| err.to_string())

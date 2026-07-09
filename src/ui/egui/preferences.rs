@@ -358,21 +358,38 @@ fn show_options_page(ui: &mut egui::Ui, config: &mut Config) {
     );
 }
 
+fn playlist_font_size_from_descriptor(descriptor: &str) -> f64 {
+    descriptor
+        .split_whitespace()
+        .filter_map(|token| token.parse::<f64>().ok())
+        .find(|value| *value > 0.0)
+        .unwrap_or(10.0)
+}
+
+fn playlist_font_descriptor_for_size(size: f64) -> String {
+    let size = size.clamp(6.0, 24.0);
+    if (size - size.round()).abs() < 0.05 {
+        format!("Helvetica Bold {}", size.round() as i32)
+    } else {
+        format!("Helvetica Bold {:.1}", size)
+    }
+}
+
 fn show_fonts_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
     ui.heading("Fonts");
-    ui.horizontal(|ui| {
-        ui.label("Playlist font:");
-        ui.text_edit_singleline(&mut state.config.playlist_font);
-    });
-    ui.label("Format: family, optional style, optional size (e.g. \"Sans Bold 11\").");
+    let mut playlist_font_size = playlist_font_size_from_descriptor(&state.config.playlist_font);
+    if ui
+        .add(
+            egui::Slider::new(&mut playlist_font_size, 6.0..=24.0)
+                .text("Playlist font size")
+                .suffix(" px"),
+        )
+        .changed()
+    {
+        state.config.playlist_font = playlist_font_descriptor_for_size(playlist_font_size);
+    }
     ui.label("Main window text uses the active skin bitmap font.");
-    ui.horizontal(|ui| {
-        ui.label("Main window font:");
-        ui.add_enabled(
-            false,
-            egui::TextEdit::singleline(&mut state.config.mainwin_font),
-        );
-    });
+    ui.label("Skin bitmap font");
     if ui.button("Open Skin Browser").clicked() {
         state.skin_browser_requested = true;
     }
