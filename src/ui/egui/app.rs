@@ -222,8 +222,14 @@ impl EguiFrontendState {
         #[cfg(target_os = "android")]
         let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
         #[cfg(target_os = "android")]
+        let use_android_defaults = options.reset || !config_path.is_file();
+        #[cfg(target_os = "android")]
         let mut app_state = load_saved_state(&config_path, &playlist_path, options.reset)
             .map_err(|err| format!("failed to load Android session state: {err}"))?;
+        #[cfg(target_os = "android")]
+        if use_android_defaults {
+            app_state.config.playlist_visible = true;
+        }
         #[cfg(not(target_os = "android"))]
         let mut app_state = AppState::default();
         #[cfg(not(target_os = "android"))]

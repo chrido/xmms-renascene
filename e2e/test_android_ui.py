@@ -13,6 +13,30 @@ pytest: Any = import_module("pytest")
 pytestmark = pytest.mark.android
 
 
+def test_android_shows_playlist_by_default(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+    android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.PLAYLIST])
+
+    android_device.assert_log_contains(
+        "player: toggle activated, toggle_name=Playlist",
+    )
+    android_device.wait_for_private_file_contains(
+        config_path,
+        "playlist_visible=false",
+    )
+
+    android_device.restart_app()
+    android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.PLAYLIST])
+    android_device.wait_for_private_file_contains(
+        config_path,
+        "playlist_visible=true",
+    )
+
+
 def test_android_portrait_player_controls_and_panels(
     android_device: AndroidDevice,
     test_output: Any,
