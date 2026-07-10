@@ -20,7 +20,7 @@ use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, LayoutPanelKind, PanelTitleButton, SkinRect,
 };
 
-use super::app::EguiFrontendState;
+use super::app::{CachedEqualizerTexture, EguiFrontendState};
 use super::layout::clamp_popup_to_rect;
 use super::skin_texture::{pixel_snapped_rect, render_equalizer_color_image, upload_color_image};
 
@@ -34,11 +34,33 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         return;
     }
     let render_state = equalizer_render_state(app, &view_model);
-    let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
-        ui.label("failed to render skinned equalizer");
-        return;
-    };
-    let texture = upload_color_image(ui.ctx(), "xmms-equalizer", image);
+    let needs_texture_update = app.texture_cache.equalizer.as_ref().is_none_or(|cached| {
+        cached.generation != app.texture_cache.generation || cached.state != render_state
+    });
+    if needs_texture_update {
+        let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
+            ui.label("failed to render skinned equalizer");
+            return;
+        };
+        if let Some(cached) = &mut app.texture_cache.equalizer {
+            cached.texture.set(image, egui::TextureOptions::NEAREST);
+            cached.generation = app.texture_cache.generation;
+            cached.state = render_state;
+        } else {
+            app.texture_cache.equalizer = Some(CachedEqualizerTexture {
+                generation: app.texture_cache.generation,
+                state: render_state,
+                texture: upload_color_image(ui.ctx(), "xmms-equalizer", image),
+            });
+        }
+    }
+    let texture_id = app
+        .texture_cache
+        .equalizer
+        .as_ref()
+        .expect("equalizer texture initialized")
+        .texture
+        .id();
     let base_height = if view_model.shaded {
         crate::render::MAIN_TITLEBAR_HEIGHT
     } else {
@@ -50,7 +72,7 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
-        texture.id(),
+        texture_id,
         pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,

@@ -21,7 +21,7 @@ use crate::skin::layout::{
     PlaylistMenuButton, SkinRect,
 };
 
-use super::app::EguiFrontendState;
+use super::app::{CachedPlaylistTexture, EguiFrontendState, PlaylistTextureKey};
 use super::layout::clamp_popup_to_rect;
 use super::skin_texture::{
     pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
@@ -49,23 +49,58 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let footer_info = playlist_footer_info(app);
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
     let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
-    let Ok(image) = render_playlist_color_image(
-        &app.active_skin,
-        true,
-        view_model.shaded,
-        app.playlist_width,
-        app.playlist_height,
-        Some(&shaded_info),
-        &rows,
-        Some(&footer_info),
-        Some(&footer_time_minutes),
-        Some(&footer_time_seconds),
-        render_scale,
-    ) else {
-        ui.label("failed to render skinned playlist");
-        return;
+    let texture_key = PlaylistTextureKey {
+        generation: app.texture_cache.generation,
+        focused: true,
+        shaded: view_model.shaded,
+        width: app.playlist_width,
+        height: app.playlist_height,
+        shaded_info,
+        rows,
+        footer_info,
+        footer_time_minutes,
+        footer_time_seconds,
+        render_scale_bits: render_scale.to_bits(),
     };
-    let texture = upload_color_image(ui.ctx(), "xmms-playlist", image);
+    if app
+        .texture_cache
+        .playlist
+        .as_ref()
+        .is_none_or(|cached| cached.key != texture_key)
+    {
+        let Ok(image) = render_playlist_color_image(
+            &app.active_skin,
+            texture_key.focused,
+            texture_key.shaded,
+            texture_key.width,
+            texture_key.height,
+            Some(&texture_key.shaded_info),
+            &texture_key.rows,
+            Some(&texture_key.footer_info),
+            Some(&texture_key.footer_time_minutes),
+            Some(&texture_key.footer_time_seconds),
+            render_scale,
+        ) else {
+            ui.label("failed to render skinned playlist");
+            return;
+        };
+        if let Some(cached) = &mut app.texture_cache.playlist {
+            cached.texture.set(image, egui::TextureOptions::NEAREST);
+            cached.key = texture_key;
+        } else {
+            app.texture_cache.playlist = Some(CachedPlaylistTexture {
+                key: texture_key,
+                texture: upload_color_image(ui.ctx(), "xmms-playlist", image),
+            });
+        }
+    }
+    let texture_id = app
+        .texture_cache
+        .playlist
+        .as_ref()
+        .expect("playlist texture initialized")
+        .texture
+        .id();
     let base_height = playlist_window_height(view_model.shaded, app.playlist_height);
     let size = egui::vec2(
         app.playlist_width as f32 * app.scale_factor,
@@ -73,7 +108,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
-        texture.id(),
+        texture_id,
         pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
@@ -330,11 +365,13 @@ fn add_playlist_rows_hit_region(
         SkinRect::new(12, 20, app.playlist_width - 31, app.playlist_height - 58),
         app.scale_factor,
     );
-    let response = ui.interact(
-        rows_rect,
-        ui.id().with("playlist-rows"),
-        egui::Sense::click(),
-    );
+    #[cfg(target_os = "android")]
+    let rows_sense = egui::Sense::click_and_drag();
+    #[cfg(not(target_os = "android"))]
+    let rows_sense = egui::Sense::click();
+    let response = ui.interact(rows_rect, ui.id().with("playlist-rows"), rows_sense);
+    #[cfg(target_os = "android")]
+    handle_playlist_touch_scroll(ui, app, &response);
     response.context_menu(|ui| {
         if ui.button("Remove Selected").clicked() {
             app.dispatch(PlaylistCommand::RemoveSelectedOrCurrent);
@@ -377,6 +414,43 @@ fn add_playlist_rows_hit_region(
                 app.dispatch(command);
             }
         }
+    }
+}
+
+#[cfg(target_os = "android")]
+fn handle_playlist_touch_scroll(
+    ui: &egui::Ui,
+    app: &mut EguiFrontendState,
+    response: &egui::Response,
+) {
+    if response.drag_started() {
+        app.playlist_touch_scroll_remainder = 0.0;
+    }
+    if response.dragged() {
+        let row_height = 11.0 * app.scale_factor;
+        app.playlist_touch_scroll_remainder += -response.drag_delta().y / row_height;
+        let rows = app.playlist_touch_scroll_remainder.trunc() as i32;
+        if rows != 0 {
+            scroll_playlist_rows(app, rows);
+            app.playlist_touch_scroll_remainder -= rows as f32;
+            ui.ctx().request_repaint();
+        }
+    }
+    if response.drag_stopped() {
+        app.playlist_touch_scroll_remainder = 0.0;
+    }
+}
+
+fn scroll_playlist_rows(app: &mut EguiFrontendState, rows: i32) {
+    if rows < 0 {
+        app.playlist_scroll_offset = app
+            .playlist_scroll_offset
+            .saturating_sub(rows.unsigned_abs() as usize);
+    } else {
+        app.playlist_scroll_offset = app
+            .playlist_scroll_offset
+            .saturating_add(rows as usize)
+            .min(app.playlist_max_scroll_offset());
     }
 }
 

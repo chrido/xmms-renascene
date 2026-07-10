@@ -46,6 +46,7 @@ Run the tests locally:
 ```bash
 ./repo pye2e -k gtk
 ./repo pye2e -k mpris
+./repo pye2e -m android
 ```
 
 Set `XMMS_E2E_USE_XVFB=0` to disable the automatic Xvfb wrapper and run against the current `DISPLAY`. This is useful for debugging but may trigger GNOME screen-sharing prompts. Set `XMMS_E2E_FORCE_XVFB=1` to require Xvfb and fail if `xvfb-run` is unavailable. Override Xvfb's server args with `XMMS_E2E_XVFB_SERVER_ARGS`, defaulting to `-screen 0 1024x768x24`.
@@ -83,3 +84,27 @@ cargo build --manifest-path Cargo.toml --features egui-ui --quiet
 ```
 
 Set `XMMS_E2E_SKIP_BUILD=1` to reuse an existing `target/debug/xmms-rs` binary.
+
+## Android emulator tests
+
+The Android-marked tests use the managed API 35 emulator and the same custom
+APK packaging path as `./repo android-screenshot`. They exercise portrait
+transport/panel controls, menu dismissal, landscape scaling, and coordinate
+taps while writing numbered emulator screenshots and videos to `testoutput`.
+
+```bash
+./repo pye2e -m android
+```
+
+The first run builds and installs the x86_64 APK and starts the emulator
+headlessly. Set `XMMS_E2E_ANDROID_SKIP_BUILD=1` to reuse a running emulator and
+the existing `target/debug/apk/xmms-renascene.apk`. `ANDROID_HOME` and
+`ANDROID_SERIAL` can override the SDK and selected emulator.
+
+CI and externally managed emulators can build the x86_64 APK without starting
+the repository-managed emulator:
+
+```bash
+./repo android-apk-emulator
+XMMS_E2E_ANDROID_SKIP_BUILD=1 ./repo pye2e -m android
+```

@@ -4,11 +4,12 @@
 //! in the first Android-audio step. Android `content://` and streaming URL
 //! support are handled by a later platform URI resolver.
 
-use std::cell::RefCell;
 use std::fs::File;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(test)]
@@ -17,15 +18,18 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
-use crate::audio_model::{equalizer_position_to_db, EqualizerBandPositions, EQUALIZER_BANDS};
+use crate::audio_model::{
+    equalizer_position_to_db, EqualizerBandPositions, SpectrumData, EQUALIZER_BANDS, SPECTRUM_BANDS,
+};
 use crate::playback::backend::{AudioMetadataProbe, PlaybackBackend};
 use crate::playback::model::{
     EqualizerBackendState, OutputDevice, OutputDeviceGroups, PlaybackEvent, PlayerState, StreamInfo,
 };
 use crate::playlist::{DurationIndexItem, DurationIndexResult};
 
+#[derive(Clone)]
 pub struct RodioBackend {
-    inner: RefCell<RodioBackendInner>,
+    inner: Arc<Mutex<RodioBackendInner>>,
 }
 
 struct RodioBackendInner {
@@ -40,6 +44,8 @@ struct RodioBackendInner {
     balance: i32,
     equalizer: EqualizerBackendState,
     dsp_settings: SharedDspSettings,
+    visualization: SharedVisualization,
+    visualization_generation: u64,
     output_device: OutputDevice,
     last_debug_log: Option<Instant>,
 }
@@ -121,9 +127,11 @@ impl Biquad {
 struct RodioDspSource<S> {
     inner: S,
     settings: SharedDspSettings,
+    spectrum: RodioSpectrumCapture,
     seen_version: u64,
     preamp_gain: f32,
     next_channel: usize,
+    frame_sum: f32,
     filters: Vec<[Biquad; EQUALIZER_BANDS]>,
 }
 
@@ -131,14 +139,17 @@ impl<S> RodioDspSource<S>
 where
     S: Source,
 {
-    fn new(inner: S, settings: SharedDspSettings) -> Self {
+    fn new(inner: S, settings: SharedDspSettings, visualization: SharedVisualization) -> Self {
         let channels = usize::from(inner.channels().get()).max(1);
+        let sample_rate = inner.sample_rate().get() as f32;
         let mut source = Self {
             inner,
             settings,
+            spectrum: RodioSpectrumCapture::new(sample_rate, visualization),
             seen_version: u64::MAX,
             preamp_gain: 1.0,
             next_channel: 0,
+            frame_sum: 0.0,
             filters: vec![[Biquad::identity(); EQUALIZER_BANDS]; channels],
         };
         source.refresh_filters_if_needed();
@@ -180,12 +191,19 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.refresh_filters_if_needed();
         let channel = self.next_channel;
-        self.next_channel = (self.next_channel + 1) % self.filters.len().max(1);
         let mut sample = self.inner.next()? as f32;
         for filter in &mut self.filters[channel] {
             sample = filter.process(sample);
         }
-        Some((sample * self.preamp_gain).clamp(-1.0, 1.0) as rodio::Sample)
+        sample = (sample * self.preamp_gain).clamp(-1.0, 1.0);
+        self.frame_sum += sample;
+        self.next_channel = (channel + 1) % self.filters.len().max(1);
+        if self.next_channel == 0 {
+            self.spectrum
+                .push_sample(self.frame_sum / self.filters.len().max(1) as f32);
+            self.frame_sum = 0.0;
+        }
+        Some(sample as rodio::Sample)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -215,6 +233,8 @@ where
 
     fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
         self.next_channel = 0;
+        self.frame_sum = 0.0;
+        self.spectrum.reset();
         self.inner.try_seek(pos)
     }
 }
@@ -230,6 +250,142 @@ const EQ_FREQUENCIES_HZ: [f32; EQUALIZER_BANDS] = [
 const EQ_Q: f32 = 1.0;
 
 type SharedDspSettings = Arc<Mutex<RodioDspSettings>>;
+type SharedVisualization = Arc<Mutex<RodioVisualization>>;
+
+const SPECTRUM_WINDOW_FRAMES: usize = 1_024;
+
+struct RodioVisualization {
+    data: SpectrumData,
+    generation: u64,
+}
+
+impl RodioVisualization {
+    fn new() -> Self {
+        Self {
+            data: [0.0; SPECTRUM_BANDS],
+            generation: 0,
+        }
+    }
+
+    fn publish(&mut self, data: SpectrumData) {
+        self.data = data;
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
+
+struct SpectrumWindow {
+    generation: u64,
+    samples: Vec<f32>,
+}
+
+struct RodioSpectrumCapture {
+    sender: SyncSender<SpectrumWindow>,
+    recycled: Receiver<Vec<f32>>,
+    current_generation: Arc<AtomicU64>,
+    samples: Vec<f32>,
+}
+
+impl RodioSpectrumCapture {
+    fn new(sample_rate: f32, shared: SharedVisualization) -> Self {
+        let (sender, receiver) = mpsc::sync_channel::<SpectrumWindow>(2);
+        let (recycle_sender, recycled) = mpsc::sync_channel(2);
+        let current_generation = Arc::new(AtomicU64::new(0));
+        let worker_generation = Arc::clone(&current_generation);
+        if let Err(err) = std::thread::Builder::new()
+            .name("xmms-spectrum".to_string())
+            .spawn(move || {
+                while let Ok(mut window) = receiver.recv() {
+                    let generation = window.generation;
+                    let data = analyze_spectrum_window(sample_rate, &window.samples);
+                    if generation == worker_generation.load(Ordering::Acquire) {
+                        shared
+                            .lock()
+                            .unwrap_or_else(|poison| poison.into_inner())
+                            .publish(data);
+                    }
+                    window.samples.clear();
+                    let _ = recycle_sender.try_send(window.samples);
+                }
+            })
+        {
+            eprintln!("xmms-rs: failed to start spectrum worker: {err}");
+        }
+        Self {
+            sender,
+            recycled,
+            current_generation,
+            samples: Vec::with_capacity(SPECTRUM_WINDOW_FRAMES),
+        }
+    }
+
+    fn push_sample(&mut self, sample: f32) {
+        self.samples.push(sample);
+        if self.samples.len() < SPECTRUM_WINDOW_FRAMES {
+            return;
+        }
+
+        let replacement = match self.recycled.try_recv() {
+            Ok(samples) => samples,
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                Vec::with_capacity(SPECTRUM_WINDOW_FRAMES)
+            }
+        };
+        let samples = std::mem::replace(&mut self.samples, replacement);
+        let window = SpectrumWindow {
+            generation: self.current_generation.load(Ordering::Relaxed),
+            samples,
+        };
+        match self.sender.try_send(window) {
+            Ok(()) => {}
+            Err(TrySendError::Full(mut window) | TrySendError::Disconnected(mut window)) => {
+                window.samples.clear();
+                self.samples = window.samples;
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current_generation.fetch_add(1, Ordering::Release);
+        self.samples.clear();
+    }
+}
+
+fn spectrum_band_frequency(sample_rate: f32, band: usize) -> f32 {
+    let band_width = (sample_rate * 0.5) / SPECTRUM_BANDS as f32;
+    (band.min(SPECTRUM_BANDS - 1) as f32 + 0.5) * band_width
+}
+
+fn analyze_spectrum_window(sample_rate: f32, samples: &[f32]) -> SpectrumData {
+    if samples.is_empty() {
+        return [0.0; SPECTRUM_BANDS];
+    }
+    let coefficients: SpectrumData = std::array::from_fn(|band| {
+        let frequency = spectrum_band_frequency(sample_rate, band);
+        2.0 * (2.0 * std::f32::consts::PI * frequency / sample_rate).cos()
+    });
+    let mut q1 = [0.0; SPECTRUM_BANDS];
+    let mut q2 = [0.0; SPECTRUM_BANDS];
+    for (frame, sample) in samples.iter().enumerate() {
+        let window = 0.5
+            - 0.5
+                * (2.0 * std::f32::consts::PI * frame as f32
+                    / samples.len().saturating_sub(1).max(1) as f32)
+                    .cos();
+        let sample = sample * window;
+        for band in 0..SPECTRUM_BANDS {
+            let q0 = sample + coefficients[band] * q1[band] - q2[band];
+            q2[band] = q1[band];
+            q1[band] = q0;
+        }
+    }
+    std::array::from_fn(|band| {
+        let power =
+            q1[band] * q1[band] + q2[band] * q2[band] - coefficients[band] * q1[band] * q2[band];
+        let amplitude = power.max(0.0).sqrt() * 4.0 / samples.len() as f32;
+        let decibels = 20.0 * amplitude.max(0.0001).log10();
+        ((decibels + 80.0) / 80.0).clamp(0.0, 1.0)
+    })
+}
 
 #[derive(Debug, Clone)]
 struct RodioDspSettings {
@@ -289,8 +445,9 @@ impl RodioBackend {
             preamp_position: 0,
             band_positions: [0; EQUALIZER_BANDS],
         };
+        let visualization = Arc::new(Mutex::new(RodioVisualization::new()));
         Self {
-            inner: RefCell::new(RodioBackendInner {
+            inner: Arc::new(Mutex::new(RodioBackendInner {
                 output,
                 current_uri: None,
                 state: PlayerState::Stopped,
@@ -302,10 +459,18 @@ impl RodioBackend {
                 balance: 0,
                 equalizer,
                 dsp_settings: Arc::new(Mutex::new(RodioDspSettings::from_equalizer(equalizer))),
+                visualization,
+                visualization_generation: 0,
                 output_device,
                 last_debug_log: None,
-            }),
+            })),
         }
+    }
+
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, RodioBackendInner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     #[cfg(test)]
@@ -316,20 +481,20 @@ impl RodioBackend {
 
     #[cfg(test)]
     fn force_player_empty_for_tests(&self) {
-        let inner = self.inner.borrow();
+        let inner = self.lock_inner();
         inner.output.player().stop();
     }
 
     pub fn volume(&self) -> i32 {
-        self.inner.borrow().volume
+        self.lock_inner().volume
     }
 
     pub fn balance(&self) -> i32 {
-        self.inner.borrow().balance
+        self.lock_inner().balance
     }
 
     pub fn equalizer(&self) -> EqualizerBackendState {
-        self.inner.borrow().equalizer
+        self.lock_inner().equalizer
     }
 
     fn stop_current_locked(inner: &mut RodioBackendInner) {
@@ -342,7 +507,7 @@ impl RodioBackend {
     }
 
     fn record_error(&self, message: String) -> Result<(), String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         Self::stop_current_locked(&mut inner);
         inner
             .pending_events
@@ -363,7 +528,7 @@ impl PlaybackBackend for RodioBackend {
         }
 
         {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = self.lock_inner();
             Self::stop_current_locked(&mut inner);
         }
 
@@ -414,12 +579,13 @@ impl PlaybackBackend for RodioBackend {
             channels
         );
 
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.output.recreate_player();
         let player = inner.output.player();
         player.set_volume(percent_to_rodio_volume(inner.volume));
         let dsp_settings = Arc::clone(&inner.dsp_settings);
-        player.append(RodioDspSource::new(decoder, dsp_settings));
+        let visualization = Arc::clone(&inner.visualization);
+        player.append(RodioDspSource::new(decoder, dsp_settings, visualization));
         let queued_sources = player.len();
         let player_empty = player.empty();
         crate::app_log_info!(
@@ -457,7 +623,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn pause(&self) -> Result<(), String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.output.player().pause();
         if inner.state == PlayerState::Playing {
             inner.state = PlayerState::Paused;
@@ -466,7 +632,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn unpause(&self) -> Result<(), String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.output.player().play();
         if inner.current_uri.is_some() {
             inner.state = PlayerState::Playing;
@@ -475,7 +641,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn stop(&self) -> Result<(), String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.output.player().stop();
         inner.current_uri = None;
         inner.state = PlayerState::Stopped;
@@ -490,8 +656,7 @@ impl PlaybackBackend for RodioBackend {
             return Err("seek position must be non-negative".to_string());
         }
         crate::app_log_info!(backend, "rodio seek", position_ms);
-        self.inner
-            .borrow()
+        self.lock_inner()
             .output
             .player()
             .try_seek(Duration::from_millis(position_ms as u64))
@@ -499,7 +664,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn set_volume(&self, volume: i32) -> Result<(), String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.volume = volume.clamp(0, 100);
         let rodio_volume = percent_to_rodio_volume(inner.volume);
         inner.output.player().set_volume(rodio_volume);
@@ -508,12 +673,12 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn set_balance(&self, balance: i32) -> Result<(), String> {
-        self.inner.borrow_mut().balance = balance.clamp(-100, 100);
+        self.lock_inner().balance = balance.clamp(-100, 100);
         Ok(())
     }
 
     fn set_equalizer(&self, state: EqualizerBackendState) -> Result<(), String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.equalizer = state;
         inner
             .dsp_settings
@@ -531,7 +696,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         if rodio_debug_enabled()
             && inner
                 .last_debug_log
@@ -564,29 +729,40 @@ impl PlaybackBackend for RodioBackend {
             crate::app_log_info!(backend, "rodio synthetic eos", pos_ms);
             inner.pending_events.push(PlaybackEvent::EndOfStream);
         }
+        let visualization = Arc::clone(&inner.visualization);
+        let visualization = visualization
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let visualization_update = (visualization.generation != inner.visualization_generation)
+            .then_some((visualization.generation, visualization.data));
+        drop(visualization);
+        if let Some((generation, data)) = visualization_update {
+            inner.visualization_generation = generation;
+            inner.pending_events.push(PlaybackEvent::Spectrum(data));
+        }
         Ok(std::mem::take(&mut inner.pending_events))
     }
 
     fn position_ms(&self) -> Option<i64> {
         Some(duration_to_millis(
-            self.inner.borrow().output.player().get_pos(),
+            self.lock_inner().output.player().get_pos(),
         ))
     }
 
     fn duration_ms(&self) -> Option<i64> {
-        self.inner.borrow().duration_ms
+        self.lock_inner().duration_ms
     }
 
     fn stream_info(&self) -> StreamInfo {
-        self.inner.borrow().stream_info
+        self.lock_inner().stream_info
     }
 
     fn state(&self) -> PlayerState {
-        self.inner.borrow().state
+        self.lock_inner().state
     }
 
     fn current_uri(&self) -> Option<String> {
-        self.inner.borrow().current_uri.clone()
+        self.lock_inner().current_uri.clone()
     }
 
     fn output_device_groups(&self) -> OutputDeviceGroups {
@@ -603,7 +779,7 @@ impl PlaybackBackend for RodioBackend {
         };
         let (sink, output_device) = open_rodio_sink(requested)?;
         let player = RodioPlayer::connect_new(sink.mixer());
-        let mut inner = self.inner.borrow_mut();
+        let mut inner = self.lock_inner();
         inner.output = RodioOutput::Device { sink, player };
         inner.output_device = output_device;
         inner.state = PlayerState::Stopped;
@@ -612,7 +788,7 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn current_output_device(&self) -> Option<OutputDevice> {
-        Some(self.inner.borrow().output_device.clone())
+        Some(self.lock_inner().output_device.clone())
     }
 }
 
@@ -1065,6 +1241,49 @@ mod tests {
     }
 
     #[test]
+    fn rodio_spectrum_analyzer_places_audio_in_linear_frequency_bands() {
+        let sample_rate = 44_100.0;
+        let tone_frequency = 1_000.0;
+        let samples = (0..SPECTRUM_WINDOW_FRAMES)
+            .map(|frame| {
+                let phase =
+                    2.0 * std::f32::consts::PI * tone_frequency * frame as f32 / sample_rate;
+                phase.sin() * 0.8
+            })
+            .collect::<Vec<_>>();
+        let spectrum = analyze_spectrum_window(sample_rate, &samples);
+        let strongest_band = spectrum
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(band, _)| band)
+            .unwrap();
+        let expected_band =
+            (tone_frequency / (sample_rate * 0.5) * SPECTRUM_BANDS as f32).floor() as usize;
+        assert!(spectrum[strongest_band] > 0.9);
+        assert!(strongest_band.abs_diff(expected_band) <= 1);
+    }
+
+    #[test]
+    fn rodio_spectrum_capture_drops_a_window_when_worker_queue_is_full() {
+        let (sender, _receiver) = mpsc::sync_channel(0);
+        let (_recycle_sender, recycled) = mpsc::sync_channel(1);
+        let mut capture = RodioSpectrumCapture {
+            sender,
+            recycled,
+            current_generation: Arc::new(AtomicU64::new(0)),
+            samples: Vec::with_capacity(SPECTRUM_WINDOW_FRAMES),
+        };
+
+        for _ in 0..SPECTRUM_WINDOW_FRAMES {
+            capture.push_sample(0.25);
+        }
+
+        assert!(capture.samples.is_empty());
+        assert!(capture.samples.capacity() >= SPECTRUM_WINDOW_FRAMES);
+    }
+
+    #[test]
     fn local_uri_resolver_accepts_paths_and_file_uris() {
         let plain = resolve_local_audio_source("/tmp/example.wav").unwrap();
         assert_eq!(plain.path, PathBuf::from("/tmp/example.wav"));
@@ -1149,7 +1368,7 @@ mod tests {
     #[test]
     fn rodio_backend_emits_synthetic_eos_once() {
         let backend = RodioBackend::new_detached_for_tests();
-        backend.inner.borrow_mut().state = PlayerState::Playing;
+        backend.lock_inner().state = PlayerState::Playing;
         backend.force_player_empty_for_tests();
 
         assert_eq!(
@@ -1179,7 +1398,7 @@ mod tests {
     fn rodio_backend_stops_existing_track_when_next_uri_fails() {
         let backend = RodioBackend::new_detached_for_tests();
         {
-            let mut inner = backend.inner.borrow_mut();
+            let mut inner = backend.lock_inner();
             inner.current_uri = Some("file:///tmp/playing.mp3".to_string());
             inner.state = PlayerState::Playing;
             inner.duration_ms = Some(10_000);
@@ -1220,7 +1439,7 @@ mod tests {
         assert_eq!(backend.volume(), 100);
         assert_eq!(backend.balance(), -100);
         assert_eq!(backend.equalizer(), equalizer);
-        let settings = backend.inner.borrow().dsp_settings.clone();
+        let settings = backend.lock_inner().dsp_settings.clone();
         let settings = settings.lock().unwrap();
         assert!(settings.active);
         assert_eq!(settings.preamp_position, 42);
@@ -1240,7 +1459,8 @@ mod tests {
             std::num::NonZero::new(44_100).unwrap(),
             vec![0.1],
         );
-        let mut source = RodioDspSource::new(source, settings);
+        let visualization = Arc::new(Mutex::new(RodioVisualization::new()));
+        let mut source = RodioDspSource::new(source, settings, visualization);
 
         let sample = source.next().unwrap();
 
@@ -1277,7 +1497,8 @@ mod tests {
                 std::num::NonZero::new(44_100).unwrap(),
                 sine.clone(),
             );
-            RodioDspSource::new(source, settings)
+            let visualization = Arc::new(Mutex::new(RodioVisualization::new()));
+            RodioDspSource::new(source, settings, visualization)
         };
 
         let boosted_sum: f32 = make_source(boosted).map(f32::abs).sum();

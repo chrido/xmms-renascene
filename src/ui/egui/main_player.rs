@@ -17,7 +17,7 @@ use crate::skin::layout::{
 };
 use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 
-use super::app::EguiFrontendState;
+use super::app::{CachedMainTexture, EguiFrontendState};
 use super::skin_texture::{pixel_snapped_rect, render_main_player_color_image, upload_color_image};
 
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
@@ -39,11 +39,33 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         config.timer_mode,
         app.visualization_render_state(),
     );
-    let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
-        ui.label("failed to render skinned main player");
-        return;
-    };
-    let texture = upload_color_image(ui.ctx(), "xmms-main-player", image);
+    let needs_texture_update = app.texture_cache.main.as_ref().is_none_or(|cached| {
+        cached.generation != app.texture_cache.generation || cached.state != render_state
+    });
+    if needs_texture_update {
+        let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
+            ui.label("failed to render skinned main player");
+            return;
+        };
+        if let Some(cached) = &mut app.texture_cache.main {
+            cached.texture.set(image, egui::TextureOptions::NEAREST);
+            cached.generation = app.texture_cache.generation;
+            cached.state = render_state.clone();
+        } else {
+            app.texture_cache.main = Some(CachedMainTexture {
+                generation: app.texture_cache.generation,
+                state: render_state.clone(),
+                texture: upload_color_image(ui.ctx(), "xmms-main-player", image),
+            });
+        }
+    }
+    let texture_id = app
+        .texture_cache
+        .main
+        .as_ref()
+        .expect("main texture initialized")
+        .texture
+        .id();
     let base_height = if view_model.shaded {
         MAIN_TITLEBAR_HEIGHT
     } else {
@@ -55,7 +77,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
-        texture.id(),
+        texture_id,
         pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
@@ -298,6 +320,7 @@ fn add_main_hit_regions(
             ui.ctx().request_repaint();
         }
         if response.clicked() {
+            app.close_player_menus();
             dispatch_push(ui.ctx(), app, button);
         }
     }
@@ -321,6 +344,7 @@ fn add_main_hit_regions(
                 ui.ctx().request_repaint();
             }
             if response.clicked() {
+                app.close_player_menus();
                 dispatch_toggle(app, toggle);
             }
         }
@@ -339,6 +363,7 @@ fn add_main_hit_regions(
             ui.ctx().request_repaint();
         }
         if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
+            app.close_player_menus();
             let pointer = response.interact_pointer_pos().unwrap();
             let normalized = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
             let position =

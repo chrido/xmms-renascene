@@ -130,15 +130,23 @@ pub fn render_playlist_frame(
         (width - 25, 0),
     )?;
 
-    for i in 0..(height - 58) / 29 {
-        let ydest = (i * 29) + 20;
-        blit_surface_rect(cr, &pledit, SkinRect::new(0, 42, 12, 29), (0, ydest))?;
+    let mut ydest = 20;
+    let side_bottom = height - 38;
+    while ydest < side_bottom {
+        let tile_height = (side_bottom - ydest).min(29);
         blit_surface_rect(
             cr,
             &pledit,
-            SkinRect::new(32, 42, 19, 29),
+            SkinRect::new(0, 42, 12, tile_height),
+            (0, ydest),
+        )?;
+        blit_surface_rect(
+            cr,
+            &pledit,
+            SkinRect::new(32, 42, 19, tile_height),
             (width - 19, ydest),
         )?;
+        ydest += tile_height;
     }
 
     blit_surface_rect(cr, &pledit, SkinRect::new(0, 72, 125, 38), (0, height - 38))?;

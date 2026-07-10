@@ -7,9 +7,14 @@ import contextlib
 import glob
 import logging
 import os
+import re
+import signal
 import shlex
+import shutil
 import subprocess
 import sys
+import time
+import zipfile
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, cast
@@ -31,6 +36,10 @@ ANDROID_SDK = Path(
 )
 ANDROID_NDK_VERSION = "27.2.12479018"
 ANDROID_TARGET = "aarch64-linux-android"
+ANDROID_EMULATOR_TARGET = "x86_64-linux-android"
+ANDROID_AVD = "xmms_api35"
+ANDROID_PACKAGE = "org.xmms.renascene"
+ANDROID_ACTIVITY = "org.xmms.renascene.XmmsActivity"
 SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
     "main-player-default": ("--reset", "--screenshot-scenario", "main-player-default"),
     "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
@@ -232,6 +241,374 @@ class RepoTool:
         env["ANDROID_NDK_HOME"] = str(ndk)
         return env
 
+    def _android_apk_command(self, target: str, *, release: bool = False) -> list[str]:
+        command = [
+            "cargo",
+            "apk",
+            "build",
+            "--target",
+            target,
+            "--no-default-features",
+            "--features",
+            "mobile-ui",
+            "--lib",
+        ]
+        if release:
+            command.append("--release")
+        return command
+
+    def _android_apk_path(self, *, release: bool = False) -> Path:
+        profile = "release" if release else "debug"
+        return REPO_DIR / "target" / profile / "apk" / "xmms-renascene.apk"
+
+    def _wait_for_android_emulator(self, adb: Path, timeout_seconds: int = 240) -> None:
+        subprocess.run([str(adb), "wait-for-device"], check=True, timeout=timeout_seconds)
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            result = subprocess.run(
+                [str(adb), "shell", "getprop", "sys.boot_completed"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if result.stdout.strip() == "1":
+                subprocess.run([str(adb), "shell", "input", "keyevent", "82"], check=False)
+                return
+            time.sleep(2)
+        raise TimeoutError("Android emulator did not finish booting")
+
+    def _stop_managed_android_emulator(self, adb: Path, pid_path: Path) -> None:
+        try:
+            pid = int(pid_path.read_text().strip())
+        except (FileNotFoundError, ValueError):
+            raise RuntimeError(
+                "A headless Android emulator is already running but its managed PID is unavailable"
+            )
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            state = subprocess.run(
+                [str(adb), "get-state"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if state.returncode != 0:
+                break
+            time.sleep(1)
+        pid_path.unlink(missing_ok=True)
+
+    def _ensure_android_emulator(self, env: dict[str, str], *, headless: bool) -> Path:
+        sdk = Path(env["ANDROID_HOME"])
+        adb = sdk / "platform-tools" / "adb"
+        emulator = sdk / "emulator" / "emulator"
+        if not adb.is_file() or not emulator.is_file():
+            raise RuntimeError("Android platform-tools and emulator packages are required")
+        state_dir = REPO_DIR / "target" / "android"
+        mode_path = state_dir / "emulator.mode"
+        pid_path = state_dir / "emulator.pid"
+        devices = subprocess.run(
+            [str(adb), "devices"],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        if any(line.startswith("emulator-") and "\tdevice" in line for line in devices.splitlines()):
+            mode = mode_path.read_text().strip() if mode_path.is_file() else ""
+            if headless or mode != "headless":
+                return adb
+            self._stop_managed_android_emulator(adb, pid_path)
+
+        avd_path = Path.home() / ".android" / "avd" / f"{ANDROID_AVD}.avd"
+        if not avd_path.is_dir():
+            raise RuntimeError(
+                f"Android AVD {ANDROID_AVD!r} is missing; create it with the API 35 "
+                "Google APIs x86_64 system image"
+            )
+        log_path = state_dir / "emulator.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        command = [
+            str(emulator),
+            "-avd",
+            ANDROID_AVD,
+            "-no-audio",
+            "-no-boot-anim",
+            "-gpu",
+            "swiftshader_indirect",
+            "-no-snapshot",
+            "-no-metrics",
+        ]
+        if headless:
+            command.append("-no-window")
+        with log_path.open("ab") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=REPO_DIR,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        pid_path.write_text(f"{process.pid}\n")
+        mode_path.write_text("headless\n" if headless else "windowed\n")
+        self._wait_for_android_emulator(adb)
+        return adb
+
+    def _dismiss_android_anr_wait(self, adb: Path) -> None:
+        subprocess.run(
+            [str(adb), "shell", "uiautomator", "dump", "/sdcard/window.xml"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        result = subprocess.run(
+            [str(adb), "shell", "cat", "/sdcard/window.xml"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        match = re.search(
+            r'resource-id="android:id/aerr_wait".*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            result.stdout,
+        )
+        if match is None:
+            return
+        left, top, right, bottom = map(int, match.groups())
+        subprocess.run(
+            [
+                str(adb),
+                "shell",
+                "input",
+                "tap",
+                str((left + right) // 2),
+                str((top + bottom) // 2),
+            ],
+            check=False,
+        )
+        time.sleep(2)
+
+    def _build_android_apk(
+        self, env: dict[str, str], target: str, *, release: bool = False
+    ) -> bool:
+        command = self._android_apk_command(target, release=release)
+        env = env.copy()
+        page_size_flag = "-C link-arg=-Wl,-z,max-page-size=16384"
+        env["RUSTFLAGS"] = " ".join(
+            part for part in (env.get("RUSTFLAGS", ""), page_size_flag) if part
+        )
+        if release:
+            env.setdefault(
+                "CARGO_APK_RELEASE_KEYSTORE",
+                str(Path.home() / ".android" / "debug.keystore"),
+            )
+            env.setdefault("CARGO_APK_RELEASE_KEYSTORE_PASSWORD", "android")
+        logging.info("Building Android APK: %s", " ".join(command))
+        if subprocess.run(command, cwd=REPO_DIR, env=env, check=False).returncode != 0:
+            return False
+        try:
+            self._package_android_activity(env, release=release)
+        except Exception as err:
+            logging.error("failed to package Android file picker activity: %s", err)
+            return False
+        return True
+
+    def _package_android_activity(
+        self, env: dict[str, str], *, release: bool = False
+    ) -> None:
+        sdk = Path(env["ANDROID_HOME"])
+        build_tools = sdk / "build-tools" / "35.0.0"
+        android_jar = sdk / "platforms" / "android-35" / "android.jar"
+        java_source_dir = (
+            REPO_DIR
+            / "android"
+            / "java"
+            / "org"
+            / "xmms"
+            / "renascene"
+        )
+        java_sources = sorted(str(path) for path in java_source_dir.glob("*.java"))
+        apk = self._android_apk_path(release=release)
+        work_dir = REPO_DIR / "target" / "android" / "java"
+        classes_dir = work_dir / "classes"
+        dex_dir = work_dir / "dex"
+        shutil.rmtree(work_dir, ignore_errors=True)
+        classes_dir.mkdir(parents=True)
+        dex_dir.mkdir()
+
+        subprocess.run(
+            [
+                "javac",
+                "-Xlint:-options",
+                "-source",
+                "8",
+                "-target",
+                "8",
+                "-classpath",
+                str(android_jar),
+                "-d",
+                str(classes_dir),
+                *java_sources,
+            ],
+            cwd=REPO_DIR,
+            check=True,
+        )
+        class_files = [str(path) for path in classes_dir.rglob("*.class")]
+        subprocess.run(
+            [
+                str(build_tools / "d8"),
+                "--lib",
+                str(android_jar),
+                "--output",
+                str(dex_dir),
+                *class_files,
+            ],
+            cwd=REPO_DIR,
+            env=env,
+            check=True,
+        )
+
+        manifest_source = work_dir / "AndroidManifest.xml"
+        manifest_apk = work_dir / "manifest.apk"
+        manifest_source.write_text(
+            f"""<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{ANDROID_PACKAGE}"
+    android:versionCode="16777472"
+    android:versionName="0.1.0">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <application
+        android:debuggable="{"false" if release else "true"}"
+        android:hasCode="true"
+        android:label="XMMS Renascene"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <activity
+            android:name="{ANDROID_ACTIVITY}"
+            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:exported="true"
+            android:resizeableActivity="true"
+            android:screenOrientation="unspecified">
+            <meta-data android:name="android.app.lib_name" android:value="xmms_renascene" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".XmmsPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="false" />
+    </application>
+</manifest>
+""",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [
+                str(build_tools / "aapt"),
+                "package",
+                "-f",
+                "-M",
+                str(manifest_source),
+                "-I",
+                str(android_jar),
+                "-F",
+                str(manifest_apk),
+            ],
+            cwd=REPO_DIR,
+            check=True,
+        )
+        with zipfile.ZipFile(manifest_apk, "r") as compiled:
+            android_manifest = compiled.read("AndroidManifest.xml")
+
+        unsigned = work_dir / "xmms-renascene-unsigned.apk"
+        aligned = work_dir / "xmms-renascene-aligned.apk"
+        with zipfile.ZipFile(apk, "r") as source, zipfile.ZipFile(unsigned, "w") as destination:
+            for entry in source.infolist():
+                upper_name = entry.filename.upper()
+                if entry.filename in {"AndroidManifest.xml", "classes.dex"} or (
+                    upper_name.startswith("META-INF/")
+                    and upper_name.endswith((".SF", ".RSA", ".DSA", "MANIFEST.MF"))
+                ):
+                    continue
+                destination.writestr(entry, source.read(entry.filename))
+            destination.writestr(
+                "AndroidManifest.xml", android_manifest, zipfile.ZIP_DEFLATED
+            )
+            destination.write(dex_dir / "classes.dex", "classes.dex", zipfile.ZIP_DEFLATED)
+
+        subprocess.run(
+            [
+                str(build_tools / "zipalign"),
+                "-f",
+                "-P",
+                "16",
+                "4",
+                str(unsigned),
+                str(aligned),
+            ],
+            cwd=REPO_DIR,
+            check=True,
+        )
+        subprocess.run(
+            [
+                str(build_tools / "apksigner"),
+                "sign",
+                "--ks",
+                str(Path.home() / ".android" / "debug.keystore"),
+                "--ks-key-alias",
+                "androiddebugkey",
+                "--ks-pass",
+                "pass:android",
+                "--key-pass",
+                "pass:android",
+                "--out",
+                str(apk),
+                str(aligned),
+            ],
+            cwd=REPO_DIR,
+            check=True,
+        )
+
+    def _install_and_launch_android(self, adb: Path) -> bool:
+        apk = REPO_DIR / "target" / "debug" / "apk" / "xmms-renascene.apk"
+        commands = [
+            [str(adb), "install", "-r", str(apk)],
+            [str(adb), "shell", "am", "force-stop", "org.xmms.renascene"],
+            [
+                str(adb),
+                "shell",
+                "am",
+                "start",
+                "-W",
+                "-n",
+                "org.xmms.renascene/org.xmms.renascene.XmmsActivity",
+            ],
+        ]
+        return all(
+            subprocess.run(command, cwd=REPO_DIR, check=False).returncode == 0
+            for command in commands
+        )
+
+    def _run_android_emulator(self) -> int:
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+            adb = self._ensure_android_emulator(env, headless=False)
+        except Exception as err:
+            logging.error("failed to prepare Android emulator: %s", err)
+            return 1
+        if not self._build_android_apk(env, ANDROID_EMULATOR_TARGET):
+            return 1
+        if not self._install_and_launch_android(adb):
+            return 1
+        logging.info("XMMS Renascene is running in the Android emulator")
+        return 0
+
     def _build_selected_app(self) -> None:
         self._build_app("gtk", "gstreamer")
 
@@ -420,8 +797,15 @@ class RepoTool:
           ./repo run --egui             -> build egui with GStreamer and run --frontend egui
           ./repo run --gtk --rodio      -> build GTK with rodio and run --frontend gtk
           ./repo run --egui --rodio     -> build egui with rodio and run --frontend egui
+          ./repo run --android          -> build, install, and launch in the Android emulator
         """
         os.chdir(REPO_DIR)
+        if "--android" in args:
+            remaining = tuple(arg for arg in args if arg != "--android")
+            if remaining:
+                logging.error("--android cannot currently be combined with other run arguments")
+                return 2
+            return self._run_android_emulator()
         try:
             frontend, audio_backend, app_args = self._select_run_frontend(args)
         except ValueError as err:
@@ -460,25 +844,136 @@ class RepoTool:
         except RuntimeError as err:
             logging.error("%s", err)
             return 1
-        command = [
-            "cargo",
-            "apk",
-            "build",
-            "--target",
-            ANDROID_TARGET,
-            "--no-default-features",
-            "--features",
-            "mobile-ui",
-            "--lib",
-        ]
-        logging.info("Building Android APK: %s", " ".join(command))
-        result = subprocess.run(command, cwd=REPO_DIR, env=env, check=False)
-        if result.returncode == 0:
+        if self._build_android_apk(env, ANDROID_TARGET):
             logging.info(
                 "Android APK written to %s",
                 REPO_DIR / "target" / "debug" / "apk" / "xmms-renascene.apk",
             )
-        return result.returncode
+            return 0
+        return 1
+
+    async def android_apk_emulator(self) -> int:
+        """Build the signed x86_64 debug APK used by the Android emulator."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+        except RuntimeError as err:
+            logging.error("%s", err)
+            return 1
+        if self._build_android_apk(env, ANDROID_EMULATOR_TARGET):
+            logging.info(
+                "Android emulator APK written to %s",
+                REPO_DIR / "target" / "debug" / "apk" / "xmms-renascene.apk",
+            )
+            return 0
+        return 1
+
+    async def deploy_android(self, release: bool = False) -> int:
+        """Build and install an arm64 APK on the USB-attached Android device."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+        except RuntimeError as err:
+            logging.error("%s", err)
+            return 1
+
+        adb = Path(env["ANDROID_HOME"]) / "platform-tools" / "adb"
+        if not adb.is_file():
+            logging.error("Android adb was not found at %s", adb)
+            return 1
+
+        device_state = subprocess.run(
+            [str(adb), "-d", "get-state"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if device_state.returncode != 0 or device_state.stdout.strip() != "device":
+            detail = device_state.stderr.strip() or device_state.stdout.strip()
+            logging.error(
+                "no usable USB-attached Android device found%s",
+                f": {detail}" if detail else "",
+            )
+            return 1
+
+        device_abis = subprocess.run(
+            [str(adb), "-d", "shell", "getprop", "ro.product.cpu.abilist"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if device_abis.returncode != 0:
+            logging.error("failed to determine the USB device CPU architecture")
+            return 1
+        supported_abis = {abi.strip() for abi in device_abis.stdout.split(",")}
+        if "arm64-v8a" not in supported_abis:
+            logging.error(
+                "USB device does not support the arm64-v8a APK; reported ABIs: %s",
+                device_abis.stdout.strip() or "unknown",
+            )
+            return 1
+
+        if not self._build_android_apk(env, ANDROID_TARGET, release=release):
+            return 1
+
+        apk = self._android_apk_path(release=release)
+        result = subprocess.run(
+            [str(adb), "-d", "install", "-r", str(apk)],
+            cwd=REPO_DIR,
+            check=False,
+        )
+        if result.returncode != 0:
+            logging.error("failed to install Android APK on the USB device")
+            return 1
+        logging.info("Installed %s on the USB-attached Android device", apk)
+        return 0
+
+    async def android_screenshot(
+        self,
+        output: str = "testoutput/android/xmms-android-initial.png",
+        wait_seconds: int = 8,
+    ) -> int:
+        """Build, launch in the API 35 emulator, and capture an Android screenshot."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+            adb = self._ensure_android_emulator(env, headless=True)
+        except Exception as err:
+            logging.error("failed to prepare Android emulator: %s", err)
+            return 1
+
+        if not self._build_android_apk(env, ANDROID_EMULATOR_TARGET):
+            return 1
+        if not self._install_and_launch_android(adb):
+            return 1
+        time.sleep(max(0, wait_seconds))
+        pid = subprocess.run(
+            [str(adb), "shell", "pidof", "org.xmms.renascene"],
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout.strip()
+        if not pid:
+            logging.error("Android app is not running after launch")
+            return 1
+
+        self._dismiss_android_anr_wait(adb)
+        output_path = REPO_DIR / output
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as screenshot:
+            result = subprocess.run(
+                [str(adb), "exec-out", "screencap", "-p"],
+                stdout=screenshot,
+                check=False,
+            )
+        if result.returncode != 0 or not output_path.is_file() or output_path.stat().st_size == 0:
+            logging.error("failed to capture Android screenshot")
+            return 1
+        logging.info("Android screenshot written to %s", output_path)
+        return 0
 
     async def screenshot(self, *args: str) -> int:
         """Capture a root-window screenshot after starting the selected frontend."""
@@ -710,6 +1205,16 @@ class RepoTool:
 
     def _pye2e_command(self, python: Path, args: tuple[str, ...]) -> list[str]:
         pytest_command = [str(python), "-m", "pytest", "e2e", *args]
+        android_only = any(
+            arg == "e2e/test_android_ui.py"
+            or arg.endswith("/test_android_ui.py")
+            or arg == "android"
+            or arg == "-m=android"
+            for arg in args
+        )
+        if android_only:
+            logging.info("Running Android Python E2E tests without Xvfb")
+            return pytest_command
         disable_xvfb = os.environ.get("XMMS_E2E_USE_XVFB") == "0"
         force_xvfb = os.environ.get("XMMS_E2E_FORCE_XVFB") == "1"
         if disable_xvfb and not force_xvfb:

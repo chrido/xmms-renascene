@@ -17,6 +17,7 @@ from typing import Any
 pytest: Any = import_module("pytest")
 
 control_socket: Any = import_module("control_socket")
+from android import AndroidDevice
 from gui import MainWindow, parse_xdotool_int
 
 
@@ -112,7 +113,11 @@ def command_exists(name: str) -> bool:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def build_gui_frontends() -> None:
+def build_gui_frontends(request: Any) -> None:
+    if request.session.items and all(
+        item.get_closest_marker("android") is not None for item in request.session.items
+    ):
+        return
     if os.environ.get("XMMS_E2E_SKIP_BUILD") == "1":
         if not APP_BINARY.exists():
             pytest.skip(f"{APP_BINARY} does not exist and XMMS_E2E_SKIP_BUILD=1")
@@ -133,6 +138,8 @@ def build_gui_frontends() -> None:
 
 @pytest.fixture(autouse=True)
 def require_x11_tools(request: Any) -> None:
+    if request.node.get_closest_marker("android") is not None:
+        return
     if not os.environ.get("DISPLAY"):
         pytest.skip("DISPLAY is not set; run with xvfb-run, e.g. xvfb-run -a python -m pytest e2e")
     if request.node.get_closest_marker("no_xdotool") is not None:
@@ -419,3 +426,35 @@ def test_output(request: Any) -> Iterator[TestOutput]:
 def e2e_screenshot_dir(test_output: TestOutput) -> Path:
     return test_output.directory
 
+
+@pytest.fixture(scope="session")
+def android_device(tmp_path_factory: Any) -> Iterator[AndroidDevice]:
+    device = AndroidDevice.from_environment()
+    startup_output = tmp_path_factory.mktemp("android-startup") / "initial.png"
+    if os.environ.get("XMMS_E2E_ANDROID_SKIP_BUILD") == "1":
+        device.require_running_emulator()
+        device.install_existing_apk()
+    else:
+        startup_env = os.environ.copy()
+        if device.serial:
+            startup_env["ANDROID_SERIAL"] = device.serial
+        subprocess.run(
+            [
+                str(REPO_ROOT / "repo"),
+                "android-screenshot",
+                f"--output={startup_output}",
+                "--wait-seconds=1",
+            ],
+            cwd=REPO_ROOT,
+            env=startup_env,
+            check=True,
+        )
+        device = AndroidDevice.from_environment()
+    device.grant_runtime_permissions()
+    device.set_portrait()
+    device.restart_app()
+    try:
+        yield device
+    finally:
+        device.set_portrait()
+        device.force_stop()
