@@ -225,26 +225,40 @@ impl PreferencesPage {
 
 fn show_audio_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading("Audio I/O Plugins");
-    ui.label("Output plugin: GStreamer");
-    ui.horizontal(|ui| {
-        ui.label("Output device:");
-        let mut device = config
-            .output_device
-            .clone()
-            .unwrap_or_else(|| "System default".to_string());
-        egui::ComboBox::from_id_salt("egui-output-device")
-            .selected_text(&device)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut device, "System default".to_string(), "System default");
-            });
-        config.output_device = (device != "System default").then_some(device);
-    });
-    ui.add_enabled(false, egui::Button::new("Configure"))
-        .on_disabled_hover_text(
-            "GStreamer output configuration is handled by the system for egui.",
-        );
-    ui.separator();
-    ui.label("Input plugins are handled by GStreamer and playlist import helpers.");
+    #[cfg(target_os = "android")]
+    {
+        let _ = config;
+        ui.label("Output: Android system media routing");
+        ui.label("Headphones, Bluetooth, and speaker selection are managed by Android.");
+        return;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        ui.label("Output plugin: GStreamer");
+        ui.horizontal(|ui| {
+            ui.label("Output device:");
+            let mut device = config
+                .output_device
+                .clone()
+                .unwrap_or_else(|| "System default".to_string());
+            egui::ComboBox::from_id_salt("egui-output-device")
+                .selected_text(&device)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut device,
+                        "System default".to_string(),
+                        "System default",
+                    );
+                });
+            config.output_device = (device != "System default").then_some(device);
+        });
+        ui.add_enabled(false, egui::Button::new("Configure"))
+            .on_disabled_hover_text(
+                "GStreamer output configuration is handled by the system for egui.",
+            );
+        ui.separator();
+        ui.label("Input plugins are handled by GStreamer and playlist import helpers.");
+    }
 }
 
 fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {

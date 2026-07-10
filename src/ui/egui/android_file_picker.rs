@@ -70,18 +70,43 @@ static REPAINT_CONTEXT: OnceLock<egui::Context> = OnceLock::new();
 pub fn initialize(app: &winit::platform::android::activity::AndroidApp) -> Result<(), String> {
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }
         .map_err(|err| format!("failed to access Android VM: {err}"))?;
-    let env = vm
+    let mut env = vm
         .attach_current_thread()
         .map_err(|err| format!("failed to attach Android picker thread: {err}"))?;
     let activity = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
     let activity = env
         .new_global_ref(activity)
         .map_err(|err| format!("failed to retain Android activity: {err}"))?;
+    let files_dir = android_activity_directory(&mut env, activity.as_obj(), "getFilesDir")?;
+    let cache_dir = android_activity_directory(&mut env, activity.as_obj(), "getCacheDir")?;
+    std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
+    std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
     drop(env);
     CONTEXT
         .set(AndroidPickerContext { vm, activity })
         .map_err(|_| "Android file picker was initialized more than once".to_string())?;
     Ok(())
+}
+
+fn android_activity_directory(
+    env: &mut JNIEnv<'_>,
+    activity: &JObject<'_>,
+    method: &str,
+) -> Result<PathBuf, String> {
+    let directory = env
+        .call_method(activity, method, "()Ljava/io/File;", &[])
+        .and_then(|value| value.l())
+        .map_err(|err| format!("failed to resolve Android {method}: {err}"))?;
+    let absolute_path = env
+        .call_method(directory, "getAbsolutePath", "()Ljava/lang/String;", &[])
+        .and_then(|value| value.l())
+        .map_err(|err| format!("failed to resolve Android {method} path: {err}"))?;
+    let absolute_path = JString::from(absolute_path);
+    let absolute_path: String = env
+        .get_string(&absolute_path)
+        .map_err(|err| format!("failed to read Android {method} path: {err}"))?
+        .into();
+    Ok(PathBuf::from(absolute_path))
 }
 
 pub fn open(request: FileDialogRequest) -> Result<(), String> {

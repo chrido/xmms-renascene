@@ -5,6 +5,7 @@
 import asyncio
 import contextlib
 import glob
+import hashlib
 import logging
 import os
 import re
@@ -412,6 +413,32 @@ class RepoTool:
             return False
         return True
 
+    def _android_signing_config(
+        self,
+        env: dict[str, str],
+        *,
+        release: bool,
+    ) -> tuple[Path, str, str, str]:
+        if not release:
+            return (
+                Path.home() / ".android" / "debug.keystore",
+                "androiddebugkey",
+                "android",
+                "android",
+            )
+        keystore_password = env.get("CARGO_APK_RELEASE_KEYSTORE_PASSWORD", "android")
+        return (
+            Path(
+                env.get(
+                    "CARGO_APK_RELEASE_KEYSTORE",
+                    str(Path.home() / ".android" / "debug.keystore"),
+                )
+            ),
+            env.get("CARGO_APK_RELEASE_KEYSTORE_KEY_ALIAS", "androiddebugkey"),
+            keystore_password,
+            env.get("CARGO_APK_RELEASE_KEY_ALIAS_PASSWORD", keystore_password),
+        )
+
     def _package_android_activity(
         self, env: dict[str, str], *, release: bool = False
     ) -> None:
@@ -469,6 +496,10 @@ class RepoTool:
 
         manifest_source = work_dir / "AndroidManifest.xml"
         manifest_apk = work_dir / "manifest.apk"
+        resource_dir = work_dir / "res"
+        drawable_dir = resource_dir / "drawable"
+        drawable_dir.mkdir(parents=True)
+        shutil.copy2(REPO_DIR / "data" / "org.xmms.Renascene.png", drawable_dir / "icon.png")
         manifest_source.write_text(
             f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -483,6 +514,7 @@ class RepoTool:
     <application
         android:debuggable="{"false" if release else "true"}"
         android:hasCode="true"
+        android:icon="@drawable/icon"
         android:label="XMMS Renascene"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
         <activity
@@ -516,6 +548,8 @@ class RepoTool:
                 str(manifest_source),
                 "-I",
                 str(android_jar),
+                "-S",
+                str(resource_dir),
                 "-F",
                 str(manifest_apk),
             ],
@@ -524,6 +558,14 @@ class RepoTool:
         )
         with zipfile.ZipFile(manifest_apk, "r") as compiled:
             android_manifest = compiled.read("AndroidManifest.xml")
+            compiled_resources = [
+                (entry, compiled.read(entry.filename))
+                for entry in compiled.infolist()
+                if entry.filename != "AndroidManifest.xml" and not entry.is_dir()
+            ]
+            compiled_resource_names = {
+                entry.filename for entry, _contents in compiled_resources
+            }
 
         unsigned = work_dir / "xmms-renascene-unsigned.apk"
         aligned = work_dir / "xmms-renascene-aligned.apk"
@@ -533,13 +575,15 @@ class RepoTool:
                 if entry.filename in {"AndroidManifest.xml", "classes.dex"} or (
                     upper_name.startswith("META-INF/")
                     and upper_name.endswith((".SF", ".RSA", ".DSA", "MANIFEST.MF"))
-                ):
+                ) or entry.filename in compiled_resource_names:
                     continue
                 destination.writestr(entry, source.read(entry.filename))
             destination.writestr(
                 "AndroidManifest.xml", android_manifest, zipfile.ZIP_DEFLATED
             )
             destination.write(dex_dir / "classes.dex", "classes.dex", zipfile.ZIP_DEFLATED)
+            for entry, contents in compiled_resources:
+                destination.writestr(entry, contents)
 
         subprocess.run(
             [
@@ -554,18 +598,21 @@ class RepoTool:
             cwd=REPO_DIR,
             check=True,
         )
+        keystore, key_alias, keystore_password, key_password = (
+            self._android_signing_config(env, release=release)
+        )
         subprocess.run(
             [
                 str(build_tools / "apksigner"),
                 "sign",
                 "--ks",
-                str(Path.home() / ".android" / "debug.keystore"),
+                str(keystore),
                 "--ks-key-alias",
-                "androiddebugkey",
+                key_alias,
                 "--ks-pass",
-                "pass:android",
+                f"pass:{keystore_password}",
                 "--key-pass",
-                "pass:android",
+                f"pass:{key_password}",
                 "--out",
                 str(apk),
                 str(aligned),
@@ -868,6 +915,36 @@ class RepoTool:
             )
             return 0
         return 1
+
+    async def android_apk_release(self, output_dir: str = "release-assets") -> int:
+        """Build an arm64 release APK named with its SHA-256 digest."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+        except RuntimeError as err:
+            logging.error("%s", err)
+            return 1
+        if not self._build_android_apk(env, ANDROID_TARGET, release=True):
+            return 1
+
+        source = self._android_apk_path(release=True)
+        digest = hashlib.sha256()
+        with source.open("rb") as apk_file:
+            for chunk in iter(lambda: apk_file.read(1024 * 1024), b""):
+                digest.update(chunk)
+        checksum = digest.hexdigest()
+        destination_dir = Path(output_dir)
+        if not destination_dir.is_absolute():
+            destination_dir = REPO_DIR / destination_dir
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / f"xmms-renascene-{checksum}.apk"
+        shutil.copy2(source, destination)
+        destination.with_suffix(".apk.sha256").write_text(
+            f"{checksum}  {destination.name}\n"
+        )
+        logging.info("Android release APK written to %s", destination)
+        return 0
 
     async def deploy_android(self, release: bool = False) -> int:
         """Build and install an arm64 APK on the USB-attached Android device."""

@@ -119,8 +119,11 @@ class AndroidDevice:
     def force_stop(self) -> None:
         self.shell("am", "force-stop", ANDROID_PACKAGE, check=False)
 
-    def restart_app(self) -> None:
+    def restart_app(self, *, reset_data: bool = False) -> None:
         self.force_stop()
+        if reset_data:
+            self.shell("pm", "clear", ANDROID_PACKAGE)
+            self.grant_runtime_permissions()
         self.command("logcat", "-c", check=False)
         self.shell("am", "start", "-W", "-n", ANDROID_ACTIVITY)
         self.wait_for_app()
@@ -252,3 +255,25 @@ class AndroidDevice:
             + "\n".join(f"- {needle}" for needle in missing)
             + f"\n\nRecent logcat:\n{log[-12000:]}"
         )
+
+    def wait_for_private_file_contains(
+        self,
+        path: str,
+        needle: str,
+        timeout: float = 5.0,
+    ) -> str:
+        deadline = time.monotonic() + timeout
+        contents = ""
+        while time.monotonic() < deadline:
+            result = self.shell(
+                "run-as",
+                ANDROID_PACKAGE,
+                "cat",
+                path,
+                check=False,
+            )
+            contents = result.stdout
+            if needle in contents:
+                return contents
+            time.sleep(0.2)
+        raise AssertionError(f"{path} did not contain {needle!r}:\n{contents}")

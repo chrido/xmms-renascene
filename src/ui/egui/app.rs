@@ -19,12 +19,17 @@ use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
 use crate::app::store::AppStore;
 use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
-    formatted_current_title as shared_formatted_current_title,
-    formatted_playlist_entry_title as shared_formatted_playlist_entry_title,
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
     volume_to_eq_shaded_position,
 };
+#[cfg(target_os = "android")]
+use crate::app::view_model::{
+    formatted_current_title as shared_formatted_current_title,
+    formatted_playlist_entry_title as shared_formatted_playlist_entry_title,
+};
+#[cfg(target_os = "android")]
+use crate::app_log_error;
 use crate::app_log_info;
 use crate::app_state::AppState;
 use crate::equalizer::{load_winamp_eqf_first, load_xmms_preset_file, EqualizerPreset};
@@ -52,6 +57,8 @@ use crate::render::{
     PLAYLIST_MIN_WIDTH,
 };
 use crate::session::default_config_dir;
+#[cfg(target_os = "android")]
+use crate::session::{fallback_state_paths, load_saved_state, save_fallback_state};
 use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, playlist_footer_button_rect,
     playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
@@ -212,7 +219,14 @@ pub struct EguiFrontendState {
 
 impl EguiFrontendState {
     pub fn new(options: PreviewOptions) -> Result<Self, String> {
+        #[cfg(target_os = "android")]
+        let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
+        #[cfg(target_os = "android")]
+        let mut app_state = load_saved_state(&config_path, &playlist_path, options.reset)
+            .map_err(|err| format!("failed to load Android session state: {err}"))?;
+        #[cfg(not(target_os = "android"))]
         let mut app_state = AppState::default();
+        #[cfg(not(target_os = "android"))]
         if options.reset {
             app_state = AppState::default();
         }
@@ -354,6 +368,8 @@ impl EguiFrontendState {
         if should_index_durations {
             self.schedule_missing_local_playlist_durations();
         }
+        #[cfg(target_os = "android")]
+        self.persist_android_state();
     }
 
     pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
@@ -369,6 +385,22 @@ impl EguiFrontendState {
         self.sync_scale_factor_from_config();
         self.apply_visualization_preferences();
         self.apply_effects(result.effects);
+        #[cfg(target_os = "android")]
+        self.persist_android_state();
+    }
+
+    #[cfg(target_os = "android")]
+    fn persist_android_state(&mut self) {
+        let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
+        if let Err(err) =
+            save_fallback_state(self.controller.state_mut(), &config_path, &playlist_path)
+        {
+            app_log_error!(frontend, "failed to save Android session state", err);
+            let message = format!("failed to save Android session state: {err}");
+            if !self.runtime.pending_messages.contains(&message) {
+                self.runtime.pending_messages.push(message);
+            }
+        }
     }
 
     fn sync_frontend_state_from_store(&mut self) {

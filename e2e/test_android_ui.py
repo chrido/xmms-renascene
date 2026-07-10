@@ -18,7 +18,7 @@ def test_android_portrait_player_controls_and_panels(
     test_output: Any,
 ) -> None:
     android_device.set_portrait()
-    android_device.restart_app()
+    android_device.restart_app(reset_data=True)
     initial = android_device.screenshot(test_output.screenshot_path())
 
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
@@ -41,7 +41,7 @@ def test_android_touching_player_closes_main_menu(
     test_output: Any,
 ) -> None:
     android_device.set_portrait()
-    android_device.restart_app()
+    android_device.restart_app(reset_data=True)
     player_bounds = android_device.main_player_bounds()
 
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU], player_bounds)
@@ -65,7 +65,7 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     test_output: Any,
 ) -> None:
     android_device.set_landscape()
-    android_device.restart_app()
+    android_device.restart_app(reset_data=True)
     geometry = android_device.display_geometry()
     scale = android_device.main_player_scale()
 
@@ -81,3 +81,30 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
         "player: toggle activated, toggle_name=Repeat",
     )
     assert before.read_bytes() != after.read_bytes()
+
+
+def test_android_persists_player_configuration(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+    player_bounds = android_device.main_player_bounds()
+
+    android_device.tap_skin_rect(
+        MAIN_TOGGLE_RECTS[MainToggleButton.SHUFFLE],
+        player_bounds,
+    )
+    android_device.wait_for_private_file_contains(config_path, "shuffle=true")
+
+    android_device.restart_app()
+    player_bounds = android_device.main_player_bounds()
+    android_device.tap_skin_rect(
+        MAIN_TOGGLE_RECTS[MainToggleButton.SHUFFLE],
+        player_bounds,
+    )
+
+    android_device.assert_log_contains(
+        "player: toggle activated, toggle_name=Shuffle",
+    )
+    android_device.wait_for_private_file_contains(config_path, "shuffle=false")

@@ -441,6 +441,7 @@ fn handle_playlist_touch_scroll(
     }
 }
 
+#[cfg(target_os = "android")]
 fn scroll_playlist_rows(app: &mut EguiFrontendState, rows: i32) {
     if rows < 0 {
         app.playlist_scroll_offset = app

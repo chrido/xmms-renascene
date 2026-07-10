@@ -34,6 +34,118 @@ jobs:
             ${{ env.BUNDLE }}
             ${{ env.BUNDLE }}.sha256
 
+  android-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_API_LEVEL: "35"
+      ANDROID_BUILD_TOOLS: "35.0.0"
+      ANDROID_NDK_VERSION: "27.2.12479018"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Install Rust Android toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-release
+
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --version 0.10.0 --locked
+
+      - name: Configure APK signing
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          mkdir -p "$HOME/.android"
+          if [[ -n "$RELEASE_KEYSTORE_BASE64" ]]; then
+            if [[ -z "$RELEASE_KEYSTORE_PASSWORD" || -z "$RELEASE_KEY_ALIAS" || -z "$RELEASE_KEY_PASSWORD" ]]; then
+              echo "All Android release signing secrets must be configured together" >&2
+              exit 1
+            fi
+            KEYSTORE="$RUNNER_TEMP/xmms-renascene-release.keystore"
+            printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+            echo "CARGO_APK_RELEASE_KEYSTORE=$KEYSTORE" >> "$GITHUB_ENV"
+            echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$RELEASE_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "CARGO_APK_RELEASE_KEYSTORE_KEY_ALIAS=$RELEASE_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "CARGO_APK_RELEASE_KEY_ALIAS_PASSWORD=$RELEASE_KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -dname "CN=XMMS Renascene CI,O=XMMS Renascene,C=DE" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000
+          fi
+
+      - name: Build content-addressed Android release APK
+        run: ./repo android-apk-release
+
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xmms-renascene-android
+          path: |
+            release-assets/*.apk
+            release-assets/*.apk.sha256
+
+  publish-release:
+    name: Publish release assets
+    needs:
+      - flatpak-bundle
+      - android-apk
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Flatpak artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xmms-renascene-flatpak
+          path: release-assets
+
+      - name: Download Android APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: xmms-renascene-android
+          path: release-assets
+
+      - name: Resolve release asset names
+        id: assets
+        run: |
+          echo "bundle=$(find release-assets -maxdepth 1 -name '*.flatpack' -printf '%f\n' -quit)" >> "$GITHUB_OUTPUT"
+          echo "apk=$(find release-assets -maxdepth 1 -name '*.apk' -printf '%f\n' -quit)" >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -41,13 +153,14 @@ jobs:
           name: ${{ github.ref_type == 'tag' && github.ref_name || format('Main build {0}', github.sha) }}
           prerelease: ${{ github.ref_type != 'tag' }}
           generate_release_notes: true
-          files: |
-            ${{ env.BUNDLE }}
-            ${{ env.BUNDLE }}.sha256
+          files: release-assets/*
           body: |
-            Download `${{ env.BUNDLE }}` and install it with:
+            Download `${{ steps.assets.outputs.bundle }}` and install it with:
 
             ```sh
-            flatpak install --user ./${{ env.BUNDLE }}
+            flatpak install --user ./${{ steps.assets.outputs.bundle }}
             flatpak run org.xmms.Renascene
             ```
+
+            Download `${{ steps.assets.outputs.apk }}` for Android. Verify it
+            with the matching `.sha256` file before installing.

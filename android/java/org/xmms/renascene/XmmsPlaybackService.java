@@ -5,7 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
@@ -49,6 +52,18 @@ public final class XmmsPlaybackService extends Service {
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
     private MediaSession mediaSession;
+    private boolean resumeAfterFocusGain;
+    private boolean noisyReceiverRegistered;
+    private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())
+                    && playbackState == 1) {
+                resumeAfterFocusGain = false;
+                nativeOnMediaControl(CONTROL_PAUSE, 0);
+            }
+        }
+    };
     private final Handler playbackHandler = new Handler(Looper.getMainLooper());
     private final Runnable playbackPoll = new Runnable() {
         @Override
@@ -90,8 +105,15 @@ public final class XmmsPlaybackService extends Service {
                 .build();
         audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(attributes)
-                .setOnAudioFocusChangeListener(focusChange -> {})
+                .setOnAudioFocusChangeListener(this::handleAudioFocusChange)
                 .build();
+        IntentFilter noisyFilter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(noisyReceiver, noisyFilter, RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(noisyReceiver, noisyFilter);
+        }
+        noisyReceiverRegistered = true;
 
         mediaSession = new MediaSession(this, "XMMS Renascene");
         mediaSession.setFlags(
@@ -184,6 +206,10 @@ public final class XmmsPlaybackService extends Service {
     @Override
     public void onDestroy() {
         playbackHandler.removeCallbacks(playbackPoll);
+        if (noisyReceiverRegistered) {
+            unregisterReceiver(noisyReceiver);
+            noisyReceiverRegistered = false;
+        }
         releaseWakeLock();
         abandonAudioFocus();
         if (mediaSession != null) {
@@ -265,7 +291,25 @@ public final class XmmsPlaybackService extends Service {
         }
     }
 
+    private void handleAudioFocusChange(int focusChange) {
+        if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
+            if (resumeAfterFocusGain) {
+                resumeAfterFocusGain = false;
+                nativeOnMediaControl(CONTROL_PLAY, 0);
+            }
+            return;
+        }
+        if (playbackState != 1) {
+            return;
+        }
+        resumeAfterFocusGain =
+                focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                        || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK;
+        nativeOnMediaControl(CONTROL_PAUSE, 0);
+    }
+
     private void abandonAudioFocus() {
+        resumeAfterFocusGain = false;
         if (audioManager != null && audioFocusRequest != null) {
             audioManager.abandonAudioFocusRequest(audioFocusRequest);
         }

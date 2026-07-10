@@ -90,7 +90,8 @@ Set `XMMS_E2E_SKIP_BUILD=1` to reuse an existing `target/debug/xmms-rs` binary.
 The Android-marked tests use the managed API 35 emulator and the same custom
 APK packaging path as `./repo android-screenshot`. They exercise portrait
 transport/panel controls, menu dismissal, landscape scaling, and coordinate
-taps while writing numbered emulator screenshots and videos to `testoutput`.
+taps. They also verify that player configuration survives an Activity restart
+while writing numbered emulator screenshots and videos to `testoutput`.
 
 ```bash
 ./repo pye2e -m android

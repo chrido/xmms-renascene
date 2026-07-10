@@ -452,7 +452,7 @@ def android_device(tmp_path_factory: Any) -> Iterator[AndroidDevice]:
         device = AndroidDevice.from_environment()
     device.grant_runtime_permissions()
     device.set_portrait()
-    device.restart_app()
+    device.restart_app(reset_data=True)
     try:
         yield device
     finally:

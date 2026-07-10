@@ -130,6 +130,8 @@ struct RodioDspSource<S> {
     spectrum: RodioSpectrumCapture,
     seen_version: u64,
     preamp_gain: f32,
+    left_gain: f32,
+    right_gain: f32,
     next_channel: usize,
     frame_sum: f32,
     filters: Vec<[Biquad; EQUALIZER_BANDS]>,
@@ -148,6 +150,8 @@ where
             spectrum: RodioSpectrumCapture::new(sample_rate, visualization),
             seen_version: u64::MAX,
             preamp_gain: 1.0,
+            left_gain: 1.0,
+            right_gain: 1.0,
             next_channel: 0,
             frame_sum: 0.0,
             filters: vec![[Biquad::identity(); EQUALIZER_BANDS]; channels],
@@ -167,6 +171,7 @@ where
         }
         self.seen_version = settings.version;
         self.preamp_gain = settings.preamp_gain();
+        (self.left_gain, self.right_gain) = settings.channel_gains();
         let sample_rate = self.inner.sample_rate().get() as f32;
         let template = std::array::from_fn(|band| {
             Biquad::peaking(
@@ -195,7 +200,14 @@ where
         for filter in &mut self.filters[channel] {
             sample = filter.process(sample);
         }
-        sample = (sample * self.preamp_gain).clamp(-1.0, 1.0);
+        let channel_gain = if self.filters.len() < 2 {
+            1.0
+        } else if channel % 2 == 0 {
+            self.left_gain
+        } else {
+            self.right_gain
+        };
+        sample = (sample * self.preamp_gain * channel_gain).clamp(-1.0, 1.0);
         self.frame_sum += sample;
         self.next_channel = (channel + 1) % self.filters.len().max(1);
         if self.next_channel == 0 {
@@ -390,15 +402,17 @@ fn analyze_spectrum_window(sample_rate: f32, samples: &[f32]) -> SpectrumData {
 #[derive(Debug, Clone)]
 struct RodioDspSettings {
     version: u64,
+    balance: i32,
     active: bool,
     preamp_position: i32,
     band_positions: EqualizerBandPositions,
 }
 
 impl RodioDspSettings {
-    fn from_equalizer(state: EqualizerBackendState) -> Self {
+    fn new(state: EqualizerBackendState, balance: i32) -> Self {
         Self {
             version: 0,
+            balance: balance.clamp(-100, 100),
             active: state.active,
             preamp_position: state.preamp_position,
             band_positions: state.band_positions,
@@ -410,6 +424,20 @@ impl RodioDspSettings {
         self.active = state.active;
         self.preamp_position = state.preamp_position;
         self.band_positions = state.band_positions;
+    }
+
+    fn update_balance(&mut self, balance: i32) {
+        self.version = self.version.wrapping_add(1);
+        self.balance = balance.clamp(-100, 100);
+    }
+
+    fn channel_gains(&self) -> (f32, f32) {
+        let balance = self.balance as f32 / 100.0;
+        if balance < 0.0 {
+            (1.0, 1.0 + balance)
+        } else {
+            (1.0 - balance, 1.0)
+        }
     }
 
     fn preamp_gain(&self) -> f32 {
@@ -458,7 +486,7 @@ impl RodioBackend {
                 volume: 100,
                 balance: 0,
                 equalizer,
-                dsp_settings: Arc::new(Mutex::new(RodioDspSettings::from_equalizer(equalizer))),
+                dsp_settings: Arc::new(Mutex::new(RodioDspSettings::new(equalizer, 0))),
                 visualization,
                 visualization_generation: 0,
                 output_device,
@@ -673,7 +701,13 @@ impl PlaybackBackend for RodioBackend {
     }
 
     fn set_balance(&self, balance: i32) -> Result<(), String> {
-        self.lock_inner().balance = balance.clamp(-100, 100);
+        let mut inner = self.lock_inner();
+        inner.balance = balance.clamp(-100, 100);
+        inner
+            .dsp_settings
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .update_balance(inner.balance);
         Ok(())
     }
 
@@ -1441,6 +1475,7 @@ mod tests {
         assert_eq!(backend.equalizer(), equalizer);
         let settings = backend.lock_inner().dsp_settings.clone();
         let settings = settings.lock().unwrap();
+        assert_eq!(settings.balance, -100);
         assert!(settings.active);
         assert_eq!(settings.preamp_position, 42);
         assert_eq!(settings.band_positions, [7; EQUALIZER_BANDS]);
@@ -1453,7 +1488,7 @@ mod tests {
             preamp_position: 25,
             band_positions: [50; EQUALIZER_BANDS],
         };
-        let settings = Arc::new(Mutex::new(RodioDspSettings::from_equalizer(state)));
+        let settings = Arc::new(Mutex::new(RodioDspSettings::new(state, 0)));
         let source = rodio::buffer::SamplesBuffer::new(
             std::num::NonZero::new(1).unwrap(),
             std::num::NonZero::new(44_100).unwrap(),
@@ -1468,6 +1503,28 @@ mod tests {
             sample > 0.25,
             "expected +10 dB preamp to boost sample, got {sample}"
         );
+    }
+
+    #[test]
+    fn rodio_dsp_source_applies_stereo_balance() {
+        let settings = Arc::new(Mutex::new(RodioDspSettings::new(
+            EqualizerBackendState {
+                active: false,
+                preamp_position: 50,
+                band_positions: [50; EQUALIZER_BANDS],
+            },
+            -100,
+        )));
+        let source = rodio::buffer::SamplesBuffer::new(
+            std::num::NonZero::new(2).unwrap(),
+            std::num::NonZero::new(44_100).unwrap(),
+            vec![0.5, 0.5],
+        );
+        let visualization = Arc::new(Mutex::new(RodioVisualization::new()));
+        let samples = RodioDspSource::new(source, settings, visualization).collect::<Vec<_>>();
+
+        assert!((samples[0] - 0.5).abs() < 0.001);
+        assert!(samples[1].abs() < 0.001);
     }
 
     #[test]
@@ -1491,7 +1548,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let make_source = |state| {
-            let settings = Arc::new(Mutex::new(RodioDspSettings::from_equalizer(state)));
+            let settings = Arc::new(Mutex::new(RodioDspSettings::new(state, 0)));
             let source = rodio::buffer::SamplesBuffer::new(
                 std::num::NonZero::new(1).unwrap(),
                 std::num::NonZero::new(44_100).unwrap(),
