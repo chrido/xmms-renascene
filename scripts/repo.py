@@ -498,8 +498,28 @@ class RepoTool:
         manifest_apk = work_dir / "manifest.apk"
         resource_dir = work_dir / "res"
         drawable_dir = resource_dir / "drawable"
+        xml_dir = resource_dir / "xml"
         drawable_dir.mkdir(parents=True)
+        xml_dir.mkdir()
         shutil.copy2(REPO_DIR / "data" / "org.xmms.Renascene.png", drawable_dir / "icon.png")
+        (xml_dir / "automotive_app_desc.xml").write_text(
+            """<?xml version="1.0" encoding="utf-8"?>
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>
+""",
+            encoding="utf-8",
+        )
+        debug_probe_activity = (
+            """
+        <activity
+            android:name=".XmmsAutoProbeActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+"""
+            if not release
+            else ""
+        )
         manifest_source.write_text(
             f"""<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -512,11 +532,15 @@ class RepoTool:
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <application
+        android:appCategory="audio"
         android:debuggable="{"false" if release else "true"}"
         android:hasCode="true"
         android:icon="@drawable/icon"
         android:label="XMMS Renascene"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         <activity
             android:name="{ANDROID_ACTIVITY}"
             android:configChanges="orientation|keyboardHidden|screenSize"
@@ -529,11 +553,16 @@ class RepoTool:
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+{debug_probe_activity}
         <service
             android:name=".XmmsPlaybackService"
-            android:exported="false"
+            android:exported="true"
             android:foregroundServiceType="mediaPlayback"
-            android:stopWithTask="false" />
+            android:stopWithTask="false">
+            <intent-filter>
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>
 """,

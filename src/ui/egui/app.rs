@@ -1164,6 +1164,14 @@ impl EguiFrontendState {
                 }));
                 continue;
             }
+            if let super::android_file_picker::AndroidMediaControl::PlayMediaItem(index) = control {
+                let result = self
+                    .controller
+                    .dispatch(PlaylistCommand::SetPosition(index));
+                self.sync_frontend_state_from_store();
+                self.apply_effects(result.effects);
+                continue;
+            }
             let command = match control {
                 super::android_file_picker::AndroidMediaControl::PausePlayback => {
                     PlayerCommand::Pause
@@ -1180,6 +1188,7 @@ impl EguiFrontendState {
                 super::android_file_picker::AndroidMediaControl::SeekToMs(position_ms) => {
                     PlayerCommand::SeekToMs(position_ms)
                 }
+                super::android_file_picker::AndroidMediaControl::PlayMediaItem(_) => unreachable!(),
                 super::android_file_picker::AndroidMediaControl::StopPlayback => {
                     PlayerCommand::Stop
                 }
@@ -1228,11 +1237,25 @@ impl EguiFrontendState {
             .unwrap_or(self.controller.state().config.playback_position_ms)
             .max(0);
         let has_entries = !self.controller.state().playlist.is_empty();
+        let current_index = self
+            .controller
+            .state()
+            .playlist
+            .position()
+            .map_or(-1, |index| index as i64);
+        let playlist_len = self
+            .controller
+            .state()
+            .playlist
+            .len()
+            .min(i32::MAX as usize) as i32;
         if let Err(err) = super::android_file_picker::update_playback_notification(
             state,
             &title,
             duration_ms,
             position_ms,
+            current_index,
+            playlist_len,
             has_entries,
             has_entries,
         ) {

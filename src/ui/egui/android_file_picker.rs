@@ -1,10 +1,10 @@
 //! Android Storage Access Framework bridge for the egui frontend.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JValue};
-use jni::sys::{jint, jlong, jobjectArray};
+use jni::sys::{jint, jlong, jobjectArray, jstring};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::effect::FileDialogRequest;
@@ -12,6 +12,7 @@ use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{PlaybackEvent, PlayerState};
 use crate::playback::rodio::RodioBackend;
 use crate::playlist::Playlist;
+use crate::session::{fallback_state_paths, load_saved_state};
 
 struct AndroidPickerContext {
     vm: JavaVM,
@@ -31,6 +32,7 @@ pub enum AndroidMediaControl {
     NextTrack,
     PreviousTrack,
     SeekToMs(i64),
+    PlayMediaItem(usize),
     StopPlayback,
     PlaylistEof,
 }
@@ -40,6 +42,8 @@ struct AndroidMediaNotification {
     state: i32,
     title: String,
     duration_ms: i64,
+    current_index: i64,
+    playlist_len: i32,
     has_previous: bool,
     has_next: bool,
 }
@@ -221,6 +225,8 @@ pub fn update_playback_notification(
     title: &str,
     duration_ms: i64,
     position_ms: i64,
+    current_index: i64,
+    playlist_len: i32,
     has_previous: bool,
     has_next: bool,
 ) -> Result<(), String> {
@@ -228,6 +234,8 @@ pub fn update_playback_notification(
         state,
         title: title.to_string(),
         duration_ms,
+        current_index,
+        playlist_len,
         has_previous,
         has_next,
     };
@@ -252,12 +260,14 @@ pub fn update_playback_notification(
     env.call_method(
         context.activity.as_obj(),
         "updatePlaybackNotification",
-        "(ILjava/lang/String;JJZZ)V",
+        "(ILjava/lang/String;JJJIZZ)V",
         &[
             JValue::Int(state),
             JValue::Object(&title),
             JValue::Long(duration_ms),
             JValue::Long(position_ms),
+            JValue::Long(current_index),
+            JValue::Int(playlist_len),
             JValue::Bool(has_previous.into()),
             JValue::Bool(has_next.into()),
         ],
@@ -434,9 +444,130 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeOnMedia
         4 => AndroidMediaControl::PreviousTrack,
         5 => AndroidMediaControl::SeekToMs(value.max(0)),
         6 => AndroidMediaControl::StopPlayback,
+        7 => AndroidMediaControl::PlayMediaItem(value.max(0) as usize),
         _ => return,
     };
     handle_android_media_control(env, Some(service), control);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeInitializeMediaLibrary(
+    mut env: JNIEnv,
+    _service: JObject,
+    files_dir: JString,
+    cache_dir: JString,
+) {
+    let Ok(files_dir) = env
+        .get_string(&files_dir)
+        .map(|value| PathBuf::from(value.to_string_lossy().into_owned()))
+    else {
+        return;
+    };
+    let Ok(cache_dir) = env
+        .get_string(&cache_dir)
+        .map(|value| PathBuf::from(value.to_string_lossy().into_owned()))
+    else {
+        return;
+    };
+    std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
+    std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
+    if MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .is_some()
+    {
+        return;
+    }
+    let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
+    match load_saved_state(&config_path, &playlist_path, false) {
+        Ok(state) => {
+            let titles = state
+                .playlist
+                .entries()
+                .iter()
+                .map(|entry| media_item_title(&entry.title, &entry.filename))
+                .collect();
+            sync_media_playlist(&state.playlist, titles);
+        }
+        Err(err) => eprintln!("xmms-rs: failed to load Android Auto media library: {err}"),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeMediaItemCount(
+    _env: JNIEnv,
+    _service: JObject,
+) -> jint {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .map_or(0, |shared| {
+            shared.playlist.len().min(jint::MAX as usize) as jint
+        })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeMediaItemTitle(
+    env: JNIEnv,
+    _service: JObject,
+    index: jint,
+) -> jstring {
+    if index < 0 {
+        return std::ptr::null_mut();
+    }
+    let title = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .and_then(|shared| {
+            let entry = shared.playlist.entries().get(index as usize)?;
+            Some(
+                shared
+                    .titles
+                    .get(index as usize)
+                    .cloned()
+                    .unwrap_or_else(|| media_item_title(&entry.title, &entry.filename)),
+            )
+        });
+    title
+        .and_then(|title| env.new_string(title).ok())
+        .map_or(std::ptr::null_mut(), JString::into_raw)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeMediaItemDurationMs(
+    _env: JNIEnv,
+    _service: JObject,
+    index: jint,
+) -> jlong {
+    if index < 0 {
+        return -1;
+    }
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .and_then(|shared| shared.playlist.entries().get(index as usize))
+        .map_or(-1, |entry| entry.length_ms)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeCurrentMediaItemIndex(
+    _env: JNIEnv,
+    _service: JObject,
+) -> jlong {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .and_then(|shared| shared.playlist.position())
+        .map_or(-1, |position| position.min(jlong::MAX as usize) as jlong)
 }
 
 #[unsafe(no_mangle)]
@@ -535,6 +666,7 @@ fn execute_android_media_control(control: AndroidMediaControl) -> Result<(), Str
         AndroidMediaControl::NextTrack => change_media_track(true, &backend),
         AndroidMediaControl::PreviousTrack => change_media_track(false, &backend),
         AndroidMediaControl::SeekToMs(position_ms) => backend.seek(position_ms),
+        AndroidMediaControl::PlayMediaItem(index) => play_media_item(index, &backend),
         AndroidMediaControl::StopPlayback => backend.stop(),
         AndroidMediaControl::PlaylistEof => Ok(()),
     }
@@ -590,6 +722,40 @@ fn change_media_track(next: bool, backend: &RodioBackend) -> Result<(), String> 
     Ok(())
 }
 
+fn play_media_item(index: usize, backend: &RodioBackend) -> Result<(), String> {
+    let mut shared = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let current = shared
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "Android media playlist is unavailable".to_string())?;
+    let mut updated = current;
+    let uri = updated
+        .playlist
+        .entries()
+        .get(index)
+        .map(|entry| entry.filename.clone())
+        .ok_or_else(|| format!("Android media item index {index} is out of range"))?;
+    updated.playlist.set_position(index);
+    backend.play_uri(&uri)?;
+    *shared = Some(updated);
+    Ok(())
+}
+
+fn media_item_title(title: &str, filename: &str) -> String {
+    if !title.trim().is_empty() {
+        return title.to_string();
+    }
+    Path::new(filename)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Unknown track")
+        .to_string()
+}
+
 fn current_media_entry() -> Option<(String, String, i64)> {
     let shared = MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(None))
@@ -627,24 +793,32 @@ fn update_service_from_backend(env: &mut JNIEnv, service: JObject) {
         .or_else(|| backend.duration_ms())
         .unwrap_or(-1);
     let position_ms = backend.position_ms().unwrap_or(0).max(0);
-    let has_entries = MEDIA_PLAYLIST
+    let (current_index, playlist_len) = MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .as_ref()
-        .is_some_and(|shared| !shared.playlist.is_empty());
+        .map_or((-1, 0), |shared| {
+            (
+                shared.playlist.position().map_or(-1, |index| index as i64),
+                shared.playlist.len().min(i32::MAX as usize) as i32,
+            )
+        });
+    let has_entries = playlist_len > 0;
     let Ok(title) = env.new_string(title) else {
         return;
     };
     let _ = env.call_method(
         service,
         "applyNativePlaybackState",
-        "(ILjava/lang/String;JJZZ)V",
+        "(ILjava/lang/String;JJJIZZ)V",
         &[
             JValue::Int(state),
             JValue::Object(&title),
             JValue::Long(duration_ms),
             JValue::Long(position_ms),
+            JValue::Long(current_index),
+            JValue::Int(playlist_len),
             JValue::Bool(has_entries.into()),
             JValue::Bool(has_entries.into()),
         ],

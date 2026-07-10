@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import re
+import shlex
 import subprocess
 import time
 from io import BytesIO
@@ -17,6 +19,9 @@ from gui import BASE_MAIN_WIDTH, SkinRect
 
 ANDROID_PACKAGE = "org.xmms.renascene"
 ANDROID_ACTIVITY = f"{ANDROID_PACKAGE}/org.xmms.renascene.XmmsActivity"
+ANDROID_AUTO_PROBE_ACTIVITY = (
+    f"{ANDROID_PACKAGE}/org.xmms.renascene.XmmsAutoProbeActivity"
+)
 MAIN_PLAYER_BASE_HEIGHT = 116
 
 
@@ -87,6 +92,9 @@ class AndroidDevice:
     def shell(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         return self.command("shell", *args, check=check)
 
+    def clear_logcat(self) -> None:
+        self.command("logcat", "-c", check=False)
+
     def require_running_emulator(self) -> None:
         devices = self.command("devices").stdout
         if not any(
@@ -107,6 +115,19 @@ class AndroidDevice:
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(f"Could not install existing Android APK: {detail}")
 
+    def apk_xmltree(self, resource: str) -> str:
+        build_tools = os.environ.get("ANDROID_BUILD_TOOLS", "35.0.0")
+        aapt = self.adb.parents[1] / "build-tools" / build_tools / "aapt"
+        apk = Path(__file__).resolve().parents[1] / "target/debug/apk/xmms-renascene.apk"
+        if not aapt.is_file():
+            raise RuntimeError(f"Android aapt was not found at {aapt}")
+        return subprocess.run(
+            [str(aapt), "dump", "xmltree", str(apk), resource],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+
     def grant_runtime_permissions(self) -> None:
         self.shell(
             "pm",
@@ -124,7 +145,7 @@ class AndroidDevice:
         if reset_data:
             self.shell("pm", "clear", ANDROID_PACKAGE)
             self.grant_runtime_permissions()
-        self.command("logcat", "-c", check=False)
+        self.clear_logcat()
         self.shell("am", "start", "-W", "-n", ANDROID_ACTIVITY)
         self.wait_for_app()
 
@@ -277,3 +298,15 @@ class AndroidDevice:
                 return contents
             time.sleep(0.2)
         raise AssertionError(f"{path} did not contain {needle!r}:\n{contents}")
+
+    def write_private_file(self, path: str, contents: str) -> None:
+        encoded = base64.b64encode(contents.encode("utf-8")).decode("ascii")
+        parent = str(Path(path).parent)
+        script = (
+            f"mkdir -p {shlex.quote(parent)} && "
+            f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
+        )
+        self.command(
+            "shell",
+            f"run-as {shlex.quote(ANDROID_PACKAGE)} sh -c {shlex.quote(script)}",
+        )

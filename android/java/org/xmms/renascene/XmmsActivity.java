@@ -171,6 +171,8 @@ public final class XmmsActivity extends NativeActivity {
             String title,
             long durationMs,
             long positionMs,
+            long currentIndex,
+            int playlistSize,
             boolean hasPrevious,
             boolean hasNext) {
         runOnUiThread(() -> {
@@ -180,6 +182,8 @@ public final class XmmsActivity extends NativeActivity {
                     .putExtra(XmmsPlaybackService.EXTRA_TITLE, title)
                     .putExtra(XmmsPlaybackService.EXTRA_DURATION_MS, durationMs)
                     .putExtra(XmmsPlaybackService.EXTRA_POSITION_MS, positionMs)
+                    .putExtra(XmmsPlaybackService.EXTRA_CURRENT_INDEX, currentIndex)
+                    .putExtra(XmmsPlaybackService.EXTRA_PLAYLIST_SIZE, playlistSize)
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_PREVIOUS, hasPrevious)
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_NEXT, hasNext);
             if (state == 0) {
