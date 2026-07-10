@@ -1,5 +1,6 @@
 //! eframe application lifecycle for the egui frontend.
 
+#[cfg(feature = "desktop-egui")]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -8,8 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::app::command::{
-    AppCommand, AudioCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
-    UiCommand,
+    AppCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand, UiCommand,
 };
 use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
@@ -25,18 +25,23 @@ use crate::app::view_model::{
 };
 use crate::app_log_info;
 use crate::app_state::AppState;
+#[cfg(feature = "desktop-egui")]
 use crate::equalizer::{
     load_winamp_eqf_first, load_xmms_preset_file, save_winamp_eqf, save_xmms_preset_file,
     EqualizerPreset,
 };
+#[cfg(feature = "desktop-egui")]
 use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
+#[cfg(feature = "desktop-egui")]
 use crate::mpris::{
     app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
 use crate::playback::backend::{create_backend, PlaybackBackend, PlaybackBackendKind};
 use crate::playback::model::{EqualizerBackendState, PlaybackEvent, PlayerState};
 use crate::playlist::file_uri_to_path;
-use crate::playlist::{DurationIndexResult, Playlist};
+use crate::playlist::DurationIndexResult;
+#[cfg(feature = "desktop-egui")]
+use crate::playlist::Playlist;
 use crate::render::{
     docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
     EqualizerControl, EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider,
@@ -157,6 +162,7 @@ pub struct EguiFrontendState {
     duration_index_sender: Sender<DurationIndexResult>,
     duration_index_receiver: Receiver<DurationIndexResult>,
     socket_control: Option<SocketControl>,
+    #[cfg(feature = "desktop-egui")]
     mpris_service: Option<EguiMprisService>,
     controller: AppStore,
     playback_backend: Option<Box<dyn PlaybackBackend>>,
@@ -187,13 +193,16 @@ impl EguiFrontendState {
         )));
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
         let socket_control = options.socket_port.map(start_socket_control).transpose()?;
-        let initial_mpris_player_properties =
-            mpris_player_properties(&app_state, app_state.config.playback_position_ms);
-        let mpris_service = match EguiMprisService::new(initial_mpris_player_properties) {
-            Ok(service) => Some(service),
-            Err(err) => {
-                app_log_debug!(mpris, "egui MPRIS service unavailable", err);
-                None
+        #[cfg(feature = "desktop-egui")]
+        let mpris_service = {
+            let initial_properties =
+                mpris_player_properties(&app_state, app_state.config.playback_position_ms);
+            match EguiMprisService::new(initial_properties) {
+                Ok(service) => Some(service),
+                Err(err) => {
+                    app_log_debug!(mpris, "egui MPRIS service unavailable", err);
+                    None
+                }
             }
         };
         let playlist_size = options
@@ -239,6 +248,7 @@ impl EguiFrontendState {
             duration_index_sender,
             duration_index_receiver,
             socket_control,
+            #[cfg(feature = "desktop-egui")]
             mpris_service,
             controller: AppStore::new(app_state),
             playback_backend: create_backend(PlaybackBackendKind::Auto).ok(),
@@ -394,6 +404,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn current_mpris_player_properties(&self) -> crate::mpris::MprisPlayerProperties {
         mpris_player_properties(
             self.controller.state(),
@@ -401,6 +412,7 @@ impl EguiFrontendState {
         )
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn sync_mpris_properties(&mut self, extra_events: impl IntoIterator<Item = MprisEvent>) {
         let properties = self.current_mpris_player_properties();
         if let Some(service) = &mut self.mpris_service {
@@ -410,6 +422,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn poll_mpris_requests(&mut self, ctx: &egui::Context) {
         let requests = self
             .mpris_service
@@ -428,6 +441,7 @@ impl EguiFrontendState {
         ctx.request_repaint();
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn handle_mpris_request(
         &mut self,
         ctx: &egui::Context,
@@ -436,12 +450,15 @@ impl EguiFrontendState {
         match request {
             MprisServiceRequest::Command(command) => self.handle_mpris_command(ctx, command),
             MprisServiceRequest::SetVolume(volume) => {
-                self.dispatch(AudioCommand::SetVolume((volume * 100.0) as i32));
+                self.dispatch(crate::app::command::AudioCommand::SetVolume(
+                    (volume * 100.0) as i32,
+                ));
                 vec![MprisEvent::PlaybackStatusChanged]
             }
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn handle_mpris_command(
         &mut self,
         ctx: &egui::Context,
@@ -491,6 +508,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn open_mpris_uri(&mut self, uri: String) -> bool {
         self.dispatch(PlaylistCommand::Clear);
         self.dispatch(PlaylistCommand::AddLocations(vec![uri]));
@@ -781,6 +799,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn handle_file_dialog(&mut self, request: FileDialogRequest) {
         match request {
             FileDialogRequest::AddAudioFiles => {
@@ -843,6 +862,14 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(not(feature = "desktop-egui"))]
+    fn handle_file_dialog(&mut self, _request: FileDialogRequest) {
+        self.runtime
+            .pending_messages
+            .push("Android file picking is not implemented yet".to_string());
+    }
+
+    #[cfg(feature = "desktop-egui")]
     fn load_playlist_file(&mut self, path: &Path) {
         match Playlist::load_m3u_file(path) {
             Ok(playlist) => {
@@ -859,6 +886,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn save_playlist_file(&mut self, path: &Path) {
         if let Err(err) = self.controller.state().playlist.save_m3u_file(path) {
             self.runtime.pending_messages.push(format!(
@@ -868,6 +896,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn load_equalizer_preset_file(&mut self, path: &Path) {
         let loaded = if is_winamp_eqf(path) {
             load_winamp_eqf_first(path)
@@ -887,6 +916,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn save_equalizer_preset_file(&mut self, path: &Path) {
         let preset = self.current_equalizer_preset(if is_winamp_eqf(path) {
             "Entry1"
@@ -906,6 +936,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn current_equalizer_preset(&self, name: &str) -> EqualizerPreset {
         let config = &self.controller.state().config;
         EqualizerPreset::from_positions(
@@ -915,6 +946,7 @@ impl EguiFrontendState {
         )
     }
 
+    #[cfg(feature = "desktop-egui")]
     fn apply_equalizer_preset(&mut self, preset: &EqualizerPreset) {
         let result = self
             .controller
@@ -924,6 +956,7 @@ impl EguiFrontendState {
     }
 }
 
+#[cfg(feature = "desktop-egui")]
 fn is_winamp_eqf(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -982,6 +1015,7 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_socket_control(ctx);
+        #[cfg(feature = "desktop-egui")]
         self.poll_mpris_requests(ctx);
         self.poll_playback_backend();
         if self.poll_duration_index_results() {
@@ -990,7 +1024,9 @@ impl eframe::App for EguiFrontendState {
         self.tick_playback_position(ctx);
         handle_dropped_files(ctx, self);
         handle_global_shortcuts(ctx, self);
+        #[cfg(feature = "desktop-egui")]
         self.sync_mpris_properties(std::iter::empty());
+        #[cfg(not(target_os = "android"))]
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
     }
 
@@ -2297,6 +2333,23 @@ pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
     .map_err(|err| format!("failed to start egui frontend: {err}"))
 }
 
+#[cfg(target_os = "android")]
+pub fn run_egui_frontend_android(
+    options: PreviewOptions,
+    android_app: winit::platform::android::activity::AndroidApp,
+) -> Result<(), String> {
+    let app = EguiFrontendState::new(options)?;
+    eframe::run_native(
+        "XMMS Renascene",
+        eframe::NativeOptions {
+            android_app: Some(android_app),
+            ..eframe::NativeOptions::default()
+        },
+        Box::new(|_cc| Ok(Box::new(app))),
+    )
+    .map_err(|err| format!("failed to start Android egui frontend: {err}"))
+}
+
 fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendState) {
     let mut open = app.skin_browser_open;
     egui::Window::new("Skin selector")
@@ -2365,6 +2418,7 @@ fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {
     }
 }
 
+#[cfg(feature = "desktop-egui")]
 fn import_skin_from_dialog(app: &mut EguiFrontendState) {
     let Some(path) = rfd::FileDialog::new().set_title("Add skin").pick_file() else {
         return;
@@ -2390,6 +2444,14 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
     }
 }
 
+#[cfg(not(feature = "desktop-egui"))]
+fn import_skin_from_dialog(app: &mut EguiFrontendState) {
+    app.runtime
+        .pending_messages
+        .push("Android skin importing is not implemented yet".to_string());
+}
+
+#[cfg(feature = "desktop-egui")]
 fn import_skin_to_user_dir(source: &Path) -> std::io::Result<PathBuf> {
     let user_skin_dir = default_config_dir().join("xmms").join("Skins");
     fs::create_dir_all(&user_skin_dir)?;
@@ -2408,6 +2470,7 @@ fn import_skin_to_user_dir(source: &Path) -> std::io::Result<PathBuf> {
     Ok(destination)
 }
 
+#[cfg(feature = "desktop-egui")]
 fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {

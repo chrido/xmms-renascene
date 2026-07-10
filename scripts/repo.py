@@ -26,6 +26,11 @@ E2E_REQUIREMENTS = E2E_DIR / "requirements.txt"
 E2E_CREATE_VENV = E2E_DIR / "create_venv.py"
 E2E_DOCKERFILE = E2E_DIR / "Dockerfile"
 E2E_DOCKER_IMAGE = "xmms-renascene-pye2e"
+ANDROID_SDK = Path(
+    os.environ.get("ANDROID_HOME", str(Path.home() / ".local" / "share" / "android-sdk"))
+)
+ANDROID_NDK_VERSION = "27.2.12479018"
+ANDROID_TARGET = "aarch64-linux-android"
 SCREENSHOT_SCENARIOS: dict[str, tuple[str, ...]] = {
     "main-player-default": ("--reset", "--screenshot-scenario", "main-player-default"),
     "main-player-shaded": ("--reset", "--shade-main", "--screenshot-scenario", "main-player-shaded"),
@@ -210,6 +215,23 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
 
 
 class RepoTool:
+    def _android_environment(self) -> dict[str, str]:
+        sdk = ANDROID_SDK
+        ndk = Path(os.environ.get("ANDROID_NDK_HOME", str(sdk / "ndk" / ANDROID_NDK_VERSION)))
+        if not sdk.is_dir():
+            raise RuntimeError(
+                f"Android SDK not found at {sdk}; set ANDROID_HOME or install it there"
+            )
+        if not ndk.is_dir():
+            raise RuntimeError(
+                f"Android NDK {ANDROID_NDK_VERSION} not found at {ndk}; "
+                "set ANDROID_NDK_HOME or install the pinned NDK"
+            )
+        env = os.environ.copy()
+        env["ANDROID_HOME"] = str(sdk)
+        env["ANDROID_NDK_HOME"] = str(ndk)
+        return env
+
     def _build_selected_app(self) -> None:
         self._build_app("gtk", "gstreamer")
 
@@ -412,6 +434,51 @@ class RepoTool:
         self._build_frontend_unless_skipped(frontend, audio_backend)
         self._exec_app(app_args)
         return 0
+
+    async def android_check(self) -> int:
+        """Cross-check the Android eframe and rodio application library."""
+        os.chdir(REPO_DIR)
+        command = [
+            "cargo",
+            "check",
+            "--target",
+            ANDROID_TARGET,
+            "--no-default-features",
+            "--features",
+            "mobile-ui",
+            "--lib",
+        ]
+        logging.info("Checking Android build: %s", " ".join(command))
+        return subprocess.run(command, cwd=REPO_DIR, check=False).returncode
+
+    async def android_apk_debug(self) -> int:
+        """Build the signed arm64 debug APK with cargo-apk."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+        except RuntimeError as err:
+            logging.error("%s", err)
+            return 1
+        command = [
+            "cargo",
+            "apk",
+            "build",
+            "--target",
+            ANDROID_TARGET,
+            "--no-default-features",
+            "--features",
+            "mobile-ui",
+            "--lib",
+        ]
+        logging.info("Building Android APK: %s", " ".join(command))
+        result = subprocess.run(command, cwd=REPO_DIR, env=env, check=False)
+        if result.returncode == 0:
+            logging.info(
+                "Android APK written to %s",
+                REPO_DIR / "target" / "debug" / "apk" / "xmms-renascene.apk",
+            )
+        return result.returncode
 
     async def screenshot(self, *args: str) -> int:
         """Capture a root-window screenshot after starting the selected frontend."""
