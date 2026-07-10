@@ -251,22 +251,24 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     private int calculateSafeInset(WindowInsets insets, int side) {
-        int safeInset;
+        int safeInset = 0;
         if (Build.VERSION.SDK_INT >= 30) {
-            android.graphics.Insets systemBars = insets.getInsetsIgnoringVisibility(
-                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            android.graphics.Insets cutout = insets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.displayCutout());
+            android.graphics.Insets navigation = insets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.navigationBars());
             switch (side) {
                 case 0:
-                    safeInset = systemBars.left;
+                    safeInset = Math.max(cutout.left, navigation.left);
                     break;
                 case 1:
-                    safeInset = systemBars.top;
+                    safeInset = cutout.top;
                     break;
                 case 2:
-                    safeInset = systemBars.right;
+                    safeInset = Math.max(cutout.right, navigation.right);
                     break;
                 case 3:
-                    safeInset = systemBars.bottom;
+                    safeInset = Math.max(cutout.bottom, navigation.bottom);
                     break;
                 default:
                     return 0;
@@ -277,7 +279,6 @@ public final class XmmsActivity extends NativeActivity {
                     safeInset = insets.getStableInsetLeft();
                     break;
                 case 1:
-                    safeInset = insets.getStableInsetTop();
                     break;
                 case 2:
                     safeInset = insets.getStableInsetRight();
@@ -314,31 +315,66 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     private int roundedCornerInset(WindowInsets insets, int side) {
-        if (Build.VERSION.SDK_INT < 31
-                || getWindow().getDecorView().getWidth()
-                        > getWindow().getDecorView().getHeight()) {
+        if (Build.VERSION.SDK_INT < 31) {
             return 0;
         }
+        int width = getWindow().getDecorView().getWidth();
+        int height = getWindow().getDecorView().getHeight();
+        boolean landscape = width > height;
         RoundedCorner first;
         RoundedCorner second;
         switch (side) {
             case 0:
-                return 0;
+                if (!landscape) {
+                    return 0;
+                }
+                first = insets.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT);
+                second = insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT);
+                return Math.max(leftCornerInset(first), leftCornerInset(second));
             case 1:
+                if (landscape) {
+                    return 0;
+                }
                 first = insets.getRoundedCorner(RoundedCorner.POSITION_TOP_LEFT);
                 second = insets.getRoundedCorner(RoundedCorner.POSITION_TOP_RIGHT);
                 return Math.max(topCornerInset(first), topCornerInset(second));
             case 2:
-                return 0;
+                if (!landscape) {
+                    return 0;
+                }
+                first = insets.getRoundedCorner(RoundedCorner.POSITION_TOP_RIGHT);
+                second = insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT);
+                return Math.max(
+                        rightCornerInset(first, width),
+                        rightCornerInset(second, width));
             case 3:
-                return 0;
+                if (landscape) {
+                    return 0;
+                }
+                first = insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_LEFT);
+                second = insets.getRoundedCorner(RoundedCorner.POSITION_BOTTOM_RIGHT);
+                return Math.max(
+                        bottomCornerInset(first, height),
+                        bottomCornerInset(second, height));
             default:
                 return 0;
         }
     }
 
+    private int leftCornerInset(RoundedCorner corner) {
+        return corner == null ? 0 : corner.getCenter().x;
+    }
+
     private int topCornerInset(RoundedCorner corner) {
-        return corner == null ? 0 : corner.getCenter().y + corner.getRadius();
+        return corner == null ? 0 : corner.getCenter().y;
+    }
+
+    private int rightCornerInset(RoundedCorner corner, int width) {
+        return corner == null ? 0 : Math.max(0, width - corner.getCenter().x);
+    }
+
+    private int bottomCornerInset(RoundedCorner corner, int height) {
+        return corner == null ? 0 : Math.max(0, height - corner.getCenter().y);
     }
 
     @Override

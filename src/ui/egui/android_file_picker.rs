@@ -1,18 +1,24 @@
 //! Android Storage Access Framework bridge for the egui frontend.
 
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jint, jlong, jobjectArray, jstring};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::effect::FileDialogRequest;
+use crate::app_state::AppState;
+use crate::config::Config;
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{PlaybackEvent, PlayerState};
 use crate::playback::rodio::RodioBackend;
 use crate::playlist::Playlist;
-use crate::session::{fallback_state_paths, load_saved_state};
+use crate::session::{
+    default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
+};
 
 struct AndroidPickerContext {
     vm: JavaVM,
@@ -62,14 +68,18 @@ pub struct AndroidSystemInsets {
     pub bottom: i32,
 }
 
-static CONTEXT: OnceLock<AndroidPickerContext> = OnceLock::new();
+static CONTEXT: OnceLock<Mutex<Option<AndroidPickerContext>>> = OnceLock::new();
 static RESULTS: OnceLock<Mutex<Vec<AndroidPickerResult>>> = OnceLock::new();
 static MEDIA_CONTROLS: OnceLock<Mutex<Vec<AndroidMediaControl>>> = OnceLock::new();
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
 static SERVICE_PLAYBACK_EVENTS: OnceLock<Mutex<Vec<PlaybackEvent>>> = OnceLock::new();
-static REPAINT_CONTEXT: OnceLock<egui::Context> = OnceLock::new();
+static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
+static STATE_IO: OnceLock<Mutex<()>> = OnceLock::new();
+static LAST_POSITION_CHECKPOINT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+const POSITION_CHECKPOINT_INTERVAL: Duration = Duration::from_secs(10);
 
 pub fn initialize(app: &winit::platform::android::activity::AndroidApp) -> Result<(), String> {
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }
@@ -86,10 +96,44 @@ pub fn initialize(app: &winit::platform::android::activity::AndroidApp) -> Resul
     std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
     std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
     drop(env);
-    CONTEXT
-        .set(AndroidPickerContext { vm, activity })
-        .map_err(|_| "Android file picker was initialized more than once".to_string())?;
+    *CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(AndroidPickerContext { vm, activity });
+    *REPAINT_CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *MEDIA_NOTIFICATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    RESULTS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clear();
     Ok(())
+}
+
+pub fn persist_app_state(state: &mut AppState) -> io::Result<()> {
+    let _state_io = STATE_IO
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
+    save_fallback_state(state, &config_path, &playlist_path)
+}
+
+fn android_context() -> Result<MutexGuard<'static, Option<AndroidPickerContext>>, String> {
+    let context = CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if context.is_none() {
+        return Err("Android activity is not initialized".to_string());
+    }
+    Ok(context)
 }
 
 fn android_activity_directory(
@@ -115,8 +159,9 @@ fn android_activity_directory(
 
 pub fn open(request: FileDialogRequest) -> Result<(), String> {
     if request == FileDialogRequest::AddAudioDirectory {
-        let context = CONTEXT
-            .get()
+        let context = android_context()?;
+        let context = context
+            .as_ref()
             .ok_or_else(|| "Android file picker is not initialized".to_string())?;
         let mut env = context
             .vm
@@ -145,8 +190,9 @@ pub fn open(request: FileDialogRequest) -> Result<(), String> {
             );
         }
     };
-    let context = CONTEXT
-        .get()
+    let context = android_context()?;
+    let context = context
+        .as_ref()
         .ok_or_else(|| "Android file picker is not initialized".to_string())?;
     let mut env = context
         .vm
@@ -178,7 +224,10 @@ pub fn drain_results() -> Vec<AndroidPickerResult> {
 }
 
 pub fn register_repaint_context(context: &egui::Context) {
-    let _ = REPAINT_CONTEXT.set(context.clone());
+    *REPAINT_CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(context.clone());
 }
 
 pub fn drain_media_controls() -> Vec<AndroidMediaControl> {
@@ -247,8 +296,9 @@ pub fn update_playback_notification(
         return Ok(());
     }
 
-    let context = CONTEXT
-        .get()
+    let context = android_context()?;
+    let context = context
+        .as_ref()
         .ok_or_else(|| "Android activity is not initialized".to_string())?;
     let mut env = context
         .vm
@@ -278,8 +328,9 @@ pub fn update_playback_notification(
 }
 
 pub fn complete_media_control() -> Result<(), String> {
-    let context = CONTEXT
-        .get()
+    let context = android_context()?;
+    let context = context
+        .as_ref()
         .ok_or_else(|| "Android activity is not initialized".to_string())?;
     let mut env = context
         .vm
@@ -296,7 +347,10 @@ pub fn complete_media_control() -> Result<(), String> {
 }
 
 pub fn system_insets_pixels() -> AndroidSystemInsets {
-    let Some(context) = CONTEXT.get() else {
+    let Ok(context) = android_context() else {
+        return AndroidSystemInsets::default();
+    };
+    let Some(context) = context.as_ref() else {
         return AndroidSystemInsets::default();
     };
     let Ok(mut env) = context.vm.attach_current_thread() else {
@@ -322,8 +376,9 @@ pub fn system_insets_pixels() -> AndroidSystemInsets {
 }
 
 pub fn request_playback_audio_focus() -> Result<(), String> {
-    let context = CONTEXT
-        .get()
+    let context = android_context()?;
+    let context = context
+        .as_ref()
         .ok_or_else(|| "Android activity is not initialized".to_string())?;
     let mut env = context
         .vm
@@ -346,7 +401,10 @@ pub fn request_playback_audio_focus() -> Result<(), String> {
 }
 
 pub fn abandon_playback_audio_focus() {
-    let Some(context) = CONTEXT.get() else {
+    let Ok(context) = android_context() else {
+        return;
+    };
+    let Some(context) = context.as_ref() else {
         return;
     };
     let Ok(mut env) = context.vm.attach_current_thread() else {
@@ -622,6 +680,55 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
     } else if refresh_state {
         update_service_from_backend(&mut env, service);
     }
+    checkpoint_playback_position(&backend);
+}
+
+fn checkpoint_playback_position(backend: &RodioBackend) {
+    let now = Instant::now();
+    let mut last_checkpoint = LAST_POSITION_CHECKPOINT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if backend.state() != PlayerState::Playing {
+        *last_checkpoint = None;
+        return;
+    }
+    let Some(last) = *last_checkpoint else {
+        *last_checkpoint = Some(now);
+        return;
+    };
+    if now.saturating_duration_since(last) < POSITION_CHECKPOINT_INTERVAL {
+        return;
+    }
+    let Some(position_ms) = backend.position_ms().map(|position| position.max(0)) else {
+        return;
+    };
+
+    let _state_io = STATE_IO
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (config_path, _) = fallback_state_paths(&default_config_dir());
+    let mut config = match Config::load_from_file(&config_path) {
+        Ok(config) => config,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Config::default(),
+        Err(err) => {
+            eprintln!("xmms-rs: failed to load Android position checkpoint: {err}");
+            return;
+        }
+    };
+    config.playback_position_ms = position_ms;
+    config.playlist_position = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .and_then(|shared| shared.playlist.position())
+        .map_or(-1, |position| position.min(i32::MAX as usize) as i32);
+    match config.save_to_file(&config_path) {
+        Ok(()) => *last_checkpoint = Some(now),
+        Err(err) => eprintln!("xmms-rs: failed to save Android position checkpoint: {err}"),
+    }
 }
 
 fn handle_android_media_control(
@@ -642,7 +749,12 @@ fn handle_android_media_control(
     if let Some(service) = service {
         update_service_from_backend(&mut env, service);
     }
-    if let Some(context) = REPAINT_CONTEXT.get() {
+    if let Some(context) = REPAINT_CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+    {
         context.request_repaint();
     }
 }

@@ -58,7 +58,7 @@ use crate::render::{
 };
 use crate::session::default_config_dir;
 #[cfg(target_os = "android")]
-use crate::session::{fallback_state_paths, load_saved_state, save_fallback_state};
+use crate::session::{fallback_state_paths, load_saved_state};
 use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, playlist_footer_button_rect,
     playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
@@ -397,9 +397,7 @@ impl EguiFrontendState {
 
     #[cfg(target_os = "android")]
     fn persist_android_state(&mut self) {
-        let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
-        if let Err(err) =
-            save_fallback_state(self.controller.state_mut(), &config_path, &playlist_path)
+        if let Err(err) = super::android_file_picker::persist_app_state(self.controller.state_mut())
         {
             app_log_error!(frontend, "failed to save Android session state", err);
             let message = format!("failed to save Android session state: {err}");
@@ -1326,6 +1324,11 @@ impl EguiFrontendState {
 }
 
 impl eframe::App for EguiFrontendState {
+    #[cfg(target_os = "android")]
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.persist_android_state();
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "android")]
         let android_media_control_handled = {

@@ -30,7 +30,6 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
     let options = app::preview::PreviewOptions {
         frontend: app::preview::FrontendKind::Egui,
         reset: false,
-        scale_factor: Some("1.0".to_string()),
         ..app::preview::PreviewOptions::default()
     };
     if let Err(err) = egui_frontend::app::run_egui_frontend_android(options, app) {

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import base64
 import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 from io import BytesIO
 from dataclasses import dataclass
@@ -140,14 +140,28 @@ class AndroidDevice:
     def force_stop(self) -> None:
         self.shell("am", "force-stop", ANDROID_PACKAGE, check=False)
 
+    def app_pid(self) -> str:
+        return self.shell("pidof", ANDROID_PACKAGE, check=False).stdout.strip()
+
+    def close_activity(self) -> str:
+        pid = self.app_pid()
+        if not pid:
+            raise AssertionError("Android app process is not running")
+        self.shell("input", "keyevent", "4")
+        time.sleep(1.0)
+        return pid
+
+    def start_activity(self) -> None:
+        self.clear_logcat()
+        self.shell("am", "start", "-W", "-n", ANDROID_ACTIVITY)
+        self.wait_for_app()
+
     def restart_app(self, *, reset_data: bool = False) -> None:
         self.force_stop()
         if reset_data:
             self.shell("pm", "clear", ANDROID_PACKAGE)
             self.grant_runtime_permissions()
-        self.clear_logcat()
-        self.shell("am", "start", "-W", "-n", ANDROID_ACTIVITY)
-        self.wait_for_app()
+        self.start_activity()
 
     def wait_for_app(self, timeout: float = 15.0) -> None:
         deadline = time.monotonic() + timeout
@@ -159,6 +173,21 @@ class AndroidDevice:
                 return
             time.sleep(0.2)
         raise TimeoutError("Android app did not become active")
+
+    def wait_for_service(self, service_name: str, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            services = self.shell(
+                "dumpsys",
+                "activity",
+                "services",
+                ANDROID_PACKAGE,
+                check=False,
+            ).stdout
+            if service_name in services:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"Android service did not start: {service_name}")
 
     def set_portrait(self) -> None:
         self._set_rotation(0)
@@ -220,19 +249,27 @@ class AndroidDevice:
         return result.stdout
 
     def main_player_bounds(self) -> tuple[int, int, int, int]:
-        geometry = self.display_geometry()
-        with Image.open(BytesIO(self.framebuffer_png())) as screenshot:
-            crop_right = geometry.width if geometry.width <= geometry.height else geometry.width // 2
-            crop_bottom = geometry.height - geometry.bottom_inset
-            player_region = screenshot.convert("L").crop((0, 0, crop_right, crop_bottom))
-            visible = player_region.point(lambda value: 255 if value >= 18 else 0)
-            bounds = visible.getbbox()
-        if bounds is None:
-            raise AssertionError("Could not find the rendered player in the Android screenshot")
-        left, top, right, bottom = bounds
-        if right - left < geometry.width * 0.2:
-            raise AssertionError(f"Detected Android player bounds are implausibly small: {bounds}")
-        return bounds
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            geometry = self.display_geometry()
+            with Image.open(BytesIO(self.framebuffer_png())) as screenshot:
+                crop_right = (
+                    geometry.width
+                    if geometry.width <= geometry.height
+                    else geometry.width // 2
+                )
+                crop_bottom = geometry.height - geometry.bottom_inset
+                player_region = screenshot.convert("L").crop(
+                    (0, 0, crop_right, crop_bottom)
+                )
+                visible = player_region.point(lambda value: 255 if value >= 18 else 0)
+                bounds = visible.getbbox()
+            if bounds is not None:
+                left, _top, right, _bottom = bounds
+                if right - left >= geometry.width * 0.2:
+                    return bounds
+            time.sleep(0.2)
+        raise AssertionError("Could not find the rendered player in the Android screenshot")
 
     def tap_skin_rect(
         self,
@@ -299,14 +336,50 @@ class AndroidDevice:
             time.sleep(0.2)
         raise AssertionError(f"{path} did not contain {needle!r}:\n{contents}")
 
+    def wait_for_private_file_int_at_least(
+        self,
+        path: str,
+        key: str,
+        minimum: int,
+        timeout: float = 5.0,
+    ) -> int:
+        deadline = time.monotonic() + timeout
+        contents = ""
+        while time.monotonic() < deadline:
+            result = self.shell(
+                "run-as",
+                ANDROID_PACKAGE,
+                "cat",
+                path,
+                check=False,
+            )
+            contents = result.stdout
+            match = re.search(rf"^{re.escape(key)}=(-?\d+)$", contents, re.MULTILINE)
+            if match is not None and int(match.group(1)) >= minimum:
+                return int(match.group(1))
+            time.sleep(0.2)
+        raise AssertionError(
+            f"{path} did not contain {key}>={minimum}:\n{contents}"
+        )
+
     def write_private_file(self, path: str, contents: str) -> None:
-        encoded = base64.b64encode(contents.encode("utf-8")).decode("ascii")
+        self.write_private_bytes(path, contents.encode("utf-8"))
+
+    def write_private_bytes(self, path: str, contents: bytes) -> None:
         parent = str(Path(path).parent)
-        script = (
-            f"mkdir -p {shlex.quote(parent)} && "
-            f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(path)}"
-        )
-        self.command(
-            "shell",
-            f"run-as {shlex.quote(ANDROID_PACKAGE)} sh -c {shlex.quote(script)}",
-        )
+        remote_path = "/data/local/tmp/xmms-renascene-e2e-upload"
+        with tempfile.NamedTemporaryFile() as source:
+            source.write(contents)
+            source.flush()
+            self.command("push", source.name, remote_path)
+        try:
+            script = (
+                f"mkdir -p {shlex.quote(parent)} && "
+                f"cp {shlex.quote(remote_path)} {shlex.quote(path)}"
+            )
+            self.command(
+                "shell",
+                f"run-as {shlex.quote(ANDROID_PACKAGE)} sh -c {shlex.quote(script)}",
+            )
+        finally:
+            self.shell("rm", "-f", remote_path, check=False)
