@@ -89,7 +89,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private final Runnable playbackPoll = new Runnable() {
         @Override
         public void run() {
-            if (playbackState == 1) {
+            if (playbackState != 0) {
                 nativePollPlayback();
             }
             playbackHandler.postDelayed(this, 250);
@@ -253,6 +253,11 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         }
     }
 
+    public void applyNativePlaybackPosition(long positionMs) {
+        playbackPositionMs = Math.max(0, positionMs);
+        updatePlaybackState(playbackState == 1);
+    }
+
     @Override
     public void onDestroy() {
         playbackHandler.removeCallbacks(playbackPoll);
@@ -332,6 +337,19 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     }
 
     private void updateMediaSession(boolean playing) {
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, playbackTitle)
+                .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, playbackTitle)
+                .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, mediaId(currentMediaItemIndex));
+        if (playbackDurationMs >= 0) {
+            metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, playbackDurationMs);
+        }
+        mediaSession.setMetadata(metadata.build());
+        updatePlaybackState(playing);
+        mediaSession.setActive(true);
+    }
+
+    private void updatePlaybackState(boolean playing) {
         long actions = PlaybackState.ACTION_PLAY
                 | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE
@@ -343,14 +361,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         if (hasNext) {
             actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
         }
-        MediaMetadata.Builder metadata = new MediaMetadata.Builder()
-                .putString(MediaMetadata.METADATA_KEY_TITLE, playbackTitle)
-                .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, playbackTitle)
-                .putString(MediaMetadata.METADATA_KEY_MEDIA_ID, mediaId(currentMediaItemIndex));
-        if (playbackDurationMs >= 0) {
-            metadata.putLong(MediaMetadata.METADATA_KEY_DURATION, playbackDurationMs);
-        }
-        mediaSession.setMetadata(metadata.build());
         mediaSession.setPlaybackState(new PlaybackState.Builder()
                 .setActions(actions)
                 .setState(
@@ -359,7 +369,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                         playing ? 1.0f : 0.0f)
                 .setActiveQueueItemId(currentMediaItemIndex)
                 .build());
-        mediaSession.setActive(true);
     }
 
     private void refreshMediaQueue() {
