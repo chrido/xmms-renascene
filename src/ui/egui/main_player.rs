@@ -89,7 +89,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     }
 }
 
-fn main_render_state(
+pub(crate) fn main_render_state(
     view_model: &MainPlayerViewModel,
     playback_position_ms: i64,
     duration_ms: Option<i64>,

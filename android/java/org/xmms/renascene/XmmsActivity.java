@@ -396,14 +396,14 @@ public final class XmmsActivity extends NativeActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) {
-            if (requestCode == 105) {
+            if (requestCode == 105 || requestCode == 106) {
                 pendingDocumentContents = null;
             }
             nativeOnDocumentsSelected(requestCode, new String[0], null);
             return;
         }
         try {
-            if (requestCode == 105) {
+            if (requestCode == 105 || requestCode == 106) {
                 Uri uri = data.getData();
                 if (uri == null) {
                     throw new IllegalStateException("document provider returned no output URI");

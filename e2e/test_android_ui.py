@@ -383,3 +383,19 @@ def test_android_auto_media_browser_surface(
         "children parent=xmms-playlist count=1",
         "first title=Android Auto Track",
     )
+
+
+def test_android_player_widget_is_packaged(
+    android_device: AndroidDevice,
+) -> None:
+    manifest = android_device.apk_xmltree("AndroidManifest.xml")
+    widget_info = android_device.apk_xmltree("res/xml/player_widget_info.xml")
+    widget_layout = android_device.apk_xmltree("res/layout/widget_player.xml")
+
+    assert ".XmmsPlayerWidget" in manifest
+    assert "android.appwidget.action.APPWIDGET_UPDATE" in manifest
+    assert "player_widget_info" in manifest
+    assert "widget_player" in widget_info
+    assert "widget_player_image" in widget_layout
+    assert "widget_play" in widget_layout
+    assert "widget_pause" in widget_layout

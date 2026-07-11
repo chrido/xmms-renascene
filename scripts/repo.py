@@ -499,8 +499,13 @@ class RepoTool:
         resource_dir = work_dir / "res"
         drawable_dir = resource_dir / "drawable"
         xml_dir = resource_dir / "xml"
-        drawable_dir.mkdir(parents=True)
-        xml_dir.mkdir()
+        shutil.copytree(
+            REPO_DIR / "android" / "res",
+            resource_dir,
+            dirs_exist_ok=True,
+        )
+        drawable_dir.mkdir(parents=True, exist_ok=True)
+        xml_dir.mkdir(exist_ok=True)
         shutil.copy2(REPO_DIR / "data" / "org.xmms.Renascene.png", drawable_dir / "icon.png")
         (xml_dir / "automotive_app_desc.xml").write_text(
             """<?xml version="1.0" encoding="utf-8"?>
@@ -563,6 +568,16 @@ class RepoTool:
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+        <receiver
+            android:name=".XmmsPlayerWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/player_widget_info" />
+        </receiver>
     </application>
 </manifest>
 """,

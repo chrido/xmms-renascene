@@ -6,11 +6,13 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JValue};
-use jni::sys::{jint, jlong, jobjectArray, jstring};
+use jni::sys::{jint, jintArray, jlong, jobjectArray, jstring};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::effect::FileDialogRequest;
+use crate::app::view_model::main_player_view_model;
 use crate::app_state::AppState;
+use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 use crate::config::Config;
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{PlaybackEvent, PlayerState};
@@ -19,6 +21,7 @@ use crate::playlist::Playlist;
 use crate::session::{
     default_config_dir, fallback_state_paths, load_saved_state, save_fallback_state,
 };
+use crate::skin::DefaultSkin;
 
 struct AndroidPickerContext {
     vm: JavaVM,
@@ -74,6 +77,8 @@ static MEDIA_CONTROLS: OnceLock<Mutex<Vec<AndroidMediaControl>>> = OnceLock::new
 static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
+static WIDGET_SKIN: OnceLock<Mutex<Option<(Option<String>, DefaultSkin)>>> = OnceLock::new();
+static WIDGET_SPECTRUM: OnceLock<Mutex<SpectrumData>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
 static SERVICE_PLAYBACK_EVENTS: OnceLock<Mutex<Vec<PlaybackEvent>>> = OnceLock::new();
 static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
@@ -602,6 +607,7 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeInitial
     {
         return;
     }
+
     let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
     match load_saved_state(&config_path, &playlist_path, false) {
         Ok(state) => {
@@ -614,6 +620,124 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeInitial
             sync_media_playlist(&state.playlist, titles);
         }
         Err(err) => eprintln!("xmms-rs: failed to load Android Auto media library: {err}"),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlayerWidget(
+    mut env: JNIEnv,
+    _class: JObject,
+    files_dir: JString,
+    cache_dir: JString,
+    state: jint,
+    title: JString,
+    duration_ms: jlong,
+    position_ms: jlong,
+) -> jintArray {
+    let result = (|| {
+        let files_dir = PathBuf::from(
+            env.get_string(&files_dir)
+                .map_err(|err| err.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let cache_dir = PathBuf::from(
+            env.get_string(&cache_dir)
+                .map_err(|err| err.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let title = env
+            .get_string(&title)
+            .map_err(|err| err.to_string())?
+            .to_string_lossy()
+            .into_owned();
+        std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
+        std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
+        let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
+        let app_state =
+            load_saved_state(&config_path, &playlist_path, false).map_err(|err| err.to_string())?;
+        let mut view_model = main_player_view_model(&app_state);
+        view_model.title = title;
+        view_model.player_state = match state {
+            1 => PlayerState::Playing,
+            2 => PlayerState::Paused,
+            _ => PlayerState::Stopped,
+        };
+        view_model.shaded = false;
+        let render_state = super::main_player::main_render_state(
+            &view_model,
+            position_ms.max(0),
+            (duration_ms > 0).then_some(duration_ms),
+            app_state.config.equalizer_visible,
+            app_state.config.playlist_visible,
+            None,
+            None,
+            None,
+            app_state.config.timer_mode,
+            {
+                let data = if view_model.player_state == PlayerState::Playing {
+                    *WIDGET_SPECTRUM
+                        .get_or_init(|| Mutex::new([0.0; SPECTRUM_BANDS]))
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                } else {
+                    [0.0; SPECTRUM_BANDS]
+                };
+                crate::render::VisualizationRenderState {
+                    mode: app_state.config.vis_mode,
+                    analyzer_style: app_state.config.vis_analyzer_style,
+                    analyzer_mode: app_state.config.vis_analyzer_mode,
+                    scope_mode: app_state.config.vis_scope_mode,
+                    peaks_enabled: app_state.config.vis_peaks_enabled,
+                    vu_mode: app_state.config.vis_vu_mode,
+                    data,
+                    peak: data,
+                    ..Default::default()
+                }
+            },
+        );
+        let skin_key = app_state.config.skin.clone();
+        let mut cached_skin = WIDGET_SKIN
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if cached_skin
+            .as_ref()
+            .is_none_or(|(cached_key, _)| cached_key != &skin_key)
+        {
+            let skin = match skin_key.as_deref() {
+                Some(path) => DefaultSkin::load_from_path(Path::new(path))
+                    .map_err(|err| format!("failed to load widget skin '{path}': {err}"))?,
+                None => DefaultSkin::load_bundled()
+                    .map_err(|err| format!("failed to load bundled widget skin: {err}"))?,
+            };
+            *cached_skin = Some((skin_key, skin));
+        }
+        let skin = &cached_skin.as_ref().expect("widget skin initialized").1;
+        let image = super::skin_texture::render_main_player_color_image(skin, &render_state)
+            .map_err(|err| format!("failed to render widget player: {err}"))?;
+        let pixels: Vec<jint> = image
+            .pixels
+            .iter()
+            .map(|pixel| {
+                let [red, green, blue, alpha] = pixel.to_array();
+                i32::from_be_bytes([alpha, red, green, blue])
+            })
+            .collect();
+        let output = env
+            .new_int_array(pixels.len() as jint)
+            .map_err(|err| err.to_string())?;
+        env.set_int_array_region(&output, 0, &pixels)
+            .map_err(|err| err.to_string())?;
+        Ok::<_, String>(output.into_raw())
+    })();
+    match result {
+        Ok(pixels) => pixels,
+        Err(err) => {
+            eprintln!("xmms-rs: failed to render Android player widget: {err}");
+            std::ptr::null_mut()
+        }
     }
 }
 
@@ -714,6 +838,10 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
         if matches!(event, PlaybackEvent::EndOfStream) {
             eof = true;
         } else if let PlaybackEvent::Spectrum(data) = event {
+            *WIDGET_SPECTRUM
+                .get_or_init(|| Mutex::new([0.0; SPECTRUM_BANDS]))
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = data;
             if let Some(existing) = queued
                 .iter_mut()
                 .find(|event| matches!(event, PlaybackEvent::Spectrum(_)))
