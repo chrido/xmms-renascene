@@ -709,11 +709,12 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .push(AndroidMediaControl::PlaylistEof);
-        update_service_from_backend(&mut env, service);
+        update_service_from_backend(&mut env, &service);
     } else if refresh_state {
-        update_service_from_backend(&mut env, service);
+        update_service_from_backend(&mut env, &service);
     }
     checkpoint_playback_position(&backend);
+    update_service_position_from_backend(&mut env, &service, &backend);
 }
 
 fn checkpoint_playback_position(backend: &RodioBackend) {
@@ -780,7 +781,7 @@ fn handle_android_media_control(
         .unwrap_or_else(|poison| poison.into_inner())
         .push(control);
     if let Some(service) = service {
-        update_service_from_backend(&mut env, service);
+        update_service_from_backend(&mut env, &service);
     }
     if let Some(context) = REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
@@ -917,7 +918,23 @@ fn current_media_entry() -> Option<(String, String, i64)> {
     Some((entry.filename.clone(), title, entry.length_ms))
 }
 
-fn update_service_from_backend(env: &mut JNIEnv, service: JObject) {
+fn update_service_position_from_backend(
+    env: &mut JNIEnv,
+    service: &JObject,
+    backend: &RodioBackend,
+) {
+    let Some(position_ms) = backend.position_ms().map(|position| position.max(0)) else {
+        return;
+    };
+    let _ = env.call_method(
+        service,
+        "applyNativePlaybackPosition",
+        "(J)V",
+        &[JValue::Long(position_ms)],
+    );
+}
+
+fn update_service_from_backend(env: &mut JNIEnv, service: &JObject) {
     let Ok(backend) = shared_playback_backend() else {
         return;
     };
