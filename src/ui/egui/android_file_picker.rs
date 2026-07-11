@@ -71,6 +71,7 @@ pub struct AndroidSystemInsets {
 static CONTEXT: OnceLock<Mutex<Option<AndroidPickerContext>>> = OnceLock::new();
 static RESULTS: OnceLock<Mutex<Vec<AndroidPickerResult>>> = OnceLock::new();
 static MEDIA_CONTROLS: OnceLock<Mutex<Vec<AndroidMediaControl>>> = OnceLock::new();
+static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
@@ -215,6 +216,19 @@ pub fn open(request: FileDialogRequest) -> Result<(), String> {
 }
 
 pub fn save_equalizer_preset(contents: &[u8]) -> Result<(), String> {
+    create_document(105, "application/octet-stream", "preset.eqf", contents)
+}
+
+pub fn save_playlist(contents: &[u8], name: &str) -> Result<(), String> {
+    create_document(106, "audio/x-mpegurl", name, contents)
+}
+
+fn create_document(
+    request_code: jint,
+    mime_type: &str,
+    title: &str,
+    contents: &[u8],
+) -> Result<(), String> {
     let context = android_context()?;
     let context = context
         .as_ref()
@@ -224,26 +238,26 @@ pub fn save_equalizer_preset(contents: &[u8]) -> Result<(), String> {
         .attach_current_thread()
         .map_err(|err| format!("failed to attach Android picker thread: {err}"))?;
     let mime_type = env
-        .new_string("application/octet-stream")
-        .map_err(|err| format!("failed to create EQF MIME type: {err}"))?;
+        .new_string(mime_type)
+        .map_err(|err| format!("failed to create document MIME type: {err}"))?;
     let title = env
-        .new_string("preset.eqf")
-        .map_err(|err| format!("failed to create EQF file name: {err}"))?;
+        .new_string(title)
+        .map_err(|err| format!("failed to create document file name: {err}"))?;
     let contents = env
         .byte_array_from_slice(contents)
-        .map_err(|err| format!("failed to create EQF document contents: {err}"))?;
+        .map_err(|err| format!("failed to create document contents: {err}"))?;
     env.call_method(
         context.activity.as_obj(),
         "createDocument",
         "(ILjava/lang/String;Ljava/lang/String;[B)V",
         &[
-            JValue::Int(105),
+            JValue::Int(request_code),
             JValue::Object(&mime_type),
             JValue::Object(&title),
             JValue::Object(&contents),
         ],
     )
-    .map_err(|err| format!("failed to open Android EQF save dialog: {err}"))?;
+    .map_err(|err| format!("failed to open Android document save dialog: {err}"))?;
     Ok(())
 }
 
@@ -263,11 +277,28 @@ pub fn register_repaint_context(context: &egui::Context) {
 }
 
 pub fn drain_media_controls() -> Vec<AndroidMediaControl> {
+    let _order = MEDIA_CONTROL_ORDER
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let mut controls = MEDIA_CONTROLS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     std::mem::take(&mut *controls)
+}
+
+pub fn begin_local_media_control() -> MutexGuard<'static, ()> {
+    let order = MEDIA_CONTROL_ORDER
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    MEDIA_CONTROLS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clear();
+    order
 }
 
 pub fn shared_playback_backend() -> Result<RodioBackend, String> {
@@ -458,6 +489,7 @@ fn request_from_code(code: jint) -> Option<FileDialogRequest> {
         103 => Some(FileDialogRequest::ImportSkin),
         104 => Some(FileDialogRequest::AddAudioDirectory),
         105 => Some(FileDialogRequest::SaveEqualizerPreset),
+        106 => Some(FileDialogRequest::SavePlaylist),
         _ => None,
     }
 }
@@ -770,6 +802,10 @@ fn handle_android_media_control(
     service: Option<JObject>,
     control: AndroidMediaControl,
 ) {
+    let _order = MEDIA_CONTROL_ORDER
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let result = execute_android_media_control(control);
     if let Err(err) = result {
         eprintln!("xmms-rs: Android media control failed: {err}");

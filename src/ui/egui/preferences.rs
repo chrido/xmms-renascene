@@ -24,6 +24,7 @@ pub enum PreferencesPage {
     Fonts,
     Title,
     Skins,
+    Playlists,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,7 @@ pub struct PreferencesViewportState {
     pub changed: bool,
     pub close_requested: bool,
     pub skin_browser_requested: bool,
+    pub playlist_manager_requested: bool,
     android_skin_action: Option<AndroidSkinAction>,
     android_swipe_start: Option<egui::Pos2>,
     android_swipe_last: Option<egui::Pos2>,
@@ -58,6 +60,7 @@ impl PreferencesViewportState {
             changed: false,
             close_requested: false,
             skin_browser_requested: false,
+            playlist_manager_requested: false,
             android_skin_action: None,
             android_swipe_start: None,
             android_swipe_last: None,
@@ -156,6 +159,8 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     let mut save_config = false;
     let mut queue_render = false;
     let mut open_skin_browser = false;
+    #[cfg(target_os = "android")]
+    let mut open_playlist_manager = false;
     let mut next_open = app.preferences_open;
     let next_page;
     let mut next_config = None;
@@ -184,6 +189,10 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
         }
         #[cfg(target_os = "android")]
         {
+            if state.playlist_manager_requested {
+                open_playlist_manager = true;
+                state.playlist_manager_requested = false;
+            }
             android_skin_action = state.android_skin_action.take();
         }
     }
@@ -195,6 +204,10 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     }
     if open_skin_browser {
         app.dispatch(UiCommand::SetSkinBrowserVisible(true));
+    }
+    #[cfg(target_os = "android")]
+    if open_playlist_manager {
+        app.open_android_playlist_manager();
     }
     #[cfg(target_os = "android")]
     if let Some(action) = android_skin_action {
@@ -355,7 +368,13 @@ fn show_android_preferences_categories(ui: &mut egui::Ui, state: &mut Preference
                     .clicked()
                 {
                     state.selected_page = page;
-                    state.android_show_categories = false;
+                    if page == PreferencesPage::Playlists {
+                        state.open = false;
+                        state.close_requested = true;
+                        state.playlist_manager_requested = true;
+                    } else {
+                        state.android_show_categories = false;
+                    }
                 }
             }
         });
@@ -394,7 +413,10 @@ fn show_android_preferences_page(
 
 #[cfg(any(target_os = "android", test))]
 fn android_page_shows_reset(page: PreferencesPage) -> bool {
-    !matches!(page, PreferencesPage::Fonts | PreferencesPage::Skins)
+    !matches!(
+        page,
+        PreferencesPage::Fonts | PreferencesPage::Skins | PreferencesPage::Playlists
+    )
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -451,12 +473,13 @@ impl PreferencesPage {
     ];
 
     #[cfg(any(target_os = "android", test))]
-    const ANDROID_ALL: [Self; 5] = [
+    const ANDROID_ALL: [Self; 6] = [
         Self::VisualizationPlugins,
         Self::Options,
         Self::Fonts,
         Self::Title,
         Self::Skins,
+        Self::Playlists,
     ];
 
     pub fn label(self) -> &'static str {
@@ -467,6 +490,7 @@ impl PreferencesPage {
             Self::Fonts => "Fonts",
             Self::Title => "Title",
             Self::Skins => "Skins",
+            Self::Playlists => "Playlists",
         }
     }
 
@@ -479,6 +503,7 @@ impl PreferencesPage {
             Self::Fonts => "Fonts",
             Self::Title => "Track titles",
             Self::Skins => "Skins",
+            Self::Playlists => "Playlists",
         }
     }
 }
@@ -490,7 +515,7 @@ fn show_selected_preferences_page(ui: &mut egui::Ui, state: &mut PreferencesView
         PreferencesPage::Options => show_options_page(ui, &mut state.config),
         PreferencesPage::Fonts => show_fonts_page(ui, state),
         PreferencesPage::Title => show_title_page(ui, &mut state.config),
-        PreferencesPage::Skins => {}
+        PreferencesPage::Skins | PreferencesPage::Playlists => {}
     }
 }
 

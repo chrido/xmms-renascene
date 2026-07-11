@@ -204,6 +204,22 @@ pub struct EguiFrontendState {
     pub playlist_resize_start: Option<i32>,
     #[cfg(target_os = "android")]
     pub(crate) playlist_touch_scroll_remainder: f32,
+    #[cfg(target_os = "android")]
+    pub(crate) playlist_touch_drag_delta: egui::Vec2,
+    #[cfg(target_os = "android")]
+    pub(crate) playlist_touch_drag_direction_decided: bool,
+    #[cfg(target_os = "android")]
+    pub(crate) playlist_touch_drag_horizontal: bool,
+    #[cfg(target_os = "android")]
+    pub(crate) playlist_touch_drag_row: Option<usize>,
+    #[cfg(target_os = "android")]
+    pub(crate) android_playlist_manager_open: bool,
+    #[cfg(target_os = "android")]
+    pub(crate) android_playlist_import_pending: bool,
+    #[cfg(target_os = "android")]
+    pub(crate) android_playlist_name: String,
+    #[cfg(target_os = "android")]
+    pub(crate) android_saved_playlists: Vec<PathBuf>,
     visualization: Visualization,
     visualization_tick_counter: i32,
     #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
@@ -334,6 +350,22 @@ impl EguiFrontendState {
             playlist_resize_start: None,
             #[cfg(target_os = "android")]
             playlist_touch_scroll_remainder: 0.0,
+            #[cfg(target_os = "android")]
+            playlist_touch_drag_delta: egui::Vec2::ZERO,
+            #[cfg(target_os = "android")]
+            playlist_touch_drag_direction_decided: false,
+            #[cfg(target_os = "android")]
+            playlist_touch_drag_horizontal: false,
+            #[cfg(target_os = "android")]
+            playlist_touch_drag_row: None,
+            #[cfg(target_os = "android")]
+            android_playlist_manager_open: false,
+            #[cfg(target_os = "android")]
+            android_playlist_import_pending: false,
+            #[cfg(target_os = "android")]
+            android_playlist_name: "playlist".to_string(),
+            #[cfg(target_os = "android")]
+            android_saved_playlists: discover_managed_playlists(),
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
             duration_index_sender,
@@ -361,7 +393,22 @@ impl EguiFrontendState {
     }
 
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) {
-        let command = command.into();
+        self.dispatch_all([command.into()]);
+    }
+
+    pub(crate) fn dispatch_all(&mut self, commands: impl IntoIterator<Item = AppCommand>) {
+        let commands: Vec<_> = commands.into_iter().collect();
+        #[cfg(target_os = "android")]
+        let _media_control_order = commands
+            .iter()
+            .any(|command| matches!(command, AppCommand::Player(_)))
+            .then(super::android_file_picker::begin_local_media_control);
+        for command in commands {
+            self.dispatch_one(command);
+        }
+    }
+
+    fn dispatch_one(&mut self, command: AppCommand) {
         let should_index_durations = matches!(
             &command,
             AppCommand::Playlist(
@@ -1018,11 +1065,20 @@ impl EguiFrontendState {
 
     #[cfg(target_os = "android")]
     fn handle_file_dialog(&mut self, request: FileDialogRequest) {
-        let result = if request == FileDialogRequest::SaveEqualizerPreset {
-            let preset = self.current_equalizer_preset("Entry1");
-            super::android_file_picker::save_equalizer_preset(&serialize_winamp_eqf(&preset))
-        } else {
-            super::android_file_picker::open(request)
+        let result = match request {
+            FileDialogRequest::LoadPlaylist if !self.android_playlist_import_pending => {
+                self.open_android_playlist_manager();
+                return;
+            }
+            FileDialogRequest::SavePlaylist => {
+                self.open_android_playlist_manager();
+                return;
+            }
+            FileDialogRequest::SaveEqualizerPreset => {
+                let preset = self.current_equalizer_preset("Entry1");
+                super::android_file_picker::save_equalizer_preset(&serialize_winamp_eqf(&preset))
+            }
+            _ => super::android_file_picker::open(request),
         };
         if let Err(err) = result {
             self.runtime.pending_messages.push(err);
@@ -1036,7 +1092,7 @@ impl EguiFrontendState {
             .push("file picking is not available on this platform".to_string());
     }
 
-    fn load_playlist_file(&mut self, path: &Path) {
+    fn load_playlist_file(&mut self, path: &Path) -> bool {
         match Playlist::load_m3u_file(path) {
             Ok(playlist) => {
                 let result = self.controller.replace_playlist_for_file_load(playlist);
@@ -1044,11 +1100,15 @@ impl EguiFrontendState {
                 self.sync_frontend_state_from_store();
                 self.apply_effects(result.effects);
                 self.schedule_missing_local_playlist_durations();
+                true
             }
-            Err(err) => self.runtime.pending_messages.push(format!(
-                "failed to load playlist '{}': {err}",
-                path.display()
-            )),
+            Err(err) => {
+                self.runtime.pending_messages.push(format!(
+                    "failed to load playlist '{}': {err}",
+                    path.display()
+                ));
+                false
+            }
         }
     }
 
@@ -1130,8 +1190,13 @@ impl EguiFrontendState {
                     self.dispatch(PlaylistCommand::AddFiles(result.paths));
                 }
                 FileDialogRequest::LoadPlaylist => {
+                    let import = std::mem::take(&mut self.android_playlist_import_pending);
                     if let Some(path) = result.paths.first() {
-                        self.load_playlist_file(path);
+                        if import {
+                            self.import_android_playlist(path);
+                        } else {
+                            self.load_playlist_file(path);
+                        }
                     }
                 }
                 FileDialogRequest::LoadEqualizerPreset => {
@@ -1400,6 +1465,10 @@ impl eframe::App for EguiFrontendState {
         }
         file_info::show_file_info_dialog(&ctx, self);
         #[cfg(target_os = "android")]
+        if self.android_playlist_manager_open {
+            playlist::show_android_playlist_manager(&ctx, self);
+        }
+        #[cfg(target_os = "android")]
         if self.skin_browser_open {
             self.selected_preferences_page = PreferencesPage::Skins;
             self.dispatch(UiCommand::SetSkinBrowserVisible(false));
@@ -1480,6 +1549,120 @@ impl EguiFrontendState {
     #[cfg(target_os = "android")]
     pub(crate) fn import_skin(&mut self) {
         import_skin_from_dialog(self);
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn open_android_playlist_manager(&mut self) {
+        self.android_saved_playlists = discover_managed_playlists();
+        self.android_playlist_manager_open = true;
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn save_android_playlist(&mut self) {
+        let name = managed_playlist_name(&self.android_playlist_name);
+        if name.is_empty() {
+            self.runtime
+                .pending_messages
+                .push("enter a playlist name".to_string());
+            return;
+        }
+        let directory = managed_playlist_dir();
+        if let Err(err) = fs::create_dir_all(&directory) {
+            self.runtime
+                .pending_messages
+                .push(format!("failed to create playlist storage: {err}"));
+            return;
+        }
+        let path = directory.join(&name);
+        if let Err(err) = self.controller().state().playlist.save_m3u_file(&path) {
+            self.runtime.pending_messages.push(format!(
+                "failed to save playlist '{}': {err}",
+                path.display()
+            ));
+            return;
+        }
+        self.android_playlist_name = name;
+        self.android_saved_playlists = discover_managed_playlists();
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn begin_android_playlist_import(&mut self) {
+        self.android_playlist_import_pending = true;
+        self.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::LoadPlaylist));
+    }
+
+    #[cfg(target_os = "android")]
+    fn import_android_playlist(&mut self, source: &Path) {
+        let directory = managed_playlist_dir();
+        if let Err(err) = fs::create_dir_all(&directory) {
+            self.runtime
+                .pending_messages
+                .push(format!("failed to create playlist storage: {err}"));
+            return;
+        }
+        let source_name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("imported.m3u8");
+        let name = managed_playlist_name(source_name);
+        let destination = unique_managed_playlist_path(&directory, &name);
+        if let Err(err) = fs::copy(source, &destination) {
+            self.runtime.pending_messages.push(format!(
+                "failed to import playlist '{}': {err}",
+                source.display()
+            ));
+            return;
+        }
+        self.android_saved_playlists = discover_managed_playlists();
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn load_android_playlist(&mut self, path: &Path) {
+        if is_managed_playlist_path(path) && self.load_playlist_file(path) {
+            self.android_playlist_manager_open = false;
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn delete_android_playlist(&mut self, path: &Path) {
+        if !is_managed_playlist_path(path) {
+            return;
+        }
+        if let Err(err) = fs::remove_file(path) {
+            self.runtime.pending_messages.push(format!(
+                "failed to delete playlist '{}': {err}",
+                path.display()
+            ));
+            return;
+        }
+        self.android_saved_playlists = discover_managed_playlists();
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn export_android_playlist(&mut self, path: &Path) {
+        if !is_managed_playlist_path(path) {
+            return;
+        }
+        let base_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(managed_playlist_name)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "playlist".to_string());
+        let name = format!("{base_name}.m3u8");
+        let contents = match fs::read(path) {
+            Ok(contents) => contents,
+            Err(err) => {
+                self.runtime.pending_messages.push(format!(
+                    "failed to read playlist '{}': {err}",
+                    path.display()
+                ));
+                return;
+            }
+        };
+        if let Err(err) = super::android_file_picker::save_playlist(&contents, &name) {
+            self.runtime.pending_messages.push(err);
+        }
     }
 
     #[cfg(target_os = "android")]
@@ -1720,9 +1903,7 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
             double,
             ctrl,
         } => {
-            for command in playlist_row_click_commands(index, double, ctrl) {
-                app.dispatch(command);
-            }
+            app.dispatch_all(playlist_row_click_commands(index, double, ctrl));
         }
         DetachedPanelAction::PlaylistScrollTo(offset) => {
             app.playlist_scroll_offset = offset.min(app.playlist_max_scroll_offset());
@@ -2592,6 +2773,10 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
 }
 
 fn global_shortcuts_suspended(ctx: &egui::Context, app: &EguiFrontendState) -> bool {
+    #[cfg(target_os = "android")]
+    if app.android_playlist_manager_open {
+        return true;
+    }
     ctx.egui_wants_keyboard_input()
         || app.main_menu_open
         || app.prompt_open.is_some()
@@ -3093,6 +3278,71 @@ fn discover_runtime_skins() -> Vec<SkinEntry> {
         skinsdir.as_deref(),
     );
     discover_skins_in_dirs(dirs).unwrap_or_default()
+}
+
+#[cfg(target_os = "android")]
+fn managed_playlist_dir() -> PathBuf {
+    default_config_dir().join("playlists")
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn managed_playlist_name(name: &str) -> String {
+    let mut name: String = name
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let lowercase = name.to_ascii_lowercase();
+    if lowercase.ends_with(".m3u8") {
+        name.truncate(name.len() - 5);
+    } else if lowercase.ends_with(".m3u") {
+        name.truncate(name.len() - 4);
+    }
+    name.trim().to_string()
+}
+
+#[cfg(target_os = "android")]
+fn discover_managed_playlists() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(managed_playlist_dir()) else {
+        return Vec::new();
+    };
+    let mut playlists: Vec<_> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect();
+    playlists.sort_by_key(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default()
+    });
+    playlists
+}
+
+#[cfg(target_os = "android")]
+fn is_managed_playlist_path(path: &Path) -> bool {
+    path.parent() == Some(managed_playlist_dir().as_path())
+}
+
+#[cfg(target_os = "android")]
+fn unique_managed_playlist_path(directory: &Path, name: &str) -> PathBuf {
+    let path = directory.join(name);
+    if !path.exists() {
+        return path;
+    }
+    for suffix in 2.. {
+        let candidate = directory.join(format!("{name}-{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {
