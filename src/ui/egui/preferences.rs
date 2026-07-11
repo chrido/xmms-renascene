@@ -290,7 +290,7 @@ fn show_android_preferences(
 }
 
 #[cfg(target_os = "android")]
-fn apply_android_preferences_style(ui: &mut egui::Ui) {
+pub(crate) fn apply_android_preferences_style(ui: &mut egui::Ui) {
     let style = ui.style_mut();
     style.visuals.panel_fill = egui::Color32::from_gray(46);
     style.visuals.window_fill = egui::Color32::from_gray(46);

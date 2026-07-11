@@ -271,7 +271,11 @@ pub(crate) fn show_equalizer_presets_popover(
     }
 
     let presets_button = equalizer_control_rect(EqualizerControl::Presets);
-    let estimated_popup_width = 240.0;
+    let estimated_popup_width = if cfg!(target_os = "android") {
+        300.0
+    } else {
+        240.0
+    };
     // egui Areas are clipped to the OS window. The Presets button sits near the
     // right edge of the 275px equalizer, while this popup is much wider, so an
     // unadjusted right-opening popup is clipped. Move it left as needed so the
@@ -290,10 +294,16 @@ pub(crate) fn show_equalizer_presets_popover(
         .fixed_pos(popup_pos)
         .constrain(false)
         .show(ctx, |ui| {
+            #[cfg(target_os = "android")]
+            super::preferences::apply_android_preferences_style(ui);
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(220.0);
+                ui.set_min_width(if cfg!(target_os = "android") {
+                    280.0
+                } else {
+                    220.0
+                });
                 for item in EQUALIZER_PRESET_FILE_ITEMS {
-                    if ui.button(item.label).clicked() {
+                    if equalizer_popup_button(ui, item.label).clicked() {
                         dispatch_equalizer_preset_action(app, item.action);
                         close_after_click = true;
                     }
@@ -303,7 +313,7 @@ pub(crate) fn show_equalizer_presets_popover(
                     .max_height(420.0)
                     .show(ui, |ui| {
                         for preset in built_in_equalizer_presets() {
-                            if ui.button(&preset.name).clicked() {
+                            if equalizer_popup_button(ui, &preset.name).clicked() {
                                 apply_equalizer_preset(app, &preset);
                                 close_after_click = true;
                             }
@@ -313,15 +323,35 @@ pub(crate) fn show_equalizer_presets_popover(
         });
 
     let clicked_outside = ctx.input(|input| {
-        input.pointer.any_released()
-            && input.pointer.latest_pos().is_some_and(|pos| {
-                let presets_rect =
-                    scale_skin_rect(equalizer_rect, presets_button, app.scale_factor);
-                !response.response.rect.contains(pos) && !presets_rect.contains(pos)
-            })
+        let pointer_triggered = if cfg!(target_os = "android") {
+            input.pointer.any_pressed()
+        } else {
+            input.pointer.any_released()
+        };
+        pointer_triggered
+            && input
+                .pointer
+                .interact_pos()
+                .or_else(|| input.pointer.latest_pos())
+                .is_some_and(|pos| {
+                    let presets_rect =
+                        scale_skin_rect(equalizer_rect, presets_button, app.scale_factor);
+                    !response.response.rect.contains(pos) && !presets_rect.contains(pos)
+                })
     });
     if close_after_click || clicked_outside {
         app.equalizer_presets_open = false;
+    }
+}
+
+fn equalizer_popup_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    #[cfg(target_os = "android")]
+    {
+        return ui.add_sized([ui.available_width(), 56.0], egui::Button::new(label));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        ui.button(label)
     }
 }
 

@@ -510,6 +510,11 @@ fn add_playlist_menu_popover(
         app.playlist_menu_open = None;
         return;
     }
+    #[cfg(target_os = "android")]
+    if kind == PlaylistMenuKind::Misc {
+        show_android_playlist_misc_popover(ui.ctx(), app, base_rect);
+        return;
+    }
     let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
     let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor);
     let item_height = 18.0 * app.scale_factor;
@@ -534,6 +539,66 @@ fn add_playlist_menu_popover(
         }
         if response.clicked() {
             clicked_item = Some(index);
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn show_android_playlist_misc_popover(
+        ctx: &egui::Context,
+        app: &mut EguiFrontendState,
+        playlist_rect: egui::Rect,
+    ) {
+        let misc_button = playlist_menu_button_rect(
+            PlaylistMenuButton::Misc,
+            app.playlist_width,
+            app.playlist_height,
+        );
+        let popup_size = egui::vec2(260.0, 184.0);
+        let popup_pos = clamp_popup_to_rect(
+            egui::pos2(
+                playlist_rect.left() + misc_button.x as f32 * app.scale_factor,
+                playlist_rect.top() + misc_button.y as f32 * app.scale_factor - popup_size.y,
+            ),
+            playlist_rect,
+            popup_size,
+        );
+        let mut clicked_item = None;
+        let response = egui::Area::new(egui::Id::new("xmms-egui-android-playlist-misc-popup"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(popup_pos)
+            .constrain(false)
+            .show(ctx, |ui| {
+                super::preferences::apply_android_preferences_style(ui);
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(240.0);
+                    for (index, label) in ["Sort", "File Info", "Options"].into_iter().enumerate() {
+                        if ui
+                            .add_sized([ui.available_width(), 56.0], egui::Button::new(label))
+                            .clicked()
+                        {
+                            clicked_item = Some(index);
+                        }
+                    }
+                });
+            });
+
+        let clicked_outside = ctx.input(|input| {
+            input.pointer.any_pressed()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .or_else(|| input.pointer.latest_pos())
+                    .is_some_and(|pos| {
+                        let misc_rect =
+                            scale_skin_rect(playlist_rect, misc_button, app.scale_factor);
+                        !response.response.rect.contains(pos) && !misc_rect.contains(pos)
+                    })
+        });
+        if let Some(index) = clicked_item {
+            dispatch_playlist_menu_item(app, PlaylistMenuKind::Misc, index);
+            app.playlist_menu_open = None;
+        } else if clicked_outside {
+            app.playlist_menu_open = None;
         }
     }
 
@@ -632,8 +697,16 @@ fn show_playlist_sort_popover(
         app.playlist_width,
         app.playlist_height,
     );
-    let estimated_popup_height = 220.0;
-    let popup_width = 200.0;
+    let estimated_popup_height = if cfg!(target_os = "android") {
+        420.0
+    } else {
+        220.0
+    };
+    let popup_width = if cfg!(target_os = "android") {
+        300.0
+    } else {
+        200.0
+    };
     // egui Areas are clipped to the OS window, which is only as wide/tall as the
     // docked playlist. Anchoring the popover at the Misc button (far right, near
     // the bottom) would push its buttons off-window and make them unclickable
@@ -653,8 +726,14 @@ fn show_playlist_sort_popover(
         .fixed_pos(popup_pos)
         .constrain(false)
         .show(ctx, |ui| {
+            #[cfg(target_os = "android")]
+            super::preferences::apply_android_preferences_style(ui);
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(180.0);
+                ui.set_min_width(if cfg!(target_os = "android") {
+                    280.0
+                } else {
+                    180.0
+                });
                 egui::ScrollArea::vertical()
                     .max_height(estimated_popup_height)
                     .show(ui, |ui| {
@@ -667,11 +746,20 @@ fn show_playlist_sort_popover(
         });
 
     let clicked_outside = ctx.input(|input| {
-        input.pointer.any_released()
-            && input.pointer.latest_pos().is_some_and(|pos| {
-                let misc_rect = scale_skin_rect(playlist_rect, misc_button, app.scale_factor);
-                !response.response.rect.contains(pos) && !misc_rect.contains(pos)
-            })
+        let pointer_triggered = if cfg!(target_os = "android") {
+            input.pointer.any_pressed()
+        } else {
+            input.pointer.any_released()
+        };
+        pointer_triggered
+            && input
+                .pointer
+                .interact_pos()
+                .or_else(|| input.pointer.latest_pos())
+                .is_some_and(|pos| {
+                    let misc_rect = scale_skin_rect(playlist_rect, misc_button, app.scale_factor);
+                    !response.response.rect.contains(pos) && !misc_rect.contains(pos)
+                })
     });
     if close_after_click || clicked_outside {
         app.playlist_sort_menu_open = false;
@@ -684,7 +772,11 @@ fn playlist_sort_item(
     action: PlaylistSortAction,
     label: &str,
 ) -> bool {
-    if !ui.button(label).clicked() {
+    #[cfg(target_os = "android")]
+    let response = ui.add_sized([ui.available_width(), 56.0], egui::Button::new(label));
+    #[cfg(not(target_os = "android"))]
+    let response = ui.button(label);
+    if !response.clicked() {
         return false;
     }
     app.dispatch(action.command());
