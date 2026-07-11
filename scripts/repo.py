@@ -975,10 +975,11 @@ class RepoTool:
         logging.info("Android release APK written to %s", destination)
         return 0
 
-    async def deploy_android(self, release: bool = False) -> int:
-        """Build and install an arm64 APK on the USB-attached Android device."""
+    async def deploy_android(self, debug: bool = False) -> int:
+        """Cleanly deploy an arm64 release APK; pass --debug for a debug build."""
         os.chdir(REPO_DIR)
         required_command("cargo-apk")
+        release = not debug
         try:
             env = self._android_environment()
         except RuntimeError as err:
@@ -1021,8 +1022,39 @@ class RepoTool:
             )
             return 1
 
+        stop_result = subprocess.run(
+            [str(adb), "-d", "shell", "am", "force-stop", ANDROID_PACKAGE],
+            cwd=REPO_DIR,
+            check=False,
+        )
+        if stop_result.returncode != 0:
+            logging.error("failed to force-stop the existing Android app process")
+            return 1
+
         if not self._build_android_apk(env, ANDROID_TARGET, release=release):
             return 1
+
+        installed_package = subprocess.run(
+            [str(adb), "-d", "shell", "pm", "path", ANDROID_PACKAGE],
+            cwd=REPO_DIR,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if installed_package.returncode != 0:
+            logging.warning(
+                "Could not determine whether the Android app is installed; "
+                "continuing with installation"
+            )
+        elif installed_package.stdout.strip():
+            uninstall_result = subprocess.run(
+                [str(adb), "-d", "uninstall", ANDROID_PACKAGE],
+                cwd=REPO_DIR,
+                check=False,
+            )
+            if uninstall_result.returncode != 0:
+                logging.error("failed to uninstall the existing Android app")
+                return 1
 
         apk = self._android_apk_path(release=release)
         stop_result = subprocess.run(
@@ -1035,7 +1067,7 @@ class RepoTool:
             return 1
 
         result = subprocess.run(
-            [str(adb), "-d", "install", "-r", str(apk)],
+            [str(adb), "-d", "install", str(apk)],
             cwd=REPO_DIR,
             check=False,
         )
