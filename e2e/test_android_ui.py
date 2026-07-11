@@ -118,6 +118,35 @@ def test_android_portrait_player_controls_and_panels(
     assert equalizer.read_bytes() != playlist.read_bytes()
 
 
+def test_android_preferences_use_touch_layout_and_back_navigation(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+    original_pid = android_device.app_pid()
+
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
+    android_device.tap_usable_fraction(0.15, 0.044)
+    categories = android_device.screenshot(test_output.screenshot_path())
+
+    android_device.tap_usable_fraction(0.5, 0.30)
+    player_page = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.13, 0.045)
+    categories_after_back = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.13, 0.045)
+    closed = android_device.screenshot(test_output.screenshot_path())
+
+    android_device.assert_log_contains(
+        "command Ui(SetPreferencesVisible(true))",
+        "command Ui(SetPreferencesVisible(false))",
+    )
+    assert android_device.app_pid() == original_pid
+    assert categories.read_bytes() != player_page.read_bytes()
+    assert categories.read_bytes() == categories_after_back.read_bytes()
+    assert categories.read_bytes() != closed.read_bytes()
+
+
 def test_android_touching_player_closes_main_menu(
     android_device: AndroidDevice,
     test_output: Any,

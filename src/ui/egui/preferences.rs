@@ -27,6 +27,7 @@ pub enum PreferencesPage {
 pub struct PreferencesViewportState {
     pub open: bool,
     pub selected_page: PreferencesPage,
+    pub android_show_categories: bool,
     pub config: Config,
     pub changed: bool,
     pub close_requested: bool,
@@ -38,6 +39,7 @@ impl PreferencesViewportState {
         Self {
             open,
             selected_page,
+            android_show_categories: true,
             config: config.clone(),
             changed: false,
             close_requested: false,
@@ -50,40 +52,55 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
     apply_pending_viewport_state(app);
     sync_viewport_state_from_app(app);
 
-    let state = Arc::clone(&app.preferences_viewport);
-    let builder = egui::ViewportBuilder::default()
-        .with_title("Preferences")
-        .with_inner_size(egui::vec2(560.0, 460.0))
-        .with_min_inner_size(egui::vec2(420.0, 300.0))
-        .with_resizable(true)
-        .with_decorations(true);
+    #[cfg(target_os = "android")]
+    {
+        let state = Arc::clone(&app.preferences_viewport);
+        let mut state = state.lock().expect("preferences viewport state poisoned");
+        let before = state.config.clone();
+        show_android_preferences(ctx, &mut state);
+        if state.config != before {
+            state.changed = true;
+        }
+        return;
+    }
 
-    ctx.show_viewport_deferred(
-        egui::ViewportId::from_hash_of("xmms-egui-preferences"),
-        builder,
-        move |ctx, class| {
-            let mut state = state.lock().expect("preferences viewport state poisoned");
-            if ctx.input(|input| input.viewport().close_requested()) {
-                state.open = false;
-                state.close_requested = true;
-                return;
-            }
+    #[cfg(not(target_os = "android"))]
+    {
+        let state = Arc::clone(&app.preferences_viewport);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Preferences")
+            .with_inner_size(egui::vec2(560.0, 460.0))
+            .with_min_inner_size(egui::vec2(420.0, 300.0))
+            .with_resizable(true)
+            .with_decorations(true);
 
-            let before = state.config.clone();
-            match class {
-                egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
-                    show_preferences_embedded(ctx, &mut state);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("xmms-egui-preferences"),
+            builder,
+            move |ctx, class| {
+                let mut state = state.lock().expect("preferences viewport state poisoned");
+                if ctx.input(|input| input.viewport().close_requested()) {
+                    state.open = false;
+                    state.close_requested = true;
+                    return;
                 }
-                egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| show_preferences_contents(ui, &mut state));
+
+                let before = state.config.clone();
+                match class {
+                    egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
+                        show_preferences_embedded(ctx, &mut state);
+                    }
+                    egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                        egui::CentralPanel::default()
+                            .show(ctx, |ui| show_preferences_contents(ui, &mut state));
+                    }
                 }
-            }
-            if state.config != before {
-                state.changed = true;
-            }
-        },
-    );
+                if state.config != before {
+                    state.changed = true;
+                }
+            },
+        );
+    }
 }
 
 fn sync_viewport_state_from_app(app: &mut EguiFrontendState) {
@@ -158,6 +175,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn show_preferences_embedded(ctx: &egui::Context, state: &mut PreferencesViewportState) {
     let mut open = state.open;
     egui::Window::new("Preferences")
@@ -172,6 +190,147 @@ fn show_preferences_embedded(ctx: &egui::Context, state: &mut PreferencesViewpor
     }
 }
 
+#[cfg(target_os = "android")]
+fn show_android_preferences(ctx: &egui::Context, state: &mut PreferencesViewportState) {
+    let back_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+    if back_requested {
+        navigate_android_preferences_back(state);
+        ctx.request_repaint();
+    }
+    if !state.open {
+        return;
+    }
+
+    let screen = ctx.content_rect();
+    let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
+    let insets = super::android_file_picker::system_insets_pixels();
+    let left_inset = insets.left as f32 / pixels_per_point;
+    let top_inset = insets.top as f32 / pixels_per_point;
+    let right_inset = insets.right as f32 / pixels_per_point;
+    let bottom_inset = insets.bottom as f32 / pixels_per_point;
+    let horizontal_margin = 16.0;
+    let vertical_margin = 12.0;
+    let content_width =
+        (screen.width() - left_inset - right_inset - horizontal_margin * 2.0).max(1.0);
+    let content_height =
+        (screen.height() - top_inset - bottom_inset - vertical_margin * 2.0).max(1.0);
+    let fill = ctx.style_of(ctx.theme()).visuals.panel_fill;
+
+    egui::Area::new(egui::Id::new("xmms-android-preferences"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            ui.painter().rect_filled(ui.max_rect(), 0.0, fill);
+            ui.add_space(top_inset + vertical_margin);
+            ui.horizontal(|ui| {
+                ui.add_space(left_inset + horizontal_margin);
+                ui.vertical(|ui| {
+                    ui.set_min_size(egui::vec2(content_width, content_height));
+                    apply_android_preferences_style(ui);
+                    show_android_preferences_header(ui, state);
+                    ui.separator();
+                    if state.android_show_categories {
+                        show_android_preferences_categories(ui, state);
+                    } else {
+                        show_android_preferences_page(ui, state);
+                    }
+                });
+            });
+        });
+}
+
+#[cfg(target_os = "android")]
+fn apply_android_preferences_style(ui: &mut egui::Ui) {
+    let style = ui.style_mut();
+    style.spacing.item_spacing = egui::vec2(12.0, 12.0);
+    style.spacing.button_padding = egui::vec2(16.0, 10.0);
+    style.spacing.interact_size.y = 48.0;
+    style
+        .text_styles
+        .insert(egui::TextStyle::Body, egui::FontId::proportional(18.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Button, egui::FontId::proportional(18.0));
+    style
+        .text_styles
+        .insert(egui::TextStyle::Heading, egui::FontId::proportional(24.0));
+}
+
+#[cfg(target_os = "android")]
+fn show_android_preferences_header(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
+    ui.horizontal(|ui| {
+        let back_label = if state.android_show_categories {
+            "Close"
+        } else {
+            "Back"
+        };
+        if ui
+            .add_sized([88.0, 48.0], egui::Button::new(back_label))
+            .clicked()
+        {
+            navigate_android_preferences_back(state);
+        }
+        ui.heading(if state.android_show_categories {
+            "Settings"
+        } else {
+            state.selected_page.android_label()
+        });
+    });
+}
+
+#[cfg(target_os = "android")]
+fn show_android_preferences_categories(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            for page in PreferencesPage::ALL {
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 56.0],
+                        egui::Button::new(page.android_label()),
+                    )
+                    .clicked()
+                {
+                    state.selected_page = page;
+                    state.android_show_categories = false;
+                }
+            }
+        });
+}
+
+#[cfg(target_os = "android")]
+fn show_android_preferences_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            show_selected_preferences_page(ui, state);
+            ui.separator();
+            if ui
+                .add_sized(
+                    [ui.available_width(), 48.0],
+                    egui::Button::new("Reset to Defaults"),
+                )
+                .clicked()
+            {
+                state.config = Config::default();
+                state.changed = true;
+            }
+        });
+}
+
+fn navigate_android_preferences_back(state: &mut PreferencesViewportState) {
+    if state.android_show_categories {
+        state.open = false;
+        state.close_requested = true;
+    } else {
+        state.android_show_categories = true;
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 fn show_preferences_contents(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
     ui.horizontal_wrapped(|ui| {
         for page in [
@@ -190,13 +349,7 @@ fn show_preferences_contents(ui: &mut egui::Ui, state: &mut PreferencesViewportS
         }
     });
     ui.separator();
-    match state.selected_page {
-        PreferencesPage::AudioIoPlugins => show_audio_page(ui, &mut state.config),
-        PreferencesPage::VisualizationPlugins => show_visualization_page(ui, &mut state.config),
-        PreferencesPage::Options => show_options_page(ui, &mut state.config),
-        PreferencesPage::Fonts => show_fonts_page(ui, state),
-        PreferencesPage::Title => show_title_page(ui, &mut state.config),
-    }
+    show_selected_preferences_page(ui, state);
     ui.separator();
     ui.horizontal(|ui| {
         if ui.button("Reset to Defaults").clicked() {
@@ -212,6 +365,14 @@ fn show_preferences_contents(ui: &mut egui::Ui, state: &mut PreferencesViewportS
 }
 
 impl PreferencesPage {
+    const ALL: [Self; 5] = [
+        Self::AudioIoPlugins,
+        Self::VisualizationPlugins,
+        Self::Options,
+        Self::Fonts,
+        Self::Title,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::AudioIoPlugins => "Audio I/O Plugins",
@@ -221,19 +382,41 @@ impl PreferencesPage {
             Self::Title => "Title",
         }
     }
+
+    #[cfg(target_os = "android")]
+    fn android_label(self) -> &'static str {
+        match self {
+            Self::AudioIoPlugins => "Audio",
+            Self::VisualizationPlugins => "Visualization",
+            Self::Options => "Player",
+            Self::Fonts => "Fonts",
+            Self::Title => "Track titles",
+        }
+    }
+}
+
+fn show_selected_preferences_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
+    match state.selected_page {
+        PreferencesPage::AudioIoPlugins => show_audio_page(ui, &mut state.config),
+        PreferencesPage::VisualizationPlugins => show_visualization_page(ui, &mut state.config),
+        PreferencesPage::Options => show_options_page(ui, &mut state.config),
+        PreferencesPage::Fonts => show_fonts_page(ui, state),
+        PreferencesPage::Title => show_title_page(ui, &mut state.config),
+    }
 }
 
 fn show_audio_page(ui: &mut egui::Ui, config: &mut Config) {
-    ui.heading("Audio I/O Plugins");
     #[cfg(target_os = "android")]
     {
         let _ = config;
+        ui.heading("Audio");
         ui.label("Output: Android system media routing");
         ui.label("Headphones, Bluetooth, and speaker selection are managed by Android.");
         return;
     }
     #[cfg(not(target_os = "android"))]
     {
+        ui.heading("Audio I/O Plugins");
         ui.label("Output plugin: GStreamer");
         ui.horizontal(|ui| {
             ui.label("Output device:");
@@ -263,113 +446,246 @@ fn show_audio_page(ui: &mut egui::Ui, config: &mut Config) {
 
 fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading("Visualization Plugins");
-    combo(
-        ui,
-        "Visualization mode",
-        &mut config.vis_mode,
-        &[
-            (VisMode::Analyzer, "Analyzer"),
-            (VisMode::Scope, "Scope"),
-            (VisMode::Off, "Off"),
-        ],
-    );
-    combo(
-        ui,
-        "Analyzer mode",
-        &mut config.vis_analyzer_mode,
-        &[
-            (VisAnalyzerMode::Normal, "Normal"),
-            (VisAnalyzerMode::Fire, "Fire"),
-            (VisAnalyzerMode::VerticalLines, "Vertical lines"),
-        ],
-    );
-    combo(
-        ui,
-        "Analyzer style",
-        &mut config.vis_analyzer_style,
-        &[
-            (VisAnalyzerStyle::Bars, "Bars"),
-            (VisAnalyzerStyle::Lines, "Lines"),
-        ],
-    );
-    combo(
-        ui,
-        "Scope mode",
-        &mut config.vis_scope_mode,
-        &[
-            (VisScopeMode::Dot, "Dot"),
-            (VisScopeMode::Line, "Line"),
-            (VisScopeMode::Solid, "Solid"),
-        ],
-    );
-    ui.checkbox(&mut config.vis_peaks_enabled, "Peaks");
-    combo(
-        ui,
-        "Analyzer falloff",
-        &mut config.vis_analyzer_falloff,
-        &falloff_options(),
-    );
-    combo(
-        ui,
-        "Peaks falloff",
-        &mut config.vis_peaks_falloff,
-        &falloff_options(),
-    );
-    combo(
-        ui,
-        "WindowShade VU mode",
-        &mut config.vis_vu_mode,
-        &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
-    );
-    ui.add(egui::Slider::new(&mut config.vis_refresh_divisor, 1..=4).text("Refresh divisor"));
-    ui.add(egui::Slider::new(&mut config.vis_falloff, 0.001..=0.25).text("Sensitivity/falloff"));
+    #[cfg(target_os = "android")]
+    {
+        android_combo(
+            ui,
+            "Visualization mode",
+            &mut config.vis_mode,
+            &[
+                (VisMode::Analyzer, "Analyzer"),
+                (VisMode::Scope, "Scope"),
+                (VisMode::Off, "Off"),
+            ],
+        );
+        android_combo(
+            ui,
+            "Analyzer mode",
+            &mut config.vis_analyzer_mode,
+            &[
+                (VisAnalyzerMode::Normal, "Normal"),
+                (VisAnalyzerMode::Fire, "Fire"),
+                (VisAnalyzerMode::VerticalLines, "Vertical lines"),
+            ],
+        );
+        android_combo(
+            ui,
+            "Analyzer style",
+            &mut config.vis_analyzer_style,
+            &[
+                (VisAnalyzerStyle::Bars, "Bars"),
+                (VisAnalyzerStyle::Lines, "Lines"),
+            ],
+        );
+        android_combo(
+            ui,
+            "Scope mode",
+            &mut config.vis_scope_mode,
+            &[
+                (VisScopeMode::Dot, "Dot"),
+                (VisScopeMode::Line, "Line"),
+                (VisScopeMode::Solid, "Solid"),
+            ],
+        );
+        ui.checkbox(&mut config.vis_peaks_enabled, "Peaks");
+        android_combo(
+            ui,
+            "Analyzer falloff",
+            &mut config.vis_analyzer_falloff,
+            &falloff_options(),
+        );
+        android_combo(
+            ui,
+            "Peaks falloff",
+            &mut config.vis_peaks_falloff,
+            &falloff_options(),
+        );
+        android_combo(
+            ui,
+            "WindowShade VU mode",
+            &mut config.vis_vu_mode,
+            &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
+        );
+        android_slider(
+            ui,
+            "Refresh divisor",
+            egui::Slider::new(&mut config.vis_refresh_divisor, 1..=4),
+        );
+        android_slider(
+            ui,
+            "Sensitivity / falloff",
+            egui::Slider::new(&mut config.vis_falloff, 0.001..=0.25),
+        );
+        return;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        combo(
+            ui,
+            "Visualization mode",
+            &mut config.vis_mode,
+            &[
+                (VisMode::Analyzer, "Analyzer"),
+                (VisMode::Scope, "Scope"),
+                (VisMode::Off, "Off"),
+            ],
+        );
+        combo(
+            ui,
+            "Analyzer mode",
+            &mut config.vis_analyzer_mode,
+            &[
+                (VisAnalyzerMode::Normal, "Normal"),
+                (VisAnalyzerMode::Fire, "Fire"),
+                (VisAnalyzerMode::VerticalLines, "Vertical lines"),
+            ],
+        );
+        combo(
+            ui,
+            "Analyzer style",
+            &mut config.vis_analyzer_style,
+            &[
+                (VisAnalyzerStyle::Bars, "Bars"),
+                (VisAnalyzerStyle::Lines, "Lines"),
+            ],
+        );
+        combo(
+            ui,
+            "Scope mode",
+            &mut config.vis_scope_mode,
+            &[
+                (VisScopeMode::Dot, "Dot"),
+                (VisScopeMode::Line, "Line"),
+                (VisScopeMode::Solid, "Solid"),
+            ],
+        );
+        ui.checkbox(&mut config.vis_peaks_enabled, "Peaks");
+        combo(
+            ui,
+            "Analyzer falloff",
+            &mut config.vis_analyzer_falloff,
+            &falloff_options(),
+        );
+        combo(
+            ui,
+            "Peaks falloff",
+            &mut config.vis_peaks_falloff,
+            &falloff_options(),
+        );
+        combo(
+            ui,
+            "WindowShade VU mode",
+            &mut config.vis_vu_mode,
+            &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
+        );
+        ui.add(egui::Slider::new(&mut config.vis_refresh_divisor, 1..=4).text("Refresh divisor"));
+        ui.add(
+            egui::Slider::new(&mut config.vis_falloff, 0.001..=0.25).text("Sensitivity/falloff"),
+        );
+    }
 }
 
 fn show_options_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading("Options");
-    ui.add(egui::Slider::new(&mut config.volume, 0..=100).text("Volume"));
-    ui.add(egui::Slider::new(&mut config.balance, -100..=100).text("Balance"));
-    let mut scale_factor = clamped_scale_factor(config.scale_factor);
-    ui.add(
-        egui::Slider::new(&mut scale_factor, 1.0..=5.0)
-            .text("Zoom level")
-            .suffix("x"),
-    );
-    set_scale_factor(config, scale_factor);
-    ui.add(
-        egui::Slider::new(&mut config.pause_between_songs_time, 0..=30)
-            .text("Pause between songs seconds"),
-    );
-    ui.add(
-        egui::Slider::new(&mut config.mouse_wheel_change, 1..=25).text("Mouse wheel volume step"),
-    );
-    ui.checkbox(&mut config.repeat, "Repeat");
-    ui.checkbox(&mut config.shuffle, "Shuffle");
-    ui.checkbox(&mut config.no_playlist_advance, "No playlist advance");
-    ui.checkbox(&mut config.pause_between_songs, "Pause between songs");
-    ui.checkbox(&mut config.stop_with_fadeout, "Stop with fadeout");
-    let mut remaining = config.timer_mode == TimerMode::Remaining;
-    if ui.checkbox(&mut remaining, "Time remaining").changed() {
-        config.timer_mode = if remaining {
-            TimerMode::Remaining
-        } else {
-            TimerMode::Elapsed
-        };
+    #[cfg(target_os = "android")]
+    {
+        ui.heading("Playback");
+        android_slider(ui, "Volume", egui::Slider::new(&mut config.volume, 0..=100));
+        android_slider(
+            ui,
+            "Balance",
+            egui::Slider::new(&mut config.balance, -100..=100),
+        );
+        ui.checkbox(&mut config.repeat, "Repeat");
+        ui.checkbox(&mut config.shuffle, "Shuffle");
+        ui.checkbox(&mut config.no_playlist_advance, "No playlist advance");
+        ui.checkbox(&mut config.pause_between_songs, "Pause between songs");
+        if config.pause_between_songs {
+            android_slider(
+                ui,
+                "Pause duration in seconds",
+                egui::Slider::new(&mut config.pause_between_songs_time, 0..=30),
+            );
+        }
+        ui.checkbox(&mut config.stop_with_fadeout, "Stop with fadeout");
+        let mut remaining = config.timer_mode == TimerMode::Remaining;
+        if ui.checkbox(&mut remaining, "Show time remaining").changed() {
+            config.timer_mode = if remaining {
+                TimerMode::Remaining
+            } else {
+                TimerMode::Elapsed
+            };
+        }
+
+        ui.separator();
+        ui.heading("Layout");
+        let mut scale_factor = clamped_scale_factor(config.scale_factor);
+        android_slider(
+            ui,
+            "Player zoom",
+            egui::Slider::new(&mut scale_factor, 1.0..=5.0).suffix("x"),
+        );
+        set_scale_factor(config, scale_factor);
+        ui.checkbox(&mut config.playlist_visible, "Show playlist");
+        ui.checkbox(&mut config.equalizer_visible, "Show equalizer");
+
+        ui.separator();
+        ui.heading("Playlist text");
+        ui.checkbox(&mut config.convert_twenty, "Convert %20 to space");
+        ui.checkbox(
+            &mut config.convert_underscore,
+            "Convert underscore to space",
+        );
+        ui.checkbox(&mut config.show_numbers_in_pl, "Show track numbers");
+        return;
     }
-    ui.checkbox(&mut config.playlist_visible, "Show playlist");
-    ui.checkbox(&mut config.equalizer_visible, "Show equalizer");
-    ui.checkbox(&mut config.playlist_detached, "Detach playlist");
-    ui.checkbox(&mut config.equalizer_detached, "Detach equalizer");
-    ui.checkbox(&mut config.convert_twenty, "Convert %20 to space");
-    ui.checkbox(
-        &mut config.convert_underscore,
-        "Convert underscore to space",
-    );
-    ui.checkbox(&mut config.show_numbers_in_pl, "Show numbers in playlist");
-    ui.checkbox(
-        &mut config.vim_playlist_navigation,
-        "Vim-style playlist navigation",
-    );
+    #[cfg(not(target_os = "android"))]
+    {
+        ui.add(egui::Slider::new(&mut config.volume, 0..=100).text("Volume"));
+        ui.add(egui::Slider::new(&mut config.balance, -100..=100).text("Balance"));
+        let mut scale_factor = clamped_scale_factor(config.scale_factor);
+        ui.add(
+            egui::Slider::new(&mut scale_factor, 1.0..=5.0)
+                .text("Zoom level")
+                .suffix("x"),
+        );
+        set_scale_factor(config, scale_factor);
+        ui.add(
+            egui::Slider::new(&mut config.pause_between_songs_time, 0..=30)
+                .text("Pause between songs seconds"),
+        );
+        ui.add(
+            egui::Slider::new(&mut config.mouse_wheel_change, 1..=25)
+                .text("Mouse wheel volume step"),
+        );
+        ui.checkbox(&mut config.repeat, "Repeat");
+        ui.checkbox(&mut config.shuffle, "Shuffle");
+        ui.checkbox(&mut config.no_playlist_advance, "No playlist advance");
+        ui.checkbox(&mut config.pause_between_songs, "Pause between songs");
+        ui.checkbox(&mut config.stop_with_fadeout, "Stop with fadeout");
+        let mut remaining = config.timer_mode == TimerMode::Remaining;
+        if ui.checkbox(&mut remaining, "Time remaining").changed() {
+            config.timer_mode = if remaining {
+                TimerMode::Remaining
+            } else {
+                TimerMode::Elapsed
+            };
+        }
+        ui.checkbox(&mut config.playlist_visible, "Show playlist");
+        ui.checkbox(&mut config.equalizer_visible, "Show equalizer");
+        ui.checkbox(&mut config.playlist_detached, "Detach playlist");
+        ui.checkbox(&mut config.equalizer_detached, "Detach equalizer");
+        ui.checkbox(&mut config.convert_twenty, "Convert %20 to space");
+        ui.checkbox(
+            &mut config.convert_underscore,
+            "Convert underscore to space",
+        );
+        ui.checkbox(&mut config.show_numbers_in_pl, "Show numbers in playlist");
+        ui.checkbox(
+            &mut config.vim_playlist_navigation,
+            "Vim-style playlist navigation",
+        );
+    }
 }
 
 fn playlist_font_size_from_descriptor(descriptor: &str) -> f64 {
@@ -392,14 +708,21 @@ fn playlist_font_descriptor_for_size(size: f64) -> String {
 fn show_fonts_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
     ui.heading("Fonts");
     let mut playlist_font_size = playlist_font_size_from_descriptor(&state.config.playlist_font);
-    if ui
+    #[cfg(target_os = "android")]
+    let font_size_changed = android_slider(
+        ui,
+        "Playlist font size",
+        egui::Slider::new(&mut playlist_font_size, 6.0..=24.0).suffix(" px"),
+    );
+    #[cfg(not(target_os = "android"))]
+    let font_size_changed = ui
         .add(
             egui::Slider::new(&mut playlist_font_size, 6.0..=24.0)
                 .text("Playlist font size")
                 .suffix(" px"),
         )
-        .changed()
-    {
+        .changed();
+    if font_size_changed {
         state.config.playlist_font = playlist_font_descriptor_for_size(playlist_font_size);
     }
     ui.label("Main window text uses the active skin bitmap font.");
@@ -419,6 +742,7 @@ fn show_title_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.label(format!("Preview: {}", title_format_preview(config)));
 }
 
+#[cfg(not(target_os = "android"))]
 fn combo<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     label: &str,
@@ -439,6 +763,36 @@ fn combo<T: Copy + PartialEq>(
         });
 }
 
+#[cfg(target_os = "android")]
+fn android_combo<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut T,
+    options: &[(T, &str)],
+) {
+    let selected = options
+        .iter()
+        .find(|(candidate, _)| candidate == value)
+        .map(|(_, label)| *label)
+        .unwrap_or("Unknown");
+    ui.label(label);
+    egui::ComboBox::from_id_salt(("android-preferences", label))
+        .width(ui.available_width())
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            for (candidate, option_label) in options {
+                ui.selectable_value(value, *candidate, *option_label);
+            }
+        });
+}
+
+#[cfg(target_os = "android")]
+fn android_slider(ui: &mut egui::Ui, label: &str, slider: egui::Slider<'_>) -> bool {
+    ui.label(label);
+    ui.add_sized([ui.available_width(), 48.0], slider).changed()
+}
+
 fn falloff_options() -> [(VisFalloffSpeed, &'static str); 5] {
     [
         (VisFalloffSpeed::Slowest, "Slowest"),
@@ -450,16 +804,10 @@ fn falloff_options() -> [(VisFalloffSpeed, &'static str); 5] {
 }
 
 pub fn page_labels() -> Vec<&'static str> {
-    [
-        PreferencesPage::AudioIoPlugins,
-        PreferencesPage::VisualizationPlugins,
-        PreferencesPage::Options,
-        PreferencesPage::Fonts,
-        PreferencesPage::Title,
-    ]
-    .into_iter()
-    .map(PreferencesPage::label)
-    .collect()
+    PreferencesPage::ALL
+        .into_iter()
+        .map(PreferencesPage::label)
+        .collect()
 }
 
 #[cfg(test)]
@@ -478,5 +826,21 @@ mod tests {
                 "Title"
             ]
         );
+    }
+
+    #[test]
+    fn android_back_returns_to_categories_before_closing() {
+        let mut state =
+            PreferencesViewportState::new(&Config::default(), PreferencesPage::Options, true);
+        state.android_show_categories = false;
+
+        navigate_android_preferences_back(&mut state);
+        assert!(state.android_show_categories);
+        assert!(state.open);
+        assert!(!state.close_requested);
+
+        navigate_android_preferences_back(&mut state);
+        assert!(!state.open);
+        assert!(state.close_requested);
     }
 }
