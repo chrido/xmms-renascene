@@ -288,10 +288,22 @@ fn add_main_titlebar_drag_region(
 fn main_titlebar_drag_excluded(x: i32, y: i32, shaded: bool) -> bool {
     main_push_buttons(shaded)
         .iter()
-        .any(|button| main_push_button_rect(*button, shaded).contains(x, y))
+        .any(|button| main_push_hit_rect(*button, shaded).contains(x, y))
         || main_sliders(shaded)
             .iter()
             .any(|slider| main_slider_layout(*slider, shaded).rect.contains(x, y))
+}
+
+fn main_push_hit_rect(button: MainPushButton, shaded: bool) -> SkinRect {
+    main_push_hit_rect_for(button, shaded, cfg!(target_os = "android"))
+}
+
+fn main_push_hit_rect_for(button: MainPushButton, shaded: bool, touch_friendly: bool) -> SkinRect {
+    if touch_friendly && button == MainPushButton::Menu {
+        SkinRect::new(0, 0, 36, 36)
+    } else {
+        main_push_button_rect(button, shaded)
+    }
 }
 
 fn add_main_hit_regions(
@@ -307,7 +319,7 @@ fn add_main_hit_regions(
     for &button in main_push_buttons(view_model.shaded) {
         let rect = scale_skin_rect(
             base_rect,
-            main_push_button_rect(button, view_model.shaded),
+            main_push_hit_rect(button, view_model.shaded),
             app.scale_factor,
         );
         let response = ui.interact(
@@ -508,6 +520,22 @@ mod tests {
         assert_eq!(
             AppCommand::from(PanelCommand::TogglePlaylistVisibility),
             AppCommand::Panel(PanelCommand::TogglePlaylistVisibility)
+        );
+    }
+
+    #[test]
+    fn android_menu_uses_larger_touch_target() {
+        assert_eq!(
+            main_push_hit_rect_for(MainPushButton::Menu, false, true),
+            SkinRect::new(0, 0, 36, 36)
+        );
+        assert_eq!(
+            main_push_hit_rect_for(MainPushButton::Menu, false, false),
+            main_push_button_rect(MainPushButton::Menu, false)
+        );
+        assert_eq!(
+            main_push_hit_rect_for(MainPushButton::Play, false, true),
+            main_push_button_rect(MainPushButton::Play, false)
         );
     }
 
