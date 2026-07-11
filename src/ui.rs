@@ -16,9 +16,7 @@ use crate::app::command::{
 };
 use crate::app::effect::AppEffect;
 pub use crate::app::equalizer_actions::EqualizerPresetAction;
-use crate::app::equalizer_actions::{
-    EQUALIZER_CONFIGURE_PRESET_ITEM, EQUALIZER_PRESET_MENU_SECTIONS,
-};
+use crate::app::equalizer_actions::EQUALIZER_PRESET_FILE_ITEMS;
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
@@ -45,10 +43,9 @@ use crate::app_state::AppState;
 use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
 use crate::config::{Config, TimerMode};
 use crate::equalizer::{
-    default_equalizer_presets, find_preset, import_winamp_eqf, load_preset_store,
-    load_winamp_eqf_first, load_xmms_preset_file, preset_store_path, remove_presets,
-    save_preset_store, save_winamp_eqf, save_xmms_preset_file, sort_presets, upsert_preset,
-    winamp_original_presets, EqualizerPreset,
+    built_in_equalizer_presets, default_equalizer_presets, find_preset, load_preset_store,
+    load_winamp_eqf_first, load_xmms_preset_file, preset_store_path, save_winamp_eqf,
+    EqualizerPreset,
 };
 use crate::mpris::{
     app_action_for_mpris_command, gio_service::MprisService, mpris_player_properties,
@@ -5530,20 +5527,6 @@ impl MainWindowUiState {
         Ok(())
     }
 
-    fn save_equalizer_presets(&self) -> io::Result<()> {
-        save_preset_store(
-            &preset_store_path(&self.equalizer.preset_dir, "eq.preset"),
-            &self.equalizer.presets,
-        )
-    }
-
-    fn save_equalizer_auto_presets(&self) -> io::Result<()> {
-        save_preset_store(
-            &preset_store_path(&self.equalizer.preset_dir, "eq.auto_preset"),
-            &self.equalizer.auto_presets,
-        )
-    }
-
     fn current_equalizer_preset(&self, name: impl Into<String>) -> EqualizerPreset {
         EqualizerPreset::from_positions(
             name,
@@ -5573,52 +5556,8 @@ impl MainWindowUiState {
         }
     }
 
-    fn save_named_equalizer_preset(&mut self, name: String, automatic: bool) -> io::Result<()> {
-        let preset = self.current_equalizer_preset(name);
-        if automatic {
-            upsert_preset(&mut self.equalizer.auto_presets, preset);
-            self.save_equalizer_auto_presets()
-        } else {
-            upsert_preset(&mut self.equalizer.presets, preset);
-            self.save_equalizer_presets()
-        }
-    }
-
-    fn delete_named_equalizer_presets(
-        &mut self,
-        names: Vec<String>,
-        automatic: bool,
-    ) -> io::Result<()> {
-        if automatic {
-            remove_presets(&mut self.equalizer.auto_presets, &names);
-            self.save_equalizer_auto_presets()
-        } else {
-            remove_presets(&mut self.equalizer.presets, &names);
-            self.save_equalizer_presets()
-        }
-    }
-
-    fn load_equalizer_zero_preset(&mut self) {
-        self.apply_equalizer_preset_values(&EqualizerPreset::zero("Zero"));
-    }
-
     fn load_equalizer_default_preset(&mut self) {
         self.load_named_equalizer_preset("Default", false);
-    }
-
-    fn save_equalizer_default_preset(&mut self) -> io::Result<()> {
-        self.save_named_equalizer_preset("Default".to_string(), false)
-    }
-
-    fn load_equalizer_preset_file(&mut self, path: &Path) -> io::Result<()> {
-        if let Some(preset) = load_xmms_preset_file(path)? {
-            self.apply_equalizer_preset_values(&preset);
-        }
-        Ok(())
-    }
-
-    fn save_equalizer_preset_file(&self, path: &Path) -> io::Result<()> {
-        save_xmms_preset_file(path, &self.current_equalizer_preset("File"))
     }
 
     fn load_equalizer_winamp_file(&mut self, path: &Path) -> io::Result<()> {
@@ -5628,28 +5567,16 @@ impl MainWindowUiState {
         Ok(())
     }
 
-    fn import_equalizer_winamp_file(&mut self, path: &Path) -> io::Result<usize> {
-        let imported = import_winamp_eqf(path)?;
-        let count = imported.len();
-        for preset in imported {
-            upsert_preset(&mut self.equalizer.presets, preset);
-        }
-        self.save_equalizer_presets()?;
-        Ok(count)
-    }
-
     fn save_equalizer_winamp_file(&self, path: &Path) -> io::Result<()> {
-        save_winamp_eqf(path, &self.current_equalizer_preset("Entry1"))
-    }
-
-    fn sorted_equalizer_presets(&self, automatic: bool) -> Vec<EqualizerPreset> {
-        let mut presets = if automatic {
-            self.equalizer.auto_presets.clone()
+        let path = if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("eqf"))
+        {
+            path.to_path_buf()
         } else {
-            self.equalizer.presets.clone()
+            path.with_extension("eqf")
         };
-        sort_presets(&mut presets);
-        presets
+        save_winamp_eqf(&path, &self.current_equalizer_preset("Entry1"))
     }
 
     pub(crate) fn scale_factor(&self) -> f64 {
@@ -6837,17 +6764,6 @@ impl MainWindowUiState {
             .playlist
             .position()
             .and_then(|position| self.playlist_entry_uri(position))
-    }
-
-    fn current_playlist_basename(&self) -> Option<String> {
-        self.current_playlist_entry_uri().and_then(|uri| {
-            file_uri_to_path(uri)
-                .and_then(|path| {
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().to_string())
-                })
-                .or_else(|| uri.rsplit('/').next().map(ToString::to_string))
-        })
     }
 
     #[allow(dead_code)]

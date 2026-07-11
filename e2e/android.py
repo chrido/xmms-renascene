@@ -189,6 +189,32 @@ class AndroidDevice:
             time.sleep(0.2)
         raise TimeoutError(f"Android service did not start: {service_name}")
 
+    def wait_for_focus(self, package: str, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            window_dump = self.shell("dumpsys", "window", check=False).stdout
+            focus = next(
+                (
+                    line
+                    for line in window_dump.splitlines()
+                    if "mCurrentFocus=" in line
+                ),
+                "",
+            )
+            if package in focus:
+                time.sleep(0.7)
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"Android package did not receive focus: {package}")
+
+    def wait_for_external_file(self, path: str, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.shell("test", "-f", path, check=False).returncode == 0:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"Android external file was not created: {path}")
+
     def set_portrait(self) -> None:
         self._set_rotation(0)
 
@@ -290,6 +316,34 @@ class AndroidDevice:
         y = round(geometry.top_inset + geometry.usable_height * y_fraction)
         self.shell("input", "tap", str(x), str(y))
         time.sleep(0.3)
+
+    def swipe_usable_fraction(
+        self,
+        start_x_fraction: float,
+        start_y_fraction: float,
+        end_x_fraction: float,
+        end_y_fraction: float,
+        duration_ms: int = 300,
+    ) -> None:
+        geometry = self.display_geometry()
+        start_x = round(
+            geometry.left_inset + geometry.usable_width * start_x_fraction
+        )
+        start_y = round(
+            geometry.top_inset + geometry.usable_height * start_y_fraction
+        )
+        end_x = round(geometry.left_inset + geometry.usable_width * end_x_fraction)
+        end_y = round(geometry.top_inset + geometry.usable_height * end_y_fraction)
+        self.shell(
+            "input",
+            "swipe",
+            str(start_x),
+            str(start_y),
+            str(end_x),
+            str(end_y),
+            str(duration_ms),
+        )
+        time.sleep(0.4)
 
     def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)

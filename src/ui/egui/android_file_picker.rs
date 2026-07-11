@@ -182,13 +182,12 @@ pub fn open(request: FileDialogRequest) -> Result<(), String> {
         FileDialogRequest::LoadEqualizerPreset => (102, "*/*", false),
         FileDialogRequest::ImportSkin => (103, "*/*", false),
         FileDialogRequest::AddAudioDirectory => unreachable!(),
-        FileDialogRequest::SavePlaylist
-        | FileDialogRequest::SaveEqualizerPreset
-        | FileDialogRequest::ExportSkin => {
+        FileDialogRequest::SavePlaylist | FileDialogRequest::ExportSkin => {
             return Err(
                 "Saving through the Android document picker is not supported yet".to_string(),
             );
         }
+        FileDialogRequest::SaveEqualizerPreset => unreachable!(),
     };
     let context = android_context()?;
     let context = context
@@ -212,6 +211,39 @@ pub fn open(request: FileDialogRequest) -> Result<(), String> {
         ],
     )
     .map_err(|err| format!("failed to open Android document picker: {err}"))?;
+    Ok(())
+}
+
+pub fn save_equalizer_preset(contents: &[u8]) -> Result<(), String> {
+    let context = android_context()?;
+    let context = context
+        .as_ref()
+        .ok_or_else(|| "Android file picker is not initialized".to_string())?;
+    let mut env = context
+        .vm
+        .attach_current_thread()
+        .map_err(|err| format!("failed to attach Android picker thread: {err}"))?;
+    let mime_type = env
+        .new_string("application/octet-stream")
+        .map_err(|err| format!("failed to create EQF MIME type: {err}"))?;
+    let title = env
+        .new_string("preset.eqf")
+        .map_err(|err| format!("failed to create EQF file name: {err}"))?;
+    let contents = env
+        .byte_array_from_slice(contents)
+        .map_err(|err| format!("failed to create EQF document contents: {err}"))?;
+    env.call_method(
+        context.activity.as_obj(),
+        "createDocument",
+        "(ILjava/lang/String;Ljava/lang/String;[B)V",
+        &[
+            JValue::Int(105),
+            JValue::Object(&mime_type),
+            JValue::Object(&title),
+            JValue::Object(&contents),
+        ],
+    )
+    .map_err(|err| format!("failed to open Android EQF save dialog: {err}"))?;
     Ok(())
 }
 
@@ -425,6 +457,7 @@ fn request_from_code(code: jint) -> Option<FileDialogRequest> {
         102 => Some(FileDialogRequest::LoadEqualizerPreset),
         103 => Some(FileDialogRequest::ImportSkin),
         104 => Some(FileDialogRequest::AddAudioDirectory),
+        105 => Some(FileDialogRequest::SaveEqualizerPreset),
         _ => None,
     }
 }

@@ -438,7 +438,12 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
             crate::app::effect::FileDialogRequest::AddAudioFiles,
         )),
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
-        MainPushButton::Menu => app.dispatch(UiCommand::SetMainMenuVisible(true)),
+        MainPushButton::Menu => {
+            #[cfg(target_os = "android")]
+            app.dispatch(UiCommand::SetPreferencesVisible(true));
+            #[cfg(not(target_os = "android"))]
+            app.dispatch(UiCommand::SetMainMenuVisible(true));
+        }
         MainPushButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
         MainPushButton::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
     }

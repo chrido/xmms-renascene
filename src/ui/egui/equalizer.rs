@@ -2,16 +2,14 @@
 
 use crate::app::command::{AudioCommand, EqualizerCommand, PanelCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
-use crate::app::equalizer_actions::{
-    EqualizerPresetAction, EQUALIZER_CONFIGURE_PRESET_ITEM, EQUALIZER_PRESET_MENU_SECTIONS,
-};
+use crate::app::equalizer_actions::{EqualizerPresetAction, EQUALIZER_PRESET_FILE_ITEMS};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, eq_shaded_position_to_balance, eq_shaded_position_to_volume,
     eq_slider_pixel_to_position, equalizer_view_model, volume_to_eq_shaded_position,
     EqualizerViewModel,
 };
 use crate::app_log_info;
-use crate::equalizer::{winamp_original_presets, EqualizerPreset};
+use crate::equalizer::{built_in_equalizer_presets, EqualizerPreset};
 use crate::render::{
     equalizer_slider_layout, EqualizerControl, EqualizerRenderState, EqualizerSlider,
     EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
@@ -294,32 +292,23 @@ pub(crate) fn show_equalizer_presets_popover(
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_min_width(220.0);
-                for section in EQUALIZER_PRESET_MENU_SECTIONS {
-                    ui.menu_button(section.label, |ui| {
-                        for item in section.items {
-                            if ui.button(item.label).clicked() {
-                                dispatch_equalizer_preset_action(app, item.action);
+                for item in EQUALIZER_PRESET_FILE_ITEMS {
+                    if ui.button(item.label).clicked() {
+                        dispatch_equalizer_preset_action(app, item.action);
+                        close_after_click = true;
+                    }
+                }
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        for preset in built_in_equalizer_presets() {
+                            if ui.button(&preset.name).clicked() {
+                                apply_equalizer_preset(app, &preset);
                                 close_after_click = true;
-                                ui.close();
-                            }
-                        }
-                        if section.label == "Load" {
-                            ui.separator();
-                            ui.label("Winamp original presets");
-                            for preset in winamp_original_presets().into_iter().take(12) {
-                                if ui.button(&preset.name).clicked() {
-                                    apply_equalizer_preset(app, &preset);
-                                    close_after_click = true;
-                                    ui.close();
-                                }
                             }
                         }
                     });
-                }
-                if ui.button(EQUALIZER_CONFIGURE_PRESET_ITEM.label).clicked() {
-                    dispatch_equalizer_preset_action(app, EQUALIZER_CONFIGURE_PRESET_ITEM.action);
-                    close_after_click = true;
-                }
             });
         });
 
@@ -338,31 +327,15 @@ pub(crate) fn show_equalizer_presets_popover(
 
 fn dispatch_equalizer_preset_action(app: &mut EguiFrontendState, action: EqualizerPresetAction) {
     match action {
-        EqualizerPresetAction::LoadDefault => {
-            apply_equalizer_preset(app, &EqualizerPreset::zero("Default"));
-        }
-        EqualizerPresetAction::LoadZero => {
-            apply_equalizer_preset(app, &EqualizerPreset::zero("Zero"));
-        }
-        EqualizerPresetAction::LoadFromFile | EqualizerPresetAction::LoadFromWinampFile => {
+        EqualizerPresetAction::Load => {
             app.apply_effect(AppEffect::OpenFileDialog(
                 FileDialogRequest::LoadEqualizerPreset,
             ));
         }
-        EqualizerPresetAction::ImportWinampPresets => {
-            app.apply_effect(AppEffect::OpenFileDialog(
-                FileDialogRequest::LoadEqualizerPreset,
-            ));
-        }
-        EqualizerPresetAction::SaveToFile | EqualizerPresetAction::SaveToWinampFile => {
+        EqualizerPresetAction::Save => {
             app.apply_effect(AppEffect::OpenFileDialog(
                 FileDialogRequest::SaveEqualizerPreset,
             ));
-        }
-        other => {
-            if let Some(message) = other.unsupported_egui_message() {
-                app.runtime.pending_messages.push(message.to_string());
-            }
         }
     }
 }

@@ -1,5 +1,6 @@
 //! egui preferences dialog/window.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::command::UiCommand;
@@ -10,6 +11,7 @@ use crate::config::{Config, TimerMode};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
+use crate::skin::SkinEntry;
 
 use super::app::EguiFrontendState;
 
@@ -21,6 +23,15 @@ pub enum PreferencesPage {
     Options,
     Fonts,
     Title,
+    Skins,
+}
+
+#[derive(Debug, Clone)]
+enum AndroidSkinAction {
+    Refresh,
+    Default,
+    Import,
+    Select(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +43,9 @@ pub struct PreferencesViewportState {
     pub changed: bool,
     pub close_requested: bool,
     pub skin_browser_requested: bool,
+    android_skin_action: Option<AndroidSkinAction>,
+    android_swipe_start: Option<egui::Pos2>,
+    android_swipe_last: Option<egui::Pos2>,
 }
 
 impl PreferencesViewportState {
@@ -44,6 +58,9 @@ impl PreferencesViewportState {
             changed: false,
             close_requested: false,
             skin_browser_requested: false,
+            android_skin_action: None,
+            android_swipe_start: None,
+            android_swipe_last: None,
         }
     }
 }
@@ -54,10 +71,11 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     #[cfg(target_os = "android")]
     {
+        let skin_entries = app.skin_entries.clone();
         let state = Arc::clone(&app.preferences_viewport);
         let mut state = state.lock().expect("preferences viewport state poisoned");
         let before = state.config.clone();
-        show_android_preferences(ctx, &mut state);
+        show_android_preferences(ctx, &mut state, &skin_entries);
         if state.config != before {
             state.changed = true;
         }
@@ -122,6 +140,10 @@ fn sync_viewport_state_from_app(app: &mut EguiFrontendState) {
         // by closing a window. Mirror those live so the checkboxes/sliders don't
         // show a stale value (the snapshot is only re-seeded when opening).
         mirror_live_preferences_fields(&mut state.config, &app.controller().state().config);
+        #[cfg(target_os = "android")]
+        {
+            state.config.skin = app.controller().state().config.skin.clone();
+        }
     }
 }
 
@@ -132,6 +154,8 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     let mut next_open = app.preferences_open;
     let next_page;
     let mut next_config = None;
+    #[cfg(target_os = "android")]
+    let android_skin_action;
 
     {
         let mut state = app
@@ -153,6 +177,10 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
             open_skin_browser = true;
             state.skin_browser_requested = false;
         }
+        #[cfg(target_os = "android")]
+        {
+            android_skin_action = state.android_skin_action.take();
+        }
     }
 
     app.dispatch(UiCommand::SetPreferencesVisible(next_open));
@@ -162,6 +190,15 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     }
     if open_skin_browser {
         app.dispatch(UiCommand::SetSkinBrowserVisible(true));
+    }
+    #[cfg(target_os = "android")]
+    if let Some(action) = android_skin_action {
+        match action {
+            AndroidSkinAction::Refresh => app.refresh_runtime_skins(),
+            AndroidSkinAction::Default => app.select_default_skin(),
+            AndroidSkinAction::Import => app.import_skin(),
+            AndroidSkinAction::Select(path) => app.select_skin_path(path),
+        }
     }
     if save_config {
         app.runtime
@@ -191,8 +228,15 @@ fn show_preferences_embedded(ctx: &egui::Context, state: &mut PreferencesViewpor
 }
 
 #[cfg(target_os = "android")]
-fn show_android_preferences(ctx: &egui::Context, state: &mut PreferencesViewportState) {
-    let back_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape));
+fn show_android_preferences(
+    ctx: &egui::Context,
+    state: &mut PreferencesViewportState,
+    skin_entries: &[SkinEntry],
+) {
+    let screen = ctx.content_rect();
+    update_android_swipe_start(ctx, state);
+    let back_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape))
+        || take_android_back_swipe(ctx, state, screen);
     if back_requested {
         navigate_android_preferences_back(state);
         ctx.request_repaint();
@@ -201,7 +245,6 @@ fn show_android_preferences(ctx: &egui::Context, state: &mut PreferencesViewport
         return;
     }
 
-    let screen = ctx.content_rect();
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
     let insets = super::android_file_picker::system_insets_pixels();
     let left_inset = insets.left as f32 / pixels_per_point;
@@ -214,7 +257,7 @@ fn show_android_preferences(ctx: &egui::Context, state: &mut PreferencesViewport
         (screen.width() - left_inset - right_inset - horizontal_margin * 2.0).max(1.0);
     let content_height =
         (screen.height() - top_inset - bottom_inset - vertical_margin * 2.0).max(1.0);
-    let fill = ctx.style_of(ctx.theme()).visuals.panel_fill;
+    let fill = egui::Color32::from_gray(46);
 
     egui::Area::new(egui::Id::new("xmms-android-preferences"))
         .order(egui::Order::Foreground)
@@ -233,7 +276,7 @@ fn show_android_preferences(ctx: &egui::Context, state: &mut PreferencesViewport
                     if state.android_show_categories {
                         show_android_preferences_categories(ui, state);
                     } else {
-                        show_android_preferences_page(ui, state);
+                        show_android_preferences_page(ui, state, skin_entries);
                     }
                 });
             });
@@ -243,6 +286,16 @@ fn show_android_preferences(ctx: &egui::Context, state: &mut PreferencesViewport
 #[cfg(target_os = "android")]
 fn apply_android_preferences_style(ui: &mut egui::Ui) {
     let style = ui.style_mut();
+    style.visuals.panel_fill = egui::Color32::from_gray(46);
+    style.visuals.window_fill = egui::Color32::from_gray(46);
+    style.visuals.extreme_bg_color = egui::Color32::from_gray(28);
+    style.visuals.override_text_color = Some(egui::Color32::from_gray(245));
+    style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_gray(68);
+    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(68);
+    style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_gray(92);
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_gray(92);
+    style.visuals.widgets.active.weak_bg_fill = egui::Color32::from_gray(112);
+    style.visuals.widgets.active.bg_fill = egui::Color32::from_gray(112);
     style.spacing.item_spacing = egui::vec2(12.0, 12.0);
     style.spacing.button_padding = egui::vec2(16.0, 10.0);
     style.spacing.interact_size.y = 48.0;
@@ -285,7 +338,7 @@ fn show_android_preferences_categories(ui: &mut egui::Ui, state: &mut Preference
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            for page in PreferencesPage::ALL {
+            for page in PreferencesPage::ANDROID_ALL {
                 if ui
                     .add_sized(
                         [ui.available_width(), 56.0],
@@ -301,12 +354,20 @@ fn show_android_preferences_categories(ui: &mut egui::Ui, state: &mut Preference
 }
 
 #[cfg(target_os = "android")]
-fn show_android_preferences_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
+fn show_android_preferences_page(
+    ui: &mut egui::Ui,
+    state: &mut PreferencesViewportState,
+    skin_entries: &[SkinEntry],
+) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            show_selected_preferences_page(ui, state);
+            if state.selected_page == PreferencesPage::Skins {
+                show_android_skins_page(ui, state, skin_entries);
+            } else {
+                show_selected_preferences_page(ui, state);
+            }
             ui.separator();
             if ui
                 .add_sized(
@@ -321,6 +382,7 @@ fn show_android_preferences_page(ui: &mut egui::Ui, state: &mut PreferencesViewp
         });
 }
 
+#[cfg(any(target_os = "android", test))]
 fn navigate_android_preferences_back(state: &mut PreferencesViewportState) {
     if state.android_show_categories {
         state.open = false;
@@ -373,6 +435,16 @@ impl PreferencesPage {
         Self::Title,
     ];
 
+    #[cfg(target_os = "android")]
+    const ANDROID_ALL: [Self; 6] = [
+        Self::AudioIoPlugins,
+        Self::VisualizationPlugins,
+        Self::Options,
+        Self::Fonts,
+        Self::Title,
+        Self::Skins,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::AudioIoPlugins => "Audio I/O Plugins",
@@ -380,6 +452,7 @@ impl PreferencesPage {
             Self::Options => "Options",
             Self::Fonts => "Fonts",
             Self::Title => "Title",
+            Self::Skins => "Skins",
         }
     }
 
@@ -391,6 +464,7 @@ impl PreferencesPage {
             Self::Options => "Player",
             Self::Fonts => "Fonts",
             Self::Title => "Track titles",
+            Self::Skins => "Skins",
         }
     }
 }
@@ -402,6 +476,62 @@ fn show_selected_preferences_page(ui: &mut egui::Ui, state: &mut PreferencesView
         PreferencesPage::Options => show_options_page(ui, &mut state.config),
         PreferencesPage::Fonts => show_fonts_page(ui, state),
         PreferencesPage::Title => show_title_page(ui, &mut state.config),
+        PreferencesPage::Skins => {}
+    }
+}
+
+#[cfg(target_os = "android")]
+fn show_android_skins_page(
+    ui: &mut egui::Ui,
+    state: &mut PreferencesViewportState,
+    skin_entries: &[SkinEntry],
+) {
+    ui.heading("Skins");
+    ui.horizontal(|ui| {
+        if ui
+            .add_sized(
+                [ui.available_width() * 0.48, 48.0],
+                egui::Button::new("Default"),
+            )
+            .clicked()
+        {
+            state.android_skin_action = Some(AndroidSkinAction::Default);
+        }
+        if ui
+            .add_sized(
+                [ui.available_width(), 48.0],
+                egui::Button::new("Add skin..."),
+            )
+            .clicked()
+        {
+            state.android_skin_action = Some(AndroidSkinAction::Import);
+        }
+    });
+    if ui
+        .add_sized(
+            [ui.available_width(), 48.0],
+            egui::Button::new("Refresh skin list"),
+        )
+        .clicked()
+    {
+        state.android_skin_action = Some(AndroidSkinAction::Refresh);
+    }
+    ui.separator();
+    for entry in skin_entries {
+        let path = entry.path.to_string_lossy();
+        let selected = state.config.skin.as_deref() == Some(path.as_ref());
+        if ui
+            .add_sized(
+                [ui.available_width(), 52.0],
+                egui::Button::selectable(selected, &entry.name),
+            )
+            .clicked()
+        {
+            state.android_skin_action = Some(AndroidSkinAction::Select(entry.path.clone()));
+        }
+    }
+    if skin_entries.is_empty() {
+        ui.label("No additional skins found. Use Add skin to choose a WSZ file.");
     }
 }
 
@@ -727,9 +857,51 @@ fn show_fonts_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
     }
     ui.label("Main window text uses the active skin bitmap font.");
     ui.label("Skin bitmap font");
+    #[cfg(not(target_os = "android"))]
     if ui.button("Open Skin Browser").clicked() {
         state.skin_browser_requested = true;
     }
+}
+
+#[cfg(target_os = "android")]
+fn update_android_swipe_start(ctx: &egui::Context, state: &mut PreferencesViewportState) {
+    let (pressed, position) = ctx.input(|input| {
+        (
+            input.pointer.any_pressed(),
+            input
+                .pointer
+                .interact_pos()
+                .or_else(|| input.pointer.latest_pos()),
+        )
+    });
+    if pressed {
+        state.android_swipe_start = position;
+        state.android_swipe_last = position;
+    } else if state.android_swipe_start.is_some() && position.is_some() {
+        state.android_swipe_last = position;
+    }
+}
+
+#[cfg(target_os = "android")]
+fn take_android_back_swipe(
+    ctx: &egui::Context,
+    state: &mut PreferencesViewportState,
+    screen: egui::Rect,
+) -> bool {
+    if !ctx.input(|input| input.pointer.any_released()) {
+        return false;
+    }
+    let start = state.android_swipe_start.take();
+    let end = state.android_swipe_last.take();
+    start
+        .zip(end)
+        .is_some_and(|(start, end)| is_android_back_swipe(start, end, screen))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn is_android_back_swipe(start: egui::Pos2, end: egui::Pos2, screen: egui::Rect) -> bool {
+    let delta = end - start;
+    start.x <= screen.left() + 96.0 && delta.x >= 80.0 && delta.x >= delta.y.abs() * 1.5
 }
 
 fn show_title_page(ui: &mut egui::Ui, config: &mut Config) {
@@ -842,5 +1014,25 @@ mod tests {
         navigate_android_preferences_back(&mut state);
         assert!(!state.open);
         assert!(state.close_requested);
+    }
+
+    #[test]
+    fn android_back_swipe_requires_a_rightward_edge_gesture() {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 800.0));
+        assert!(is_android_back_swipe(
+            egui::pos2(20.0, 300.0),
+            egui::pos2(180.0, 315.0),
+            screen,
+        ));
+        assert!(!is_android_back_swipe(
+            egui::pos2(140.0, 300.0),
+            egui::pos2(300.0, 300.0),
+            screen,
+        ));
+        assert!(!is_android_back_swipe(
+            egui::pos2(20.0, 300.0),
+            egui::pos2(40.0, 300.0),
+            screen,
+        ));
     }
 }

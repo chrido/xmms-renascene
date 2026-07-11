@@ -21,6 +21,7 @@ import android.view.WindowInsets;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 
 public final class XmmsActivity extends NativeActivity {
@@ -53,6 +54,7 @@ public final class XmmsActivity extends NativeActivity {
     private volatile int safeInsetTop;
     private volatile int safeInsetRight;
     private volatile int safeInsetBottom;
+    private byte[] pendingDocumentContents;
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
@@ -228,6 +230,19 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
+    public void createDocument(
+            int requestCode, String mimeType, String title, byte[] contents) {
+        runOnUiThread(() -> {
+            pendingDocumentContents = contents;
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType(mimeType);
+            intent.putExtra(Intent.EXTRA_TITLE, title);
+            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            startActivityForResult(intent, requestCode);
+        });
+    }
+
     public int systemInset(int side) {
         switch (side) {
             case 0:
@@ -381,10 +396,32 @@ public final class XmmsActivity extends NativeActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) {
+            if (requestCode == 105) {
+                pendingDocumentContents = null;
+            }
             nativeOnDocumentsSelected(requestCode, new String[0], null);
             return;
         }
         try {
+            if (requestCode == 105) {
+                Uri uri = data.getData();
+                if (uri == null) {
+                    throw new IllegalStateException("document provider returned no output URI");
+                }
+                byte[] contents = pendingDocumentContents;
+                pendingDocumentContents = null;
+                if (contents == null) {
+                    throw new IllegalStateException("equalizer preset contents are unavailable");
+                }
+                try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (output == null) {
+                        throw new IllegalStateException("could not open output document");
+                    }
+                    output.write(contents);
+                }
+                nativeOnDocumentsSelected(requestCode, new String[0], null);
+                return;
+            }
             if (requestCode == 104) {
                 Uri treeUri = data.getData();
                 if (treeUri == null) {
@@ -411,7 +448,7 @@ public final class XmmsActivity extends NativeActivity {
             nativeOnDocumentsSelected(requestCode, paths.toArray(new String[0]), null);
         } catch (Exception error) {
             nativeOnDocumentsSelected(
-                    requestCode, new String[0], "Failed to import selected document: " + error);
+                    requestCode, new String[0], "Failed to process selected document: " + error);
         }
     }
 

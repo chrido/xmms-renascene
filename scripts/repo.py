@@ -1025,6 +1025,15 @@ class RepoTool:
             return 1
 
         apk = self._android_apk_path(release=release)
+        stop_result = subprocess.run(
+            [str(adb), "-d", "shell", "am", "force-stop", ANDROID_PACKAGE],
+            cwd=REPO_DIR,
+            check=False,
+        )
+        if stop_result.returncode != 0:
+            logging.error("failed to force-stop the existing Android app process")
+            return 1
+
         result = subprocess.run(
             [str(adb), "-d", "install", "-r", str(apk)],
             cwd=REPO_DIR,

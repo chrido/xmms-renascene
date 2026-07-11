@@ -32,9 +32,11 @@ use crate::app::view_model::{
 use crate::app_log_error;
 use crate::app_log_info;
 use crate::app_state::AppState;
-use crate::equalizer::{load_winamp_eqf_first, load_xmms_preset_file, EqualizerPreset};
 #[cfg(feature = "desktop-egui")]
-use crate::equalizer::{save_winamp_eqf, save_xmms_preset_file};
+use crate::equalizer::save_winamp_eqf;
+#[cfg(target_os = "android")]
+use crate::equalizer::serialize_winamp_eqf;
+use crate::equalizer::{load_winamp_eqf_first, EqualizerPreset};
 #[cfg(feature = "desktop-egui")]
 use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
 #[cfg(feature = "desktop-egui")]
@@ -990,7 +992,7 @@ impl EguiFrontendState {
             FileDialogRequest::LoadEqualizerPreset => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Load equalizer preset")
-                    .add_filter("Equalizer presets", &["preset", "eqf"])
+                    .add_filter("Winamp EQF files", &["eqf"])
                     .pick_file()
                 {
                     self.load_equalizer_preset_file(&path);
@@ -999,7 +1001,8 @@ impl EguiFrontendState {
             FileDialogRequest::SaveEqualizerPreset => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Save equalizer preset")
-                    .add_filter("Equalizer presets", &["preset", "eqf"])
+                    .add_filter("Winamp EQF files", &["eqf"])
+                    .set_file_name("preset.eqf")
                     .save_file()
                 {
                     self.save_equalizer_preset_file(&path);
@@ -1015,7 +1018,13 @@ impl EguiFrontendState {
 
     #[cfg(target_os = "android")]
     fn handle_file_dialog(&mut self, request: FileDialogRequest) {
-        if let Err(err) = super::android_file_picker::open(request) {
+        let result = if request == FileDialogRequest::SaveEqualizerPreset {
+            let preset = self.current_equalizer_preset("Entry1");
+            super::android_file_picker::save_equalizer_preset(&serialize_winamp_eqf(&preset))
+        } else {
+            super::android_file_picker::open(request)
+        };
+        if let Err(err) = result {
             self.runtime.pending_messages.push(err);
         }
     }
@@ -1054,12 +1063,7 @@ impl EguiFrontendState {
     }
 
     fn load_equalizer_preset_file(&mut self, path: &Path) {
-        let loaded = if is_winamp_eqf(path) {
-            load_winamp_eqf_first(path)
-        } else {
-            load_xmms_preset_file(path)
-        };
-        match loaded {
+        match load_winamp_eqf_first(path) {
             Ok(Some(preset)) => self.apply_equalizer_preset(&preset),
             Ok(None) => self
                 .runtime
@@ -1074,17 +1078,9 @@ impl EguiFrontendState {
 
     #[cfg(feature = "desktop-egui")]
     fn save_equalizer_preset_file(&mut self, path: &Path) {
-        let preset = self.current_equalizer_preset(if is_winamp_eqf(path) {
-            "Entry1"
-        } else {
-            "File"
-        });
-        let saved = if is_winamp_eqf(path) {
-            save_winamp_eqf(path, &preset)
-        } else {
-            save_xmms_preset_file(path, &preset)
-        };
-        if let Err(err) = saved {
+        let path = Self::path_with_extension(path, "eqf");
+        let preset = self.current_equalizer_preset("Entry1");
+        if let Err(err) = save_winamp_eqf(&path, &preset) {
             self.runtime.pending_messages.push(format!(
                 "failed to save equalizer preset '{}': {err}",
                 path.display()
@@ -1092,7 +1088,7 @@ impl EguiFrontendState {
         }
     }
 
-    #[cfg(feature = "desktop-egui")]
+    #[cfg(any(feature = "desktop-egui", target_os = "android"))]
     fn current_equalizer_preset(&self, name: &str) -> EqualizerPreset {
         let config = &self.controller.state().config;
         EqualizerPreset::from_positions(
@@ -1100,6 +1096,18 @@ impl EguiFrontendState {
             config.equalizer_preamp_pos,
             config.equalizer_band_pos,
         )
+    }
+
+    #[cfg(feature = "desktop-egui")]
+    fn path_with_extension(path: &Path, extension: &str) -> PathBuf {
+        if path
+            .extension()
+            .is_some_and(|current| current.eq_ignore_ascii_case(extension))
+        {
+            path.to_path_buf()
+        } else {
+            path.with_extension(extension)
+        }
     }
 
     fn apply_equalizer_preset(&mut self, preset: &EqualizerPreset) {
@@ -1268,12 +1276,6 @@ impl EguiFrontendState {
     }
 }
 
-fn is_winamp_eqf(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("eqf"))
-}
-
 impl EguiFrontendState {
     fn desired_window_size(&self) -> egui::Vec2 {
         let config = &self.controller.state().config;
@@ -1397,6 +1399,13 @@ impl eframe::App for EguiFrontendState {
             preferences::show_preferences(&ctx, self);
         }
         file_info::show_file_info_dialog(&ctx, self);
+        #[cfg(target_os = "android")]
+        if self.skin_browser_open {
+            self.selected_preferences_page = PreferencesPage::Skins;
+            self.dispatch(UiCommand::SetSkinBrowserVisible(false));
+            self.dispatch(UiCommand::SetPreferencesVisible(true));
+        }
+        #[cfg(not(target_os = "android"))]
         if self.skin_browser_open {
             show_skin_browser_placeholder(&ctx, self);
         }
@@ -1423,6 +1432,46 @@ impl EguiFrontendState {
     fn replace_active_skin(&mut self, skin: DefaultSkin) {
         self.active_skin = skin;
         self.texture_cache.generation = self.texture_cache.generation.wrapping_add(1);
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn refresh_runtime_skins(&mut self) {
+        self.skin_entries = discover_runtime_skins();
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn select_default_skin(&mut self) {
+        match DefaultSkin::load_bundled() {
+            Ok(skin) => {
+                self.replace_active_skin(skin);
+                let mut config = self.controller().state().config.clone();
+                config.skin = None;
+                self.apply_preferences_config(config);
+            }
+            Err(err) => self
+                .runtime
+                .pending_messages
+                .push(format!("failed to load bundled default skin: {err}")),
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn select_skin_path(&mut self, path: PathBuf) {
+        let entry = SkinEntry {
+            name: path
+                .file_stem()
+                .or_else(|| path.file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or("Imported skin")
+                .to_string(),
+            path,
+        };
+        select_skin_entry(self, &entry);
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn import_skin(&mut self) {
+        import_skin_from_dialog(self);
     }
 }
 
@@ -2812,6 +2861,7 @@ pub fn run_egui_frontend_android(
     .map_err(|err| format!("failed to start Android egui frontend: {err}"))
 }
 
+#[cfg(not(target_os = "android"))]
 fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendState) {
     let mut open = app.skin_browser_open;
     egui::Window::new("Skin selector")
@@ -2820,10 +2870,18 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
         .default_width(360.0)
         .show(ctx, |ui| {
             if ui.button("Refresh").clicked() {
-                app.skin_entries = discover_runtime_skins();
+                #[cfg(target_os = "android")]
+                app.refresh_runtime_skins();
+                #[cfg(not(target_os = "android"))]
+                {
+                    app.skin_entries = discover_runtime_skins();
+                }
             }
             ui.horizontal(|ui| {
                 if ui.button("Default").clicked() {
+                    #[cfg(target_os = "android")]
+                    app.select_default_skin();
+                    #[cfg(not(target_os = "android"))]
                     match DefaultSkin::load_bundled() {
                         Ok(skin) => {
                             app.replace_active_skin(skin);

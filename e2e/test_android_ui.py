@@ -127,13 +127,18 @@ def test_android_preferences_use_touch_layout_and_back_navigation(
     original_pid = android_device.app_pid()
 
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
-    android_device.tap_usable_fraction(0.15, 0.044)
     categories = android_device.screenshot(test_output.screenshot_path())
 
     android_device.tap_usable_fraction(0.5, 0.30)
     player_page = android_device.screenshot(test_output.screenshot_path())
-    android_device.tap_usable_fraction(0.13, 0.045)
+    android_device.swipe_usable_fraction(0.20, 0.5, 0.70, 0.5)
     categories_after_back = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.5, 0.52)
+    skins_page = android_device.screenshot(test_output.screenshot_path())
+    android_device.swipe_usable_fraction(0.20, 0.5, 0.70, 0.5)
+    categories_after_skin_back = android_device.screenshot(
+        test_output.screenshot_path()
+    )
     android_device.tap_usable_fraction(0.13, 0.045)
     closed = android_device.screenshot(test_output.screenshot_path())
 
@@ -144,10 +149,54 @@ def test_android_preferences_use_touch_layout_and_back_navigation(
     assert android_device.app_pid() == original_pid
     assert categories.read_bytes() != player_page.read_bytes()
     assert categories.read_bytes() == categories_after_back.read_bytes()
+    assert categories.read_bytes() != skins_page.read_bytes()
+    assert categories.read_bytes() == categories_after_skin_back.read_bytes()
     assert categories.read_bytes() != closed.read_bytes()
 
 
-def test_android_touching_player_closes_main_menu(
+def test_android_equalizer_presets_menu_saves_winamp_eqf(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    output_path = "/sdcard/Download/preset.eqf"
+    android_device.shell("rm", "-f", output_path, check=False)
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+    player_bounds = android_device.main_player_bounds()
+    android_device.tap_skin_rect(
+        MAIN_TOGGLE_RECTS[MainToggleButton.EQUALIZER],
+        player_bounds,
+    )
+    player_bounds = android_device.main_player_bounds()
+    android_device.tap_skin_rect(
+        offset_rect(
+            EQUALIZER_CONTROL_RECTS[EqualizerControl.PRESETS],
+            MAIN_PLAYER_BASE_HEIGHT,
+        ),
+        player_bounds,
+    )
+    menu = android_device.screenshot(test_output.screenshot_path())
+
+    android_device.tap_usable_fraction(0.477, 0.304)
+    android_device.wait_for_focus("com.google.android.documentsui")
+    picker = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.86, 0.97)
+    android_device.wait_for_focus(ANDROID_PACKAGE)
+    android_device.wait_for_external_file(output_path)
+    header = android_device.command(
+        "exec-out",
+        "head",
+        "-c",
+        "31",
+        output_path,
+    ).stdout
+
+    assert menu.read_bytes() != picker.read_bytes()
+    assert header == "Winamp EQ library file v1.1\x1a!--"
+    android_device.shell("rm", "-f", output_path, check=False)
+
+
+def test_android_menu_button_opens_preferences_directly(
     android_device: AndroidDevice,
     test_output: Any,
 ) -> None:
@@ -156,27 +205,25 @@ def test_android_touching_player_closes_main_menu(
     player_bounds = android_device.main_player_bounds()
 
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU], player_bounds)
-    menu_open = android_device.screenshot(test_output.screenshot_path())
-    android_device.tap_skin_rect(
-        MAIN_TOGGLE_RECTS[MainToggleButton.SHUFFLE],
-        player_bounds,
-    )
-    menu_closed = android_device.screenshot(test_output.screenshot_path())
+    preferences = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.13, 0.045)
+    player = android_device.screenshot(test_output.screenshot_path())
 
     android_device.assert_log_contains(
-        "command Ui(SetMainMenuVisible(true))",
-        "player: toggle activated, toggle_name=Shuffle",
-        "command Ui(SetMainMenuVisible(false))",
+        "command Ui(SetPreferencesVisible(true))",
+        "command Ui(SetPreferencesVisible(false))",
     )
-    assert menu_open.read_bytes() != menu_closed.read_bytes()
+    assert preferences.read_bytes() != player.read_bytes()
 
 
 def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     android_device: AndroidDevice,
     test_output: Any,
 ) -> None:
-    android_device.set_landscape()
     android_device.restart_app(reset_data=True)
+    android_device.set_landscape()
+    android_device.force_stop()
+    android_device.start_activity()
     android_device.wait_for_app()
     geometry = android_device.display_geometry()
     scale = android_device.main_player_scale()
