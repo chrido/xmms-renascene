@@ -28,10 +28,10 @@ pub enum PreferencesPage {
 
 #[derive(Debug, Clone)]
 enum AndroidSkinAction {
-    Refresh,
     Default,
     Import,
     Select(PathBuf),
+    Delete(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -76,8 +76,13 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
         let mut state = state.lock().expect("preferences viewport state poisoned");
         let before = state.config.clone();
         show_android_preferences(ctx, &mut state, &skin_entries);
-        if state.config != before {
+        let changed = state.config != before;
+        if changed {
             state.changed = true;
+        }
+        drop(state);
+        if changed {
+            ctx.request_repaint();
         }
         return;
     }
@@ -194,10 +199,10 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     #[cfg(target_os = "android")]
     if let Some(action) = android_skin_action {
         match action {
-            AndroidSkinAction::Refresh => app.refresh_runtime_skins(),
             AndroidSkinAction::Default => app.select_default_skin(),
             AndroidSkinAction::Import => app.import_skin(),
             AndroidSkinAction::Select(path) => app.select_skin_path(path),
+            AndroidSkinAction::Delete(path) => app.delete_skin_path(path),
         }
     }
     if save_config {
@@ -269,7 +274,8 @@ fn show_android_preferences(
             ui.horizontal(|ui| {
                 ui.add_space(left_inset + horizontal_margin);
                 ui.vertical(|ui| {
-                    ui.set_min_size(egui::vec2(content_width, content_height));
+                    ui.set_width(content_width);
+                    ui.set_min_height(content_height);
                     apply_android_preferences_style(ui);
                     show_android_preferences_header(ui, state);
                     ui.separator();
@@ -299,6 +305,8 @@ fn apply_android_preferences_style(ui: &mut egui::Ui) {
     style.spacing.item_spacing = egui::vec2(12.0, 12.0);
     style.spacing.button_padding = egui::vec2(16.0, 10.0);
     style.spacing.interact_size.y = 48.0;
+    style.spacing.icon_width = 28.0;
+    style.spacing.icon_width_inner = 16.0;
     style
         .text_styles
         .insert(egui::TextStyle::Body, egui::FontId::proportional(18.0));
@@ -368,18 +376,25 @@ fn show_android_preferences_page(
             } else {
                 show_selected_preferences_page(ui, state);
             }
-            ui.separator();
-            if ui
-                .add_sized(
-                    [ui.available_width(), 48.0],
-                    egui::Button::new("Reset to Defaults"),
-                )
-                .clicked()
-            {
-                state.config = Config::default();
-                state.changed = true;
+            if android_page_shows_reset(state.selected_page) {
+                ui.separator();
+                if ui
+                    .add_sized(
+                        [ui.available_width(), 48.0],
+                        egui::Button::new("Reset to Defaults"),
+                    )
+                    .clicked()
+                {
+                    state.config = Config::default();
+                    state.changed = true;
+                }
             }
         });
+}
+
+#[cfg(any(target_os = "android", test))]
+fn android_page_shows_reset(page: PreferencesPage) -> bool {
+    !matches!(page, PreferencesPage::Fonts | PreferencesPage::Skins)
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -435,9 +450,8 @@ impl PreferencesPage {
         Self::Title,
     ];
 
-    #[cfg(target_os = "android")]
-    const ANDROID_ALL: [Self; 6] = [
-        Self::AudioIoPlugins,
+    #[cfg(any(target_os = "android", test))]
+    const ANDROID_ALL: [Self; 5] = [
         Self::VisualizationPlugins,
         Self::Options,
         Self::Fonts,
@@ -507,28 +521,32 @@ fn show_android_skins_page(
             state.android_skin_action = Some(AndroidSkinAction::Import);
         }
     });
-    if ui
-        .add_sized(
-            [ui.available_width(), 48.0],
-            egui::Button::new("Refresh skin list"),
-        )
-        .clicked()
-    {
-        state.android_skin_action = Some(AndroidSkinAction::Refresh);
-    }
     ui.separator();
     for entry in skin_entries {
         let path = entry.path.to_string_lossy();
         let selected = state.config.skin.as_deref() == Some(path.as_ref());
-        if ui
-            .add_sized(
-                [ui.available_width(), 52.0],
-                egui::Button::selectable(selected, &entry.name),
-            )
-            .clicked()
-        {
-            state.android_skin_action = Some(AndroidSkinAction::Select(entry.path.clone()));
-        }
+        ui.horizontal(|ui| {
+            let can_delete = super::app::is_user_imported_skin_path(&entry.path);
+            let delete_width = if can_delete { 88.0 } else { 0.0 };
+            let select_width =
+                (ui.available_width() - delete_width - ui.spacing().item_spacing.x).max(48.0);
+            if ui
+                .add_sized(
+                    [select_width, 52.0],
+                    egui::Button::selectable(selected, &entry.name),
+                )
+                .clicked()
+            {
+                state.android_skin_action = Some(AndroidSkinAction::Select(entry.path.clone()));
+            }
+            if can_delete
+                && ui
+                    .add_sized([delete_width, 52.0], egui::Button::new("Delete"))
+                    .clicked()
+            {
+                state.android_skin_action = Some(AndroidSkinAction::Delete(entry.path.clone()));
+            }
+        });
     }
     if skin_entries.is_empty() {
         ui.label("No additional skins found. Use Add skin to choose a WSZ file.");
@@ -758,15 +776,6 @@ fn show_options_page(ui: &mut egui::Ui, config: &mut Config) {
         set_scale_factor(config, scale_factor);
         ui.checkbox(&mut config.playlist_visible, "Show playlist");
         ui.checkbox(&mut config.equalizer_visible, "Show equalizer");
-
-        ui.separator();
-        ui.heading("Playlist text");
-        ui.checkbox(&mut config.convert_twenty, "Convert %20 to space");
-        ui.checkbox(
-            &mut config.convert_underscore,
-            "Convert underscore to space",
-        );
-        ui.checkbox(&mut config.show_numbers_in_pl, "Show track numbers");
         return;
     }
     #[cfg(not(target_os = "android"))]
@@ -855,7 +864,9 @@ fn show_fonts_page(ui: &mut egui::Ui, state: &mut PreferencesViewportState) {
     if font_size_changed {
         state.config.playlist_font = playlist_font_descriptor_for_size(playlist_font_size);
     }
+    #[cfg(not(target_os = "android"))]
     ui.label("Main window text uses the active skin bitmap font.");
+    #[cfg(not(target_os = "android"))]
     ui.label("Skin bitmap font");
     #[cfg(not(target_os = "android"))]
     if ui.button("Open Skin Browser").clicked() {
@@ -905,6 +916,9 @@ fn is_android_back_swipe(start: egui::Pos2, end: egui::Pos2, screen: egui::Rect)
 }
 
 fn show_title_page(ui: &mut egui::Ui, config: &mut Config) {
+    #[cfg(target_os = "android")]
+    ui.heading("Track titles");
+    #[cfg(not(target_os = "android"))]
     ui.heading("Title");
     ui.label("Title format");
     ui.text_edit_singleline(&mut config.title_format);
@@ -912,6 +926,17 @@ fn show_title_page(ui: &mut egui::Ui, config: &mut Config) {
         "Tokens: %p performer, %a album, %t title, %n track number, %f filename, %F full path/URI.",
     );
     ui.label(format!("Preview: {}", title_format_preview(config)));
+    #[cfg(target_os = "android")]
+    {
+        ui.separator();
+        ui.heading("Playlist text");
+        ui.checkbox(&mut config.convert_twenty, "Convert %20 to space");
+        ui.checkbox(
+            &mut config.convert_underscore,
+            "Convert underscore to space",
+        );
+        ui.checkbox(&mut config.show_numbers_in_pl, "Show track numbers");
+    }
 }
 
 #[cfg(not(target_os = "android"))]
@@ -948,15 +973,31 @@ fn android_combo<T: Copy + PartialEq>(
         .map(|(_, label)| *label)
         .unwrap_or("Unknown");
     ui.label(label);
-    egui::ComboBox::from_id_salt(("android-preferences", label))
-        .width(ui.available_width())
-        .selected_text(selected)
-        .show_ui(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            for (candidate, option_label) in options {
-                ui.selectable_value(value, *candidate, *option_label);
-            }
-        });
+    let width = ui.available_width();
+    ui.scope(|ui| {
+        let style = ui.style_mut();
+        style.spacing.interact_size.y = 56.0;
+        style.spacing.button_padding.y = 14.0;
+        style.spacing.icon_width = 32.0;
+        style.spacing.icon_width_inner = 18.0;
+        egui::ComboBox::from_id_salt(("android-preferences", label))
+            .width(width)
+            .selected_text(selected)
+            .show_ui(ui, |ui| {
+                ui.set_min_width(width);
+                for (candidate, option_label) in options {
+                    if ui
+                        .add_sized(
+                            [ui.available_width(), 56.0],
+                            egui::Button::selectable(*value == *candidate, *option_label),
+                        )
+                        .clicked()
+                    {
+                        *value = *candidate;
+                    }
+                }
+            });
+    });
 }
 
 #[cfg(target_os = "android")]
@@ -1014,6 +1055,17 @@ mod tests {
         navigate_android_preferences_back(&mut state);
         assert!(!state.open);
         assert!(state.close_requested);
+    }
+
+    #[test]
+    fn android_preferences_exclude_audio_and_hide_font_reset() {
+        assert!(!PreferencesPage::ANDROID_ALL.contains(&PreferencesPage::AudioIoPlugins));
+        assert!(PreferencesPage::ANDROID_ALL.contains(&PreferencesPage::VisualizationPlugins));
+        assert!(!android_page_shows_reset(PreferencesPage::Fonts));
+        assert!(!android_page_shows_reset(PreferencesPage::Skins));
+        assert!(android_page_shows_reset(
+            PreferencesPage::VisualizationPlugins
+        ));
     }
 
     #[test]

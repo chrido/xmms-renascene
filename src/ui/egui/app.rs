@@ -1,6 +1,6 @@
 //! eframe application lifecycle for the egui frontend.
 
-#[cfg(feature = "desktop-egui")]
+#[cfg(any(feature = "desktop-egui", target_os = "android"))]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -1410,6 +1410,7 @@ impl eframe::App for EguiFrontendState {
             show_skin_browser_placeholder(&ctx, self);
         }
         menu::show_pending_messages(&ctx, self);
+        self.flush_queued_repaint(&ctx);
         app_log_trace!(render, "egui update size={:?}", self.desired_window_size());
     }
 }
@@ -1420,6 +1421,13 @@ fn android_main_player_scale(available_width: f32) -> f32 {
 }
 
 impl EguiFrontendState {
+    fn flush_queued_repaint(&mut self, ctx: &egui::Context) {
+        if std::mem::take(&mut self.runtime.repaint_requested) {
+            self.runtime.dirty_targets.clear();
+            ctx.request_repaint();
+        }
+    }
+
     pub(crate) fn close_player_menus(&mut self) {
         self.playlist_menu_open = None;
         self.playlist_menu_hover = None;
@@ -1472,6 +1480,33 @@ impl EguiFrontendState {
     #[cfg(target_os = "android")]
     pub(crate) fn import_skin(&mut self) {
         import_skin_from_dialog(self);
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn delete_skin_path(&mut self, path: PathBuf) {
+        if !is_user_imported_skin_path(&path) {
+            self.runtime
+                .pending_messages
+                .push(format!("cannot delete unmanaged skin '{}'", path.display()));
+            return;
+        }
+        let selected = self.controller().state().config.skin.as_deref()
+            == Some(path.to_string_lossy().as_ref());
+        let result = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        if let Err(err) = result {
+            self.runtime
+                .pending_messages
+                .push(format!("failed to delete skin '{}': {err}", path.display()));
+            return;
+        }
+        if selected {
+            self.select_default_skin();
+        }
+        self.refresh_runtime_skins();
     }
 }
 
@@ -2978,21 +3013,39 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
 
 #[cfg(target_os = "android")]
 fn import_skin_path(app: &mut EguiFrontendState, path: &Path) {
-    let entry = SkinEntry {
-        name: path
-            .file_stem()
-            .or_else(|| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("Imported skin")
-            .to_string(),
-        path: path.to_path_buf(),
-    };
-    select_skin_entry(app, &entry);
+    match import_skin_to_user_dir(path) {
+        Ok(imported) => {
+            app.skin_entries = discover_runtime_skins();
+            let entry = SkinEntry {
+                name: imported
+                    .file_stem()
+                    .or_else(|| imported.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Imported skin")
+                    .to_string(),
+                path: imported,
+            };
+            select_skin_entry(app, &entry);
+        }
+        Err(err) => app
+            .runtime
+            .pending_messages
+            .push(format!("failed to import skin '{}': {err}", path.display())),
+    }
 }
 
-#[cfg(feature = "desktop-egui")]
+fn user_skin_import_dir() -> PathBuf {
+    default_config_dir().join("xmms").join("Skins")
+}
+
+#[cfg(target_os = "android")]
+pub(crate) fn is_user_imported_skin_path(path: &Path) -> bool {
+    path.parent() == Some(user_skin_import_dir().as_path())
+}
+
+#[cfg(any(feature = "desktop-egui", target_os = "android"))]
 fn import_skin_to_user_dir(source: &Path) -> std::io::Result<PathBuf> {
-    let user_skin_dir = default_config_dir().join("xmms").join("Skins");
+    let user_skin_dir = user_skin_import_dir();
     fs::create_dir_all(&user_skin_dir)?;
     let name = source.file_name().ok_or_else(|| {
         std::io::Error::new(
@@ -3009,7 +3062,7 @@ fn import_skin_to_user_dir(source: &Path) -> std::io::Result<PathBuf> {
     Ok(destination)
 }
 
-#[cfg(feature = "desktop-egui")]
+#[cfg(any(feature = "desktop-egui", target_os = "android"))]
 fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -3386,6 +3439,20 @@ mod tests {
 
         assert!(app.controller().state().config.playlist_visible);
         assert!(app.runtime.repaint_requested);
+    }
+
+    #[test]
+    fn egui_flushes_queued_render_into_repaint_request() {
+        let ctx = egui::Context::default();
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.runtime.apply_effect(AppEffect::QueueRender(
+            crate::app::effect::RenderTarget::All,
+        ));
+
+        app.flush_queued_repaint(&ctx);
+
+        assert!(!app.runtime.repaint_requested);
+        assert!(app.runtime.dirty_targets.is_empty());
     }
 
     #[test]
