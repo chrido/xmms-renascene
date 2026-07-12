@@ -5035,6 +5035,7 @@ enum PlaybackTransitionState {
     Idle,
     StoppedAt(i64),
     PendingBackendSeek(i64),
+    AwaitingBackendSeek(i64),
     WaitingBetweenSongs {
         remaining_ms: i64,
     },
@@ -5064,6 +5065,10 @@ impl PlaybackTransitionState {
 
     fn request_backend_seek(position_ms: i64) -> Self {
         Self::PendingBackendSeek(position_ms)
+    }
+
+    fn await_backend_seek(position_ms: i64) -> Self {
+        Self::AwaitingBackendSeek(position_ms)
     }
 
     fn start_fadeout(start_volume: i32) -> Self {
@@ -5119,6 +5124,13 @@ impl PlaybackTransitionState {
         }
     }
 
+    fn awaiting_backend_seek_ms(self) -> Option<i64> {
+        match self {
+            PlaybackTransitionState::AwaitingBackendSeek(position_ms) => Some(position_ms),
+            _ => None,
+        }
+    }
+
     fn fadeout(self) -> Option<(i64, i32)> {
         match self {
             PlaybackTransitionState::FadingOut {
@@ -5136,6 +5148,7 @@ impl PlaybackTransitionState {
             PlaybackTransitionState::WaitingBetweenSongs { .. } => 0,
             PlaybackTransitionState::Idle
             | PlaybackTransitionState::PendingBackendSeek(_)
+            | PlaybackTransitionState::AwaitingBackendSeek(_)
             | PlaybackTransitionState::FadingOut { .. } => fallback_ms,
         }
     }
@@ -8662,9 +8675,17 @@ impl MainWindowUiState {
                 PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
             return;
         }
+        self.playback_transition =
+            PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
         if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().seek(self.playback_position_ms) {
-                eprintln!("xmms-rs: failed to seek playback: {err}");
+            match backend.borrow().seek(self.playback_position_ms) {
+                Ok(()) => {
+                    self.playback_transition =
+                        PlaybackTransitionState::await_backend_seek(self.playback_position_ms);
+                }
+                Err(err) => {
+                    eprintln!("xmms-rs: failed to seek playback: {err}");
+                }
             }
         }
     }
@@ -8817,9 +8838,15 @@ impl MainWindowUiState {
             }
             applied_pending_seek |= self.apply_pending_backend_seek(&backend, true);
         }
-        if self.should_sync_backend_position(applied_pending_seek) {
-            let position_ms = { backend.borrow().position_ms() };
-            if let Some(position_ms) = position_ms {
+        let position_ms = { backend.borrow().position_ms() };
+        if let Some(position_ms) = position_ms {
+            if let Some(target_ms) = self.playback_transition.awaiting_backend_seek_ms() {
+                if position_ms.saturating_sub(target_ms).abs() <= 250 {
+                    self.playback_transition = PlaybackTransitionState::Idle;
+                    self.playback_position_ms = position_ms.max(target_ms);
+                    self.position_position = self.position_slider_position();
+                }
+            } else if self.should_sync_backend_position(applied_pending_seek) {
                 self.playback_position_ms = position_ms.max(0);
                 self.position_position = self.position_slider_position();
             }
@@ -8827,7 +8854,13 @@ impl MainWindowUiState {
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
-        !applied_pending_seek && self.playback_transition.eof_pause_remaining_ms().is_none()
+        !applied_pending_seek
+            && self.playback_transition.pending_backend_seek_ms().is_none()
+            && self
+                .playback_transition
+                .awaiting_backend_seek_ms()
+                .is_none()
+            && self.playback_transition.eof_pause_remaining_ms().is_none()
     }
 
     fn apply_pending_backend_seek(
@@ -8841,7 +8874,7 @@ impl MainWindowUiState {
         match backend.borrow().seek(position_ms) {
             Ok(()) => {
                 app_log_info!(backend, "gtk applied pending start seek", position_ms);
-                self.playback_transition = PlaybackTransitionState::Idle;
+                self.playback_transition = PlaybackTransitionState::await_backend_seek(position_ms);
                 true
             }
             Err(err) => {
@@ -9925,6 +9958,26 @@ mod tests {
             state.playback_transition,
             PlaybackTransitionState::PendingBackendSeek(42_000)
         );
+    }
+
+    #[test]
+    fn seeking_while_playing_waits_for_backend_position_confirmation() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+        state.press(40, 90);
+        assert_eq!(state.release(40, 90), UiAction::None);
+
+        state.set_playback_position_ms(42_000);
+
+        assert_eq!(state.playback_position_ms, 42_000);
+        assert_eq!(
+            state.playback_transition,
+            PlaybackTransitionState::PendingBackendSeek(42_000)
+        );
+        assert!(!state.should_sync_backend_position(false));
     }
 
     #[test]

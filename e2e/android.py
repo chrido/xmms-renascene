@@ -189,6 +189,21 @@ class AndroidDevice:
             time.sleep(0.2)
         raise TimeoutError(f"Android service did not start: {service_name}")
 
+    def wait_for_service_absent(self, service_name: str, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            services = self.shell(
+                "dumpsys",
+                "activity",
+                "services",
+                ANDROID_PACKAGE,
+                check=False,
+            ).stdout
+            if service_name not in services:
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"Android service did not stop: {service_name}")
+
     def wait_for_focus(self, package: str, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -390,6 +405,28 @@ class AndroidDevice:
             time.sleep(0.2)
         raise AssertionError(f"{path} did not contain {needle!r}:\n{contents}")
 
+    def wait_for_private_file_not_contains(
+        self,
+        path: str,
+        needle: str,
+        timeout: float = 5.0,
+    ) -> str:
+        deadline = time.monotonic() + timeout
+        contents = ""
+        while time.monotonic() < deadline:
+            result = self.shell(
+                "run-as",
+                ANDROID_PACKAGE,
+                "cat",
+                path,
+                check=False,
+            )
+            contents = result.stdout
+            if result.returncode == 0 and needle not in contents:
+                return contents
+            time.sleep(0.2)
+        raise AssertionError(f"{path} still contained {needle!r}:\n{contents}")
+
     def wait_for_private_file_int_at_least(
         self,
         path: str,
@@ -415,6 +452,44 @@ class AndroidDevice:
         raise AssertionError(
             f"{path} did not contain {key}>={minimum}:\n{contents}"
         )
+
+    def read_private_file(self, path: str) -> str:
+        result = self.shell(
+            "run-as",
+            ANDROID_PACKAGE,
+            "cat",
+            path,
+            check=False,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise AssertionError(f"Could not read private file {path}: {detail}")
+        return result.stdout
+
+    def private_file_exists(self, path: str) -> bool:
+        return (
+            self.shell(
+                "run-as",
+                ANDROID_PACKAGE,
+                "test",
+                "-f",
+                path,
+                check=False,
+            ).returncode
+            == 0
+        )
+
+    def wait_for_private_file_absent(
+        self,
+        path: str,
+        timeout: float = 5.0,
+    ) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self.private_file_exists(path):
+                return
+            time.sleep(0.2)
+        raise AssertionError(f"Private file still exists: {path}")
 
     def write_private_file(self, path: str, contents: str) -> None:
         self.write_private_bytes(path, contents.encode("utf-8"))

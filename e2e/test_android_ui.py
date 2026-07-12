@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from io import BytesIO
 from importlib import import_module
+from pathlib import Path
 from typing import Any
+import time
 import wave
+import zipfile
+
+from PIL import Image
 
 from android import ANDROID_AUTO_PROBE_ACTIVITY, ANDROID_PACKAGE, AndroidDevice
 from gui import (
@@ -129,11 +134,11 @@ def test_android_preferences_use_touch_layout_and_back_navigation(
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
     categories = android_device.screenshot(test_output.screenshot_path())
 
-    android_device.tap_usable_fraction(0.5, 0.30)
+    android_device.tap_usable_fraction(0.5, 0.22)
     player_page = android_device.screenshot(test_output.screenshot_path())
     android_device.swipe_usable_fraction(0.20, 0.5, 0.70, 0.5)
     categories_after_back = android_device.screenshot(test_output.screenshot_path())
-    android_device.tap_usable_fraction(0.5, 0.52)
+    android_device.tap_usable_fraction(0.5, 0.463)
     skins_page = android_device.screenshot(test_output.screenshot_path())
     android_device.swipe_usable_fraction(0.20, 0.5, 0.70, 0.5)
     categories_after_skin_back = android_device.screenshot(
@@ -177,7 +182,7 @@ def test_android_equalizer_presets_menu_saves_winamp_eqf(
     )
     menu = android_device.screenshot(test_output.screenshot_path())
 
-    android_device.tap_usable_fraction(0.477, 0.304)
+    android_device.tap_usable_fraction(0.477, 0.405)
     android_device.wait_for_focus("com.google.android.documentsui")
     picker = android_device.screenshot(test_output.screenshot_path())
     android_device.tap_usable_fraction(0.86, 0.97)
@@ -354,6 +359,240 @@ def test_android_restores_panels_settings_and_playlist_after_relaunch(
     android_device.wait_for_private_file_contains(playlist_path, "Restored Track")
 
 
+def test_android_managed_playlists_save_load_and_delete_from_settings(
+    android_device: AndroidDevice,
+) -> None:
+    playlist_path = "files/config/xmms-renascene/playlist.m3u"
+    managed_path = "files/config/playlists/playlist"
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    android_device.write_private_file(
+        playlist_path,
+        "#EXTM3U\n"
+        "#EXTINF:42,Managed Original\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/original.wav\n",
+    )
+    android_device.start_activity()
+
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
+    android_device.tap_usable_fraction(0.5, 0.544)
+    android_device.tap_usable_fraction(0.5, 0.30)
+    android_device.wait_for_private_file_contains(managed_path, "Managed Original")
+    assert not android_device.private_file_exists(f"{managed_path}.m3u8")
+
+    android_device.write_private_file(
+        managed_path,
+        "#EXTM3U\n"
+        "#EXTINF:42,Managed Loaded\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/loaded.wav\n",
+    )
+    android_device.tap_usable_fraction(0.32, 0.74)
+    android_device.close_activity()
+    android_device.wait_for_private_file_contains(playlist_path, "Managed Loaded")
+    android_device.start_activity()
+
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
+    android_device.tap_usable_fraction(0.5, 0.544)
+    android_device.tap_usable_fraction(0.84, 0.74)
+    android_device.wait_for_private_file_absent(managed_path)
+
+
+def test_android_playlist_save_and_load_menu_items_open_managed_dialog(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+    player = android_device.screenshot(test_output.screenshot_path())
+    left, top, right, bottom = android_device.main_player_bounds()
+    scale = (right - left) / 275
+    list_x = round(left + 240.5 * scale)
+
+    def tap_list_y(offset_from_bottom: float) -> None:
+        android_device.shell(
+            "input",
+            "tap",
+            str(list_x),
+            str(round(bottom - offset_from_bottom * scale)),
+        )
+        time.sleep(0.4)
+
+    tap_list_y(20)
+    tap_list_y(39)
+    save_dialog = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.13, 0.043)
+
+    tap_list_y(20)
+    tap_list_y(21)
+    load_dialog = android_device.screenshot(test_output.screenshot_path())
+
+    def image_pixels(path: Path) -> bytes:
+        with Image.open(path) as image:
+            return image.convert("RGB").tobytes()
+
+    assert image_pixels(player) != image_pixels(save_dialog)
+    assert image_pixels(player) != image_pixels(load_dialog)
+
+
+def test_android_playlist_swipes_select_right_and_deselect_left(
+    android_device: AndroidDevice,
+) -> None:
+    playlist_path = "files/config/xmms-renascene/playlist.m3u"
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    android_device.write_private_file(
+        playlist_path,
+        "#EXTM3U\n"
+        "#EXTINF:42,Swipe First\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/first.wav\n"
+        "#EXTINF:42,Swipe Second\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/second.wav\n",
+    )
+    android_device.start_activity()
+    left, top, right, _bottom = android_device.main_player_bounds()
+    scale = (right - left) / 275
+    playlist_top = top + round(116 * scale)
+    row_top = playlist_top + round(20 * scale)
+    row_bottom = row_top + round(11 * scale)
+    row_y = (row_top + row_bottom) // 2
+    start_x = left + round(40 * scale)
+    end_x = left + round(200 * scale)
+
+    def row_pixels() -> bytes:
+        with Image.open(BytesIO(android_device.framebuffer_png())) as screenshot:
+            return screenshot.convert("RGB").crop(
+                (left, row_top, right, row_bottom)
+            ).tobytes()
+
+    before = row_pixels()
+    android_device.clear_logcat()
+    android_device.shell(
+        "input",
+        "swipe",
+        str(start_x),
+        str(row_y),
+        str(end_x),
+        str(row_y),
+        "300",
+    )
+    time.sleep(0.5)
+    selected = row_pixels()
+    android_device.shell(
+        "input",
+        "swipe",
+        str(end_x),
+        str(row_y),
+        str(start_x),
+        str(row_y),
+        "300",
+    )
+    time.sleep(0.5)
+    deselected = row_pixels()
+
+    assert before != selected
+    assert selected != deselected
+
+
+def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    android_device.write_private_file(
+        "files/config/xmms-renascene/playlist.m3u",
+        "#EXTM3U\n"
+        "#EXTINF:42,File Info Track\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/info.wav\n",
+    )
+    android_device.start_activity()
+    player = android_device.screenshot(test_output.screenshot_path())
+    left, _top, right, bottom = android_device.main_player_bounds()
+    scale = (right - left) / 275
+    misc_x = round(left + 111.5 * scale)
+    menu_y = round(bottom - 20 * scale)
+
+    def open_misc() -> None:
+        android_device.shell("input", "tap", str(misc_x), str(menu_y))
+        time.sleep(0.5)
+
+    open_misc()
+    popup = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.1, 0.5)
+    dismissed = android_device.screenshot(test_output.screenshot_path())
+
+    open_misc()
+    android_device.tap_usable_fraction(0.67, 0.85)
+    file_info = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_usable_fraction(0.13, 0.043)
+    returned = android_device.screenshot(test_output.screenshot_path())
+
+    def image_pixels(path: Path) -> bytes:
+        with Image.open(path) as image:
+            return image.convert("RGB").tobytes()
+
+    assert image_pixels(player) != image_pixels(popup)
+    assert image_pixels(popup) != image_pixels(dismissed)
+    assert image_pixels(dismissed) != image_pixels(file_info)
+    assert image_pixels(file_info) != image_pixels(returned)
+
+
+def test_android_clear_list_stops_playback_and_resets_playlist(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    playlist_path = "files/config/xmms-renascene/playlist.m3u"
+    audio_path = "files/imports/clear.wav"
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+
+    audio = BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(8_000)
+        wav.writeframes(bytes([128]) * 8_000 * 8)
+    android_device.write_private_bytes(audio_path, audio.getvalue())
+    android_device.write_private_file(
+        playlist_path,
+        "#EXTM3U\n"
+        "#EXTINF:8,Clear Track\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/clear.wav\n",
+    )
+    android_device.start_activity()
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
+    android_device.wait_for_service("XmmsPlaybackService")
+
+    left, _top, right, bottom = android_device.main_player_bounds()
+    scale = (right - left) / 275
+    list_x = round(left + 240.5 * scale)
+    android_device.shell(
+        "input",
+        "tap",
+        str(list_x),
+        str(round(bottom - 20 * scale)),
+    )
+    time.sleep(0.4)
+    android_device.shell(
+        "input",
+        "tap",
+        str(list_x),
+        str(round(bottom - 57 * scale)),
+    )
+
+    android_device.wait_for_service_absent("XmmsPlaybackService")
+    android_device.wait_for_private_file_not_contains(playlist_path, "Clear Track")
+    android_device.wait_for_private_file_contains(config_path, "playback_position_ms=0")
+
+
 def test_android_auto_media_browser_surface(
     android_device: AndroidDevice,
 ) -> None:
@@ -394,8 +633,19 @@ def test_android_player_widget_is_packaged(
 
     assert ".XmmsPlayerWidget" in manifest
     assert "android.appwidget.action.APPWIDGET_UPDATE" in manifest
-    assert "player_widget_info" in manifest
-    assert "widget_player" in widget_info
-    assert "widget_player_image" in widget_layout
-    assert "widget_play" in widget_layout
-    assert "widget_pause" in widget_layout
+    assert "android:initialLayout" in widget_info
+    assert "E: ImageView" in widget_layout
+    assert widget_layout.count("E: ImageButton") == 5
+
+    apk = Path(__file__).resolve().parents[1] / "target/debug/apk/xmms-renascene.apk"
+    with zipfile.ZipFile(apk) as package:
+        native_library = next(
+            name
+            for name in package.namelist()
+            if name.startswith("lib/") and name.endswith("/libxmms_renascene.so")
+        )
+        library_bytes = package.read(native_library)
+    assert (
+        b"Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlayerWidget"
+        in library_bytes
+    )

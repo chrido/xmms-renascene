@@ -1100,6 +1100,8 @@ impl EguiFrontendState {
                 self.sync_frontend_state_from_store();
                 self.apply_effects(result.effects);
                 self.schedule_missing_local_playlist_durations();
+                #[cfg(target_os = "android")]
+                self.persist_android_state();
                 true
             }
             Err(err) => {
