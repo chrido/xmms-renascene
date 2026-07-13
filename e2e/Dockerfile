@@ -23,6 +23,8 @@ RUN apt-get update \
         ca-certificates \
         dbus-x11 \
         ffmpeg \
+        gstreamer1.0-plugins-base \
+        gstreamer1.0-plugins-good \
         imagemagick \
         libasound2-dev \
         libcairo2-dev \

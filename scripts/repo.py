@@ -1504,7 +1504,7 @@ class RepoTool:
                     "CARGO_TARGET_DIR=/tmp/xmms-e2e-target",
                 ]
             )
-        command.extend([image, "./repo", "pye2e", *args])
+        command.extend([image, "./repo", "pye2e", "-m", "not android", *args])
         logging.info("Running Python E2E tests in Docker: %s", " ".join(shlex.quote(part) for part in command))
         return subprocess.run(command, cwd=REPO_DIR, check=False).returncode
 

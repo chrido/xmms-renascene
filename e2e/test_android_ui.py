@@ -185,7 +185,7 @@ def test_android_equalizer_presets_menu_saves_winamp_eqf(
     android_device.tap_usable_fraction(0.477, 0.405)
     android_device.wait_for_focus("com.google.android.documentsui")
     picker = android_device.screenshot(test_output.screenshot_path())
-    android_device.tap_usable_fraction(0.86, 0.97)
+    android_device.tap_ui_text("Save")
     android_device.wait_for_focus(ANDROID_PACKAGE)
     android_device.wait_for_external_file(output_path)
     header = android_device.command(
@@ -468,6 +468,16 @@ def test_android_playlist_swipes_select_right_and_deselect_left(
                 (left, row_top, right, row_bottom)
             ).tobytes()
 
+    def wait_for_row_change(previous: bytes) -> bytes:
+        deadline = time.monotonic() + 5.0
+        current = previous
+        while time.monotonic() < deadline:
+            current = row_pixels()
+            if current != previous:
+                return current
+            time.sleep(0.2)
+        raise AssertionError("playlist row did not redraw after swipe selection")
+
     before = row_pixels()
     android_device.clear_logcat()
     android_device.shell(
@@ -479,8 +489,11 @@ def test_android_playlist_swipes_select_right_and_deselect_left(
         str(row_y),
         "300",
     )
-    time.sleep(0.5)
-    selected = row_pixels()
+    android_device.assert_log_contains(
+        "playlist: swipe selection applied, swiped_index=0, selected=true"
+    )
+    selected = wait_for_row_change(before)
+    android_device.clear_logcat()
     android_device.shell(
         "input",
         "swipe",
@@ -490,8 +503,10 @@ def test_android_playlist_swipes_select_right_and_deselect_left(
         str(row_y),
         "300",
     )
-    time.sleep(0.5)
-    deselected = row_pixels()
+    android_device.assert_log_contains(
+        "playlist: swipe selection applied, swiped_index=0, selected=false"
+    )
+    deselected = wait_for_row_change(selected)
 
     assert before != selected
     assert selected != deselected

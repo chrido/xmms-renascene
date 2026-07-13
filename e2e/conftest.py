@@ -160,6 +160,9 @@ def gui_environment(tmp_path: Path) -> dict[str, str]:
             "WINIT_UNIX_BACKEND": "x11",
             "WGPU_BACKEND": env.get("WGPU_BACKEND", "gl"),
             "LIBGL_ALWAYS_SOFTWARE": env.get("LIBGL_ALWAYS_SOFTWARE", "1"),
+            "XMMS_GSTREAMER_AUDIO_SINK": env.get(
+                "XMMS_GSTREAMER_AUDIO_SINK", "fakesink"
+            ),
             "XMMS_NON_UNIQUE": "1",
             "XMMS_RS_CONFIG_DIR": str(tmp_path / "config"),
             "XMMS_RS_LOG": env.get("XMMS_RS_LOG", "trace"),

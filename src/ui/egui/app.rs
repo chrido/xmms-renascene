@@ -43,7 +43,9 @@ use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
 use crate::mpris::{
     app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
-use crate::playback::backend::{create_backend, PlaybackBackend, PlaybackBackendKind};
+use crate::playback::backend::PlaybackBackend;
+#[cfg(not(test))]
+use crate::playback::backend::{create_backend, PlaybackBackendKind};
 use crate::playback::model::{EqualizerBackendState, PlaybackEvent, PlayerState};
 use crate::playlist::file_uri_to_path;
 use crate::playlist::DurationIndexResult;
@@ -300,7 +302,7 @@ impl EguiFrontendState {
                     )),
                 ),
             };
-        #[cfg(not(target_os = "android"))]
+        #[cfg(all(not(target_os = "android"), not(test)))]
         let (playback_backend, playback_backend_error) =
             match create_backend(PlaybackBackendKind::Auto) {
                 Ok(backend) => (Some(backend), None),
@@ -311,6 +313,8 @@ impl EguiFrontendState {
                     )),
                 ),
             };
+        #[cfg(all(not(target_os = "android"), test))]
+        let (playback_backend, playback_backend_error) = (None, None);
         let mut runtime = EguiRuntime::default();
         if let Some(error) = playback_backend_error {
             runtime.pending_messages.push(error);
@@ -891,6 +895,7 @@ impl EguiFrontendState {
             &effect,
             AppEffect::StopPlayback | AppEffect::BeginStopFade { .. }
         );
+        #[cfg(not(test))]
         if matches!(effect, AppEffect::StartPlaybackUri { .. }) && self.playback_backend.is_none() {
             match create_backend(PlaybackBackendKind::Auto) {
                 Ok(backend) => self.playback_backend = Some(backend),
@@ -990,6 +995,7 @@ impl EguiFrontendState {
         }
     }
 
+    #[cfg(not(test))]
     fn handle_frontend_playback_error(&mut self, error: String) {
         let result = self
             .controller
@@ -3823,7 +3829,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("xmms-rs-egui-eq-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("custom.preset");
+        let path = root.join("custom.eqf");
 
         let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
         app.controller_mut().state_mut().config.equalizer_preamp_pos = 25;
@@ -3835,7 +3841,7 @@ mod tests {
         app.load_equalizer_preset_file(&path);
 
         assert_eq!(app.controller().state().config.equalizer_preamp_pos, 25);
-        assert_eq!(app.controller().state().config.equalizer_band_pos[0], 75);
+        assert_eq!(app.controller().state().config.equalizer_band_pos[0], 73);
         assert!(app.runtime.repaint_requested);
 
         let _ = std::fs::remove_dir_all(&root);

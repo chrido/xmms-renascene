@@ -153,6 +153,12 @@ class AndroidDevice:
 
     def start_activity(self) -> None:
         self.clear_logcat()
+        self.shell(
+            "am",
+            "force-stop",
+            "com.google.android.documentsui",
+            check=False,
+        )
         self.shell("am", "start", "-W", "-n", ANDROID_ACTIVITY)
         self.wait_for_app()
 
@@ -167,7 +173,15 @@ class AndroidDevice:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             pid = self.shell("pidof", ANDROID_PACKAGE, check=False).stdout.strip()
-            focus = self.shell("dumpsys", "window", check=False).stdout
+            window_dump = self.shell("dumpsys", "window", check=False).stdout
+            focus = next(
+                (
+                    line
+                    for line in window_dump.splitlines()
+                    if "mCurrentFocus=" in line
+                ),
+                "",
+            )
             if pid and ANDROID_PACKAGE in focus:
                 time.sleep(0.5)
                 return
@@ -221,6 +235,34 @@ class AndroidDevice:
                 return
             time.sleep(0.2)
         raise TimeoutError(f"Android package did not receive focus: {package}")
+
+    def tap_ui_text(self, text: str, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            remote_path = "/data/local/tmp/xmms-ui.xml"
+            self.shell("uiautomator", "dump", remote_path, check=False)
+            dump = self.shell("cat", remote_path, check=False).stdout
+            for node in re.findall(r"<node\b[^>]*>", dump):
+                label = re.search(r'\btext="([^"]*)"', node)
+                bounds = re.search(
+                    r'\bbounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+                    node,
+                )
+                if (
+                    label is not None
+                    and label.group(1).casefold() == text.casefold()
+                    and bounds is not None
+                ):
+                    left, top, right, bottom = map(int, bounds.groups())
+                    self.shell(
+                        "input",
+                        "tap",
+                        str((left + right) // 2),
+                        str((top + bottom) // 2),
+                    )
+                    return
+            time.sleep(0.2)
+        raise TimeoutError(f"Android UI text did not appear: {text}")
 
     def wait_for_external_file(self, path: str, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout

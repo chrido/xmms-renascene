@@ -566,8 +566,8 @@ fn handle_playlist_touch_scroll(
         });
     }
     if response.dragged() {
-        let drag_delta = response.drag_delta();
-        app.playlist_touch_drag_delta += drag_delta;
+        let frame_drag_delta = response.drag_delta();
+        app.playlist_touch_drag_delta += frame_drag_delta;
         if !app.playlist_touch_drag_direction_decided
             && (app.playlist_touch_drag_delta.x.abs() >= 8.0
                 || app.playlist_touch_drag_delta.y.abs() >= 8.0)
@@ -578,7 +578,7 @@ fn handle_playlist_touch_scroll(
         }
         if app.playlist_touch_drag_direction_decided && !app.playlist_touch_drag_horizontal {
             let row_height = 11.0 * app.scale_factor;
-            app.playlist_touch_scroll_remainder += -drag_delta.y / row_height;
+            app.playlist_touch_scroll_remainder += -frame_drag_delta.y / row_height;
             let rows = app.playlist_touch_scroll_remainder.trunc() as i32;
             if rows != 0 {
                 scroll_playlist_rows(app, rows);
@@ -589,7 +589,16 @@ fn handle_playlist_touch_scroll(
     }
     if response.drag_stopped() {
         if app.playlist_touch_drag_horizontal {
-            if let Some(swiped_index) = app.playlist_touch_drag_row {
+            let swiped_index = app.playlist_touch_drag_row.or_else(|| {
+                response.interact_pointer_pos().and_then(|pointer| {
+                    let drag_start = pointer - app.playlist_touch_drag_delta;
+                    let row = ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor()
+                        as usize;
+                    let index = app.playlist_scroll_offset.saturating_add(row);
+                    view_model.rows.get(index).map(|model| model.index)
+                })
+            });
+            if let Some(swiped_index) = swiped_index {
                 if is_playlist_right_swipe(app.playlist_touch_drag_delta) {
                     set_swiped_playlist_selection(app, swiped_index, true);
                 } else if is_playlist_left_swipe(app.playlist_touch_drag_delta) {
@@ -628,6 +637,7 @@ fn set_swiped_playlist_selection(app: &mut EguiFrontendState, swiped_index: usiz
     };
     if entry.selected != selected {
         app.dispatch(PlaylistCommand::ToggleEntrySelection(swiped_index));
+        app_log_info!(playlist, "swipe selection applied", swiped_index, selected);
     }
 }
 

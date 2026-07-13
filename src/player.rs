@@ -118,7 +118,9 @@ impl GStreamerBackend {
         let fake_video = make_element("fakesink", "fakevideo")?;
         pipeline.set_property("video-sink", &fake_video);
 
-        let audio_sink = build_audio_sink_bin("autoaudiosink", None)?;
+        let sink_factory = std::env::var("XMMS_GSTREAMER_AUDIO_SINK")
+            .unwrap_or_else(|_| "autoaudiosink".to_string());
+        let audio_sink = build_audio_sink_bin(&sink_factory, None)?;
         pipeline.set_property("audio-sink", &audio_sink.bin);
 
         Ok(Self {
@@ -557,6 +559,10 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
     let equalizer = make_element("equalizer-10bands", "eq")?;
     let spectrum = make_element("spectrum", "spectrum")?;
     let sink = make_element(sink_factory, "sink")?;
+
+    if sink_factory == "fakesink" {
+        sink.set_property("sync", true);
+    }
 
     if let Some(device) = device {
         if sink.find_property("device").is_none() {
