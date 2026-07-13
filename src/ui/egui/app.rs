@@ -21,7 +21,7 @@ use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
-    volume_to_eq_shaded_position,
+    volume_to_eq_shaded_position, TitleMarquee,
 };
 #[cfg(target_os = "android")]
 use crate::app::view_model::{
@@ -185,6 +185,10 @@ pub struct EguiFrontendState {
     detached_viewports: Arc<Mutex<DetachedViewportState>>,
     pub texture_cache: EguiTextureCache,
     pub last_tick: Instant,
+    #[cfg(target_os = "android")]
+    android_last_state_persist: Instant,
+    pub(crate) last_title_marquee_tick: Instant,
+    pub(crate) title_marquee: TitleMarquee,
     pub scale_factor: f32,
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
@@ -209,11 +213,15 @@ pub struct EguiFrontendState {
     #[cfg(target_os = "android")]
     pub(crate) playlist_touch_drag_delta: egui::Vec2,
     #[cfg(target_os = "android")]
+    pub(crate) playlist_touch_gesture_delta: egui::Vec2,
+    #[cfg(target_os = "android")]
     pub(crate) playlist_touch_drag_direction_decided: bool,
     #[cfg(target_os = "android")]
     pub(crate) playlist_touch_drag_horizontal: bool,
     #[cfg(target_os = "android")]
     pub(crate) playlist_touch_drag_row: Option<usize>,
+    #[cfg(target_os = "android")]
+    pub(crate) playlist_touch_drag_start: Option<(egui::Pos2, Instant)>,
     #[cfg(target_os = "android")]
     pub(crate) android_playlist_manager_open: bool,
     #[cfg(target_os = "android")]
@@ -333,6 +341,10 @@ impl EguiFrontendState {
             detached_viewports,
             texture_cache: EguiTextureCache::default(),
             last_tick: Instant::now(),
+            #[cfg(target_os = "android")]
+            android_last_state_persist: Instant::now(),
+            last_title_marquee_tick: Instant::now(),
+            title_marquee: TitleMarquee::default(),
             scale_factor,
             dock_panels: true,
             runtime,
@@ -357,11 +369,15 @@ impl EguiFrontendState {
             #[cfg(target_os = "android")]
             playlist_touch_drag_delta: egui::Vec2::ZERO,
             #[cfg(target_os = "android")]
+            playlist_touch_gesture_delta: egui::Vec2::ZERO,
+            #[cfg(target_os = "android")]
             playlist_touch_drag_direction_decided: false,
             #[cfg(target_os = "android")]
             playlist_touch_drag_horizontal: false,
             #[cfg(target_os = "android")]
             playlist_touch_drag_row: None,
+            #[cfg(target_os = "android")]
+            playlist_touch_drag_start: None,
             #[cfg(target_os = "android")]
             android_playlist_manager_open: false,
             #[cfg(target_os = "android")]
@@ -433,6 +449,8 @@ impl EguiFrontendState {
 
     pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
         normalize_preferences_config(&mut config);
+        #[cfg(target_os = "android")]
+        let skin_changed = self.controller.state().config.skin != config.skin;
         let was_playlist_detached = self.controller.state().config.playlist_detached;
         let result = self.controller.apply_config_from_preferences(config);
         // When the playlist re-attaches to the main window, snap its width back to
@@ -445,11 +463,31 @@ impl EguiFrontendState {
         self.apply_visualization_preferences();
         self.apply_effects(result.effects);
         #[cfg(target_os = "android")]
-        self.persist_android_state();
+        {
+            self.persist_android_state();
+            if skin_changed {
+                if let Err(err) = super::android_file_picker::refresh_player_widgets() {
+                    app_log_error!(frontend, "failed to refresh Android player widgets", err);
+                    let message = format!("failed to refresh Android player widgets: {err}");
+                    if !self.runtime.pending_messages.contains(&message) {
+                        self.runtime.pending_messages.push(message);
+                    }
+                }
+            }
+        }
     }
 
     #[cfg(target_os = "android")]
     fn persist_android_state(&mut self) {
+        if self.controller.state().player.state() != PlayerState::Stopped {
+            if let Some(position_ms) = self
+                .playback_backend
+                .as_ref()
+                .and_then(|backend| backend.position_ms())
+            {
+                self.controller.state_mut().config.playback_position_ms = position_ms.max(0);
+            }
+        }
         if let Err(err) = super::android_file_picker::persist_app_state(self.controller.state_mut())
         {
             app_log_error!(frontend, "failed to save Android session state", err);
@@ -878,6 +916,13 @@ impl EguiFrontendState {
         let result = self.controller.tick_playback_position(elapsed_ms);
         self.sync_frontend_state_from_store();
         self.apply_effects(result.effects);
+        #[cfg(target_os = "android")]
+        if now.saturating_duration_since(self.android_last_state_persist)
+            >= Duration::from_millis(500)
+        {
+            self.android_last_state_persist = now;
+            self.persist_android_state();
+        }
         if visualizer_changed {
             ctx.request_repaint();
         }

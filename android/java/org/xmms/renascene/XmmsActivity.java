@@ -5,13 +5,15 @@ import android.app.NativeActivity;
 import android.content.Context;
 import android.content.ClipData;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
-import android.content.pm.PackageManager;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.view.DisplayCutout;
@@ -25,6 +27,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 
 public final class XmmsActivity extends NativeActivity {
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
     private static final int READ_FLAGS =
             Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
     static final String ACTION_PAUSE_PLAYBACK =
@@ -209,6 +212,11 @@ public final class XmmsActivity extends NativeActivity {
         if (audioManager != null && audioFocusRequest != null) {
             audioManager.abandonAudioFocusRequest(audioFocusRequest);
         }
+    }
+
+    public void refreshPlayerWidgets() {
+        Context applicationContext = getApplicationContext();
+        MAIN_HANDLER.post(() -> XmmsPlayerWidget.refreshAll(applicationContext));
     }
 
     public void openDocuments(int requestCode, String mimeType, boolean multiple) {

@@ -3,11 +3,15 @@
 use crate::render::{
     equalizer_window_height, playlist_window_height, render_equalizer_state,
     render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
-    render_scaled, Context, EqualizerRenderState, Format, ImageSurface, MainWindowRenderState,
-    PlaylistMenuRenderState, PlaylistRowsRenderState, RenderError, EQUALIZER_WINDOW_WIDTH,
-    MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    render_scaled, render_transport_buttons, Context, EqualizerRenderState, Format, ImageSurface,
+    MainWindowRenderState, PlaylistMenuRenderState, PlaylistRowsRenderState, RenderError,
+    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
+use crate::skin::layout::MainPushButton;
 use crate::skin::DefaultSkin;
+
+pub const TRANSPORT_BUTTONS_WIDTH: i32 = 114;
+pub const TRANSPORT_BUTTONS_HEIGHT: i32 = 18;
 
 pub fn argb_to_egui_rgba(argb: u32) -> [u8; 4] {
     let [b, g, r, a] = argb.to_ne_bytes();
@@ -46,6 +50,21 @@ pub fn render_main_player_color_image(
     let mut surface = ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, height)?;
     let cr = Context::new(&surface)?;
     render_main_player_state(&cr, skin, state)?;
+    drop(cr);
+    surface_to_color_image(&mut surface)
+}
+
+pub fn render_transport_buttons_color_image(
+    skin: &DefaultSkin,
+    pressed: Option<MainPushButton>,
+) -> Result<egui::ColorImage, RenderError> {
+    let mut surface = ImageSurface::create(
+        Format::ARgb32,
+        TRANSPORT_BUTTONS_WIDTH,
+        TRANSPORT_BUTTONS_HEIGHT,
+    )?;
+    let cr = Context::new(&surface)?;
+    render_transport_buttons(&cr, skin, pressed)?;
     drop(cr);
     surface_to_color_image(&mut surface)
 }
@@ -191,6 +210,35 @@ mod tests {
             image.size,
             [MAIN_WINDOW_WIDTH as usize, MAIN_WINDOW_HEIGHT as usize]
         );
+    }
+
+    #[test]
+    fn transport_image_only_changes_the_pressed_button() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let normal = render_transport_buttons_color_image(&skin, None).unwrap();
+        let buttons = [
+            (MainPushButton::Previous, 0, 23),
+            (MainPushButton::Play, 23, 46),
+            (MainPushButton::Pause, 46, 69),
+            (MainPushButton::Stop, 69, 92),
+            (MainPushButton::Next, 92, 114),
+        ];
+
+        for (button, start_x, end_x) in buttons {
+            let pressed = render_transport_buttons_color_image(&skin, Some(button)).unwrap();
+            assert_eq!(pressed.size, [114, 18]);
+            let changed: Vec<_> = normal
+                .pixels
+                .iter()
+                .zip(&pressed.pixels)
+                .enumerate()
+                .filter_map(|(index, (normal, pressed))| (normal != pressed).then_some(index))
+                .collect();
+            assert!(!changed.is_empty(), "{button:?} has no pressed feedback");
+            assert!(changed
+                .iter()
+                .all(|index| (start_x..end_x).contains(&(index % 114))));
+        }
     }
 
     #[test]

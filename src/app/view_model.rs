@@ -4,6 +4,7 @@
 //! GTK or any other concrete UI toolkit.
 
 use std::path::Path;
+use std::time::Duration;
 
 use crate::app_state::AppState;
 use crate::audio_model::EqualizerBandPositions;
@@ -12,6 +13,103 @@ use crate::player::PlayerState;
 use crate::playlist::{PlaylistEntry, PlaylistMenuKind};
 use crate::render::{PlaylistRowRenderEntry, PlaylistRowsRenderState};
 use crate::skin::layout::{playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton};
+use crate::skin::widget::TextBox;
+
+const TITLE_SCROLL_SPEED_PX_PER_SECOND: f64 = 12.0;
+const TITLE_SCROLL_END_PAUSE: Duration = Duration::from_millis(1_500);
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TitleMarquee {
+    title: String,
+    viewport_width: i32,
+    overflow_px: i32,
+    elapsed: Duration,
+    offset_px: i32,
+    advancing: bool,
+}
+
+impl Default for TitleMarquee {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            viewport_width: 0,
+            overflow_px: 0,
+            elapsed: Duration::ZERO,
+            offset_px: 0,
+            advancing: false,
+        }
+    }
+}
+
+impl TitleMarquee {
+    pub fn update(
+        &mut self,
+        title: &str,
+        viewport_width: i32,
+        player_state: PlayerState,
+        visible: bool,
+        elapsed: Duration,
+    ) -> bool {
+        let overflow_px = title_overflow_px(title, viewport_width);
+        let layout_changed = self.title != title || self.viewport_width != viewport_width;
+        let should_reset =
+            layout_changed || !visible || player_state == PlayerState::Stopped || overflow_px == 0;
+        let previous_offset = self.offset_px;
+        let can_advance = visible && overflow_px > 0 && player_state == PlayerState::Playing;
+
+        if should_reset {
+            self.title = title.to_string();
+            self.viewport_width = viewport_width;
+            self.overflow_px = overflow_px;
+            self.elapsed = Duration::ZERO;
+            self.offset_px = 0;
+        }
+        if can_advance && self.advancing && !layout_changed {
+            self.elapsed += elapsed;
+            self.offset_px = marquee_offset(self.elapsed, self.overflow_px);
+        }
+        self.advancing = can_advance;
+
+        self.offset_px != previous_offset
+    }
+
+    pub fn offset_px(&self) -> i32 {
+        self.offset_px
+    }
+
+    pub fn is_scrolling(&self, player_state: PlayerState, visible: bool) -> bool {
+        visible && player_state == PlayerState::Playing && self.overflow_px > 0
+    }
+}
+
+pub fn title_overflow_px(title: &str, viewport_width: i32) -> i32 {
+    let glyphs = i32::try_from(title.chars().count()).unwrap_or(i32::MAX);
+    glyphs
+        .saturating_mul(TextBox::CHAR_WIDTH)
+        .saturating_sub(viewport_width.max(0))
+        .max(0)
+}
+
+fn marquee_offset(elapsed: Duration, overflow_px: i32) -> i32 {
+    if overflow_px <= 0 {
+        return 0;
+    }
+
+    let pause = TITLE_SCROLL_END_PAUSE.as_secs_f64();
+    let travel = f64::from(overflow_px) / TITLE_SCROLL_SPEED_PX_PER_SECOND;
+    let cycle = 2.0 * (pause + travel);
+    let phase = elapsed.as_secs_f64() % cycle;
+    let offset = if phase < pause {
+        0.0
+    } else if phase < pause + travel {
+        (phase - pause) * TITLE_SCROLL_SPEED_PX_PER_SECOND
+    } else if phase < 2.0 * pause + travel {
+        f64::from(overflow_px)
+    } else {
+        f64::from(overflow_px) - (phase - (2.0 * pause + travel)) * TITLE_SCROLL_SPEED_PX_PER_SECOND
+    };
+    offset.round().clamp(0.0, f64::from(overflow_px)) as i32
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MainPlayerViewModel {
@@ -442,6 +540,131 @@ pub fn parse_time_ms(text: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_marquee_detects_only_real_overflow() {
+        assert_eq!(title_overflow_px("12345", 25), 0);
+        assert_eq!(title_overflow_px("123456", 25), 5);
+
+        let mut marquee = TitleMarquee::default();
+        marquee.update(
+            "12345",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_secs(10),
+        );
+        assert_eq!(marquee.offset_px(), 0);
+        assert!(!marquee.is_scrolling(PlayerState::Playing, true));
+    }
+
+    #[test]
+    fn title_marquee_progresses_from_elapsed_time_after_initial_pause() {
+        let mut marquee = TitleMarquee::default();
+        marquee.update("1234567890", 25, PlayerState::Playing, true, Duration::ZERO);
+        marquee.update(
+            "1234567890",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_millis(1_500),
+        );
+        assert_eq!(marquee.offset_px(), 0);
+
+        marquee.update(
+            "1234567890",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_millis(500),
+        );
+        assert_eq!(marquee.offset_px(), 6);
+    }
+
+    #[test]
+    fn title_marquee_resets_for_title_stop_shade_and_fitting_layout() {
+        let mut marquee = TitleMarquee::default();
+        marquee.update("1234567890", 25, PlayerState::Playing, true, Duration::ZERO);
+        marquee.update(
+            "1234567890",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_secs(2),
+        );
+        assert!(marquee.offset_px() > 0);
+
+        marquee.update(
+            "different long title",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::ZERO,
+        );
+        assert_eq!(marquee.offset_px(), 0);
+        marquee.update(
+            "different long title",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_secs(2),
+        );
+        marquee.update(
+            "different long title",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_secs(2),
+        );
+        marquee.update(
+            "different long title",
+            25,
+            PlayerState::Stopped,
+            true,
+            Duration::ZERO,
+        );
+        assert_eq!(marquee.offset_px(), 0);
+
+        marquee.update(
+            "different long title",
+            25,
+            PlayerState::Playing,
+            false,
+            Duration::from_secs(2),
+        );
+        assert_eq!(marquee.offset_px(), 0);
+        marquee.update(
+            "fits",
+            25,
+            PlayerState::Playing,
+            true,
+            Duration::from_secs(2),
+        );
+        assert_eq!(marquee.offset_px(), 0);
+    }
+
+    #[test]
+    fn title_marquee_loops_smoothly_back_to_the_start() {
+        let mut marquee = TitleMarquee::default();
+        marquee.update("1234567890", 26, PlayerState::Playing, true, Duration::ZERO);
+        marquee.update(
+            "1234567890",
+            26,
+            PlayerState::Playing,
+            true,
+            Duration::from_secs(7),
+        );
+        assert_eq!(marquee.offset_px(), 0);
+
+        marquee.update(
+            "1234567890",
+            26,
+            PlayerState::Playing,
+            true,
+            Duration::from_millis(2_500),
+        );
+        assert_eq!(marquee.offset_px(), 12);
+    }
 
     #[test]
     fn parse_time_accepts_seconds_and_minutes_seconds() {

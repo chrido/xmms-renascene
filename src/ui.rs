@@ -38,6 +38,7 @@ use crate::app::view_model::{
     playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
     playlist_rows_render_state as shared_playlist_rows_render_state, position_to_balance,
     position_to_volume, scale_event_coords, volume_to_eq_shaded_position, volume_to_position,
+    TitleMarquee,
 };
 use crate::app_state::AppState;
 use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
@@ -5287,6 +5288,7 @@ pub(crate) struct MainWindowUiState {
     visualization: Visualization,
     visualization_tick_counter: i32,
     main_pointer: MainPointer,
+    title_marquee: TitleMarquee,
 }
 
 impl fmt::Debug for MainWindowUiState {
@@ -5354,6 +5356,7 @@ impl MainWindowUiState {
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
             main_pointer: MainPointer::default(),
+            title_marquee: TitleMarquee::default(),
         };
         state.apply_config_to_ui_state();
         state
@@ -5638,6 +5641,7 @@ impl MainWindowUiState {
             title: self
                 .equalizer_drag_info_text()
                 .unwrap_or_else(|| self.formatted_current_title()),
+            title_offset_px: self.title_marquee.offset_px(),
             shaded: self.shaded,
             volume_position: volume_to_position(self.app_state.player.volume()),
             balance_position: balance_to_position(self.app_state.player.balance()),
@@ -8695,9 +8699,19 @@ impl MainWindowUiState {
         self.poll_playback_backend();
         let fading = self.update_stop_fade(elapsed_ms);
         let eof_waiting = self.update_pending_eof_advance(elapsed_ms);
+        let title = self
+            .equalizer_drag_info_text()
+            .unwrap_or_else(|| self.formatted_current_title());
+        let marquee_changed = self.title_marquee.update(
+            &title,
+            crate::render::MAIN_TITLE_TEXT_WIDTH,
+            self.app_state.player.state(),
+            !self.shaded,
+            Duration::from_millis(u64::from(elapsed_ms)),
+        );
         if self.app_state.player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
-            return duration_changed || fading || eof_waiting;
+            return duration_changed || fading || eof_waiting || marquee_changed;
         }
 
         if self.playback_backend.is_none() {

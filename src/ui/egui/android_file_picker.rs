@@ -2,7 +2,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JValue};
@@ -10,9 +10,7 @@ use jni::sys::{jint, jintArray, jlong, jobjectArray, jstring};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::effect::FileDialogRequest;
-use crate::app::view_model::main_player_view_model;
 use crate::app_state::AppState;
-use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 use crate::config::Config;
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{PlaybackEvent, PlayerState};
@@ -24,7 +22,7 @@ use crate::session::{
 use crate::skin::DefaultSkin;
 
 struct AndroidPickerContext {
-    vm: JavaVM,
+    vm: Arc<JavaVM>,
     activity: GlobalRef,
 }
 
@@ -78,7 +76,6 @@ static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
 static WIDGET_SKIN: OnceLock<Mutex<Option<(Option<String>, DefaultSkin)>>> = OnceLock::new();
-static WIDGET_SPECTRUM: OnceLock<Mutex<SpectrumData>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
 static SERVICE_PLAYBACK_EVENTS: OnceLock<Mutex<Vec<PlaybackEvent>>> = OnceLock::new();
 static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
@@ -105,7 +102,10 @@ pub fn initialize(app: &winit::platform::android::activity::AndroidApp) -> Resul
     *CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = Some(AndroidPickerContext { vm, activity });
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(AndroidPickerContext {
+        vm: Arc::new(vm),
+        activity,
+    });
     *REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -129,6 +129,46 @@ pub fn persist_app_state(state: &mut AppState) -> io::Result<()> {
         .unwrap_or_else(|poison| poison.into_inner());
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     save_fallback_state(state, &config_path, &playlist_path)
+}
+
+pub fn refresh_player_widgets() -> Result<(), String> {
+    *WIDGET_SKIN
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+
+    let (vm, activity) = {
+        let context = android_context()?;
+        let context = context
+            .as_ref()
+            .ok_or_else(|| "Android activity is not initialized".to_string())?;
+        (Arc::clone(&context.vm), context.activity.clone())
+    };
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|err| format!("failed to attach Android widget refresh thread: {err}"))?;
+    if let Err(err) = env.call_method(activity.as_obj(), "refreshPlayerWidgets", "()V", &[]) {
+        match env.exception_check() {
+            Ok(true) => {
+                let _ = env.exception_describe();
+                env.exception_clear().map_err(|clear_err| {
+                    format!(
+                        "failed to refresh Android player widgets: {err}; \
+                         failed to clear Java exception: {clear_err}"
+                    )
+                })?;
+            }
+            Ok(false) => {}
+            Err(check_err) => {
+                return Err(format!(
+                    "failed to refresh Android player widgets: {err}; \
+                     failed to check for a Java exception: {check_err}"
+                ));
+            }
+        }
+        return Err(format!("failed to refresh Android player widgets: {err}"));
+    }
+    Ok(())
 }
 
 fn android_context() -> Result<MutexGuard<'static, Option<AndroidPickerContext>>, String> {
@@ -629,10 +669,7 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlay
     _class: JObject,
     files_dir: JString,
     cache_dir: JString,
-    state: jint,
-    title: JString,
-    duration_ms: jlong,
-    position_ms: jlong,
+    pressed_control: jint,
 ) -> jintArray {
     let result = (|| {
         let files_dir = PathBuf::from(
@@ -647,56 +684,11 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlay
                 .to_string_lossy()
                 .into_owned(),
         );
-        let title = env
-            .get_string(&title)
-            .map_err(|err| err.to_string())?
-            .to_string_lossy()
-            .into_owned();
         std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
         std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
         let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
         let app_state =
             load_saved_state(&config_path, &playlist_path, false).map_err(|err| err.to_string())?;
-        let mut view_model = main_player_view_model(&app_state);
-        view_model.title = title;
-        view_model.player_state = match state {
-            1 => PlayerState::Playing,
-            2 => PlayerState::Paused,
-            _ => PlayerState::Stopped,
-        };
-        view_model.shaded = false;
-        let render_state = super::main_player::main_render_state(
-            &view_model,
-            position_ms.max(0),
-            (duration_ms > 0).then_some(duration_ms),
-            app_state.config.equalizer_visible,
-            app_state.config.playlist_visible,
-            None,
-            None,
-            None,
-            app_state.config.timer_mode,
-            {
-                let data = if view_model.player_state == PlayerState::Playing {
-                    *WIDGET_SPECTRUM
-                        .get_or_init(|| Mutex::new([0.0; SPECTRUM_BANDS]))
-                        .lock()
-                        .unwrap_or_else(|poison| poison.into_inner())
-                } else {
-                    [0.0; SPECTRUM_BANDS]
-                };
-                crate::render::VisualizationRenderState {
-                    mode: app_state.config.vis_mode,
-                    analyzer_style: app_state.config.vis_analyzer_style,
-                    analyzer_mode: app_state.config.vis_analyzer_mode,
-                    scope_mode: app_state.config.vis_scope_mode,
-                    peaks_enabled: app_state.config.vis_peaks_enabled,
-                    vu_mode: app_state.config.vis_vu_mode,
-                    data,
-                    peak: data,
-                    ..Default::default()
-                }
-            },
-        );
         let skin_key = app_state.config.skin.clone();
         let mut cached_skin = WIDGET_SKIN
             .get_or_init(|| Mutex::new(None))
@@ -715,8 +707,16 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlay
             *cached_skin = Some((skin_key, skin));
         }
         let skin = &cached_skin.as_ref().expect("widget skin initialized").1;
-        let image = super::skin_texture::render_main_player_color_image(skin, &render_state)
-            .map_err(|err| format!("failed to render widget player: {err}"))?;
+        let pressed = match pressed_control {
+            1 => Some(crate::skin::layout::MainPushButton::Pause),
+            2 => Some(crate::skin::layout::MainPushButton::Play),
+            3 => Some(crate::skin::layout::MainPushButton::Next),
+            4 => Some(crate::skin::layout::MainPushButton::Previous),
+            6 => Some(crate::skin::layout::MainPushButton::Stop),
+            _ => None,
+        };
+        let image = super::skin_texture::render_transport_buttons_color_image(skin, pressed)
+            .map_err(|err| format!("failed to render widget transport buttons: {err}"))?;
         let pixels: Vec<jint> = image
             .pixels
             .iter()
@@ -838,10 +838,6 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
         if matches!(event, PlaybackEvent::EndOfStream) {
             eof = true;
         } else if let PlaybackEvent::Spectrum(data) = event {
-            *WIDGET_SPECTRUM
-                .get_or_init(|| Mutex::new([0.0; SPECTRUM_BANDS]))
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner()) = data;
             if let Some(existing) = queued
                 .iter_mut()
                 .find(|event| matches!(event, PlaybackEvent::Spectrum(_)))

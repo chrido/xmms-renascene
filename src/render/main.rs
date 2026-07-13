@@ -2,7 +2,7 @@ use super::Context;
 
 use super::core::{
     blit_skin_rect, blit_surface_rect, render_horizontal_slider, render_sprite_spec, render_text,
-    set_rgb, surface_from_xpm, RenderError, SliderRenderSpec,
+    render_text_offset, set_rgb, surface_from_xpm, RenderError, SliderRenderSpec,
 };
 use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 use crate::skin::layout::{
@@ -14,6 +14,8 @@ use crate::skin::widget::{
     VisVuMode,
 };
 use crate::skin::{DefaultSkin, SkinPixmapKind};
+
+pub const MAIN_TITLE_TEXT_WIDTH: i32 = 153;
 
 pub fn render_main_titlebar(
     cr: &Context,
@@ -63,6 +65,28 @@ pub fn render_main_player(
     Ok(rendered)
 }
 
+pub fn render_transport_buttons(
+    cr: &Context,
+    skin: &DefaultSkin,
+    pressed: Option<MainPushButton>,
+) -> Result<bool, RenderError> {
+    let mut rendered = false;
+    let mut x = 0;
+    for button in [
+        MainPushButton::Previous,
+        MainPushButton::Play,
+        MainPushButton::Pause,
+        MainPushButton::Stop,
+        MainPushButton::Next,
+    ] {
+        let mut spec = main_push_button_spec(button, pressed == Some(button));
+        spec.dest = SkinRect::new(x, 0, spec.source.width, spec.source.height);
+        rendered |= render_sprite_spec(cr, skin, spec)?;
+        x += spec.source.width;
+    }
+    Ok(rendered)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct VisualizationRenderState {
     pub mode: VisMode,
@@ -99,6 +123,7 @@ pub struct MainWindowRenderState {
     pub focused: bool,
     pub shaded: bool,
     pub title: String,
+    pub title_offset_px: i32,
     pub bitrate_text: String,
     pub frequency_text: String,
     pub time_digits: [i32; 5],
@@ -127,6 +152,7 @@ impl Default for MainWindowRenderState {
             focused: true,
             shaded: false,
             title: "XMMS Renascene".to_string(),
+            title_offset_px: 0,
             bitrate_text: String::new(),
             frequency_text: String::new(),
             time_digits: [NumberDisplay::BLANK; 5],
@@ -219,7 +245,15 @@ pub fn render_main_player_state(
         )?;
     }
 
-    render_text(cr, skin, &state.title, 111, 27, 153)?;
+    render_text_offset(
+        cr,
+        skin,
+        &state.title,
+        111,
+        27,
+        MAIN_TITLE_TEXT_WIDTH,
+        state.title_offset_px,
+    )?;
     render_text(cr, skin, &state.bitrate_text, 111, 43, 15)?;
     render_text(cr, skin, &state.frequency_text, 156, 43, 10)?;
 

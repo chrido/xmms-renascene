@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import re
+import time
+import wave
+import zipfile
 from io import BytesIO
 from importlib import import_module
 from pathlib import Path
 from typing import Any
-import time
-import wave
-import zipfile
 
 from PIL import Image
 
@@ -436,31 +437,125 @@ def test_android_playlist_save_and_load_menu_items_open_managed_dialog(
     assert image_pixels(player) != image_pixels(load_dialog)
 
 
-def test_android_playlist_swipes_select_right_and_deselect_left(
+def _playlist_row_point(
     android_device: AndroidDevice,
+    index: int,
+) -> tuple[int, int]:
+    left, top, right, _bottom = android_device.main_player_bounds()
+    scale = (right - left) / 275
+    rows_top = top + round((MAIN_PLAYER_BASE_HEIGHT + 20) * scale)
+    return (
+        left + round(120 * scale),
+        rows_top + round((index * 11 + 5.5) * scale),
+    )
+
+
+def _swipe_playlist_row_horizontally(
+    android_device: AndroidDevice,
+    index: int,
+    *,
+    selected: bool,
 ) -> None:
+    left, _top, right, _bottom = android_device.main_player_bounds()
+    scale = (right - left) / 275
+    _row_x, row_y = _playlist_row_point(android_device, index)
+    start_x = left + round((40 if selected else 200) * scale)
+    end_x = left + round((200 if selected else 40) * scale)
+    android_device.clear_logcat()
+    android_device.shell(
+        "input",
+        "swipe",
+        str(start_x),
+        str(row_y),
+        str(end_x),
+        str(row_y),
+        "300",
+    )
+    android_device.assert_log_contains(
+        f"playlist: swipe selection applied, swiped_index={index}, "
+        f"selected={str(selected).lower()}"
+    )
+
+
+def _swipe_playlist_up(android_device: AndroidDevice, touched_index: int) -> None:
+    start_x, start_y = _playlist_row_point(android_device, touched_index)
+    scale = android_device.main_player_scale()
+    android_device.clear_logcat()
+    android_device.shell(
+        "input",
+        "swipe",
+        str(start_x),
+        str(start_y),
+        str(start_x),
+        str(start_y - round(120 * scale)),
+        "100",
+    )
+
+
+def _swipe_playlist_down(android_device: AndroidDevice, touched_index: int) -> None:
+    start_x, start_y = _playlist_row_point(android_device, touched_index)
+    scale = android_device.main_player_scale()
+    android_device.clear_logcat()
+    android_device.shell(
+        "input",
+        "swipe",
+        str(start_x),
+        str(start_y),
+        str(start_x),
+        str(start_y + round(120 * scale)),
+        "100",
+    )
+
+
+def _private_config_int(
+    android_device: AndroidDevice,
+    key: str,
+) -> int:
+    config = android_device.read_private_file("files/config/xmms-renascene/config")
+    match = re.search(rf"^{re.escape(key)}=(-?\d+)$", config, re.MULTILINE)
+    if match is None:
+        raise AssertionError(f"Android config did not contain {key!r}:\n{config}")
+    return int(match.group(1))
+
+
+def _prepare_android_swipe_playlist(android_device: AndroidDevice) -> None:
     playlist_path = "files/config/xmms-renascene/playlist.m3u"
     android_device.set_portrait()
     android_device.force_stop()
     android_device.shell("pm", "clear", ANDROID_PACKAGE)
     android_device.grant_runtime_permissions()
+    for name in ("first", "second", "third"):
+        audio = BytesIO()
+        with wave.open(audio, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(1)
+            wav.setframerate(8_000)
+            wav.writeframes(bytes([128]) * 8_000 * 20)
+        android_device.write_private_bytes(
+            f"files/imports/{name}.wav",
+            audio.getvalue(),
+        )
     android_device.write_private_file(
         playlist_path,
         "#EXTM3U\n"
-        "#EXTINF:42,Swipe First\n"
+        "#EXTINF:20,Swipe First\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/first.wav\n"
-        "#EXTINF:42,Swipe Second\n"
-        "file:///data/user/0/org.xmms.renascene/files/imports/second.wav\n",
+        "#EXTINF:20,Swipe Second\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/second.wav\n"
+        "#EXTINF:20,Swipe Third\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/third.wav\n",
     )
     android_device.start_activity()
+
+
+def test_android_playlist_swipes_select_right_and_deselect_left(
+    android_device: AndroidDevice,
+) -> None:
+    _prepare_android_swipe_playlist(android_device)
     left, top, right, _bottom = android_device.main_player_bounds()
     scale = (right - left) / 275
-    playlist_top = top + round(116 * scale)
-    row_top = playlist_top + round(20 * scale)
+    row_top = top + round((MAIN_PLAYER_BASE_HEIGHT + 20) * scale)
     row_bottom = row_top + round(11 * scale)
-    row_y = (row_top + row_bottom) // 2
-    start_x = left + round(40 * scale)
-    end_x = left + round(200 * scale)
 
     def row_pixels() -> bytes:
         with Image.open(BytesIO(android_device.framebuffer_png())) as screenshot:
@@ -479,37 +574,143 @@ def test_android_playlist_swipes_select_right_and_deselect_left(
         raise AssertionError("playlist row did not redraw after swipe selection")
 
     before = row_pixels()
-    android_device.clear_logcat()
-    android_device.shell(
-        "input",
-        "swipe",
-        str(start_x),
-        str(row_y),
-        str(end_x),
-        str(row_y),
-        "300",
-    )
-    android_device.assert_log_contains(
-        "playlist: swipe selection applied, swiped_index=0, selected=true"
-    )
+    _swipe_playlist_row_horizontally(android_device, 0, selected=True)
     selected = wait_for_row_change(before)
-    android_device.clear_logcat()
-    android_device.shell(
-        "input",
-        "swipe",
-        str(end_x),
-        str(row_y),
-        str(start_x),
-        str(row_y),
-        "300",
-    )
-    android_device.assert_log_contains(
-        "playlist: swipe selection applied, swiped_index=0, selected=false"
-    )
+    _swipe_playlist_row_horizontally(android_device, 0, selected=False)
     deselected = wait_for_row_change(selected)
 
     assert before != selected
     assert selected != deselected
+
+
+def test_android_playlist_swipe_up_starts_only_selected_item(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    _prepare_android_swipe_playlist(android_device)
+    _swipe_playlist_row_horizontally(android_device, 1, selected=True)
+
+    _swipe_playlist_up(android_device, touched_index=0)
+
+    android_device.assert_log_contains(
+        "playlist: swipe playback started, selected_index=1",
+        "backend: egui play_uri, "
+        "uri=file:///data/user/0/org.xmms.renascene/files/imports/second.wav"
+    )
+    android_device.wait_for_service("XmmsPlaybackService")
+    android_device.wait_for_private_file_contains(
+        config_path,
+        "playlist_position=1",
+    )
+
+
+def test_android_playlist_swipe_up_starts_first_selected_item_in_playlist_order(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    _prepare_android_swipe_playlist(android_device)
+    _swipe_playlist_row_horizontally(android_device, 0, selected=True)
+    _swipe_playlist_row_horizontally(android_device, 2, selected=True)
+
+    _swipe_playlist_up(android_device, touched_index=2)
+
+    log = android_device.assert_log_contains(
+        "playlist: swipe playback started, selected_index=0",
+        "backend: egui play_uri, "
+        "uri=file:///data/user/0/org.xmms.renascene/files/imports/first.wav"
+    )
+    assert (
+        "uri=file:///data/user/0/org.xmms.renascene/files/imports/third.wav"
+        not in log
+    )
+    android_device.wait_for_service("XmmsPlaybackService")
+    android_device.wait_for_private_file_contains(
+        config_path,
+        "playlist_position=0",
+    )
+
+
+def test_android_playlist_swipe_down_pauses_and_does_not_resume(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    _prepare_android_swipe_playlist(android_device)
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
+    android_device.assert_log_contains(
+        "backend: egui play_uri, "
+        "uri=file:///data/user/0/org.xmms.renascene/files/imports/first.wav"
+    )
+    android_device.wait_for_service("XmmsPlaybackService")
+    time.sleep(1.5)
+
+    _swipe_playlist_down(android_device, touched_index=0)
+
+    android_device.assert_log_contains("playlist: swipe playback paused")
+    android_device.shell("input", "keyevent", "3")
+    paused_position = android_device.wait_for_private_file_int_at_least(
+        config_path,
+        "playback_position_ms",
+        500,
+        timeout=5.0,
+    )
+    android_device.start_activity()
+
+    _swipe_playlist_down(android_device, touched_index=0)
+
+    second_swipe_log = android_device.assert_log_contains(
+        "playlist: swipe playback paused"
+    )
+    assert "backend: egui play_uri" not in second_swipe_log
+    android_device.shell("input", "keyevent", "3")
+    time.sleep(1.0)
+    still_paused_position = _private_config_int(
+        android_device,
+        "playback_position_ms",
+    )
+    assert still_paused_position - paused_position <= 250
+
+
+def test_android_playlist_swipe_up_resumes_selected_paused_track(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    _prepare_android_swipe_playlist(android_device)
+    _swipe_playlist_row_horizontally(android_device, 0, selected=True)
+    _swipe_playlist_up(android_device, touched_index=1)
+    android_device.assert_log_contains(
+        "playlist: swipe playback started, selected_index=0",
+        "backend: egui play_uri, "
+        "uri=file:///data/user/0/org.xmms.renascene/files/imports/first.wav",
+    )
+    android_device.wait_for_service("XmmsPlaybackService")
+    time.sleep(3.0)
+
+    _swipe_playlist_down(android_device, touched_index=1)
+    android_device.assert_log_contains("playlist: swipe playback paused")
+    android_device.shell("input", "keyevent", "3")
+    paused_position = android_device.wait_for_private_file_int_at_least(
+        config_path,
+        "playback_position_ms",
+        1_500,
+        timeout=5.0,
+    )
+    android_device.start_activity()
+
+    _swipe_playlist_up(android_device, touched_index=1)
+
+    resume_log = android_device.assert_log_contains(
+        "playlist: swipe playback started, selected_index=0"
+    )
+    assert "backend: egui play_uri" not in resume_log
+    time.sleep(1.0)
+    android_device.shell("input", "keyevent", "3")
+    resumed_position = android_device.wait_for_private_file_int_at_least(
+        config_path,
+        "playback_position_ms",
+        paused_position + 500,
+        timeout=5.0,
+    )
+    assert resumed_position > paused_position
 
 
 def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
@@ -645,12 +846,95 @@ def test_android_player_widget_is_packaged(
     manifest = android_device.apk_xmltree("AndroidManifest.xml")
     widget_info = android_device.apk_xmltree("res/xml/player_widget_info.xml")
     widget_layout = android_device.apk_xmltree("res/layout/widget_player.xml")
+    widget_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/java/org/xmms/renascene/XmmsPlayerWidget.java"
+    ).read_text()
+    widget_layout_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/res/layout/widget_player.xml"
+    ).read_text()
+    native_widget_source = (
+        Path(__file__).resolve().parents[1]
+        / "src/ui/egui/android_file_picker.rs"
+    ).read_text()
 
     assert ".XmmsPlayerWidget" in manifest
     assert "android.appwidget.action.APPWIDGET_UPDATE" in manifest
     assert "android:initialLayout" in widget_info
+    assert 'android:id="@+id/widget_player_container"' in widget_layout_source
     assert "E: ImageView" in widget_layout
     assert widget_layout.count("E: ImageButton") == 5
+    assert "E: TextView" not in widget_layout
+    assert "PLAYER_WIDTH = 114" in widget_source
+    assert "PLAYER_HEIGHT = 18" in widget_source
+    assert "onAppWidgetOptionsChanged" in widget_source
+    assert "getAppWidgetOptions(widgetId)" in widget_source
+    assert "views.setViewPadding(" in widget_source
+    assert re.search(
+        r"contentHeight\s*=\s*Math\.round\(\(float\) width"
+        r"\s*\*\s*PLAYER_HEIGHT\s*/\s*PLAYER_WIDTH\)",
+        widget_source,
+    )
+    assert not re.search(
+        r"updateAppWidget\s*\(\s*widgetIds\s*,",
+        widget_source,
+    )
+    pressed_duration = re.search(
+        r"PRESSED_DURATION_MS\s*=\s*(\d+)",
+        widget_source,
+    )
+    assert pressed_duration is not None
+    assert 100 <= int(pressed_duration.group(1)) <= 200
+    assert "showPressedControl(context, control);" in widget_source
+    assert re.search(
+        r"nativeRenderPlayerWidget\s*\([^;]+activePressedControl\s*\)",
+        widget_source,
+        re.DOTALL,
+    )
+    assert "long generation = ++pressedGeneration;" in widget_source
+    assert "if (generation != pressedGeneration)" in widget_source
+    assert "PRESSED_HANDLER.removeCallbacks(restorePressedRunnable)" in widget_source
+    assert "pressedControl = NO_PRESSED_CONTROL;" in widget_source
+    assert (
+        "PRESSED_HANDLER.postDelayed(restorePressedRunnable, PRESSED_DURATION_MS)"
+        in widget_source
+    )
+    for control, button in (
+        (1, "Pause"),
+        (2, "Play"),
+        (3, "Next"),
+        (4, "Previous"),
+        (6, "Stop"),
+    ):
+        assert (
+            f"{control} => Some(crate::skin::layout::MainPushButton::{button})"
+            in native_widget_source
+        )
+    assert (
+        "render_transport_buttons_color_image(skin, pressed)"
+        in native_widget_source
+    )
+
+    controls = re.findall(
+        r'contentDescription[^=]*="([^"]+)"',
+        widget_layout,
+    )
+    assert controls == ["Previous", "Play", "Pause", "Stop", "Next"]
+
+    for view_id, media_action in (
+        ("previous", "CONTROL_PREVIOUS"),
+        ("play", "CONTROL_PLAY"),
+        ("pause", "CONTROL_PAUSE"),
+        ("stop", "CONTROL_STOP"),
+        ("next", "CONTROL_NEXT"),
+    ):
+        assert re.search(
+            rf"setOnClickPendingIntent\s*\(\s*{view_id}\s*,"
+            rf"\s*controlPendingIntent\s*\(\s*context\s*,"
+            rf"\s*XmmsPlaybackService\.{media_action}\s*\)\s*\)",
+            widget_source,
+        )
 
     apk = Path(__file__).resolve().parents[1] / "target/debug/apk/xmms-renascene.apk"
     with zipfile.ZipFile(apk) as package:

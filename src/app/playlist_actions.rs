@@ -1,7 +1,8 @@
 //! Frontend-neutral playlist action mapping.
 
 use crate::app::command::{AppCommand, PlayerCommand, PlaylistCommand};
-use crate::playlist::{PlaylistMenuKind, PlaylistSortKey};
+use crate::player::PlayerState;
+use crate::playlist::{Playlist, PlaylistMenuKind, PlaylistSortKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistSortAction {
@@ -58,6 +59,28 @@ pub fn playlist_row_click_commands(
         PlaylistCommand::SelectNone.into(),
         PlaylistCommand::ToggleEntrySelection(index).into(),
     ]
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlaylistSelectedPlaybackCommands {
+    pub selected_index: usize,
+    pub commands: Vec<AppCommand>,
+}
+
+pub fn playlist_play_first_selected_commands(
+    playlist: &Playlist,
+    player_state: PlayerState,
+) -> Option<PlaylistSelectedPlaybackCommands> {
+    let selected_index = playlist.entries().iter().position(|entry| entry.selected)?;
+    let commands = match (playlist.position() == Some(selected_index), player_state) {
+        (true, PlayerState::Paused) => vec![PlayerCommand::Play.into()],
+        (true, PlayerState::Playing) => Vec::new(),
+        _ => playlist_row_click_commands(selected_index, true, false),
+    };
+    Some(PlaylistSelectedPlaybackCommands {
+        selected_index,
+        commands,
+    })
 }
 
 const fn sort_item(label: &'static str, action: PlaylistSortAction) -> PlaylistSortMenuItem {
@@ -154,6 +177,87 @@ mod tests {
         );
         assert_eq!(playlist_row_click_commands(3, true, false), play);
         assert_eq!(playlist_row_click_commands(3, true, true), play);
+    }
+
+    #[test]
+    fn selected_playback_commands_resume_paused_current_entry() {
+        let mut playlist = Playlist::new();
+        for index in 0..3 {
+            playlist.add_uri(format!("file:///tmp/{index}.ogg"));
+        }
+        playlist.entries_mut()[1].selected = true;
+        playlist.set_position(1);
+
+        assert_eq!(
+            playlist_play_first_selected_commands(&playlist, PlayerState::Paused),
+            Some(PlaylistSelectedPlaybackCommands {
+                selected_index: 1,
+                commands: vec![PlayerCommand::Play.into()],
+            })
+        );
+    }
+
+    #[test]
+    fn selected_playback_commands_leave_playing_current_entry_unchanged() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///tmp/current.ogg");
+        playlist.entries_mut()[0].selected = true;
+        playlist.set_position(0);
+
+        assert_eq!(
+            playlist_play_first_selected_commands(&playlist, PlayerState::Playing),
+            Some(PlaylistSelectedPlaybackCommands {
+                selected_index: 0,
+                commands: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn selected_playback_commands_restart_stopped_current_entry() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///tmp/current.ogg");
+        playlist.entries_mut()[0].selected = true;
+        playlist.set_position(0);
+
+        assert_eq!(
+            playlist_play_first_selected_commands(&playlist, PlayerState::Stopped),
+            Some(PlaylistSelectedPlaybackCommands {
+                selected_index: 0,
+                commands: vec![
+                    PlaylistCommand::SetPosition(0).into(),
+                    PlayerCommand::StartCurrentTrack.into(),
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn selected_playback_commands_start_first_different_selected_entry() {
+        let mut playlist = Playlist::new();
+        for index in 0..3 {
+            playlist.add_uri(format!("file:///tmp/{index}.ogg"));
+        }
+        playlist.set_position(0);
+        playlist.entries_mut()[2].selected = true;
+        playlist.entries_mut()[1].selected = true;
+
+        assert_eq!(
+            playlist_play_first_selected_commands(&playlist, PlayerState::Paused),
+            Some(PlaylistSelectedPlaybackCommands {
+                selected_index: 1,
+                commands: vec![
+                    PlaylistCommand::SetPosition(1).into(),
+                    PlayerCommand::StartCurrentTrack.into(),
+                ],
+            })
+        );
+
+        playlist.select_all(false);
+        assert_eq!(
+            playlist_play_first_selected_commands(&playlist, PlayerState::Stopped),
+            None
+        );
     }
 
     #[test]

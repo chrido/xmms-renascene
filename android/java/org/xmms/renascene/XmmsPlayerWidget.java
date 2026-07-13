@@ -7,23 +7,31 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.DisplayMetrics;
 import android.widget.RemoteViews;
 
 public final class XmmsPlayerWidget extends AppWidgetProvider {
-    private static final int PLAYER_WIDTH = 275;
-    private static final int PLAYER_HEIGHT = 116;
+    private static final int PLAYER_WIDTH = 114;
+    private static final int PLAYER_HEIGHT = 18;
+    private static final int NO_PRESSED_CONTROL = 0;
+    private static final long PRESSED_DURATION_MS = 150;
     private static final String ACTION_CONTROL =
             "org.xmms.renascene.widget.CONTROL";
     private static final String EXTRA_CONTROL = "control";
     private static final String PREFERENCES = "xmms_player_widget";
-    private static final String KEY_STATE = "state";
-    private static final String KEY_TITLE = "title";
-    private static final String KEY_DURATION_MS = "durationMs";
-    private static final String KEY_POSITION_MS = "positionMs";
     private static final String KEY_HAS_PREVIOUS = "hasPrevious";
     private static final String KEY_HAS_NEXT = "hasNext";
+    private static final Object PRESSED_LOCK = new Object();
+    private static final Handler PRESSED_HANDLER = new Handler(Looper.getMainLooper());
+    private static long pressedGeneration;
+    private static int pressedControl = NO_PRESSED_CONTROL;
+    private static Runnable restorePressedRunnable;
 
     static {
         System.loadLibrary("xmms_renascene");
@@ -32,16 +40,38 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
     private static native int[] nativeRenderPlayerWidget(
             String filesDir,
             String cacheDir,
-            int state,
-            String title,
-            long durationMs,
-            long positionMs);
+            int pressedControl);
 
     @Override
     public void onUpdate(Context context, AppWidgetManager manager, int[] widgetIds) {
         WidgetState state = loadState(context);
-        for (int widgetId : widgetIds) {
-            manager.updateAppWidget(widgetId, remoteViews(context, state));
+        synchronized (PRESSED_LOCK) {
+            for (int widgetId : widgetIds) {
+                updateWidget(
+                        context,
+                        manager,
+                        widgetId,
+                        manager.getAppWidgetOptions(widgetId),
+                        state,
+                        pressedControl);
+            }
+        }
+    }
+
+    @Override
+    public void onAppWidgetOptionsChanged(
+            Context context,
+            AppWidgetManager manager,
+            int widgetId,
+            Bundle newOptions) {
+        synchronized (PRESSED_LOCK) {
+            updateWidget(
+                    context,
+                    manager,
+                    widgetId,
+                    newOptions,
+                    loadState(context),
+                    pressedControl);
         }
     }
 
@@ -51,11 +81,12 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         if (!ACTION_CONTROL.equals(intent.getAction())) {
             return;
         }
+        int control =
+                intent.getIntExtra(EXTRA_CONTROL, XmmsPlaybackService.CONTROL_PLAY);
+        showPressedControl(context, control);
         Intent serviceIntent = new Intent(context, XmmsPlaybackService.class)
                 .setAction(XmmsPlaybackService.ACTION_WIDGET_CONTROL)
-                .putExtra(
-                        XmmsPlaybackService.EXTRA_WIDGET_CONTROL,
-                        intent.getIntExtra(EXTRA_CONTROL, XmmsPlaybackService.CONTROL_PLAY));
+                .putExtra(XmmsPlaybackService.EXTRA_WIDGET_CONTROL, control);
         if (Build.VERSION.SDK_INT >= 26) {
             context.startForegroundService(serviceIntent);
         } else {
@@ -63,22 +94,25 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         }
     }
 
+    @Override
+    public void onDisabled(Context context) {
+        synchronized (PRESSED_LOCK) {
+            pressedGeneration++;
+            pressedControl = NO_PRESSED_CONTROL;
+            if (restorePressedRunnable != null) {
+                PRESSED_HANDLER.removeCallbacks(restorePressedRunnable);
+                restorePressedRunnable = null;
+            }
+        }
+        super.onDisabled(context);
+    }
+
     static void updateAll(
             Context context,
-            int state,
-            String title,
-            long durationMs,
-            long positionMs,
             boolean hasPrevious,
             boolean hasNext) {
-        String displayTitle =
-                title == null || title.isEmpty() ? "XMMS Renascene" : title;
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
                 .edit()
-                .putInt(KEY_STATE, state)
-                .putString(KEY_TITLE, displayTitle)
-                .putLong(KEY_DURATION_MS, durationMs)
-                .putLong(KEY_POSITION_MS, positionMs)
                 .putBoolean(KEY_HAS_PREVIOUS, hasPrevious)
                 .putBoolean(KEY_HAS_NEXT, hasNext)
                 .apply();
@@ -89,22 +123,100 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         if (widgetIds.length == 0) {
             return;
         }
-        manager.updateAppWidget(
-                widgetIds,
-                remoteViews(
-                        context,
-                        new WidgetState(
-                                state,
-                                displayTitle,
-                                durationMs,
-                                positionMs,
-                                hasPrevious,
-                                hasNext)));
+        WidgetState state = new WidgetState(hasPrevious, hasNext);
+        synchronized (PRESSED_LOCK) {
+            updateWidgets(context, manager, widgetIds, state, pressedControl);
+        }
     }
 
-    private static RemoteViews remoteViews(Context context, WidgetState state) {
+    static void refreshAll(Context context) {
+        Context applicationContext = context.getApplicationContext();
+        AppWidgetManager manager = AppWidgetManager.getInstance(applicationContext);
+        ComponentName provider =
+                new ComponentName(applicationContext, XmmsPlayerWidget.class);
+        int[] widgetIds = manager.getAppWidgetIds(provider);
+        if (widgetIds.length == 0) {
+            return;
+        }
+        WidgetState state = loadState(applicationContext);
+        synchronized (PRESSED_LOCK) {
+            updateWidgets(applicationContext, manager, widgetIds, state, pressedControl);
+        }
+    }
+
+    private static void showPressedControl(Context context, int control) {
+        Context applicationContext = context.getApplicationContext();
+        AppWidgetManager manager = AppWidgetManager.getInstance(applicationContext);
+        ComponentName provider =
+                new ComponentName(applicationContext, XmmsPlayerWidget.class);
+        int[] widgetIds = manager.getAppWidgetIds(provider);
+        if (widgetIds.length == 0) {
+            return;
+        }
+        WidgetState state = loadState(applicationContext);
+        synchronized (PRESSED_LOCK) {
+            long generation = ++pressedGeneration;
+            pressedControl = control;
+            if (restorePressedRunnable != null) {
+                PRESSED_HANDLER.removeCallbacks(restorePressedRunnable);
+            }
+            updateWidgets(applicationContext, manager, widgetIds, state, control);
+            restorePressedRunnable = () -> {
+                synchronized (PRESSED_LOCK) {
+                    if (generation != pressedGeneration) {
+                        return;
+                    }
+                    pressedControl = NO_PRESSED_CONTROL;
+                    restorePressedRunnable = null;
+                    updateWidgets(
+                            applicationContext,
+                            manager,
+                            manager.getAppWidgetIds(provider),
+                            loadState(applicationContext),
+                            NO_PRESSED_CONTROL);
+                }
+            };
+            PRESSED_HANDLER.postDelayed(restorePressedRunnable, PRESSED_DURATION_MS);
+        }
+    }
+
+    private static void updateWidgets(
+            Context context,
+            AppWidgetManager manager,
+            int[] widgetIds,
+            WidgetState state,
+            int activePressedControl) {
+        for (int widgetId : widgetIds) {
+            updateWidget(
+                    context,
+                    manager,
+                    widgetId,
+                    manager.getAppWidgetOptions(widgetId),
+                    state,
+                    activePressedControl);
+        }
+    }
+
+    private static void updateWidget(
+            Context context,
+            AppWidgetManager manager,
+            int widgetId,
+            Bundle options,
+            WidgetState state,
+            int activePressedControl) {
+        manager.updateAppWidget(
+                widgetId,
+                remoteViews(context, options, state, activePressedControl));
+    }
+
+    private static RemoteViews remoteViews(
+            Context context,
+            Bundle options,
+            WidgetState state,
+            int activePressedControl) {
         String packageName = context.getPackageName();
         int layout = resourceId(context, "layout", "widget_player");
+        int playerContainer = resourceId(context, "id", "widget_player_container");
         int playerImage = resourceId(context, "id", "widget_player_image");
         int previous = resourceId(context, "id", "widget_previous");
         int play = resourceId(context, "id", "widget_play");
@@ -112,13 +224,17 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         int stop = resourceId(context, "id", "widget_stop");
         int next = resourceId(context, "id", "widget_next");
         RemoteViews views = new RemoteViews(packageName, layout);
+        WidgetPadding padding = widgetPadding(context, options);
+        views.setViewPadding(
+                playerContainer,
+                padding.left,
+                padding.top,
+                padding.right,
+                padding.bottom);
         int[] pixels = nativeRenderPlayerWidget(
                 context.getFilesDir().getAbsolutePath(),
                 context.getCacheDir().getAbsolutePath(),
-                state.state,
-                state.title,
-                state.durationMs,
-                state.positionMs);
+                activePressedControl);
         if (pixels != null && pixels.length == PLAYER_WIDTH * PLAYER_HEIGHT) {
             views.setImageViewBitmap(
                     playerImage,
@@ -130,7 +246,6 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         }
         views.setBoolean(previous, "setEnabled", state.hasPrevious);
         views.setBoolean(next, "setEnabled", state.hasNext);
-        views.setOnClickPendingIntent(playerImage, activityPendingIntent(context));
         views.setOnClickPendingIntent(
                 previous,
                 controlPendingIntent(
@@ -150,14 +265,46 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         return views;
     }
 
-    private static PendingIntent activityPendingIntent(Context context) {
-        Intent intent = new Intent(context, XmmsActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        return PendingIntent.getActivity(
-                context,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    private static WidgetPadding widgetPadding(Context context, Bundle options) {
+        boolean landscape =
+                context.getResources().getConfiguration().orientation
+                        == Configuration.ORIENTATION_LANDSCAPE;
+        int widthDp = optionDimension(
+                options,
+                landscape
+                        ? AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH
+                        : AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
+                PLAYER_WIDTH);
+        int heightDp = optionDimension(
+                options,
+                landscape
+                        ? AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT
+                        : AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,
+                PLAYER_HEIGHT);
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        int width = Math.max(1, Math.round(widthDp * metrics.density));
+        int height = Math.max(1, Math.round(heightDp * metrics.density));
+        int contentWidth = width;
+        int contentHeight = Math.round((float) width * PLAYER_HEIGHT / PLAYER_WIDTH);
+        if (contentHeight > height) {
+            contentHeight = height;
+            contentWidth = Math.round((float) height * PLAYER_WIDTH / PLAYER_HEIGHT);
+        }
+        int horizontalPadding = Math.max(0, width - contentWidth);
+        int verticalPadding = Math.max(0, height - contentHeight);
+        return new WidgetPadding(
+                horizontalPadding / 2,
+                verticalPadding / 2,
+                horizontalPadding - horizontalPadding / 2,
+                verticalPadding - verticalPadding / 2);
+    }
+
+    private static int optionDimension(Bundle options, String key, int fallback) {
+        if (options == null) {
+            return fallback;
+        }
+        int value = options.getInt(key, fallback);
+        return value > 0 ? value : fallback;
     }
 
     private static PendingIntent controlPendingIntent(Context context, int control) {
@@ -175,10 +322,6 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         SharedPreferences preferences =
                 context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
         return new WidgetState(
-                preferences.getInt(KEY_STATE, 0),
-                preferences.getString(KEY_TITLE, "XMMS Renascene"),
-                preferences.getLong(KEY_DURATION_MS, -1),
-                preferences.getLong(KEY_POSITION_MS, 0),
                 preferences.getBoolean(KEY_HAS_PREVIOUS, false),
                 preferences.getBoolean(KEY_HAS_NEXT, false));
     }
@@ -188,26 +331,26 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
     }
 
     private static final class WidgetState {
-        final int state;
-        final String title;
-        final long durationMs;
-        final long positionMs;
         final boolean hasPrevious;
         final boolean hasNext;
 
-        WidgetState(
-                int state,
-                String title,
-                long durationMs,
-                long positionMs,
-                boolean hasPrevious,
-                boolean hasNext) {
-            this.state = state;
-            this.title = title;
-            this.durationMs = durationMs;
-            this.positionMs = positionMs;
+        WidgetState(boolean hasPrevious, boolean hasNext) {
             this.hasPrevious = hasPrevious;
             this.hasNext = hasNext;
+        }
+    }
+
+    private static final class WidgetPadding {
+        final int left;
+        final int top;
+        final int right;
+        final int bottom;
+
+        WidgetPadding(int left, int top, int right, int bottom) {
+            this.left = left;
+            this.top = top;
+            this.right = right;
+            this.bottom = bottom;
         }
     }
 }

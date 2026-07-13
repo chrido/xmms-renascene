@@ -23,7 +23,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
-import android.os.SystemClock;
 import android.service.media.MediaBrowserService;
 import android.util.Log;
 
@@ -108,8 +107,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private int playlistSize;
     private boolean hasPrevious;
     private boolean hasNext;
-    private long lastWidgetPositionSecond = -1;
-    private long lastWidgetRenderRealtime;
 
     @Override
     public void onCreate() {
@@ -252,14 +249,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         hasNext = next;
         XmmsPlayerWidget.updateAll(
                 this,
-                playbackState,
-                playbackTitle,
-                playbackDurationMs,
-                playbackPositionMs,
                 hasPrevious,
                 hasNext);
-        lastWidgetPositionSecond = playbackPositionMs / 1000;
-        lastWidgetRenderRealtime = SystemClock.elapsedRealtime();
         refreshMediaQueue();
         notifyChildrenChanged(PLAYLIST_ID);
 
@@ -284,22 +275,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     public void applyNativePlaybackPosition(long positionMs) {
         playbackPositionMs = Math.max(0, positionMs);
-        long positionSecond = playbackPositionMs / 1000;
-        long now = SystemClock.elapsedRealtime();
-        boolean analyzerFrameDue =
-                playbackState == 1 && now - lastWidgetRenderRealtime >= 200;
-        if (positionSecond != lastWidgetPositionSecond || analyzerFrameDue) {
-            lastWidgetPositionSecond = positionSecond;
-            lastWidgetRenderRealtime = now;
-            XmmsPlayerWidget.updateAll(
-                    this,
-                    playbackState,
-                    playbackTitle,
-                    playbackDurationMs,
-                    playbackPositionMs,
-                    hasPrevious,
-                    hasNext);
-        }
         updatePlaybackState(playbackState == 1);
     }
 
@@ -583,10 +558,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         playbackState = 0;
         XmmsPlayerWidget.updateAll(
                 this,
-                playbackState,
-                playbackTitle,
-                playbackDurationMs,
-                playbackPositionMs,
                 hasPrevious,
                 hasNext);
         releaseWakeLock();

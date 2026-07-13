@@ -26,8 +26,25 @@ pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
 
 pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let view_model = main_player_view_model(app.controller().state());
+    let now = std::time::Instant::now();
+    let marquee_elapsed = now.saturating_duration_since(app.last_title_marquee_tick);
+    app.last_title_marquee_tick = now;
+    app.title_marquee.update(
+        &view_model.title,
+        crate::render::MAIN_TITLE_TEXT_WIDTH,
+        view_model.player_state,
+        !view_model.shaded,
+        marquee_elapsed,
+    );
+    if app
+        .title_marquee
+        .is_scrolling(view_model.player_state, !view_model.shaded)
+    {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
     let config = &app.controller().state().config;
-    let render_state = main_render_state(
+    let mut render_state = main_render_state(
         &view_model,
         current_position_ms(app),
         current_duration_ms(app),
@@ -39,6 +56,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         config.timer_mode,
         app.visualization_render_state(),
     );
+    render_state.title_offset_px = app.title_marquee.offset_px();
     let needs_texture_update = app.texture_cache.main.as_ref().is_none_or(|cached| {
         cached.generation != app.texture_cache.generation || cached.state != render_state
     });
