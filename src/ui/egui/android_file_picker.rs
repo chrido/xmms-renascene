@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use jni::objects::{GlobalRef, JObject, JObjectArray, JString, JValue};
+use jni::objects::{GlobalRef, JLongArray, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jint, jintArray, jlong, jobjectArray, jstring};
 use jni::{JNIEnv, JavaVM};
 
 use crate::app::effect::FileDialogRequest;
+use crate::app::view_model::TitleMarquee;
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::playback::backend::PlaybackBackend;
@@ -72,6 +73,49 @@ pub struct AndroidSystemInsets {
     pub bottom: i32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct AndroidWindowLayoutSnapshot {
+    pub width: i32,
+    pub height: i32,
+    pub orientation: i32,
+    pub insets: AndroidSystemInsets,
+    pub inset_width: i32,
+    pub inset_height: i32,
+    pub inset_orientation: i32,
+    pub config_generation: i64,
+    pub inset_generation: i64,
+    pub insets_fresh: bool,
+}
+
+impl AndroidWindowLayoutSnapshot {
+    pub fn has_current_insets(self) -> bool {
+        let orientation_matches_extent = match self.orientation {
+            1 => self.height >= self.width,
+            2 => self.width > self.height,
+            _ => false,
+        };
+        self.width > 0
+            && self.height > 0
+            && orientation_matches_extent
+            && self.config_generation > 0
+            && self.inset_generation == self.config_generation
+            && self.insets_fresh
+            && self.inset_width == self.width
+            && self.inset_height == self.height
+            && self.inset_orientation == self.orientation
+            && [
+                self.insets.left,
+                self.insets.top,
+                self.insets.right,
+                self.insets.bottom,
+            ]
+            .iter()
+            .all(|inset| *inset >= 0)
+            && self.insets.left + self.insets.right < self.width
+            && self.insets.top + self.insets.bottom < self.height
+    }
+}
+
 static CONTEXT: OnceLock<Mutex<Option<AndroidPickerContext>>> = OnceLock::new();
 static RESULTS: OnceLock<Mutex<Vec<AndroidPickerResult>>> = OnceLock::new();
 static MEDIA_CONTROLS: OnceLock<Mutex<Vec<AndroidMediaControl>>> = OnceLock::new();
@@ -79,6 +123,7 @@ static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
 static WIDGET_SKIN: OnceLock<Mutex<Option<(Option<String>, DefaultSkin)>>> = OnceLock::new();
+static WIDGET_TITLE_MARQUEE: OnceLock<Mutex<TitleMarquee>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
 static SERVICE_PLAYBACK_EVENTS: OnceLock<Mutex<Vec<PlaybackEvent>>> = OnceLock::new();
 static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
@@ -466,33 +511,43 @@ pub fn complete_media_control() -> Result<(), String> {
     Ok(())
 }
 
-pub fn system_insets_pixels() -> AndroidSystemInsets {
-    let Ok(context) = android_context() else {
-        return AndroidSystemInsets::default();
-    };
-    let Some(context) = context.as_ref() else {
-        return AndroidSystemInsets::default();
-    };
-    let Ok(mut env) = context.vm.attach_current_thread() else {
-        return AndroidSystemInsets::default();
-    };
-    let mut inset = |side| {
-        env.call_method(
+pub fn window_layout_snapshot_pixels() -> Option<AndroidWindowLayoutSnapshot> {
+    let context = android_context().ok()?;
+    let context = context.as_ref()?;
+    let mut env = context.vm.attach_current_thread().ok()?;
+    let array = env
+        .call_method(
             context.activity.as_obj(),
-            "systemInset",
-            "(I)I",
-            &[JValue::Int(side)],
+            "windowLayoutSnapshot",
+            "()[J",
+            &[],
         )
-        .and_then(|value| value.i())
-        .unwrap_or(0)
-        .max(0)
-    };
-    AndroidSystemInsets {
-        left: inset(0),
-        top: inset(1),
-        right: inset(2),
-        bottom: inset(3),
+        .and_then(|value| value.l())
+        .ok()
+        .map(JLongArray::from)?;
+    if env.get_array_length(&array).ok()? != 13 {
+        return None;
     }
+    let mut values = [0_i64; 13];
+    env.get_long_array_region(&array, 0, &mut values).ok()?;
+    let snapshot = AndroidWindowLayoutSnapshot {
+        width: i32::try_from(values[0]).ok()?,
+        height: i32::try_from(values[1]).ok()?,
+        orientation: i32::try_from(values[2]).ok()?,
+        insets: AndroidSystemInsets {
+            left: i32::try_from(values[3]).ok()?,
+            top: i32::try_from(values[4]).ok()?,
+            right: i32::try_from(values[5]).ok()?,
+            bottom: i32::try_from(values[6]).ok()?,
+        },
+        inset_width: i32::try_from(values[7]).ok()?,
+        inset_height: i32::try_from(values[8]).ok()?,
+        inset_orientation: i32::try_from(values[9]).ok()?,
+        config_generation: values[10],
+        inset_generation: values[11],
+        insets_fresh: values[12] != 0,
+    };
+    Some(snapshot)
 }
 
 pub fn request_playback_audio_focus() -> Result<(), String> {
@@ -608,6 +663,14 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaControl
         _ => return,
     };
     handle_android_media_control(env, None, control);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeRequestRepaint(
+    _env: JNIEnv,
+    _activity: JObject,
+) {
+    request_registered_repaint();
 }
 
 #[unsafe(no_mangle)]
@@ -729,6 +792,7 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRender
     bitrate: jint,
     frequency: jint,
     channels: jint,
+    title_offset_px: jint,
 ) -> jintArray {
     let result = (|| {
         let files_dir = jstring_path(&mut env, &files_dir)?;
@@ -738,8 +802,13 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRender
             .map_err(|err| err.to_string())?
             .to_string_lossy()
             .into_owned();
-        let state =
-            super::skin_texture::player_info_render_state(&title, bitrate, frequency, channels);
+        let state = super::skin_texture::player_info_render_state(
+            &title,
+            bitrate,
+            frequency,
+            channels,
+            title_offset_px,
+        );
         let image = with_widget_skin(&files_dir, &cache_dir, |skin| {
             super::skin_texture::render_player_info_color_image(skin, &state)
                 .map_err(|err| format!("failed to render widget player information: {err}"))
@@ -753,6 +822,42 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRender
             std::ptr::null_mut()
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeUpdateTitleMarquee(
+    mut env: JNIEnv,
+    _class: JObject,
+    title: JString,
+    playback_state: jint,
+    elapsed_ms: jlong,
+) -> jlong {
+    let title = match env.get_string(&title) {
+        Ok(title) => title.to_string_lossy().into_owned(),
+        Err(err) => {
+            eprintln!("xmms-rs: failed to read Android widget marquee title: {err}");
+            return 0;
+        }
+    };
+    let player_state = match playback_state {
+        1 => PlayerState::Playing,
+        2 => PlayerState::Paused,
+        _ => PlayerState::Stopped,
+    };
+    let elapsed = Duration::from_millis(elapsed_ms.max(0) as u64);
+    let mut marquee = WIDGET_TITLE_MARQUEE
+        .get_or_init(|| Mutex::new(TitleMarquee::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let changed = marquee.update(
+        &title,
+        crate::render::MAIN_TITLE_TEXT_WIDTH,
+        player_state,
+        true,
+        elapsed,
+    );
+    let active = marquee.is_scrolling(player_state, true);
+    (jlong::from(marquee.offset_px()) << 2) | jlong::from(changed) << 1 | jlong::from(active)
 }
 
 fn jstring_path(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Result<PathBuf, String> {
@@ -1018,6 +1123,10 @@ fn handle_android_media_control(
     if let Some(service) = service {
         update_service_from_backend(&mut env, &service);
     }
+    request_registered_repaint();
+}
+
+fn request_registered_repaint() {
     if let Some(context) = REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()

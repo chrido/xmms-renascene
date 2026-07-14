@@ -197,13 +197,7 @@ jobs:
             -noaudio
             -no-boot-anim
             -no-metrics
-          script: |
-            set +e
-            XMMS_E2E_ANDROID_SKIP_BUILD=1 ./repo pye2e -m android
-            status=$?
-            mkdir -p testoutput/android-ci
-            adb logcat -d > testoutput/android-ci/logcat.txt || true
-            exit "$status"
+          script: .github/scripts/run-android-ui-e2e.sh
 
       - name: Upload Android E2E screenshots and logs
         if: always()

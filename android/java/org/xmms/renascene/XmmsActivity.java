@@ -5,6 +5,7 @@ import android.app.NativeActivity;
 import android.content.Context;
 import android.content.ClipData;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.media.AudioAttributes;
@@ -47,21 +48,82 @@ public final class XmmsActivity extends NativeActivity {
     private native void nativeOnDocumentsSelected(
             int requestCode, String[] paths, String error);
     private native void nativeOnMediaControl(int control);
+    private native void nativeRequestRepaint();
+
+    private static final class SafeInsetSnapshot {
+        static final SafeInsetSnapshot EMPTY =
+                new SafeInsetSnapshot(0, 0, 0, 0, 0, 0, 0, 0);
+
+        final int left;
+        final int top;
+        final int right;
+        final int bottom;
+        final int width;
+        final int height;
+        final int orientation;
+        final long configGeneration;
+
+        SafeInsetSnapshot(
+                int left,
+                int top,
+                int right,
+                int bottom,
+                int width,
+                int height,
+                int orientation,
+                long configGeneration) {
+            this.left = left;
+            this.top = top;
+            this.right = right;
+            this.bottom = bottom;
+            this.width = width;
+            this.height = height;
+            this.orientation = orientation;
+            this.configGeneration = configGeneration;
+        }
+
+        boolean hasSameLayout(
+                int left,
+                int top,
+                int right,
+                int bottom,
+                int width,
+                int height,
+                int orientation,
+                long configGeneration) {
+            return this.left == left
+                    && this.top == top
+                    && this.right == right
+                    && this.bottom == bottom
+                    && this.width == width
+                    && this.height == height
+                    && this.orientation == orientation
+                    && this.configGeneration == configGeneration;
+        }
+    }
 
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
     private boolean mediaControlPending;
     private boolean nativeLoopReady;
     private int pendingMediaControl;
-    private volatile int safeInsetLeft;
-    private volatile int safeInsetTop;
-    private volatile int safeInsetRight;
-    private volatile int safeInsetBottom;
+    private final Object geometryLock = new Object();
+    private long configGeneration = 1;
+    private volatile SafeInsetSnapshot safeInsetSnapshot = SafeInsetSnapshot.EMPTY;
     private byte[] pendingDocumentContents;
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= 28) {
+            android.view.WindowManager.LayoutParams attributes = getWindow().getAttributes();
+            attributes.layoutInDisplayCutoutMode = Build.VERSION.SDK_INT >= 30
+                    ? android.view.WindowManager.LayoutParams
+                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                    : android.view.WindowManager.LayoutParams
+                            .LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(attributes);
+        }
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         AudioAttributes attributes = new AudioAttributes.Builder()
@@ -78,7 +140,7 @@ public final class XmmsActivity extends NativeActivity {
             requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 200);
         }
         getWindow().getDecorView().setOnApplyWindowInsetsListener((view, insets) -> {
-            updateSafeInsets(insets);
+            updateSafeInsets(view, insets);
             return insets;
         });
         getWindow().getDecorView().requestApplyInsets();
@@ -112,6 +174,16 @@ public final class XmmsActivity extends NativeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleMediaControlIntent(intent);
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        synchronized (geometryLock) {
+            configGeneration++;
+        }
+        getWindow().getDecorView().requestApplyInsets();
+        nativeRequestRepaint();
     }
 
     @Override
@@ -198,7 +270,7 @@ public final class XmmsActivity extends NativeActivity {
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_PREVIOUS, hasPrevious)
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_NEXT, hasNext);
             if (state == 0) {
-                XmmsPlayerInfoWidget.updateAll(this, title, 0, 0, 0);
+                XmmsPlayerInfoWidget.updateAll(this, state, title, 0, 0, 0);
                 stopService(intent);
             } else if (Build.VERSION.SDK_INT >= 26) {
                 startForegroundService(intent);
@@ -261,29 +333,99 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public int systemInset(int side) {
-        switch (side) {
-            case 0:
-                return safeInsetLeft;
-            case 1:
-                return safeInsetTop;
-            case 2:
-                return safeInsetRight;
-            case 3:
-                return safeInsetBottom;
-            default:
-                return 0;
+    private android.graphics.Rect currentWindowBounds() {
+        android.graphics.Rect bounds;
+        if (Build.VERSION.SDK_INT >= 30) {
+            bounds = getWindowManager().getCurrentWindowMetrics().getBounds();
+        } else {
+            android.graphics.Point size = new android.graphics.Point();
+            getWindowManager().getDefaultDisplay().getRealSize(size);
+            bounds = new android.graphics.Rect(0, 0, size.x, size.y);
+        }
+        return bounds;
+    }
+
+    public long[] windowLayoutSnapshot() {
+        synchronized (geometryLock) {
+            android.graphics.Rect bounds = currentWindowBounds();
+            int orientation = getResources().getConfiguration().orientation;
+            SafeInsetSnapshot insets = safeInsetSnapshot;
+            boolean fresh = insets.configGeneration == configGeneration
+                    && insets.width == bounds.width()
+                    && insets.height == bounds.height()
+                    && insets.orientation == orientation;
+            return new long[] {
+                bounds.width(),
+                bounds.height(),
+                orientation,
+                insets.left,
+                insets.top,
+                insets.right,
+                insets.bottom,
+                insets.width,
+                insets.height,
+                insets.orientation,
+                configGeneration,
+                insets.configGeneration,
+                fresh ? 1 : 0
+            };
         }
     }
 
-    private void updateSafeInsets(WindowInsets insets) {
-        safeInsetLeft = calculateSafeInset(insets, 0);
-        safeInsetTop = calculateSafeInset(insets, 1);
-        safeInsetRight = calculateSafeInset(insets, 2);
-        safeInsetBottom = calculateSafeInset(insets, 3);
+    private void updateSafeInsets(android.view.View view, WindowInsets insets) {
+        boolean changed;
+        synchronized (geometryLock) {
+            android.graphics.Rect bounds;
+            WindowInsets measuredInsets;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.view.WindowMetrics metrics =
+                        getWindowManager().getCurrentWindowMetrics();
+                bounds = metrics.getBounds();
+                measuredInsets = metrics.getWindowInsets();
+            } else {
+                bounds = currentWindowBounds();
+                measuredInsets = insets;
+            }
+            int width = bounds.width();
+            int height = bounds.height();
+            if (view.getWidth() != width || view.getHeight() != height) {
+                view.post(view::requestApplyInsets);
+                return;
+            }
+            int orientation = getResources().getConfiguration().orientation;
+            int left = calculateSafeInset(measuredInsets, 0, width, height, orientation);
+            int top = calculateSafeInset(measuredInsets, 1, width, height, orientation);
+            int right = calculateSafeInset(measuredInsets, 2, width, height, orientation);
+            int bottom = calculateSafeInset(measuredInsets, 3, width, height, orientation);
+            SafeInsetSnapshot previous = safeInsetSnapshot;
+            changed = !previous.hasSameLayout(
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    width,
+                    height,
+                    orientation,
+                    configGeneration);
+            if (changed) {
+                safeInsetSnapshot = new SafeInsetSnapshot(
+                        left,
+                        top,
+                        right,
+                        bottom,
+                        width,
+                        height,
+                        orientation,
+                        configGeneration);
+            }
+        }
+        if (changed) {
+            nativeRequestRepaint();
+        }
     }
 
-    private int calculateSafeInset(WindowInsets insets, int side) {
+    private int calculateSafeInset(
+            WindowInsets insets, int side, int width, int height, int orientation) {
         int safeInset = 0;
         if (Build.VERSION.SDK_INT >= 30) {
             android.graphics.Insets cutout = insets.getInsetsIgnoringVisibility(
@@ -344,16 +486,18 @@ public final class XmmsActivity extends NativeActivity {
                 }
             }
         }
-        return Math.max(safeInset, roundedCornerInset(insets, side));
+        return Math.max(
+                safeInset,
+                roundedCornerInset(insets, side, width, height, orientation));
     }
 
-    private int roundedCornerInset(WindowInsets insets, int side) {
+    private int roundedCornerInset(
+            WindowInsets insets, int side, int width, int height, int orientation) {
         if (Build.VERSION.SDK_INT < 31) {
             return 0;
         }
-        int width = getWindow().getDecorView().getWidth();
-        int height = getWindow().getDecorView().getHeight();
-        boolean landscape = width > height;
+        boolean landscape =
+                orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
         RoundedCorner first;
         RoundedCorner second;
         switch (side) {

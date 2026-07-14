@@ -43,16 +43,82 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
 }
 
 #[test]
+fn android_activity_handles_bevy_configuration_change_set() {
+    let cargo = include_str!("../Cargo.toml");
+    let packaging = include_str!("../scripts/repo.py");
+    let changes = "layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode";
+
+    assert!(cargo.contains(&format!("config_changes = \"{changes}\"")));
+    assert!(packaging.contains(&format!("android:configChanges=\"{changes}\"")));
+}
+
+#[test]
+fn android_winit_patch_uses_the_reproducible_git_fork_across_the_graph() {
+    let cargo = include_str!("../Cargo.toml");
+    let lock = include_str!("../Cargo.lock");
+    let fork = "https://github.com/chrido/winit";
+    let branch = "fix-window-configchanged-android";
+
+    assert!(cargo.contains(
+        "winit = { version = \"0.30.13\", optional = true, default-features = false"
+    ));
+    assert!(cargo.contains("\"android-native-activity\""));
+    assert!(cargo.contains(&format!(
+        "winit = {{ git = \"{fork}\", branch = \"{branch}\" }}"
+    )));
+    assert!(!cargo.contains("vendor/winit"));
+
+    let winit_packages: Vec<_> = lock
+        .split("[[package]]")
+        .filter(|package| package.contains("name = \"winit\""))
+        .collect();
+    assert_eq!(winit_packages.len(), 1);
+    assert!(winit_packages[0].contains("version = \"0.30.13\""));
+    assert!(winit_packages[0].contains(&format!(
+        "source = \"git+{fork}?branch={branch}#"
+    )));
+
+    let flatpak = include_str!("../scripts/flatpak.py");
+    assert!(flatpak.contains("source.startswith(\"git+\")"));
+    assert!(flatpak.contains("\"type\": \"git\""));
+    assert!(flatpak.contains("\"commit\": commit"));
+    assert!(flatpak.contains("\"replace-with\": \"vendored-sources\""));
+}
+
+#[test]
+fn activity_exposes_atomic_window_geometry_and_insets_for_rotation_layout() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+
+    assert!(java.contains("private volatile SafeInsetSnapshot safeInsetSnapshot"));
+    assert!(java.contains("public long[] windowLayoutSnapshot()"));
+    assert!(java.contains("getCurrentWindowMetrics().getBounds()"));
+    assert!(java.contains("public void onConfigurationChanged(Configuration newConfig)"));
+    assert!(java.contains("configGeneration++;"));
+    assert!(java.contains("insets.configGeneration == configGeneration"));
+    assert!(java.contains("view.getWidth() != width || view.getHeight() != height"));
+    assert!(java.contains("measuredInsets = metrics.getWindowInsets()"));
+    assert!(java.contains("fresh ? 1 : 0"));
+    assert!(java.contains("nativeRequestRepaint();"));
+    assert!(java.contains("LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS"));
+    assert!(rust.contains("pub fn window_layout_snapshot_pixels()"));
+    assert!(rust.contains("nativeRequestRepaint"));
+}
+
+#[test]
 fn player_info_widget_is_packaged_and_opens_player() {
     let provider = include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java");
     assert!(provider.contains("INFO_WIDTH = 157"));
     assert!(provider.contains("INFO_HEIGHT = 26"));
+    assert!(provider.contains("FRAME_WIDTH = INFO_WIDTH + 4"));
+    assert!(provider.contains("FRAME_HEIGHT = INFO_HEIGHT + 4"));
     assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE = 1000"));
     assert!(provider.contains("new Intent(context, XmmsActivity.class)"));
     assert!(provider.contains("PendingIntent.getActivity("));
     assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE,"));
     assert!(provider.contains("PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE"));
-    assert!(provider.contains("views.setOnClickPendingIntent(container"));
+    assert!(provider.contains("views.setOnClickPendingIntent(open"));
+    assert!(provider.contains("widget_player_info_content"));
     assert!(provider.contains("widgetIds.length == 0"));
     assert!(provider.contains("nativeRenderPlayerInfoWidget("));
     assert!(provider.contains("XmmsWidgetSupport.proportionalPadding("));
@@ -62,22 +128,98 @@ fn player_info_widget_is_packaged_and_opens_player() {
     assert!(!provider.contains("manager.updateAppWidget(widgetIds, views)"));
 
     let layout = include_str!("../android/res/layout/widget_player_info.xml");
-    assert!(layout.contains("@+id/widget_player_info_container"));
+    assert!(layout.contains("android:id=\"@android:id/background\""));
     assert!(layout.contains("@+id/widget_player_info_image"));
-    assert!(!layout.contains("ImageButton"));
+    assert!(layout.contains("@+id/widget_player_info_open"));
 
     let info = include_str!("../android/res/xml/player_info_widget_info.xml");
     assert!(info.contains("@string/info_widget_description"));
-    assert!(info.contains("@layout/widget_player_info"));
-    assert!(info.contains("android:minWidth=\"157dp\""));
-    assert!(info.contains("android:minHeight=\"26dp\""));
+    assert!(info.contains("android:initialLayout=\"@layout/widget_player_info\""));
+    assert!(info.contains("android:previewImage=\"@drawable/widget_player_info_preview\""));
+    assert!(info.contains("android:previewLayout=\"@layout/widget_player_info_preview\""));
+    assert!(info.contains("android:minWidth=\"161dp\""));
+    assert!(info.contains("android:minHeight=\"30dp\""));
     assert!(info.contains("android:resizeMode=\"horizontal|vertical\""));
 
     let packaging = include_str!("../scripts/repo.py");
     assert!(packaging.contains("android:name=\".XmmsPlayerWidget\""));
+    assert!(packaging.contains("android:icon=\"@drawable/widget_icon\""));
+    assert!(packaging.contains("android:label=\"@string/widget_label\""));
     assert!(packaging.contains("android:resource=\"@xml/player_widget_info\""));
     assert!(packaging.contains("android:name=\".XmmsPlayerInfoWidget\""));
+    assert!(packaging.contains("android:label=\"@string/info_widget_label\""));
     assert!(packaging.contains("android:resource=\"@xml/player_info_widget_info\""));
+}
+
+#[test]
+fn player_info_widget_opts_out_of_launcher_rounding_without_local_clipping() {
+    let layout = include_str!("../android/res/layout/widget_player_info.xml");
+
+    assert!(layout.contains("android:id=\"@android:id/background\""));
+    assert!(layout.contains("@+id/widget_player_info_content"));
+    assert_eq!(layout.matches("android:clipToOutline=\"true\"").count(), 1);
+    assert_eq!(layout.matches("android:clipToOutline=\"false\"").count(), 1);
+    assert_eq!(
+        layout.matches("android:outlineProvider=\"none\"").count(),
+        2
+    );
+    assert!(layout.contains("@+id/widget_player_info_open"));
+    assert!(layout.contains("android:background=\"@android:color/black\""));
+    assert!(layout.contains("android:padding=\"2dp\""));
+    assert!(layout.contains("android:background=\"@android:color/transparent\""));
+    assert!(!layout.contains("android:clickable=\"true\""));
+    assert!(!layout.contains("android:focusable=\"true\""));
+
+    let preview = include_str!("../android/res/layout/widget_player_info_preview.xml");
+    assert!(preview.contains("android:id=\"@android:id/background\""));
+    assert!(preview.contains("android:clipToOutline=\"true\""));
+    assert!(preview.contains("android:outlineProvider=\"none\""));
+    assert!(preview.contains("android:background=\"@android:color/black\""));
+    assert!(preview.contains("android:scaleType=\"fitXY\""));
+}
+
+#[test]
+fn widget_picker_metadata_has_visible_legacy_and_modern_previews() {
+    let player_info = include_str!("../android/res/xml/player_widget_info.xml");
+    assert!(player_info.contains("android:previewImage=\"@drawable/widget_player_preview\""));
+    assert!(player_info.contains("android:previewLayout=\"@layout/widget_player_preview\""));
+
+    let player_preview = include_str!("../android/res/layout/widget_player_preview.xml");
+    assert!(player_preview.contains("android:src=\"@drawable/widget_player_preview\""));
+    assert!(player_preview.contains("android:contentDescription=\"@string/widget_description\""));
+
+    let info_preview = include_str!("../android/res/layout/widget_player_info_preview.xml");
+    assert!(info_preview.contains("android:src=\"@drawable/widget_player_info_preview\""));
+    assert!(info_preview.contains("android:contentDescription=\"@string/info_widget_description\""));
+
+    let player_png = include_bytes!("../android/res/drawable-nodpi/widget_player_preview.png");
+    let info_png = include_bytes!("../android/res/drawable-nodpi/widget_player_info_preview.png");
+    assert_eq!(&player_png[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(&info_png[..8], b"\x89PNG\r\n\x1a\n");
+    let info_image = image::load_from_memory(info_png).unwrap().to_rgba8();
+    assert_eq!(info_image.dimensions(), (644, 120));
+    assert!(info_image.pixels().all(|pixel| pixel.0[3] == 255));
+    for x in 0..info_image.width() {
+        for y in 0..8 {
+            assert_eq!(info_image.get_pixel(x, y).0, [0, 0, 0, 255]);
+            assert_eq!(
+                info_image.get_pixel(x, info_image.height() - 1 - y).0,
+                [0, 0, 0, 255]
+            );
+        }
+    }
+    for y in 0..info_image.height() {
+        for x in 0..8 {
+            assert_eq!(info_image.get_pixel(x, y).0, [0, 0, 0, 255]);
+            assert_eq!(
+                info_image.get_pixel(info_image.width() - 1 - x, y).0,
+                [0, 0, 0, 255]
+            );
+        }
+    }
+
+    let packaging = include_str!("../scripts/repo.py");
+    assert!(packaging.contains("drawable_dir / \"widget_icon.png\""));
 }
 
 #[test]
@@ -89,7 +231,8 @@ fn player_info_widget_uses_shared_skin_and_exact_main_crop() {
         .expect("info widget native renderer");
     assert!(native.contains("with_widget_skin(&files_dir, &cache_dir"));
     assert!(native.contains("render_player_info_color_image"));
-    assert!(native.contains("player_info_render_state(&title, bitrate, frequency, channels)"));
+    assert!(native.contains("title_offset_px"));
+    assert!(native.contains("player_info_render_state("));
 
     let render = include_str!("../src/ui/egui/skin_texture.rs");
     for coordinate in [
@@ -118,6 +261,7 @@ fn player_info_widget_maps_title_audio_fields_and_channel_mode() {
     assert!(mapping.contains("bitrate > 0"));
     assert!(mapping.contains("frequency > 0"));
     assert!(mapping.contains("channels: channels.max(0)"));
+    assert!(mapping.contains("title_offset_px: title_offset_px.max(0)"));
 
     let renderer = include_str!("../src/render/main.rs");
     assert!(renderer.contains("2 => (0, 12)"));
@@ -152,7 +296,7 @@ fn both_widgets_share_proportional_per_instance_sizing() {
 }
 
 #[test]
-fn playback_callbacks_refresh_info_only_for_display_changes() {
+fn playback_callbacks_refresh_info_for_display_or_transport_changes() {
     let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
     let apply = service
         .split("public void applyNativePlaybackState(")
@@ -162,7 +306,8 @@ fn playback_callbacks_refresh_info_only_for_display_changes() {
         .next()
         .expect("playback callback body");
     assert!(apply.contains("boolean infoChanged"));
-    assert!(apply.contains("if (infoChanged)"));
+    assert!(apply.contains("boolean playbackChanged"));
+    assert!(apply.contains("if (state != 0 && (infoChanged || playbackChanged))"));
     assert!(apply.contains("XmmsPlayerInfoWidget.updateAll("));
 
     let position = service
@@ -179,6 +324,39 @@ fn playback_callbacks_refresh_info_only_for_display_changes() {
     assert!(rust.contains("stream_info.bitrate.unwrap_or_default()"));
     assert!(rust.contains("stream_info.frequency.unwrap_or_default()"));
     assert!(rust.contains("stream_info.channels.unwrap_or_default()"));
+}
+
+#[test]
+fn player_info_widget_marquee_reuses_native_bitmap_title_behavior() {
+    let provider = include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java");
+    assert!(provider.contains("nativeUpdateTitleMarquee("));
+    assert!(provider.contains("MARQUEE_TICK_MS = 250"));
+    assert!(provider.contains("state.playbackState"));
+    assert!(provider.contains("marqueeChanged(marquee)"));
+    assert!(provider.contains("MARQUEE_HANDLER.postDelayed(this, MARQUEE_TICK_MS)"));
+    assert!(provider.contains("stopMarquee()"));
+    assert!(!provider.contains("TextView"));
+
+    let native = include_str!("../src/ui/egui/android_file_picker.rs");
+    let marquee = native
+        .split("Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeUpdateTitleMarquee")
+        .nth(1)
+        .expect("native widget marquee")
+        .split("fn jstring_path")
+        .next()
+        .expect("native widget marquee body");
+    assert!(native.contains("WIDGET_TITLE_MARQUEE"));
+    assert!(marquee.contains("TitleMarquee::default()"));
+    assert!(marquee.contains("crate::render::MAIN_TITLE_TEXT_WIDTH"));
+    assert!(marquee.contains("PlayerState::Playing"));
+    assert!(marquee.contains("PlayerState::Paused"));
+    assert!(marquee.contains("PlayerState::Stopped"));
+    assert!(marquee.contains("marquee.offset_px()"));
+    assert!(marquee.contains("marquee.is_scrolling(player_state, true)"));
+
+    let renderer = include_str!("../src/render/main.rs");
+    assert!(renderer.contains("render_text_offset("));
+    assert!(renderer.contains("state.title_offset_px"));
 }
 
 #[test]

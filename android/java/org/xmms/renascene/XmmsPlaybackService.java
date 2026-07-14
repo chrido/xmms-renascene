@@ -256,6 +256,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         int normalizedBitrate = Math.max(0, bitrate);
         int normalizedFrequency = Math.max(0, frequency);
         int normalizedChannels = Math.max(0, channels);
+        boolean playbackChanged = playbackState != state;
         boolean infoChanged =
                 !playbackTitle.equals(normalizedTitle)
                         || playbackBitrate != normalizedBitrate
@@ -276,9 +277,10 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                 this,
                 hasPrevious,
                 hasNext);
-        if (infoChanged) {
+        if (state != 0 && (infoChanged || playbackChanged)) {
             XmmsPlayerInfoWidget.updateAll(
                     this,
+                    playbackState,
                     playbackTitle,
                     playbackBitrate,
                     playbackFrequency,
@@ -593,6 +595,13 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                 this,
                 hasPrevious,
                 hasNext);
+        XmmsPlayerInfoWidget.updateAll(
+                this,
+                playbackState,
+                playbackTitle,
+                playbackBitrate,
+                playbackFrequency,
+                playbackChannels);
         releaseWakeLock();
         abandonAudioFocus();
         if (mediaSession != null) {

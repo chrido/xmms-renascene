@@ -1,16 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- The framework background ID opts out of launcher rounding; no outline keeps the view square. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/widget_player_info_container"
+    android:id="@android:id/background"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:clickable="true"
-    android:focusable="true">
+    android:clipToOutline="true"
+    android:outlineProvider="none">
 
-    <ImageView
-        android:id="@+id/widget_player_info_image"
+    <FrameLayout
+        android:id="@+id/widget_player_info_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@android:color/black"
+            android:padding="2dp">
+
+            <ImageView
+                android:id="@+id/widget_player_info_image"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToOutline="false"
+                android:importantForAccessibility="no"
+                android:outlineProvider="none"
+                android:scaleType="fitXY" />
+
+        </FrameLayout>
+
+    </FrameLayout>
+
+    <ImageButton
+        android:id="@+id/widget_player_info_open"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:importantForAccessibility="no"
-        android:scaleType="fitXY" />
+        android:background="@android:color/transparent"
+        android:contentDescription="@string/info_widget_description" />
 
 </FrameLayout>

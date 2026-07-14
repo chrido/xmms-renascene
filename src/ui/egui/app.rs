@@ -187,6 +187,14 @@ pub struct EguiFrontendState {
     pub last_tick: Instant,
     #[cfg(target_os = "android")]
     android_last_state_persist: Instant,
+    #[cfg(target_os = "android")]
+    android_layout_orientation: Option<AndroidLayoutOrientation>,
+    #[cfg(target_os = "android")]
+    android_layout_repaint_frames: u8,
+    #[cfg(target_os = "android")]
+    android_stable_portrait_layout: Option<AndroidStableLayout>,
+    #[cfg(target_os = "android")]
+    android_stable_landscape_layout: Option<AndroidStableLayout>,
     pub(crate) last_title_marquee_tick: Instant,
     pub(crate) title_marquee: TitleMarquee,
     pub scale_factor: f32,
@@ -343,6 +351,14 @@ impl EguiFrontendState {
             last_tick: Instant::now(),
             #[cfg(target_os = "android")]
             android_last_state_persist: Instant::now(),
+            #[cfg(target_os = "android")]
+            android_layout_orientation: None,
+            #[cfg(target_os = "android")]
+            android_layout_repaint_frames: 0,
+            #[cfg(target_os = "android")]
+            android_stable_portrait_layout: None,
+            #[cfg(target_os = "android")]
+            android_stable_landscape_layout: None,
             last_title_marquee_tick: Instant::now(),
             title_marquee: TitleMarquee::default(),
             scale_factor,
@@ -1545,6 +1561,78 @@ fn android_main_player_scale(available_width: f32) -> f32 {
     (available_width / crate::render::MAIN_WINDOW_WIDTH as f32).max(f32::EPSILON)
 }
 
+#[cfg(any(target_os = "android", test))]
+fn android_layout_extent_is_stable(width: f32, height: f32) -> bool {
+    const MIN_STABLE_EXTENT: f32 = 32.0;
+    width.is_finite()
+        && height.is_finite()
+        && width >= MIN_STABLE_EXTENT
+        && height >= MIN_STABLE_EXTENT
+}
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AndroidLayoutOrientation {
+    Portrait,
+    Landscape,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Clone, Copy, Debug)]
+struct AndroidStableLayout {
+    width: i32,
+    height: i32,
+    insets: super::android_file_picker::AndroidSystemInsets,
+    scale_factor: f32,
+    playlist_width: i32,
+    playlist_height: i32,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl AndroidLayoutOrientation {
+    fn from_configuration(orientation: i32) -> Option<Self> {
+        match orientation {
+            1 => Some(Self::Portrait),
+            2 => Some(Self::Landscape),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn android_layout_snapshot_is_consistent(
+    width: i32,
+    height: i32,
+    orientation: AndroidLayoutOrientation,
+    insets: [i32; 4],
+    inset_width: i32,
+    inset_height: i32,
+    inset_orientation: i32,
+    config_generation: i64,
+    inset_generation: i64,
+    insets_fresh: bool,
+) -> bool {
+    let [left, top, right, bottom] = insets;
+    let orientation_matches_extent = match orientation {
+        AndroidLayoutOrientation::Portrait => height >= width,
+        AndroidLayoutOrientation::Landscape => width > height,
+    };
+    width > 0
+        && height > 0
+        && orientation_matches_extent
+        && config_generation > 0
+        && inset_generation == config_generation
+        && insets_fresh
+        && inset_width == width
+        && inset_height == height
+        && AndroidLayoutOrientation::from_configuration(inset_orientation) == Some(orientation)
+        && [left, top, right, bottom].iter().all(|inset| *inset >= 0)
+        && android_layout_extent_is_stable(
+            (width - left - right) as f32,
+            (height - top - bottom) as f32,
+        )
+}
+
 impl EguiFrontendState {
     fn flush_queued_repaint(&mut self, ctx: &egui::Context) {
         if std::mem::take(&mut self.runtime.repaint_requested) {
@@ -1753,35 +1841,160 @@ impl EguiFrontendState {
 impl EguiFrontendState {
     fn show_android_docked_layout(&mut self, ui: &mut egui::Ui) {
         let pixels_per_point = ui.ctx().pixels_per_point();
-        let insets = super::android_file_picker::system_insets_pixels();
+        let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels() else {
+            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+            return;
+        };
+        let Some(orientation) = AndroidLayoutOrientation::from_configuration(layout.orientation)
+        else {
+            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+            return;
+        };
+        let insets = layout.insets;
+        if !android_layout_snapshot_is_consistent(
+            layout.width,
+            layout.height,
+            orientation,
+            [insets.left, insets.top, insets.right, insets.bottom],
+            layout.inset_width,
+            layout.inset_height,
+            layout.inset_orientation,
+            layout.config_generation,
+            layout.inset_generation,
+            layout.insets_fresh,
+        ) {
+            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+            self.show_android_last_stable_layout(
+                ui,
+                orientation,
+                layout.width,
+                layout.height,
+                pixels_per_point,
+            );
+            return;
+        }
         let left_inset = insets.left as f32 / pixels_per_point;
         let top_inset = insets.top as f32 / pixels_per_point;
         let right_inset = insets.right as f32 / pixels_per_point;
         let bottom_inset = insets.bottom as f32 / pixels_per_point;
-        let usable_width = (ui.available_width() - left_inset - right_inset).max(1.0);
-        let usable_height = (ui.available_height() - top_inset - bottom_inset).max(1.0);
-        let landscape = usable_width > usable_height;
+        let window_size = egui::vec2(
+            layout.width as f32 / pixels_per_point,
+            layout.height as f32 / pixels_per_point,
+        );
+        ui.set_width(window_size.x);
+        ui.set_height(window_size.y);
+        ui.set_clip_rect(egui::Rect::from_min_size(ui.min_rect().min, window_size));
+        let usable_width = window_size.x - left_inset - right_inset;
+        let usable_height = window_size.y - top_inset - bottom_inset;
+        if self.android_layout_orientation != Some(orientation) {
+            self.android_layout_orientation = Some(orientation);
+            self.android_layout_repaint_frames = 3;
+            self.texture_cache.playlist = None;
+        }
 
         ui.add_space(top_inset);
         ui.horizontal(|ui| {
             ui.add_space(left_inset);
-            if landscape {
-                self.scale_factor = self.android_landscape_scale(usable_width, usable_height);
-                self.adjust_android_landscape_playlist_size(usable_width, usable_height);
-                ui.vertical(|ui| self.show_android_player_column(ui));
-                if self.android_docked_playlist_visible() {
-                    playlist::show_playlist(ui, self);
-                }
-            } else {
-                self.scale_factor = android_main_player_scale(usable_width);
-                self.adjust_android_playlist_height(usable_height);
-                ui.vertical(|ui| {
-                    self.show_android_player_column(ui);
+            match orientation {
+                AndroidLayoutOrientation::Landscape => {
+                    self.scale_factor = self.android_landscape_scale(usable_width, usable_height);
+                    self.adjust_android_landscape_playlist_size(usable_width, usable_height);
+                    ui.vertical(|ui| self.show_android_player_column(ui));
                     if self.android_docked_playlist_visible() {
                         playlist::show_playlist(ui, self);
                     }
-                });
+                }
+                AndroidLayoutOrientation::Portrait => {
+                    self.scale_factor = android_main_player_scale(usable_width);
+                    self.adjust_android_playlist_height(usable_height);
+                    ui.vertical(|ui| {
+                        self.show_android_player_column(ui);
+                        if self.android_docked_playlist_visible() {
+                            playlist::show_playlist(ui, self);
+                        }
+                    });
+                }
             }
+            ui.add_space(right_inset);
+        });
+        let stable_layout = AndroidStableLayout {
+            width: layout.width,
+            height: layout.height,
+            insets,
+            scale_factor: self.scale_factor,
+            playlist_width: self.playlist_width,
+            playlist_height: self.playlist_height,
+        };
+        match orientation {
+            AndroidLayoutOrientation::Portrait => {
+                self.android_stable_portrait_layout = Some(stable_layout);
+            }
+            AndroidLayoutOrientation::Landscape => {
+                self.android_stable_landscape_layout = Some(stable_layout);
+            }
+        }
+        if self.android_layout_repaint_frames > 0 {
+            self.android_layout_repaint_frames -= 1;
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+    }
+
+    fn show_android_last_stable_layout(
+        &mut self,
+        ui: &mut egui::Ui,
+        orientation: AndroidLayoutOrientation,
+        current_width: i32,
+        current_height: i32,
+        pixels_per_point: f32,
+    ) {
+        let stable = match orientation {
+            AndroidLayoutOrientation::Portrait => self.android_stable_portrait_layout,
+            AndroidLayoutOrientation::Landscape => self.android_stable_landscape_layout,
+        };
+        let Some(stable) = stable else {
+            return;
+        };
+        let current_size = egui::vec2(
+            current_width.max(1) as f32 / pixels_per_point,
+            current_height.max(1) as f32 / pixels_per_point,
+        );
+        let stable_size = egui::vec2(
+            stable.width as f32 / pixels_per_point,
+            stable.height as f32 / pixels_per_point,
+        );
+        let clip_size = egui::vec2(
+            current_size.x.min(stable_size.x),
+            current_size.y.min(stable_size.y),
+        );
+        ui.set_width(current_size.x);
+        ui.set_height(current_size.y);
+        ui.set_clip_rect(egui::Rect::from_min_size(ui.min_rect().min, clip_size));
+        self.scale_factor = stable.scale_factor;
+        self.playlist_width = stable.playlist_width;
+        self.playlist_height = stable.playlist_height;
+        ui.add_space(stable.insets.top as f32 / pixels_per_point);
+        ui.horizontal(|ui| {
+            ui.add_space(stable.insets.left as f32 / pixels_per_point);
+            match orientation {
+                AndroidLayoutOrientation::Landscape => {
+                    ui.vertical(|ui| self.show_android_player_column(ui));
+                    if self.android_docked_playlist_visible() {
+                        playlist::show_playlist(ui, self);
+                    }
+                }
+                AndroidLayoutOrientation::Portrait => {
+                    ui.vertical(|ui| {
+                        self.show_android_player_column(ui);
+                        if self.android_docked_playlist_visible() {
+                            playlist::show_playlist(ui, self);
+                        }
+                    });
+                }
+            }
+            ui.add_space(stable.insets.right as f32 / pixels_per_point);
         });
     }
 
@@ -3460,6 +3673,81 @@ mod tests {
         assert!(app.controller().state().config.playlist_visible);
         assert_eq!((app.playlist_width, app.playlist_height), (325, 290));
         assert_eq!(app.desired_window_size().x, 325.0 * app.scale_factor);
+    }
+
+    #[test]
+    fn android_layout_rejects_transient_rotation_extents() {
+        assert!(!android_layout_extent_is_stable(1.0, 400.0));
+        assert!(!android_layout_extent_is_stable(400.0, 1.0));
+        assert!(!android_layout_extent_is_stable(f32::NAN, 400.0));
+        assert!(android_layout_extent_is_stable(400.0, 800.0));
+        assert!(android_layout_extent_is_stable(800.0, 400.0));
+        assert_eq!(
+            AndroidLayoutOrientation::from_configuration(1),
+            Some(AndroidLayoutOrientation::Portrait)
+        );
+        assert_eq!(
+            AndroidLayoutOrientation::from_configuration(2),
+            Some(AndroidLayoutOrientation::Landscape)
+        );
+        assert_eq!(AndroidLayoutOrientation::from_configuration(0), None);
+    }
+
+    #[test]
+    fn android_layout_rejects_stale_insets_and_preserves_safe_width() {
+        let landscape = AndroidLayoutOrientation::Landscape;
+        assert!(android_layout_snapshot_is_consistent(
+            2400,
+            1080,
+            landscape,
+            [96, 0, 72, 48],
+            2400,
+            1080,
+            2,
+            3,
+            3,
+            true,
+        ));
+        assert!(!android_layout_snapshot_is_consistent(
+            2400,
+            1080,
+            landscape,
+            [0, 96, 0, 72],
+            1080,
+            2400,
+            1,
+            3,
+            2,
+            false,
+        ));
+        assert!(!android_layout_snapshot_is_consistent(
+            2400,
+            1080,
+            AndroidLayoutOrientation::Portrait,
+            [96, 0, 72, 48],
+            2400,
+            1080,
+            2,
+            3,
+            3,
+            true,
+        ));
+        assert!(!android_layout_snapshot_is_consistent(
+            2400,
+            1080,
+            landscape,
+            [96, 0, 72, 48],
+            2400,
+            1080,
+            2,
+            4,
+            3,
+            false,
+        ));
+
+        let [left, _top, right, _bottom] = [96, 0, 72, 48];
+        let usable_width = 2400 - left - right;
+        assert_eq!(left + usable_width + right, 2400);
     }
 
     #[test]

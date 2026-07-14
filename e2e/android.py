@@ -279,12 +279,6 @@ class AndroidDevice:
     def set_landscape(self) -> None:
         self._set_rotation(1)
 
-    def set_rotation_while_app_stopped(self, rotation: int) -> None:
-        self.force_stop()
-        self.shell("am", "start", "-W", "-a", "android.settings.SETTINGS")
-        self.wait_for_focus("com.android.settings")
-        self._set_rotation(rotation)
-
     def _set_rotation(self, rotation: int) -> None:
         self.shell("settings", "put", "system", "accelerometer_rotation", "0")
         self.shell("settings", "put", "system", "user_rotation", str(rotation))
@@ -327,6 +321,58 @@ class AndroidDevice:
     def main_player_scale(self) -> float:
         left, _top, right, _bottom = self.main_player_bounds()
         return (right - left) / BASE_MAIN_WIDTH
+
+    def landscape_playlist_bounds(self) -> tuple[int, int, int, int]:
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            geometry = self.display_geometry()
+            if geometry.width <= geometry.height:
+                raise AssertionError("Android display is not in landscape")
+            with Image.open(BytesIO(self.framebuffer_png())) as screenshot:
+                left = geometry.width // 2
+                right_region = screenshot.convert("L").crop(
+                    (
+                        left,
+                        geometry.top_inset,
+                        geometry.width - geometry.right_inset,
+                        geometry.height - geometry.bottom_inset,
+                    )
+                )
+                visible = right_region.point(lambda value: 255 if value >= 18 else 0)
+                bounds = visible.getbbox()
+            if bounds is not None:
+                panel_left, panel_top, panel_right, panel_bottom = bounds
+                if (
+                    panel_right - panel_left >= geometry.usable_width * 0.2
+                    and panel_bottom - panel_top >= geometry.usable_height * 0.2
+                ):
+                    return (
+                        panel_left + left,
+                        panel_top + geometry.top_inset,
+                        panel_right + left,
+                        panel_bottom + geometry.top_inset,
+                    )
+            time.sleep(0.2)
+        raise AssertionError("Playlist did not move to the right side in landscape")
+
+    def portrait_docked_stack_bounds(self) -> tuple[int, int, int, int]:
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            geometry = self.display_geometry()
+            if geometry.width >= geometry.height:
+                raise AssertionError("Android display is not in portrait")
+            bounds = self.main_player_bounds()
+            safe_right = geometry.width - geometry.right_inset
+            if (
+                abs(bounds[0] - geometry.left_inset) <= 4
+                and abs(bounds[2] - safe_right) <= 4
+                and bounds[3] - bounds[1] >= geometry.usable_height * 0.85
+            ):
+                return bounds
+            time.sleep(0.2)
+        raise AssertionError(
+            "Portrait docked panels retained a landscape offset or black band"
+        )
 
     def framebuffer_png(self) -> bytes:
         command = [str(self.adb)]

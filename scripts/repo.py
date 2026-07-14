@@ -507,6 +507,10 @@ class RepoTool:
         drawable_dir.mkdir(parents=True, exist_ok=True)
         xml_dir.mkdir(exist_ok=True)
         shutil.copy2(REPO_DIR / "data" / "org.xmms.Renascene.png", drawable_dir / "icon.png")
+        shutil.copy2(
+            REPO_DIR / "data" / "org.xmms.Renascene.png",
+            drawable_dir / "widget_icon.png",
+        )
         (xml_dir / "automotive_app_desc.xml").write_text(
             """<?xml version="1.0" encoding="utf-8"?>
 <automotiveApp>
@@ -548,7 +552,7 @@ class RepoTool:
             android:resource="@xml/automotive_app_desc" />
         <activity
             android:name="{ANDROID_ACTIVITY}"
-            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:configChanges="layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode"
             android:exported="true"
             android:resizeableActivity="true"
             android:screenOrientation="unspecified">
@@ -570,6 +574,8 @@ class RepoTool:
         </service>
         <receiver
             android:name=".XmmsPlayerWidget"
+            android:icon="@drawable/widget_icon"
+            android:label="@string/widget_label"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
@@ -580,6 +586,8 @@ class RepoTool:
         </receiver>
         <receiver
             android:name=".XmmsPlayerInfoWidget"
+            android:icon="@drawable/widget_icon"
+            android:label="@string/info_widget_label"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />

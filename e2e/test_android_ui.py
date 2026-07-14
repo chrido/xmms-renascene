@@ -15,6 +15,7 @@ from PIL import Image
 
 from android import ANDROID_AUTO_PROBE_ACTIVITY, ANDROID_PACKAGE, AndroidDevice
 from gui import (
+    BASE_MAIN_WIDTH,
     EQUALIZER_CONTROL_RECTS,
     MAIN_BUTTON_RECTS,
     MAIN_PLAYER_BASE_HEIGHT,
@@ -226,30 +227,48 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     android_device: AndroidDevice,
     test_output: Any,
 ) -> None:
-    android_device.force_stop()
-    android_device.shell("pm", "clear", ANDROID_PACKAGE)
-    android_device.grant_runtime_permissions()
-    android_device.set_rotation_while_app_stopped(1)
-    android_device.start_activity()
-    try:
-        geometry = android_device.display_geometry()
-        scale = android_device.main_player_scale()
+    android_device.restart_app(reset_data=True)
+    android_device.main_player_bounds()
+    android_device.set_landscape()
+    android_device.wait_for_app()
+    geometry = android_device.display_geometry()
+    scale = android_device.main_player_scale()
+    player_bounds = android_device.main_player_bounds()
+    playlist_bounds = android_device.landscape_playlist_bounds()
 
-        assert geometry.width > geometry.height
-        default_player_column_height = 116 * 2
-        assert scale * default_player_column_height >= geometry.usable_height * 0.85
+    assert geometry.width > geometry.height
+    default_player_column_height = 116 * 2
+    assert scale * default_player_column_height >= geometry.usable_height * 0.85
+    assert playlist_bounds[0] >= player_bounds[2] - 4
+    assert playlist_bounds[1] <= player_bounds[1] + 8
+    safe_left = geometry.left_inset
+    safe_right = geometry.width - geometry.right_inset
+    assert player_bounds[0] >= safe_left - 2
+    assert player_bounds[2] <= safe_right + 2
+    assert playlist_bounds[0] >= safe_left - 2
+    assert playlist_bounds[2] <= safe_right + 2
 
-        before = android_device.screenshot(test_output.screenshot_path())
-        android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.REPEAT])
-        after = android_device.screenshot(test_output.screenshot_path())
+    before = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.REPEAT])
+    after = android_device.screenshot(test_output.screenshot_path())
 
-        android_device.assert_log_contains(
-            "player: toggle activated, toggle_name=Repeat",
-        )
-        assert before.read_bytes() != after.read_bytes()
-    finally:
-        android_device.set_rotation_while_app_stopped(0)
-        android_device.shell("am", "force-stop", "com.android.settings", check=False)
+    android_device.assert_log_contains(
+        "player: toggle activated, toggle_name=Repeat",
+    )
+    assert before.read_bytes() != after.read_bytes()
+
+    android_device.set_portrait()
+    android_device.wait_for_app()
+    portrait_geometry = android_device.display_geometry()
+    portrait_stack = android_device.portrait_docked_stack_bounds()
+    portrait_safe_right = portrait_geometry.width - portrait_geometry.right_inset
+    assert abs(portrait_stack[0] - portrait_geometry.left_inset) <= 4
+    assert abs(portrait_stack[2] - portrait_safe_right) <= 4
+    assert portrait_stack[1] >= portrait_geometry.top_inset - 2
+    assert portrait_stack[3] <= portrait_geometry.height - portrait_geometry.bottom_inset + 2
+    portrait_scale = (portrait_stack[2] - portrait_stack[0]) / BASE_MAIN_WIDTH
+    player_and_equalizer_height = 2 * MAIN_PLAYER_BASE_HEIGHT * portrait_scale
+    assert portrait_stack[3] - portrait_stack[1] > player_and_equalizer_height + 20
 
 
 def test_android_persists_player_configuration(
@@ -872,6 +891,14 @@ def test_android_player_widget_is_packaged(
         Path(__file__).resolve().parents[1]
         / "android/res/layout/widget_player.xml"
     ).read_text()
+    info_widget_layout_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/res/layout/widget_player_info.xml"
+    ).read_text()
+    info_widget_preview_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/res/layout/widget_player_info_preview.xml"
+    ).read_text()
     native_widget_source = (
         Path(__file__).resolve().parents[1]
         / "src/ui/egui/android_file_picker.rs"
@@ -882,13 +909,28 @@ def test_android_player_widget_is_packaged(
     assert "android.appwidget.action.APPWIDGET_UPDATE" in manifest
     assert "android:initialLayout" in widget_info
     assert "android:initialLayout" in info_widget_info
+    assert "android:previewImage" in widget_info
+    assert "android:previewLayout" in widget_info
+    assert "android:previewImage" in info_widget_info
+    assert "android:previewLayout" in info_widget_info
+    assert manifest.count("A: android:icon") >= 3
+    assert manifest.count("A: android:label") >= 3
     assert 'android:id="@+id/widget_player_container"' in widget_layout_source
     assert "E: ImageView" in widget_layout
     assert widget_layout.count("E: ImageButton") == 5
     assert "E: TextView" not in widget_layout
     assert "E: ImageView" in info_widget_layout
-    assert "E: ImageButton" not in info_widget_layout
+    assert info_widget_layout.count("E: ImageButton") == 1
     assert "E: TextView" not in info_widget_layout
+    assert 'android:id="@android:id/background"' in info_widget_layout_source
+    assert 'android:clipToOutline="true"' in info_widget_layout_source
+    assert 'android:outlineProvider="none"' in info_widget_layout_source
+    assert 'android:id="@+id/widget_player_info_content"' in info_widget_layout_source
+    assert 'android:background="@android:color/black"' in info_widget_layout_source
+    assert 'android:padding="2dp"' in info_widget_layout_source
+    assert 'android:id="@android:id/background"' in info_widget_preview_source
+    assert 'android:clipToOutline="true"' in info_widget_preview_source
+    assert 'android:outlineProvider="none"' in info_widget_preview_source
     assert "PLAYER_WIDTH = 114" in widget_source
     assert "PLAYER_HEIGHT = 18" in widget_source
     assert "onAppWidgetOptionsChanged" in widget_source
@@ -941,6 +983,8 @@ def test_android_player_widget_is_packaged(
     )
     assert "INFO_WIDTH = 157" in info_widget_source
     assert "INFO_HEIGHT = 26" in info_widget_source
+    assert "FRAME_WIDTH = INFO_WIDTH + 4" in info_widget_source
+    assert "FRAME_HEIGHT = INFO_HEIGHT + 4" in info_widget_source
     assert "OPEN_PLAYER_REQUEST_CODE = 1000" in info_widget_source
     assert "PendingIntent.getActivity(" in info_widget_source
     assert "new Intent(context, XmmsActivity.class)" in info_widget_source
@@ -948,6 +992,12 @@ def test_android_player_widget_is_packaged(
     assert "getAppWidgetOptions(widgetId)" in info_widget_source
     assert "XmmsWidgetSupport.proportionalPadding(" in info_widget_source
     assert "manager.updateAppWidget(widgetId, views)" in info_widget_source
+    assert "widget_player_info_content" in info_widget_source
+    assert "views.setOnClickPendingIntent(open" in info_widget_source
+    assert "nativeUpdateTitleMarquee(" in info_widget_source
+    assert "MARQUEE_HANDLER.postDelayed(this, MARQUEE_TICK_MS)" in info_widget_source
+    assert "titleOffsetPx" in info_widget_source
+    assert "TextView" not in info_widget_source
 
     controls = re.findall(
         r'contentDescription[^=]*="([^"]+)"',
@@ -971,6 +1021,18 @@ def test_android_player_widget_is_packaged(
 
     apk = Path(__file__).resolve().parents[1] / "target/debug/apk/xmms-renascene.apk"
     with zipfile.ZipFile(apk) as package:
+        packaged_resources = set(package.namelist())
+        assert "res/drawable/widget_icon.png" in packaged_resources
+        assert (
+            "res/drawable-nodpi-v4/widget_player_preview.png"
+            in packaged_resources
+        )
+        assert (
+            "res/drawable-nodpi-v4/widget_player_info_preview.png"
+            in packaged_resources
+        )
+        assert "res/layout/widget_player_preview.xml" in packaged_resources
+        assert "res/layout/widget_player_info_preview.xml" in packaged_resources
         native_library = next(
             name
             for name in package.namelist()
@@ -983,5 +1045,9 @@ def test_android_player_widget_is_packaged(
     )
     assert (
         b"Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRenderPlayerInfoWidget"
+        in library_bytes
+    )
+    assert (
+        b"Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeUpdateTitleMarquee"
         in library_bytes
     )

@@ -22,6 +22,7 @@ pub fn player_info_render_state(
     bitrate: i32,
     frequency: i32,
     channels: i32,
+    title_offset_px: i32,
 ) -> MainWindowRenderState {
     MainWindowRenderState {
         title: if title.is_empty() {
@@ -36,6 +37,7 @@ pub fn player_info_render_state(
             .then(|| frequency.to_string())
             .unwrap_or_default(),
         channels: channels.max(0),
+        title_offset_px: title_offset_px.max(0),
         ..MainWindowRenderState::default()
     }
 }
@@ -117,18 +119,27 @@ pub fn crop_color_image(
     }
 }
 
+fn flatten_color_image_onto_black(mut image: egui::ColorImage) -> egui::ColorImage {
+    // Imported MAIN images can contain keyed transparency; widgets need an opaque rectangle.
+    for pixel in &mut image.pixels {
+        let [red, green, blue, _] = pixel.to_array();
+        *pixel = egui::Color32::from_rgb(red, green, blue);
+    }
+    image
+}
+
 pub fn render_player_info_color_image(
     skin: &DefaultSkin,
     state: &MainWindowRenderState,
 ) -> Result<egui::ColorImage, RenderError> {
     let image = render_main_player_color_image(skin, state)?;
-    Ok(crop_color_image(
+    Ok(flatten_color_image_onto_black(crop_color_image(
         &image,
         PLAYER_INFO_X,
         PLAYER_INFO_Y,
         PLAYER_INFO_WIDTH,
         PLAYER_INFO_HEIGHT,
-    ))
+    )))
 }
 
 pub fn render_equalizer_color_image(
@@ -306,7 +317,7 @@ mod tests {
     #[test]
     fn player_info_image_is_native_information_rectangle() {
         let skin = DefaultSkin::load_bundled().unwrap();
-        let state = player_info_render_state("Widget title", 192, 44, 2);
+        let state = player_info_render_state("Widget title", 192, 44, 2, 0);
         let full = render_main_player_color_image(&skin, &state).unwrap();
         let info = render_player_info_color_image(&skin, &state).unwrap();
 
@@ -322,20 +333,49 @@ mod tests {
     }
 
     #[test]
+    fn player_info_image_has_no_transparent_corner_or_skin_pixels() {
+        let transparent = egui::ColorImage::from_rgba_unmultiplied(
+            [2, 1],
+            &[255, 255, 255, 0, 200, 100, 50, 128],
+        );
+        let flattened = flatten_color_image_onto_black(transparent);
+        assert!(flattened.pixels.iter().all(|pixel| pixel.a() == 255));
+        assert_eq!(flattened.pixels[0], egui::Color32::BLACK);
+
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let image = render_player_info_color_image(
+            &skin,
+            &player_info_render_state("Square widget", 192, 44, 2, 0),
+        )
+        .unwrap();
+        assert!(image.pixels.iter().all(|pixel| pixel.a() == 255));
+        for index in [
+            0,
+            PLAYER_INFO_WIDTH - 1,
+            (PLAYER_INFO_HEIGHT - 1) * PLAYER_INFO_WIDTH,
+            PLAYER_INFO_HEIGHT * PLAYER_INFO_WIDTH - 1,
+        ] {
+            assert_eq!(image.pixels[index].a(), 255);
+        }
+    }
+
+    #[test]
     fn player_info_state_maps_display_fields() {
-        let stereo = player_info_render_state("Track title", 192, 44, 2);
+        let stereo = player_info_render_state("Track title", 192, 44, 2, 7);
         assert_eq!(stereo.title, "Track title");
         assert_eq!(stereo.bitrate_text, "192");
         assert_eq!(stereo.frequency_text, "44");
         assert_eq!(stereo.channels, 2);
+        assert_eq!(stereo.title_offset_px, 7);
 
-        let mono = player_info_render_state("", -1, 0, 1);
+        let mono = player_info_render_state("", -1, 0, 1, -1);
         assert_eq!(mono.title, "XMMS Renascene");
         assert!(mono.bitrate_text.is_empty());
         assert!(mono.frequency_text.is_empty());
         assert_eq!(mono.channels, 1);
+        assert_eq!(mono.title_offset_px, 0);
 
-        let unknown = player_info_render_state("Unknown channels", 0, -1, -2);
+        let unknown = player_info_render_state("Unknown channels", 0, -1, -2, 0);
         assert_eq!(unknown.channels, 0);
     }
 
@@ -345,7 +385,7 @@ mod tests {
         let render = |title, bitrate, frequency, channels| {
             render_player_info_color_image(
                 &skin,
-                &player_info_render_state(title, bitrate, frequency, channels),
+                &player_info_render_state(title, bitrate, frequency, channels, 0),
             )
             .unwrap()
             .pixels
@@ -358,6 +398,23 @@ mod tests {
         assert_ne!(empty, render("", 0, 0, 1));
         assert_ne!(empty, render("", 0, 0, 2));
         assert_ne!(render("", 0, 0, 1), render("", 0, 0, 2));
+    }
+
+    #[test]
+    fn player_info_image_uses_bitmap_title_marquee_offset() {
+        let skin = DefaultSkin::load_bundled().unwrap();
+        let at_start = render_player_info_color_image(
+            &skin,
+            &player_info_render_state("A title long enough to overflow", 192, 44, 2, 0),
+        )
+        .unwrap();
+        let scrolled = render_player_info_color_image(
+            &skin,
+            &player_info_render_state("A title long enough to overflow", 192, 44, 2, 10),
+        )
+        .unwrap();
+
+        assert_ne!(at_start.pixels, scrolled.pixels);
     }
 
     #[test]

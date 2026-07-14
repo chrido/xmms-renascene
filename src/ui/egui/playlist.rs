@@ -49,9 +49,21 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
         return;
     }
 
-    let screen = ctx.content_rect();
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
-    let insets = super::android_file_picker::system_insets_pixels();
+    let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels()
+        .filter(|layout| layout.has_current_insets())
+    else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        return;
+    };
+    let screen = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(
+            layout.width as f32 / pixels_per_point,
+            layout.height as f32 / pixels_per_point,
+        ),
+    );
+    let insets = layout.insets;
     let left_inset = insets.left as f32 / pixels_per_point;
     let top_inset = insets.top as f32 / pixels_per_point;
     let right_inset = insets.right as f32 / pixels_per_point;

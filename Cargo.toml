@@ -79,6 +79,9 @@ winit = { version = "0.30.13", optional = true, default-features = false, featur
 ] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
+[patch.crates-io]
+winit = { git = "https://github.com/chrido/winit", branch = "fix-window-configchanged-android" }
+
 [package.metadata.android]
 package = "org.xmms.renascene"
 apk_name = "xmms-renascene"
@@ -107,7 +110,7 @@ has_code = true
 
 [package.metadata.android.application.activity]
 name = "org.xmms.renascene.XmmsActivity"
-config_changes = "orientation|keyboardHidden|screenSize"
+config_changes = "layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode"
 exported = true
 orientation = "unspecified"
 resizeable_activity = true
