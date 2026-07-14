@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import tempfile
 import time
+from collections import defaultdict
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
@@ -278,6 +279,12 @@ class AndroidDevice:
     def set_landscape(self) -> None:
         self._set_rotation(1)
 
+    def set_rotation_while_app_stopped(self, rotation: int) -> None:
+        self.force_stop()
+        self.shell("am", "start", "-W", "-a", "android.settings.SETTINGS")
+        self.wait_for_focus("com.android.settings")
+        self._set_rotation(rotation)
+
     def _set_rotation(self, rotation: int) -> None:
         self.shell("settings", "put", "system", "accelerometer_rotation", "0")
         self.shell("settings", "put", "system", "user_rotation", str(rotation))
@@ -373,6 +380,34 @@ class AndroidDevice:
         y = round(geometry.top_inset + geometry.usable_height * y_fraction)
         self.shell("input", "tap", str(x), str(y))
         time.sleep(0.3)
+
+    def tap_horizontal_button_group(
+        self,
+        button_index: int,
+        *,
+        button_count: int,
+        timeout: float = 5.0,
+    ) -> None:
+        if not 0 <= button_index < button_count:
+            raise ValueError("button_index must identify a button in the group")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            geometry = self.display_geometry()
+            with Image.open(BytesIO(self.framebuffer_png())) as screenshot:
+                centers = _horizontal_button_group_centers(
+                    screenshot.convert("RGB"),
+                    geometry,
+                    button_count,
+                )
+            if centers is not None:
+                x, y = centers[button_index]
+                self.shell("input", "tap", str(x), str(y))
+                time.sleep(0.3)
+                return
+            time.sleep(0.2)
+        raise AssertionError(
+            f"Could not find a horizontal group of {button_count} Android buttons"
+        )
 
     def swipe_usable_fraction(
         self,
@@ -554,3 +589,74 @@ class AndroidDevice:
             )
         finally:
             self.shell("rm", "-f", remote_path, check=False)
+
+
+def _horizontal_button_group_centers(
+    screenshot: Image.Image,
+    geometry: DisplayGeometry,
+    button_count: int,
+) -> list[tuple[int, int]] | None:
+    pixels = screenshot.load()
+    min_width = round(geometry.usable_width * 0.15)
+    max_width = round(geometry.usable_width * 0.32)
+    runs: dict[tuple[tuple[int, int, int], int, int], list[int]] = defaultdict(list)
+    for y in range(
+        geometry.top_inset,
+        geometry.height - geometry.bottom_inset,
+    ):
+        x = geometry.left_inset
+        usable_right = geometry.width - geometry.right_inset
+        while x < usable_right:
+            color = pixels[x, y]
+            left = x
+            x += 1
+            while x < usable_right and pixels[x, y] == color:
+                x += 1
+            if min_width <= x - left <= max_width:
+                runs[(color, left, x)].append(y)
+
+    candidates = [
+        (color, left, right, min(ys), max(ys), len(ys))
+        for (color, left, right), ys in runs.items()
+        if len(ys) >= 20
+    ]
+    groups: list[
+        tuple[int, list[tuple[tuple[int, int, int], int, int, int, int, int]]]
+    ] = []
+    for color in {candidate[0] for candidate in candidates}:
+        colored = sorted(
+            (candidate for candidate in candidates if candidate[0] == color),
+            key=lambda candidate: candidate[1],
+        )
+        for start in range(len(colored) - button_count + 1):
+            group = colored[start : start + button_count]
+            if any(
+                group[index][2] > group[index + 1][1]
+                or group[index + 1][1] - group[index][2]
+                > geometry.usable_width * 0.15
+                for index in range(button_count - 1)
+            ):
+                continue
+            overlap_top = max(candidate[3] for candidate in group)
+            overlap_bottom = min(candidate[4] for candidate in group)
+            if overlap_bottom - overlap_top < 20:
+                continue
+            covered_width = sum(candidate[2] - candidate[1] for candidate in group)
+            if covered_width < geometry.usable_width * 0.55:
+                continue
+            groups.append(
+                (
+                    (overlap_bottom - overlap_top)
+                    * sum(candidate[5] for candidate in group),
+                    group,
+                )
+            )
+    if not groups:
+        return None
+    group = max(groups, key=lambda item: item[0])[1]
+    top = min(candidate[3] for candidate in group)
+    bottom = max(candidate[4] for candidate in group)
+    return [
+        ((candidate[1] + candidate[2]) // 2, (top + bottom) // 2)
+        for candidate in group
+    ]

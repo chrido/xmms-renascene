@@ -226,26 +226,30 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     android_device: AndroidDevice,
     test_output: Any,
 ) -> None:
-    android_device.restart_app(reset_data=True)
-    android_device.set_landscape()
     android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    android_device.set_rotation_while_app_stopped(1)
     android_device.start_activity()
-    android_device.wait_for_app()
-    geometry = android_device.display_geometry()
-    scale = android_device.main_player_scale()
+    try:
+        geometry = android_device.display_geometry()
+        scale = android_device.main_player_scale()
 
-    assert geometry.width > geometry.height
-    default_player_column_height = 116 * 2
-    assert scale * default_player_column_height >= geometry.usable_height * 0.85
+        assert geometry.width > geometry.height
+        default_player_column_height = 116 * 2
+        assert scale * default_player_column_height >= geometry.usable_height * 0.85
 
-    before = android_device.screenshot(test_output.screenshot_path())
-    android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.REPEAT])
-    after = android_device.screenshot(test_output.screenshot_path())
+        before = android_device.screenshot(test_output.screenshot_path())
+        android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.REPEAT])
+        after = android_device.screenshot(test_output.screenshot_path())
 
-    android_device.assert_log_contains(
-        "player: toggle activated, toggle_name=Repeat",
-    )
-    assert before.read_bytes() != after.read_bytes()
+        android_device.assert_log_contains(
+            "player: toggle activated, toggle_name=Repeat",
+        )
+        assert before.read_bytes() != after.read_bytes()
+    finally:
+        android_device.set_rotation_while_app_stopped(0)
+        android_device.shell("am", "force-stop", "com.android.settings", check=False)
 
 
 def test_android_persists_player_configuration(
@@ -389,14 +393,14 @@ def test_android_managed_playlists_save_load_and_delete_from_settings(
         "#EXTINF:42,Managed Loaded\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/loaded.wav\n",
     )
-    android_device.tap_usable_fraction(0.32, 0.74)
+    android_device.tap_horizontal_button_group(0, button_count=3)
     android_device.close_activity()
     android_device.wait_for_private_file_contains(playlist_path, "Managed Loaded")
     android_device.start_activity()
 
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
     android_device.tap_usable_fraction(0.5, 0.544)
-    android_device.tap_usable_fraction(0.84, 0.74)
+    android_device.tap_horizontal_button_group(2, button_count=3)
     android_device.wait_for_private_file_absent(managed_path)
 
 
