@@ -37,8 +37,148 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
         .next()
         .expect("activity widget refresh body");
     assert!(refresh.contains("Context applicationContext = getApplicationContext()"));
-    assert!(refresh
-        .contains("MAIN_HANDLER.post(() -> XmmsPlayerWidget.refreshAll(applicationContext))"));
+    assert!(refresh.contains("MAIN_HANDLER.post(() -> {"));
+    assert!(refresh.contains("XmmsPlayerWidget.refreshAll(applicationContext)"));
+    assert!(refresh.contains("XmmsPlayerInfoWidget.refreshAll(applicationContext)"));
+}
+
+#[test]
+fn player_info_widget_is_packaged_and_opens_player() {
+    let provider = include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java");
+    assert!(provider.contains("INFO_WIDTH = 157"));
+    assert!(provider.contains("INFO_HEIGHT = 26"));
+    assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE = 1000"));
+    assert!(provider.contains("new Intent(context, XmmsActivity.class)"));
+    assert!(provider.contains("PendingIntent.getActivity("));
+    assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE,"));
+    assert!(provider.contains("PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE"));
+    assert!(provider.contains("views.setOnClickPendingIntent(container"));
+    assert!(provider.contains("widgetIds.length == 0"));
+    assert!(provider.contains("nativeRenderPlayerInfoWidget("));
+    assert!(provider.contains("XmmsWidgetSupport.proportionalPadding("));
+    assert!(provider.contains("onAppWidgetOptionsChanged("));
+    assert!(provider.contains("manager.getAppWidgetOptions(widgetId)"));
+    assert!(provider.contains("manager.updateAppWidget(widgetId, views)"));
+    assert!(!provider.contains("manager.updateAppWidget(widgetIds, views)"));
+
+    let layout = include_str!("../android/res/layout/widget_player_info.xml");
+    assert!(layout.contains("@+id/widget_player_info_container"));
+    assert!(layout.contains("@+id/widget_player_info_image"));
+    assert!(!layout.contains("ImageButton"));
+
+    let info = include_str!("../android/res/xml/player_info_widget_info.xml");
+    assert!(info.contains("@string/info_widget_description"));
+    assert!(info.contains("@layout/widget_player_info"));
+    assert!(info.contains("android:minWidth=\"157dp\""));
+    assert!(info.contains("android:minHeight=\"26dp\""));
+    assert!(info.contains("android:resizeMode=\"horizontal|vertical\""));
+
+    let packaging = include_str!("../scripts/repo.py");
+    assert!(packaging.contains("android:name=\".XmmsPlayerWidget\""));
+    assert!(packaging.contains("android:resource=\"@xml/player_widget_info\""));
+    assert!(packaging.contains("android:name=\".XmmsPlayerInfoWidget\""));
+    assert!(packaging.contains("android:resource=\"@xml/player_info_widget_info\""));
+}
+
+#[test]
+fn player_info_widget_uses_shared_skin_and_exact_main_crop() {
+    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let native = rust
+        .split("Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRenderPlayerInfoWidget")
+        .nth(1)
+        .expect("info widget native renderer");
+    assert!(native.contains("with_widget_skin(&files_dir, &cache_dir"));
+    assert!(native.contains("render_player_info_color_image"));
+    assert!(native.contains("player_info_render_state(&title, bitrate, frequency, channels)"));
+
+    let render = include_str!("../src/ui/egui/skin_texture.rs");
+    for coordinate in [
+        "PLAYER_INFO_X: usize = 111",
+        "PLAYER_INFO_Y: usize = 27",
+        "PLAYER_INFO_WIDTH: usize = 157",
+        "PLAYER_INFO_HEIGHT: usize = 26",
+    ] {
+        assert!(render.contains(coordinate), "missing {coordinate}");
+    }
+    assert!(render.contains("for y in 0..PLAYER_INFO_HEIGHT"));
+    assert!(render.contains("&info.pixels[info_start..info_start + PLAYER_INFO_WIDTH]"));
+}
+
+#[test]
+fn player_info_widget_maps_title_audio_fields_and_channel_mode() {
+    let render = include_str!("../src/ui/egui/skin_texture.rs");
+    let mapping = render
+        .split("pub fn player_info_render_state(")
+        .nth(1)
+        .expect("player info state mapping")
+        .split("pub fn argb_to_egui_rgba")
+        .next()
+        .expect("player info state mapping body");
+    assert!(mapping.contains("\"XMMS Renascene\".to_string()"));
+    assert!(mapping.contains("bitrate > 0"));
+    assert!(mapping.contains("frequency > 0"));
+    assert!(mapping.contains("channels: channels.max(0)"));
+
+    let renderer = include_str!("../src/render/main.rs");
+    assert!(renderer.contains("2 => (0, 12)"));
+    assert!(renderer.contains("1 => (12, 0)"));
+    assert!(renderer.contains("_ => (12, 12)"));
+}
+
+#[test]
+fn both_widgets_share_proportional_per_instance_sizing() {
+    let support = include_str!("../android/java/org/xmms/renascene/XmmsWidgetSupport.java");
+    assert!(support.contains("OPTION_APPWIDGET_MAX_WIDTH"));
+    assert!(support.contains("OPTION_APPWIDGET_MIN_WIDTH"));
+    assert!(support.contains("OPTION_APPWIDGET_MIN_HEIGHT"));
+    assert!(support.contains("OPTION_APPWIDGET_MAX_HEIGHT"));
+    assert!(
+        support.contains("contentHeight = Math.round((float) width * nativeHeight / nativeWidth)")
+    );
+    assert!(
+        support.contains("contentWidth = Math.round((float) height * nativeWidth / nativeHeight)")
+    );
+
+    for provider in [
+        include_str!("../android/java/org/xmms/renascene/XmmsPlayerWidget.java"),
+        include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java"),
+    ] {
+        assert!(provider.contains("onAppWidgetOptionsChanged("));
+        assert!(provider.contains("manager.getAppWidgetOptions(widgetId)"));
+        assert!(provider.contains("XmmsWidgetSupport.proportionalPadding("));
+        assert!(provider.contains("manager.updateAppWidget("));
+        assert!(!provider.contains("manager.updateAppWidget(widgetIds,"));
+    }
+}
+
+#[test]
+fn playback_callbacks_refresh_info_only_for_display_changes() {
+    let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
+    let apply = service
+        .split("public void applyNativePlaybackState(")
+        .nth(1)
+        .expect("playback state callback")
+        .split("public void applyNativePlaybackPosition")
+        .next()
+        .expect("playback callback body");
+    assert!(apply.contains("boolean infoChanged"));
+    assert!(apply.contains("if (infoChanged)"));
+    assert!(apply.contains("XmmsPlayerInfoWidget.updateAll("));
+
+    let position = service
+        .split("public void applyNativePlaybackPosition")
+        .nth(1)
+        .expect("position callback")
+        .split("@Override")
+        .next()
+        .expect("position callback body");
+    assert!(!position.contains("XmmsPlayerInfoWidget"));
+
+    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    assert!(rust.contains("PlaybackEvent::StreamInfo(_)"));
+    assert!(rust.contains("stream_info.bitrate.unwrap_or_default()"));
+    assert!(rust.contains("stream_info.frequency.unwrap_or_default()"));
+    assert!(rust.contains("stream_info.channels.unwrap_or_default()"));
 }
 
 #[test]

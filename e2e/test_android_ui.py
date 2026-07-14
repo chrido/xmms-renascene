@@ -845,10 +845,24 @@ def test_android_player_widget_is_packaged(
 ) -> None:
     manifest = android_device.apk_xmltree("AndroidManifest.xml")
     widget_info = android_device.apk_xmltree("res/xml/player_widget_info.xml")
+    info_widget_info = android_device.apk_xmltree(
+        "res/xml/player_info_widget_info.xml"
+    )
     widget_layout = android_device.apk_xmltree("res/layout/widget_player.xml")
+    info_widget_layout = android_device.apk_xmltree(
+        "res/layout/widget_player_info.xml"
+    )
     widget_source = (
         Path(__file__).resolve().parents[1]
         / "android/java/org/xmms/renascene/XmmsPlayerWidget.java"
+    ).read_text()
+    info_widget_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java"
+    ).read_text()
+    widget_support_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/java/org/xmms/renascene/XmmsWidgetSupport.java"
     ).read_text()
     widget_layout_source = (
         Path(__file__).resolve().parents[1]
@@ -860,21 +874,27 @@ def test_android_player_widget_is_packaged(
     ).read_text()
 
     assert ".XmmsPlayerWidget" in manifest
+    assert ".XmmsPlayerInfoWidget" in manifest
     assert "android.appwidget.action.APPWIDGET_UPDATE" in manifest
     assert "android:initialLayout" in widget_info
+    assert "android:initialLayout" in info_widget_info
     assert 'android:id="@+id/widget_player_container"' in widget_layout_source
     assert "E: ImageView" in widget_layout
     assert widget_layout.count("E: ImageButton") == 5
     assert "E: TextView" not in widget_layout
+    assert "E: ImageView" in info_widget_layout
+    assert "E: ImageButton" not in info_widget_layout
+    assert "E: TextView" not in info_widget_layout
     assert "PLAYER_WIDTH = 114" in widget_source
     assert "PLAYER_HEIGHT = 18" in widget_source
     assert "onAppWidgetOptionsChanged" in widget_source
     assert "getAppWidgetOptions(widgetId)" in widget_source
     assert "views.setViewPadding(" in widget_source
+    assert "XmmsWidgetSupport.proportionalPadding(" in widget_source
     assert re.search(
         r"contentHeight\s*=\s*Math\.round\(\(float\) width"
-        r"\s*\*\s*PLAYER_HEIGHT\s*/\s*PLAYER_WIDTH\)",
-        widget_source,
+        r"\s*\*\s*nativeHeight\s*/\s*nativeWidth\)",
+        widget_support_source,
     )
     assert not re.search(
         r"updateAppWidget\s*\(\s*widgetIds\s*,",
@@ -915,6 +935,15 @@ def test_android_player_widget_is_packaged(
         "render_transport_buttons_color_image(skin, pressed)"
         in native_widget_source
     )
+    assert "INFO_WIDTH = 157" in info_widget_source
+    assert "INFO_HEIGHT = 26" in info_widget_source
+    assert "OPEN_PLAYER_REQUEST_CODE = 1000" in info_widget_source
+    assert "PendingIntent.getActivity(" in info_widget_source
+    assert "new Intent(context, XmmsActivity.class)" in info_widget_source
+    assert "onAppWidgetOptionsChanged" in info_widget_source
+    assert "getAppWidgetOptions(widgetId)" in info_widget_source
+    assert "XmmsWidgetSupport.proportionalPadding(" in info_widget_source
+    assert "manager.updateAppWidget(widgetId, views)" in info_widget_source
 
     controls = re.findall(
         r'contentDescription[^=]*="([^"]+)"',
@@ -946,5 +975,9 @@ def test_android_player_widget_is_packaged(
         library_bytes = package.read(native_library)
     assert (
         b"Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlayerWidget"
+        in library_bytes
+    )
+    assert (
+        b"Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRenderPlayerInfoWidget"
         in library_bytes
     )

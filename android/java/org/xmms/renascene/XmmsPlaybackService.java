@@ -38,6 +38,9 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     static final String EXTRA_WIDGET_CONTROL = "widgetControl";
     static final String EXTRA_STATE = "state";
     static final String EXTRA_TITLE = "title";
+    static final String EXTRA_BITRATE = "bitrate";
+    static final String EXTRA_FREQUENCY = "frequency";
+    static final String EXTRA_CHANNELS = "channels";
     static final String EXTRA_DURATION_MS = "durationMs";
     static final String EXTRA_POSITION_MS = "positionMs";
     static final String EXTRA_CURRENT_INDEX = "currentIndex";
@@ -101,6 +104,9 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     private int playbackState;
     private String playbackTitle = "XMMS Renascene";
+    private int playbackBitrate;
+    private int playbackFrequency;
+    private int playbackChannels;
     private long playbackDurationMs = -1;
     private long playbackPositionMs;
     private long currentMediaItemIndex = -1;
@@ -221,6 +227,9 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         applyNativePlaybackState(
                 intent.getIntExtra(EXTRA_STATE, 0),
                 intent.getStringExtra(EXTRA_TITLE),
+                intent.getIntExtra(EXTRA_BITRATE, 0),
+                intent.getIntExtra(EXTRA_FREQUENCY, 0),
+                intent.getIntExtra(EXTRA_CHANNELS, 0),
                 intent.getLongExtra(EXTRA_DURATION_MS, -1),
                 intent.getLongExtra(EXTRA_POSITION_MS, 0),
                 intent.getLongExtra(EXTRA_CURRENT_INDEX, -1),
@@ -233,14 +242,30 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     public void applyNativePlaybackState(
             int state,
             String title,
+            int bitrate,
+            int frequency,
+            int channels,
             long durationMs,
             long positionMs,
             long currentIndex,
             int mediaItemCount,
             boolean previous,
             boolean next) {
+        String normalizedTitle =
+                title == null || title.isEmpty() ? "XMMS Renascene" : title;
+        int normalizedBitrate = Math.max(0, bitrate);
+        int normalizedFrequency = Math.max(0, frequency);
+        int normalizedChannels = Math.max(0, channels);
+        boolean infoChanged =
+                !playbackTitle.equals(normalizedTitle)
+                        || playbackBitrate != normalizedBitrate
+                        || playbackFrequency != normalizedFrequency
+                        || playbackChannels != normalizedChannels;
         playbackState = state;
-        playbackTitle = title == null || title.isEmpty() ? "XMMS Renascene" : title;
+        playbackTitle = normalizedTitle;
+        playbackBitrate = normalizedBitrate;
+        playbackFrequency = normalizedFrequency;
+        playbackChannels = normalizedChannels;
         playbackDurationMs = durationMs;
         playbackPositionMs = Math.max(0, positionMs);
         currentMediaItemIndex = currentIndex;
@@ -251,6 +276,14 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                 this,
                 hasPrevious,
                 hasNext);
+        if (infoChanged) {
+            XmmsPlayerInfoWidget.updateAll(
+                    this,
+                    playbackTitle,
+                    playbackBitrate,
+                    playbackFrequency,
+                    playbackChannels);
+        }
         refreshMediaQueue();
         notifyChildrenChanged(PLAYLIST_ID);
 

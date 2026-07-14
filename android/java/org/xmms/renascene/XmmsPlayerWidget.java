@@ -7,13 +7,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.DisplayMetrics;
 import android.widget.RemoteViews;
 
 public final class XmmsPlayerWidget extends AppWidgetProvider {
@@ -266,45 +264,11 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
     }
 
     private static WidgetPadding widgetPadding(Context context, Bundle options) {
-        boolean landscape =
-                context.getResources().getConfiguration().orientation
-                        == Configuration.ORIENTATION_LANDSCAPE;
-        int widthDp = optionDimension(
-                options,
-                landscape
-                        ? AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH
-                        : AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH,
-                PLAYER_WIDTH);
-        int heightDp = optionDimension(
-                options,
-                landscape
-                        ? AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT
-                        : AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT,
-                PLAYER_HEIGHT);
-        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
-        int width = Math.max(1, Math.round(widthDp * metrics.density));
-        int height = Math.max(1, Math.round(heightDp * metrics.density));
-        int contentWidth = width;
-        int contentHeight = Math.round((float) width * PLAYER_HEIGHT / PLAYER_WIDTH);
-        if (contentHeight > height) {
-            contentHeight = height;
-            contentWidth = Math.round((float) height * PLAYER_WIDTH / PLAYER_HEIGHT);
-        }
-        int horizontalPadding = Math.max(0, width - contentWidth);
-        int verticalPadding = Math.max(0, height - contentHeight);
+        XmmsWidgetSupport.WidgetPadding padding =
+                XmmsWidgetSupport.proportionalPadding(
+                        context, options, PLAYER_WIDTH, PLAYER_HEIGHT);
         return new WidgetPadding(
-                horizontalPadding / 2,
-                verticalPadding / 2,
-                horizontalPadding - horizontalPadding / 2,
-                verticalPadding - verticalPadding / 2);
-    }
-
-    private static int optionDimension(Bundle options, String key, int fallback) {
-        if (options == null) {
-            return fallback;
-        }
-        int value = options.getInt(key, fallback);
-        return value > 0 ? value : fallback;
+                padding.left, padding.top, padding.right, padding.bottom);
     }
 
     private static PendingIntent controlPendingIntent(Context context, int control) {

@@ -48,6 +48,9 @@ pub enum AndroidMediaControl {
 struct AndroidMediaNotification {
     state: i32,
     title: String,
+    bitrate: i32,
+    frequency: i32,
+    channels: i32,
     duration_ms: i64,
     current_index: i64,
     playlist_len: i32,
@@ -380,6 +383,9 @@ pub fn drain_service_playback_events() -> Vec<PlaybackEvent> {
 pub fn update_playback_notification(
     state: i32,
     title: &str,
+    bitrate: i32,
+    frequency: i32,
+    channels: i32,
     duration_ms: i64,
     position_ms: i64,
     current_index: i64,
@@ -390,6 +396,9 @@ pub fn update_playback_notification(
     let notification = AndroidMediaNotification {
         state,
         title: title.to_string(),
+        bitrate,
+        frequency,
+        channels,
         duration_ms,
         current_index,
         playlist_len,
@@ -418,10 +427,13 @@ pub fn update_playback_notification(
     env.call_method(
         context.activity.as_obj(),
         "updatePlaybackNotification",
-        "(ILjava/lang/String;JJJIZZ)V",
+        "(ILjava/lang/String;IIIJJJIZZ)V",
         &[
             JValue::Int(state),
             JValue::Object(&title),
+            JValue::Int(bitrate),
+            JValue::Int(frequency),
+            JValue::Int(channels),
             JValue::Long(duration_ms),
             JValue::Long(position_ms),
             JValue::Long(current_index),
@@ -684,29 +696,6 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlay
                 .to_string_lossy()
                 .into_owned(),
         );
-        std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
-        std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
-        let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
-        let app_state =
-            load_saved_state(&config_path, &playlist_path, false).map_err(|err| err.to_string())?;
-        let skin_key = app_state.config.skin.clone();
-        let mut cached_skin = WIDGET_SKIN
-            .get_or_init(|| Mutex::new(None))
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if cached_skin
-            .as_ref()
-            .is_none_or(|(cached_key, _)| cached_key != &skin_key)
-        {
-            let skin = match skin_key.as_deref() {
-                Some(path) => DefaultSkin::load_from_path(Path::new(path))
-                    .map_err(|err| format!("failed to load widget skin '{path}': {err}"))?,
-                None => DefaultSkin::load_bundled()
-                    .map_err(|err| format!("failed to load bundled widget skin: {err}"))?,
-            };
-            *cached_skin = Some((skin_key, skin));
-        }
-        let skin = &cached_skin.as_ref().expect("widget skin initialized").1;
         let pressed = match pressed_control {
             1 => Some(crate::skin::layout::MainPushButton::Pause),
             2 => Some(crate::skin::layout::MainPushButton::Play),
@@ -715,22 +704,11 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlay
             6 => Some(crate::skin::layout::MainPushButton::Stop),
             _ => None,
         };
-        let image = super::skin_texture::render_transport_buttons_color_image(skin, pressed)
-            .map_err(|err| format!("failed to render widget transport buttons: {err}"))?;
-        let pixels: Vec<jint> = image
-            .pixels
-            .iter()
-            .map(|pixel| {
-                let [red, green, blue, alpha] = pixel.to_array();
-                i32::from_be_bytes([alpha, red, green, blue])
-            })
-            .collect();
-        let output = env
-            .new_int_array(pixels.len() as jint)
-            .map_err(|err| err.to_string())?;
-        env.set_int_array_region(&output, 0, &pixels)
-            .map_err(|err| err.to_string())?;
-        Ok::<_, String>(output.into_raw())
+        let image = with_widget_skin(&files_dir, &cache_dir, |skin| {
+            super::skin_texture::render_transport_buttons_color_image(skin, pressed)
+                .map_err(|err| format!("failed to render widget transport buttons: {err}"))
+        })?;
+        color_image_to_jint_array(&mut env, &image)
     })();
     match result {
         Ok(pixels) => pixels,
@@ -739,6 +717,101 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlay
             std::ptr::null_mut()
         }
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRenderPlayerInfoWidget(
+    mut env: JNIEnv,
+    _class: JObject,
+    files_dir: JString,
+    cache_dir: JString,
+    title: JString,
+    bitrate: jint,
+    frequency: jint,
+    channels: jint,
+) -> jintArray {
+    let result = (|| {
+        let files_dir = jstring_path(&mut env, &files_dir)?;
+        let cache_dir = jstring_path(&mut env, &cache_dir)?;
+        let title = env
+            .get_string(&title)
+            .map_err(|err| err.to_string())?
+            .to_string_lossy()
+            .into_owned();
+        let state =
+            super::skin_texture::player_info_render_state(&title, bitrate, frequency, channels);
+        let image = with_widget_skin(&files_dir, &cache_dir, |skin| {
+            super::skin_texture::render_player_info_color_image(skin, &state)
+                .map_err(|err| format!("failed to render widget player information: {err}"))
+        })?;
+        color_image_to_jint_array(&mut env, &image)
+    })();
+    match result {
+        Ok(pixels) => pixels,
+        Err(err) => {
+            eprintln!("xmms-rs: failed to render Android player info widget: {err}");
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn jstring_path(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Result<PathBuf, String> {
+    Ok(PathBuf::from(
+        env.get_string(value)
+            .map_err(|err| err.to_string())?
+            .to_string_lossy()
+            .into_owned(),
+    ))
+}
+
+fn with_widget_skin<T>(
+    files_dir: &Path,
+    cache_dir: &Path,
+    render: impl FnOnce(&DefaultSkin) -> Result<T, String>,
+) -> Result<T, String> {
+    std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
+    std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
+    let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
+    let app_state =
+        load_saved_state(&config_path, &playlist_path, false).map_err(|err| err.to_string())?;
+    let skin_key = app_state.config.skin.clone();
+    let mut cached_skin = WIDGET_SKIN
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if cached_skin
+        .as_ref()
+        .is_none_or(|(cached_key, _)| cached_key != &skin_key)
+    {
+        let skin = match skin_key.as_deref() {
+            Some(path) => DefaultSkin::load_from_path(Path::new(path))
+                .map_err(|err| format!("failed to load widget skin '{path}': {err}"))?,
+            None => DefaultSkin::load_bundled()
+                .map_err(|err| format!("failed to load bundled widget skin: {err}"))?,
+        };
+        *cached_skin = Some((skin_key, skin));
+    }
+    render(&cached_skin.as_ref().expect("widget skin initialized").1)
+}
+
+fn color_image_to_jint_array(
+    env: &mut JNIEnv<'_>,
+    image: &egui::ColorImage,
+) -> Result<jintArray, String> {
+    let pixels: Vec<jint> = image
+        .pixels
+        .iter()
+        .map(|pixel| {
+            let [red, green, blue, alpha] = pixel.to_array();
+            i32::from_be_bytes([alpha, red, green, blue])
+        })
+        .collect();
+    let output = env
+        .new_int_array(pixels.len() as jint)
+        .map_err(|err| err.to_string())?;
+    env.set_int_array_region(&output, 0, &pixels)
+        .map_err(|err| err.to_string())?;
+    Ok(output.into_raw())
 }
 
 #[unsafe(no_mangle)]
@@ -849,7 +922,9 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
         } else {
             refresh_state |= matches!(
                 event,
-                PlaybackEvent::DurationChanged(_) | PlaybackEvent::AsyncDone
+                PlaybackEvent::DurationChanged(_)
+                    | PlaybackEvent::StreamInfo(_)
+                    | PlaybackEvent::AsyncDone
             );
             queued.push(event);
         }
@@ -1115,6 +1190,7 @@ fn update_service_from_backend(env: &mut JNIEnv, service: &JObject) {
         .or_else(|| backend.duration_ms())
         .unwrap_or(-1);
     let position_ms = backend.position_ms().unwrap_or(0).max(0);
+    let stream_info = backend.stream_info();
     let (current_index, playlist_len) = MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -1133,10 +1209,13 @@ fn update_service_from_backend(env: &mut JNIEnv, service: &JObject) {
     let _ = env.call_method(
         service,
         "applyNativePlaybackState",
-        "(ILjava/lang/String;JJJIZZ)V",
+        "(ILjava/lang/String;IIIJJJIZZ)V",
         &[
             JValue::Int(state),
             JValue::Object(&title),
+            JValue::Int(stream_info.bitrate.unwrap_or_default()),
+            JValue::Int(stream_info.frequency.unwrap_or_default()),
+            JValue::Int(stream_info.channels.unwrap_or_default()),
             JValue::Long(duration_ms),
             JValue::Long(position_ms),
             JValue::Long(current_index),

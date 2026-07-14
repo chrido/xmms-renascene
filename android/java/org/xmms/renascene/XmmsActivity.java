@@ -174,6 +174,9 @@ public final class XmmsActivity extends NativeActivity {
     public void updatePlaybackNotification(
             int state,
             String title,
+            int bitrate,
+            int frequency,
+            int channels,
             long durationMs,
             long positionMs,
             long currentIndex,
@@ -185,6 +188,9 @@ public final class XmmsActivity extends NativeActivity {
                     .setAction(XmmsPlaybackService.ACTION_UPDATE)
                     .putExtra(XmmsPlaybackService.EXTRA_STATE, state)
                     .putExtra(XmmsPlaybackService.EXTRA_TITLE, title)
+                    .putExtra(XmmsPlaybackService.EXTRA_BITRATE, bitrate)
+                    .putExtra(XmmsPlaybackService.EXTRA_FREQUENCY, frequency)
+                    .putExtra(XmmsPlaybackService.EXTRA_CHANNELS, channels)
                     .putExtra(XmmsPlaybackService.EXTRA_DURATION_MS, durationMs)
                     .putExtra(XmmsPlaybackService.EXTRA_POSITION_MS, positionMs)
                     .putExtra(XmmsPlaybackService.EXTRA_CURRENT_INDEX, currentIndex)
@@ -192,6 +198,7 @@ public final class XmmsActivity extends NativeActivity {
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_PREVIOUS, hasPrevious)
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_NEXT, hasNext);
             if (state == 0) {
+                XmmsPlayerInfoWidget.updateAll(this, title, 0, 0, 0);
                 stopService(intent);
             } else if (Build.VERSION.SDK_INT >= 26) {
                 startForegroundService(intent);
@@ -216,7 +223,10 @@ public final class XmmsActivity extends NativeActivity {
 
     public void refreshPlayerWidgets() {
         Context applicationContext = getApplicationContext();
-        MAIN_HANDLER.post(() -> XmmsPlayerWidget.refreshAll(applicationContext));
+        MAIN_HANDLER.post(() -> {
+            XmmsPlayerWidget.refreshAll(applicationContext);
+            XmmsPlayerInfoWidget.refreshAll(applicationContext);
+        });
     }
 
     public void openDocuments(int requestCode, String mimeType, boolean multiple) {

@@ -1382,6 +1382,9 @@ impl EguiFrontendState {
         if let Err(err) = super::android_file_picker::update_playback_notification(
             state,
             &title,
+            self.controller.state().player.bitrate(),
+            self.controller.state().player.frequency(),
+            self.controller.state().player.channels(),
             duration_ms,
             position_ms,
             current_index,

@@ -578,6 +578,16 @@ class RepoTool:
                 android:name="android.appwidget.provider"
                 android:resource="@xml/player_widget_info" />
         </receiver>
+        <receiver
+            android:name=".XmmsPlayerInfoWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/player_info_widget_info" />
+        </receiver>
     </application>
 </manifest>
 """,
