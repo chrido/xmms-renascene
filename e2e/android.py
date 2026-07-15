@@ -406,7 +406,7 @@ class AndroidDevice:
             latest_png = self.framebuffer_png()
             rendered = _rendered_screen_pixels(latest_png, geometry)
             if reference is not None and (
-                _changed_byte_fraction(reference, rendered)
+                _changed_pixel_fraction(reference, rendered)
                 < minimum_changed_fraction
             ):
                 candidate = None
@@ -441,7 +441,11 @@ class AndroidDevice:
         path.write_bytes(png)
         return path
 
-    def rendered_screens_match(self, first: bytes | Path, second: bytes | Path) -> bool:
+    def rendered_screens_match(
+        self,
+        first: bytes | Path,
+        second: bytes | Path,
+    ) -> bool:
         geometry = self.display_geometry()
         return _rendered_screen_pixels(
             first,
@@ -789,7 +793,7 @@ def _rendered_screen_pixels(
         return rendered.size, rendered.tobytes()
 
 
-def _changed_byte_fraction(
+def _changed_pixel_fraction(
     first: tuple[tuple[int, int], bytes],
     second: tuple[tuple[int, int], bytes],
 ) -> float:
@@ -799,7 +803,11 @@ def _changed_byte_fraction(
     second_pixels = second[1]
     if len(first_pixels) != len(second_pixels):
         return 1.0
-    return sum(
-        first_value != second_value
-        for first_value, second_value in zip(first_pixels, second_pixels)
-    ) / len(first_pixels)
+    sample_stride = 3 * 16
+    sampled_offsets = range(0, len(first_pixels), sample_stride)
+    changed = sum(
+        first_pixels[offset : offset + 3] != second_pixels[offset : offset + 3]
+        for offset in sampled_offsets
+    )
+    sample_count = (len(first_pixels) + sample_stride - 1) // sample_stride
+    return changed / sample_count
