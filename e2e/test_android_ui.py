@@ -519,8 +519,10 @@ def _run_playlist_swipe_until_log(
     android_device.clear_logcat()
     last_error: AssertionError | None = None
     for _attempt in range(2):
+        android_device.wait_for_app()
         android_device.shell(
             "input",
+            "touchscreen",
             "swipe",
             str(start_x),
             str(start_y),
