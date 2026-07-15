@@ -61,7 +61,7 @@ def test_android_checkpoints_background_playback_position(
         "player: button activated, button_name=Play",
     )
     android_device.wait_for_service("XmmsPlaybackService")
-    android_device.shell("input", "keyevent", "3")
+    android_device.go_home()
     position_ms = android_device.wait_for_private_file_int_at_least(
         config_path,
         "playback_position_ms",
@@ -134,7 +134,9 @@ def test_android_preferences_use_touch_layout_and_back_navigation(
     original_pid = android_device.app_pid()
 
     player = android_device.framebuffer_png()
+    android_device.clear_logcat()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
+    android_device.assert_log_contains("command Ui(SetPreferencesVisible(true))")
     categories = android_device.wait_for_rendered_screenshot(
         test_output.screenshot_path(),
         changed_from=player,
@@ -161,6 +163,7 @@ def test_android_preferences_use_touch_layout_and_back_navigation(
         changed_from=skins_page,
     )
     android_device.tap_usable_fraction(0.13, 0.045)
+    android_device.assert_log_contains("command Ui(SetPreferencesVisible(false))")
     closed = android_device.wait_for_rendered_screenshot(
         test_output.screenshot_path(),
         changed_from=categories_after_skin_back,
@@ -232,12 +235,15 @@ def test_android_menu_button_opens_preferences_directly(
     player_bounds = android_device.main_player_bounds()
 
     player = android_device.framebuffer_png()
+    android_device.clear_logcat()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU], player_bounds)
+    android_device.assert_log_contains("command Ui(SetPreferencesVisible(true))")
     preferences = android_device.wait_for_rendered_screenshot(
         test_output.screenshot_path(),
         changed_from=player,
     )
     android_device.tap_usable_fraction(0.13, 0.045)
+    android_device.assert_log_contains("command Ui(SetPreferencesVisible(false))")
     player_after_close = android_device.wait_for_rendered_screenshot(
         test_output.screenshot_path(),
         changed_from=preferences,
@@ -500,6 +506,38 @@ def _playlist_row_point(
     )
 
 
+def _run_playlist_swipe_until_log(
+    android_device: AndroidDevice,
+    *,
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    duration_ms: int,
+    expected_log: str,
+) -> str:
+    android_device.clear_logcat()
+    last_error: AssertionError | None = None
+    for _attempt in range(2):
+        android_device.wait_for_app()
+        android_device.shell(
+            "input",
+            "touchscreen",
+            "swipe",
+            str(start_x),
+            str(start_y),
+            str(end_x),
+            str(end_y),
+            str(duration_ms),
+        )
+        try:
+            return android_device.assert_log_contains(expected_log, timeout=2.0)
+        except AssertionError as error:
+            last_error = error
+    assert last_error is not None
+    raise last_error
+
+
 def _swipe_playlist_row_horizontally(
     android_device: AndroidDevice,
     index: int,
@@ -511,49 +549,53 @@ def _swipe_playlist_row_horizontally(
     _row_x, row_y = _playlist_row_point(android_device, index)
     start_x = left + round((40 if selected else 200) * scale)
     end_x = left + round((200 if selected else 40) * scale)
-    android_device.clear_logcat()
-    android_device.shell(
-        "input",
-        "swipe",
-        str(start_x),
-        str(row_y),
-        str(end_x),
-        str(row_y),
-        "300",
-    )
-    android_device.assert_log_contains(
-        f"playlist: swipe selection applied, swiped_index={index}, "
-        f"selected={str(selected).lower()}"
+    _run_playlist_swipe_until_log(
+        android_device,
+        start_x=start_x,
+        start_y=row_y,
+        end_x=end_x,
+        end_y=row_y,
+        duration_ms=300,
+        expected_log=(
+            f"playlist: swipe selection applied, swiped_index={index}, "
+            f"selected={str(selected).lower()}"
+        ),
     )
 
 
-def _swipe_playlist_up(android_device: AndroidDevice, touched_index: int) -> None:
+def _swipe_playlist_up(
+    android_device: AndroidDevice,
+    touched_index: int,
+    *,
+    selected_index: int,
+) -> str:
     start_x, start_y = _playlist_row_point(android_device, touched_index)
     scale = android_device.main_player_scale()
-    android_device.clear_logcat()
-    android_device.shell(
-        "input",
-        "swipe",
-        str(start_x),
-        str(start_y),
-        str(start_x),
-        str(start_y - round(120 * scale)),
-        "100",
+    return _run_playlist_swipe_until_log(
+        android_device,
+        start_x=start_x,
+        start_y=start_y,
+        end_x=start_x,
+        end_y=start_y - round(120 * scale),
+        duration_ms=100,
+        expected_log=f"playlist: swipe playback started, selected_index={selected_index}",
     )
 
 
-def _swipe_playlist_down(android_device: AndroidDevice, touched_index: int) -> None:
+def _swipe_playlist_down(
+    android_device: AndroidDevice,
+    touched_index: int,
+) -> str:
     start_x, start_y = _playlist_row_point(android_device, touched_index)
     scale = android_device.main_player_scale()
-    android_device.clear_logcat()
-    android_device.shell(
-        "input",
-        "swipe",
-        str(start_x),
-        str(start_y),
-        str(start_x),
-        str(start_y + round(120 * scale)),
-        "100",
+    return _run_playlist_swipe_until_log(
+        android_device,
+        start_x=start_x,
+        start_y=start_y,
+        end_x=start_x,
+        end_y=start_y + round(120 * scale),
+        duration_ms=100,
+        expected_log="playlist: swipe playback paused",
     )
 
 
@@ -640,7 +682,7 @@ def test_android_playlist_swipe_up_starts_only_selected_item(
     _prepare_android_swipe_playlist(android_device)
     _swipe_playlist_row_horizontally(android_device, 1, selected=True)
 
-    _swipe_playlist_up(android_device, touched_index=0)
+    _swipe_playlist_up(android_device, touched_index=0, selected_index=1)
 
     android_device.assert_log_contains(
         "playlist: swipe playback started, selected_index=1",
@@ -662,7 +704,7 @@ def test_android_playlist_swipe_up_starts_first_selected_item_in_playlist_order(
     _swipe_playlist_row_horizontally(android_device, 0, selected=True)
     _swipe_playlist_row_horizontally(android_device, 2, selected=True)
 
-    _swipe_playlist_up(android_device, touched_index=2)
+    _swipe_playlist_up(android_device, touched_index=2, selected_index=0)
 
     log = android_device.assert_log_contains(
         "playlist: swipe playback started, selected_index=0",
@@ -694,9 +736,7 @@ def test_android_playlist_swipe_down_pauses_and_does_not_resume(
     time.sleep(1.5)
 
     _swipe_playlist_down(android_device, touched_index=0)
-
-    android_device.assert_log_contains("playlist: swipe playback paused")
-    android_device.shell("input", "keyevent", "3")
+    android_device.go_home()
     paused_position = android_device.wait_for_private_file_int_at_least(
         config_path,
         "playback_position_ms",
@@ -707,13 +747,9 @@ def test_android_playlist_swipe_down_pauses_and_does_not_resume(
     android_device.start_activity()
     android_device.wait_for_rendered_screen(changed_from=background)
 
-    _swipe_playlist_down(android_device, touched_index=0)
-
-    second_swipe_log = android_device.assert_log_contains(
-        "playlist: swipe playback paused"
-    )
+    second_swipe_log = _swipe_playlist_down(android_device, touched_index=0)
     assert "backend: egui play_uri" not in second_swipe_log
-    android_device.shell("input", "keyevent", "3")
+    android_device.go_home()
     time.sleep(1.0)
     still_paused_position = _private_config_int(
         android_device,
@@ -728,7 +764,7 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
     config_path = "files/config/xmms-renascene/config"
     _prepare_android_swipe_playlist(android_device)
     _swipe_playlist_row_horizontally(android_device, 0, selected=True)
-    _swipe_playlist_up(android_device, touched_index=1)
+    _swipe_playlist_up(android_device, touched_index=1, selected_index=0)
     android_device.assert_log_contains(
         "playlist: swipe playback started, selected_index=0",
         "backend: egui play_uri, "
@@ -738,8 +774,7 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
     time.sleep(3.0)
 
     _swipe_playlist_down(android_device, touched_index=1)
-    android_device.assert_log_contains("playlist: swipe playback paused")
-    android_device.shell("input", "keyevent", "3")
+    android_device.go_home()
     paused_position = android_device.wait_for_private_file_int_at_least(
         config_path,
         "playback_position_ms",
@@ -750,14 +785,14 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
     android_device.start_activity()
     android_device.wait_for_rendered_screen(changed_from=background)
 
-    _swipe_playlist_up(android_device, touched_index=1)
-
-    resume_log = android_device.assert_log_contains(
-        "playlist: swipe playback started, selected_index=0"
+    resume_log = _swipe_playlist_up(
+        android_device,
+        touched_index=1,
+        selected_index=0,
     )
     assert "backend: egui play_uri" not in resume_log
     time.sleep(1.0)
-    android_device.shell("input", "keyevent", "3")
+    android_device.go_home()
     resumed_position = android_device.wait_for_private_file_int_at_least(
         config_path,
         "playback_position_ms",
