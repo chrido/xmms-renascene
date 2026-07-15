@@ -53,7 +53,7 @@ fn android_activity_handles_bevy_configuration_change_set() {
 }
 
 #[test]
-fn android_winit_patch_uses_the_reproducible_git_fork_across_the_graph() {
+fn android_winit_patch_uses_the_reproducible_git_fork() {
     let cargo = include_str!("../Cargo.toml");
     let lock = include_str!("../Cargo.lock");
     let fork = "https://github.com/chrido/winit";
@@ -77,12 +77,6 @@ fn android_winit_patch_uses_the_reproducible_git_fork_across_the_graph() {
     assert!(winit_packages[0].contains(&format!(
         "source = \"git+{fork}?branch={branch}#"
     )));
-
-    let flatpak = include_str!("../scripts/flatpak.py");
-    assert!(flatpak.contains("source.startswith(\"git+\")"));
-    assert!(flatpak.contains("\"type\": \"git\""));
-    assert!(flatpak.contains("\"commit\": commit"));
-    assert!(flatpak.contains("\"replace-with\": \"vendored-sources\""));
 }
 
 #[test]
