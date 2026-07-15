@@ -11,6 +11,12 @@ mod presets;
 
 pub use presets::winamp_original_presets;
 
+pub fn built_in_equalizer_presets() -> Vec<EqualizerPreset> {
+    let mut presets = vec![EqualizerPreset::zero("Default")];
+    presets.extend(winamp_original_presets());
+    presets
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EqualizerPreset {
     pub name: String,
@@ -379,5 +385,13 @@ mod tests {
         assert!(presets.iter().any(|preset| preset.name == "Full Bass"));
         assert!(presets.iter().any(|preset| preset.name == "Full Treble"));
         assert_eq!(presets.last().unwrap().name, "Preamp -12dB (Flat)");
+    }
+
+    #[test]
+    fn built_in_menu_presets_are_default_then_all_original_presets() {
+        let presets = built_in_equalizer_presets();
+        assert_eq!(presets.len(), 21);
+        assert_eq!(presets[0], EqualizerPreset::zero("Default"));
+        assert_eq!(presets[1..], winamp_original_presets());
     }
 }

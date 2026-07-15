@@ -173,10 +173,7 @@ impl AppController {
                 }
                 self.playlist_changed_effects()
             }
-            PlaylistCommand::Clear => {
-                self.state.playlist.clear();
-                self.playlist_changed_effects()
-            }
+            PlaylistCommand::Clear => self.clear_playlist(),
             PlaylistCommand::RemoveSelectedOrCurrent => {
                 self.state.playlist.remove_selected_or_current();
                 self.playlist_changed_effects()
@@ -365,10 +362,7 @@ impl AppController {
             PlaylistMenuCommand::ShowSortMenu => Vec::new(),
             PlaylistMenuCommand::ShowFileInfo => vec![AppEffect::OpenFileInfoDialog],
             PlaylistMenuCommand::OpenOptions => vec![AppEffect::OpenPreferences],
-            PlaylistMenuCommand::ClearList => {
-                self.state.playlist.clear();
-                self.playlist_changed_effects()
-            }
+            PlaylistMenuCommand::ClearList => self.clear_playlist(),
             PlaylistMenuCommand::CropToSelection => {
                 self.state.playlist.crop_to_selected_or_current();
                 self.playlist_changed_effects()
@@ -402,6 +396,18 @@ impl AppController {
         vec![
             AppEffect::SaveConfig,
             AppEffect::QueueRender(RenderTarget::Playlist),
+        ]
+    }
+
+    fn clear_playlist(&mut self) -> Vec<AppEffect> {
+        self.state.playlist.clear();
+        self.state.player.stop();
+        self.state.player.clear_visualization_data();
+        self.state.config.playback_position_ms = 0;
+        vec![
+            AppEffect::StopPlayback,
+            AppEffect::SaveConfig,
+            AppEffect::QueueRender(RenderTarget::All),
         ]
     }
 
@@ -708,6 +714,34 @@ mod tests {
 
         assert_eq!(controller.state().playlist.position(), Some(0));
         assert_eq!(controller.state().playlist.len(), 2);
+    }
+
+    #[test]
+    fn clearing_playlist_stops_and_resets_player() {
+        for command in [
+            AppCommand::from(PlaylistCommand::Clear),
+            AppCommand::from(PlaylistCommand::ExecuteMenu {
+                kind: crate::playlist::PlaylistMenuKind::List,
+                index: 0,
+            }),
+        ] {
+            let mut state = AppState::default();
+            state.playlist.add_uri("file:///tmp/one.ogg");
+            state.playlist.set_position(0);
+            state.player.mark_playing();
+            state.config.playback_position_ms = 42_000;
+            let mut controller = AppController::new(state);
+
+            let effects = controller.handle_command(command);
+
+            assert!(controller.state().playlist.is_empty());
+            assert_eq!(controller.state().playlist.position(), None);
+            assert_eq!(controller.state().player.state(), PlayerState::Stopped);
+            assert_eq!(controller.state().config.playback_position_ms, 0);
+            assert!(effects.contains(&AppEffect::StopPlayback));
+            assert!(effects.contains(&AppEffect::SaveConfig));
+            assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::All)));
+        }
     }
 
     #[test]

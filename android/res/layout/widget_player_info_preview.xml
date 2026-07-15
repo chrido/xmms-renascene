@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Match the live widget's launcher-rounding opt-out in the picker preview. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@android:id/background"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black"
+    android:clipToOutline="true"
+    android:contentDescription="@string/info_widget_description"
+    android:outlineProvider="none">
+
+    <ImageView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clipToOutline="false"
+        android:importantForAccessibility="no"
+        android:outlineProvider="none"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_player_info_preview" />
+
+</FrameLayout>

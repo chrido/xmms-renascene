@@ -612,7 +612,7 @@ pub mod gio_service {
     }
 }
 
-#[cfg(feature = "egui-ui")]
+#[cfg(feature = "desktop-egui")]
 pub mod zbus_service {
     use std::collections::HashMap;
     use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};

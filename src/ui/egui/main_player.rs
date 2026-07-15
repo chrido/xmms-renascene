@@ -17,7 +17,7 @@ use crate::skin::layout::{
 };
 use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 
-use super::app::EguiFrontendState;
+use super::app::{CachedMainTexture, EguiFrontendState};
 use super::skin_texture::{pixel_snapped_rect, render_main_player_color_image, upload_color_image};
 
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
@@ -26,8 +26,25 @@ pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
 
 pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let view_model = main_player_view_model(app.controller().state());
+    let now = std::time::Instant::now();
+    let marquee_elapsed = now.saturating_duration_since(app.last_title_marquee_tick);
+    app.last_title_marquee_tick = now;
+    app.title_marquee.update(
+        &view_model.title,
+        crate::render::MAIN_TITLE_TEXT_WIDTH,
+        view_model.player_state,
+        !view_model.shaded,
+        marquee_elapsed,
+    );
+    if app
+        .title_marquee
+        .is_scrolling(view_model.player_state, !view_model.shaded)
+    {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+    }
     let config = &app.controller().state().config;
-    let render_state = main_render_state(
+    let mut render_state = main_render_state(
         &view_model,
         current_position_ms(app),
         current_duration_ms(app),
@@ -39,11 +56,34 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         config.timer_mode,
         app.visualization_render_state(),
     );
-    let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
-        ui.label("failed to render skinned main player");
-        return;
-    };
-    let texture = upload_color_image(ui.ctx(), "xmms-main-player", image);
+    render_state.title_offset_px = app.title_marquee.offset_px();
+    let needs_texture_update = app.texture_cache.main.as_ref().is_none_or(|cached| {
+        cached.generation != app.texture_cache.generation || cached.state != render_state
+    });
+    if needs_texture_update {
+        let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
+            ui.label("failed to render skinned main player");
+            return;
+        };
+        if let Some(cached) = &mut app.texture_cache.main {
+            cached.texture.set(image, egui::TextureOptions::NEAREST);
+            cached.generation = app.texture_cache.generation;
+            cached.state = render_state.clone();
+        } else {
+            app.texture_cache.main = Some(CachedMainTexture {
+                generation: app.texture_cache.generation,
+                state: render_state.clone(),
+                texture: upload_color_image(ui.ctx(), "xmms-main-player", image),
+            });
+        }
+    }
+    let texture_id = app
+        .texture_cache
+        .main
+        .as_ref()
+        .expect("main texture initialized")
+        .texture
+        .id();
     let base_height = if view_model.shaded {
         MAIN_TITLEBAR_HEIGHT
     } else {
@@ -55,7 +95,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
-        texture.id(),
+        texture_id,
         pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
@@ -67,7 +107,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     }
 }
 
-fn main_render_state(
+pub(crate) fn main_render_state(
     view_model: &MainPlayerViewModel,
     playback_position_ms: i64,
     duration_ms: Option<i64>,
@@ -266,10 +306,22 @@ fn add_main_titlebar_drag_region(
 fn main_titlebar_drag_excluded(x: i32, y: i32, shaded: bool) -> bool {
     main_push_buttons(shaded)
         .iter()
-        .any(|button| main_push_button_rect(*button, shaded).contains(x, y))
+        .any(|button| main_push_hit_rect(*button, shaded).contains(x, y))
         || main_sliders(shaded)
             .iter()
             .any(|slider| main_slider_layout(*slider, shaded).rect.contains(x, y))
+}
+
+fn main_push_hit_rect(button: MainPushButton, shaded: bool) -> SkinRect {
+    main_push_hit_rect_for(button, shaded, cfg!(target_os = "android"))
+}
+
+fn main_push_hit_rect_for(button: MainPushButton, shaded: bool, touch_friendly: bool) -> SkinRect {
+    if touch_friendly && button == MainPushButton::Menu {
+        SkinRect::new(0, 0, 36, 36)
+    } else {
+        main_push_button_rect(button, shaded)
+    }
 }
 
 fn add_main_hit_regions(
@@ -285,7 +337,7 @@ fn add_main_hit_regions(
     for &button in main_push_buttons(view_model.shaded) {
         let rect = scale_skin_rect(
             base_rect,
-            main_push_button_rect(button, view_model.shaded),
+            main_push_hit_rect(button, view_model.shaded),
             app.scale_factor,
         );
         let response = ui.interact(
@@ -298,6 +350,7 @@ fn add_main_hit_regions(
             ui.ctx().request_repaint();
         }
         if response.clicked() {
+            app.close_player_menus();
             dispatch_push(ui.ctx(), app, button);
         }
     }
@@ -321,6 +374,7 @@ fn add_main_hit_regions(
                 ui.ctx().request_repaint();
             }
             if response.clicked() {
+                app.close_player_menus();
                 dispatch_toggle(app, toggle);
             }
         }
@@ -339,6 +393,7 @@ fn add_main_hit_regions(
             ui.ctx().request_repaint();
         }
         if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
+            app.close_player_menus();
             let pointer = response.interact_pointer_pos().unwrap();
             let normalized = ((pointer.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
             let position =
@@ -413,7 +468,12 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
             crate::app::effect::FileDialogRequest::AddAudioFiles,
         )),
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
-        MainPushButton::Menu => app.dispatch(UiCommand::SetMainMenuVisible(true)),
+        MainPushButton::Menu => {
+            #[cfg(target_os = "android")]
+            app.dispatch(UiCommand::SetPreferencesVisible(true));
+            #[cfg(not(target_os = "android"))]
+            app.dispatch(UiCommand::SetMainMenuVisible(true));
+        }
         MainPushButton::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
         MainPushButton::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
     }
@@ -478,6 +538,22 @@ mod tests {
         assert_eq!(
             AppCommand::from(PanelCommand::TogglePlaylistVisibility),
             AppCommand::Panel(PanelCommand::TogglePlaylistVisibility)
+        );
+    }
+
+    #[test]
+    fn android_menu_uses_larger_touch_target() {
+        assert_eq!(
+            main_push_hit_rect_for(MainPushButton::Menu, false, true),
+            SkinRect::new(0, 0, 36, 36)
+        );
+        assert_eq!(
+            main_push_hit_rect_for(MainPushButton::Menu, false, false),
+            main_push_button_rect(MainPushButton::Menu, false)
+        );
+        assert_eq!(
+            main_push_hit_rect_for(MainPushButton::Play, false, true),
+            main_push_button_rect(MainPushButton::Play, false)
         );
     }
 

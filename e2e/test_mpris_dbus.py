@@ -80,7 +80,7 @@ def mpris_tracks(tmp_path: Path) -> dict[str, Path]:
     names = ["one", "two", "opened"]
     tracks = generate_sine_tracks(
         tmp_path / "mpris-tracks",
-        [(f"{name}.wav", 440 + index * 110, 4.0) for index, name in enumerate(names)],
+        [(f"{name}.wav", 440 + index * 110, 15.0) for index, name in enumerate(names)],
         skip_message="ffmpeg is required to create MPRIS E2E audio tracks",
     )
     return dict(zip(names, tracks, strict=True))

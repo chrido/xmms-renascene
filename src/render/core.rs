@@ -358,6 +358,18 @@ pub(super) fn render_text(
     ydest: i32,
     width: i32,
 ) -> Result<(), RenderError> {
+    render_text_offset(cr, skin, text, xdest, ydest, width, 0)
+}
+
+pub(super) fn render_text_offset(
+    cr: &Context,
+    skin: &DefaultSkin,
+    text: &str,
+    xdest: i32,
+    ydest: i32,
+    width: i32,
+    offset_px: i32,
+) -> Result<(), RenderError> {
     let Some(image) = skin.get(SkinPixmapKind::Text) else {
         return Ok(());
     };
@@ -374,7 +386,7 @@ pub(super) fn render_text(
         let Some((sx, sy)) = TextBox::glyph_source(ch) else {
             continue;
         };
-        let dx = xdest + (index as i32 * TextBox::CHAR_WIDTH);
+        let dx = xdest + (index as i32 * TextBox::CHAR_WIDTH) - offset_px;
         if dx >= xdest + width {
             break;
         }

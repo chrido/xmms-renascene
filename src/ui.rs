@@ -16,9 +16,7 @@ use crate::app::command::{
 };
 use crate::app::effect::AppEffect;
 pub use crate::app::equalizer_actions::EqualizerPresetAction;
-use crate::app::equalizer_actions::{
-    EQUALIZER_CONFIGURE_PRESET_ITEM, EQUALIZER_PRESET_MENU_SECTIONS,
-};
+use crate::app::equalizer_actions::EQUALIZER_PRESET_FILE_ITEMS;
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelPlacement, PanelState, PanelVisibility};
@@ -40,15 +38,15 @@ use crate::app::view_model::{
     playlist_footer_info as shared_playlist_footer_info, playlist_menu_at, playlist_menu_rect,
     playlist_rows_render_state as shared_playlist_rows_render_state, position_to_balance,
     position_to_volume, scale_event_coords, volume_to_eq_shaded_position, volume_to_position,
+    TitleMarquee,
 };
 use crate::app_state::AppState;
 use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions};
 use crate::config::{Config, TimerMode};
 use crate::equalizer::{
-    default_equalizer_presets, find_preset, import_winamp_eqf, load_preset_store,
-    load_winamp_eqf_first, load_xmms_preset_file, preset_store_path, remove_presets,
-    save_preset_store, save_winamp_eqf, save_xmms_preset_file, sort_presets, upsert_preset,
-    winamp_original_presets, EqualizerPreset,
+    built_in_equalizer_presets, default_equalizer_presets, find_preset, load_preset_store,
+    load_winamp_eqf_first, load_xmms_preset_file, preset_store_path, save_winamp_eqf,
+    EqualizerPreset,
 };
 use crate::mpris::{
     app_action_for_mpris_command, gio_service::MprisService, mpris_player_properties,
@@ -5038,6 +5036,7 @@ enum PlaybackTransitionState {
     Idle,
     StoppedAt(i64),
     PendingBackendSeek(i64),
+    AwaitingBackendSeek(i64),
     WaitingBetweenSongs {
         remaining_ms: i64,
     },
@@ -5067,6 +5066,10 @@ impl PlaybackTransitionState {
 
     fn request_backend_seek(position_ms: i64) -> Self {
         Self::PendingBackendSeek(position_ms)
+    }
+
+    fn await_backend_seek(position_ms: i64) -> Self {
+        Self::AwaitingBackendSeek(position_ms)
     }
 
     fn start_fadeout(start_volume: i32) -> Self {
@@ -5122,6 +5125,13 @@ impl PlaybackTransitionState {
         }
     }
 
+    fn awaiting_backend_seek_ms(self) -> Option<i64> {
+        match self {
+            PlaybackTransitionState::AwaitingBackendSeek(position_ms) => Some(position_ms),
+            _ => None,
+        }
+    }
+
     fn fadeout(self) -> Option<(i64, i32)> {
         match self {
             PlaybackTransitionState::FadingOut {
@@ -5139,6 +5149,7 @@ impl PlaybackTransitionState {
             PlaybackTransitionState::WaitingBetweenSongs { .. } => 0,
             PlaybackTransitionState::Idle
             | PlaybackTransitionState::PendingBackendSeek(_)
+            | PlaybackTransitionState::AwaitingBackendSeek(_)
             | PlaybackTransitionState::FadingOut { .. } => fallback_ms,
         }
     }
@@ -5277,6 +5288,7 @@ pub(crate) struct MainWindowUiState {
     visualization: Visualization,
     visualization_tick_counter: i32,
     main_pointer: MainPointer,
+    title_marquee: TitleMarquee,
 }
 
 impl fmt::Debug for MainWindowUiState {
@@ -5344,6 +5356,7 @@ impl MainWindowUiState {
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
             main_pointer: MainPointer::default(),
+            title_marquee: TitleMarquee::default(),
         };
         state.apply_config_to_ui_state();
         state
@@ -5530,20 +5543,6 @@ impl MainWindowUiState {
         Ok(())
     }
 
-    fn save_equalizer_presets(&self) -> io::Result<()> {
-        save_preset_store(
-            &preset_store_path(&self.equalizer.preset_dir, "eq.preset"),
-            &self.equalizer.presets,
-        )
-    }
-
-    fn save_equalizer_auto_presets(&self) -> io::Result<()> {
-        save_preset_store(
-            &preset_store_path(&self.equalizer.preset_dir, "eq.auto_preset"),
-            &self.equalizer.auto_presets,
-        )
-    }
-
     fn current_equalizer_preset(&self, name: impl Into<String>) -> EqualizerPreset {
         EqualizerPreset::from_positions(
             name,
@@ -5573,52 +5572,8 @@ impl MainWindowUiState {
         }
     }
 
-    fn save_named_equalizer_preset(&mut self, name: String, automatic: bool) -> io::Result<()> {
-        let preset = self.current_equalizer_preset(name);
-        if automatic {
-            upsert_preset(&mut self.equalizer.auto_presets, preset);
-            self.save_equalizer_auto_presets()
-        } else {
-            upsert_preset(&mut self.equalizer.presets, preset);
-            self.save_equalizer_presets()
-        }
-    }
-
-    fn delete_named_equalizer_presets(
-        &mut self,
-        names: Vec<String>,
-        automatic: bool,
-    ) -> io::Result<()> {
-        if automatic {
-            remove_presets(&mut self.equalizer.auto_presets, &names);
-            self.save_equalizer_auto_presets()
-        } else {
-            remove_presets(&mut self.equalizer.presets, &names);
-            self.save_equalizer_presets()
-        }
-    }
-
-    fn load_equalizer_zero_preset(&mut self) {
-        self.apply_equalizer_preset_values(&EqualizerPreset::zero("Zero"));
-    }
-
     fn load_equalizer_default_preset(&mut self) {
         self.load_named_equalizer_preset("Default", false);
-    }
-
-    fn save_equalizer_default_preset(&mut self) -> io::Result<()> {
-        self.save_named_equalizer_preset("Default".to_string(), false)
-    }
-
-    fn load_equalizer_preset_file(&mut self, path: &Path) -> io::Result<()> {
-        if let Some(preset) = load_xmms_preset_file(path)? {
-            self.apply_equalizer_preset_values(&preset);
-        }
-        Ok(())
-    }
-
-    fn save_equalizer_preset_file(&self, path: &Path) -> io::Result<()> {
-        save_xmms_preset_file(path, &self.current_equalizer_preset("File"))
     }
 
     fn load_equalizer_winamp_file(&mut self, path: &Path) -> io::Result<()> {
@@ -5628,28 +5583,16 @@ impl MainWindowUiState {
         Ok(())
     }
 
-    fn import_equalizer_winamp_file(&mut self, path: &Path) -> io::Result<usize> {
-        let imported = import_winamp_eqf(path)?;
-        let count = imported.len();
-        for preset in imported {
-            upsert_preset(&mut self.equalizer.presets, preset);
-        }
-        self.save_equalizer_presets()?;
-        Ok(count)
-    }
-
     fn save_equalizer_winamp_file(&self, path: &Path) -> io::Result<()> {
-        save_winamp_eqf(path, &self.current_equalizer_preset("Entry1"))
-    }
-
-    fn sorted_equalizer_presets(&self, automatic: bool) -> Vec<EqualizerPreset> {
-        let mut presets = if automatic {
-            self.equalizer.auto_presets.clone()
+        let path = if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("eqf"))
+        {
+            path.to_path_buf()
         } else {
-            self.equalizer.presets.clone()
+            path.with_extension("eqf")
         };
-        sort_presets(&mut presets);
-        presets
+        save_winamp_eqf(&path, &self.current_equalizer_preset("Entry1"))
     }
 
     pub(crate) fn scale_factor(&self) -> f64 {
@@ -5698,6 +5641,7 @@ impl MainWindowUiState {
             title: self
                 .equalizer_drag_info_text()
                 .unwrap_or_else(|| self.formatted_current_title()),
+            title_offset_px: self.title_marquee.offset_px(),
             shaded: self.shaded,
             volume_position: volume_to_position(self.app_state.player.volume()),
             balance_position: balance_to_position(self.app_state.player.balance()),
@@ -6837,17 +6781,6 @@ impl MainWindowUiState {
             .playlist
             .position()
             .and_then(|position| self.playlist_entry_uri(position))
-    }
-
-    fn current_playlist_basename(&self) -> Option<String> {
-        self.current_playlist_entry_uri().and_then(|uri| {
-            file_uri_to_path(uri)
-                .and_then(|path| {
-                    path.file_name()
-                        .map(|name| name.to_string_lossy().to_string())
-                })
-                .or_else(|| uri.rsplit('/').next().map(ToString::to_string))
-        })
     }
 
     #[allow(dead_code)]
@@ -8746,9 +8679,17 @@ impl MainWindowUiState {
                 PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
             return;
         }
+        self.playback_transition =
+            PlaybackTransitionState::request_backend_seek(self.playback_position_ms);
         if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().seek(self.playback_position_ms) {
-                eprintln!("xmms-rs: failed to seek playback: {err}");
+            match backend.borrow().seek(self.playback_position_ms) {
+                Ok(()) => {
+                    self.playback_transition =
+                        PlaybackTransitionState::await_backend_seek(self.playback_position_ms);
+                }
+                Err(err) => {
+                    eprintln!("xmms-rs: failed to seek playback: {err}");
+                }
             }
         }
     }
@@ -8758,9 +8699,19 @@ impl MainWindowUiState {
         self.poll_playback_backend();
         let fading = self.update_stop_fade(elapsed_ms);
         let eof_waiting = self.update_pending_eof_advance(elapsed_ms);
+        let title = self
+            .equalizer_drag_info_text()
+            .unwrap_or_else(|| self.formatted_current_title());
+        let marquee_changed = self.title_marquee.update(
+            &title,
+            crate::render::MAIN_TITLE_TEXT_WIDTH,
+            self.app_state.player.state(),
+            !self.shaded,
+            Duration::from_millis(u64::from(elapsed_ms)),
+        );
         if self.app_state.player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
-            return duration_changed || fading || eof_waiting;
+            return duration_changed || fading || eof_waiting || marquee_changed;
         }
 
         if self.playback_backend.is_none() {
@@ -8901,9 +8852,15 @@ impl MainWindowUiState {
             }
             applied_pending_seek |= self.apply_pending_backend_seek(&backend, true);
         }
-        if self.should_sync_backend_position(applied_pending_seek) {
-            let position_ms = { backend.borrow().position_ms() };
-            if let Some(position_ms) = position_ms {
+        let position_ms = { backend.borrow().position_ms() };
+        if let Some(position_ms) = position_ms {
+            if let Some(target_ms) = self.playback_transition.awaiting_backend_seek_ms() {
+                if position_ms.saturating_sub(target_ms).abs() <= 250 {
+                    self.playback_transition = PlaybackTransitionState::Idle;
+                    self.playback_position_ms = position_ms.max(target_ms);
+                    self.position_position = self.position_slider_position();
+                }
+            } else if self.should_sync_backend_position(applied_pending_seek) {
                 self.playback_position_ms = position_ms.max(0);
                 self.position_position = self.position_slider_position();
             }
@@ -8911,7 +8868,13 @@ impl MainWindowUiState {
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
-        !applied_pending_seek && self.playback_transition.eof_pause_remaining_ms().is_none()
+        !applied_pending_seek
+            && self.playback_transition.pending_backend_seek_ms().is_none()
+            && self
+                .playback_transition
+                .awaiting_backend_seek_ms()
+                .is_none()
+            && self.playback_transition.eof_pause_remaining_ms().is_none()
     }
 
     fn apply_pending_backend_seek(
@@ -8925,7 +8888,7 @@ impl MainWindowUiState {
         match backend.borrow().seek(position_ms) {
             Ok(()) => {
                 app_log_info!(backend, "gtk applied pending start seek", position_ms);
-                self.playback_transition = PlaybackTransitionState::Idle;
+                self.playback_transition = PlaybackTransitionState::await_backend_seek(position_ms);
                 true
             }
             Err(err) => {
@@ -10009,6 +9972,26 @@ mod tests {
             state.playback_transition,
             PlaybackTransitionState::PendingBackendSeek(42_000)
         );
+    }
+
+    #[test]
+    fn seeking_while_playing_waits_for_backend_position_confirmation() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+        state.press(40, 90);
+        assert_eq!(state.release(40, 90), UiAction::None);
+
+        state.set_playback_position_ms(42_000);
+
+        assert_eq!(state.playback_position_ms, 42_000);
+        assert_eq!(
+            state.playback_transition,
+            PlaybackTransitionState::PendingBackendSeek(42_000)
+        );
+        assert!(!state.should_sync_backend_position(false));
     }
 
     #[test]

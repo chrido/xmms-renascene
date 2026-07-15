@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">XMMS Renascene player controls</string>
+    <string name="info_widget_description">XMMS Renascene player information</string>
+    <string name="widget_label">XMMS player controls</string>
+    <string name="info_widget_label">XMMS player information</string>
+</resources>

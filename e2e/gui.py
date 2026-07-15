@@ -364,9 +364,9 @@ def drag_skin_rect(
     run_xdotool("mousemove", "--window", window_id, str(start[0]), str(start[1]))
     run_xdotool("mousedown", "1")
     try:
-        time.sleep(0.05)
+        time.sleep(0.1)
         run_xdotool("mousemove", "--window", window_id, str(end[0]), str(end[1]))
-        time.sleep(0.05)
+        time.sleep(0.1)
     finally:
         run_xdotool("mouseup", "1", check=False)
 

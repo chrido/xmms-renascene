@@ -1,5 +1,6 @@
 //! Lightweight egui File Info dialog.
 
+#[cfg(not(target_os = "android"))]
 use std::sync::Arc;
 
 use crate::app::command::{PlaylistCommand, UiCommand};
@@ -75,39 +76,51 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
         state.details = details.clone();
     }
 
-    let shared = Arc::clone(&app.file_info_viewport);
-    let builder = egui::ViewportBuilder::default()
-        .with_title(file_info_title(details.as_ref()))
-        .with_inner_size(egui::vec2(640.0, 340.0))
-        .with_min_inner_size(egui::vec2(480.0, 260.0))
-        .with_resizable(true)
-        .with_decorations(true);
+    #[cfg(target_os = "android")]
+    {
+        let mut state = app
+            .file_info_viewport
+            .lock()
+            .expect("file info viewport state poisoned");
+        show_android_file_info(ctx, &mut state);
+    }
 
-    ctx.show_viewport_deferred(
-        egui::ViewportId::from_hash_of("xmms-egui-file-info"),
-        builder,
-        move |ctx, class| {
-            let mut state = shared.lock().expect("file info viewport state poisoned");
-            if ctx.input(|input| input.viewport().close_requested())
-                || ctx.input(|input| input.key_pressed(egui::Key::Escape))
-            {
-                state.open = false;
-                state.close_requested = true;
-                return;
-            }
-            match class {
-                egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
-                    egui::Window::new("File Info")
-                        .resizable(true)
-                        .show(ctx, |ui| render_file_info_viewport(ui, &mut state));
+    #[cfg(not(target_os = "android"))]
+    {
+        let shared = Arc::clone(&app.file_info_viewport);
+        let builder = egui::ViewportBuilder::default()
+            .with_title(file_info_title(details.as_ref()))
+            .with_inner_size(egui::vec2(640.0, 340.0))
+            .with_min_inner_size(egui::vec2(480.0, 260.0))
+            .with_resizable(true)
+            .with_decorations(true);
+
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("xmms-egui-file-info"),
+            builder,
+            move |ctx, class| {
+                let mut state = shared.lock().expect("file info viewport state poisoned");
+                if ctx.input(|input| input.viewport().close_requested())
+                    || ctx.input(|input| input.key_pressed(egui::Key::Escape))
+                {
+                    state.open = false;
+                    state.close_requested = true;
+                    return;
                 }
-                egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
-                    egui::CentralPanel::default()
-                        .show(ctx, |ui| render_file_info_viewport(ui, &mut state));
+                match class {
+                    egui::ViewportClass::EmbeddedWindow | egui::ViewportClass::Root => {
+                        egui::Window::new("File Info")
+                            .resizable(true)
+                            .show(ctx, |ui| render_file_info_viewport(ui, &mut state));
+                    }
+                    egui::ViewportClass::Deferred | egui::ViewportClass::Immediate => {
+                        egui::CentralPanel::default()
+                            .show(ctx, |ui| render_file_info_viewport(ui, &mut state));
+                    }
                 }
-            }
-        },
-    );
+            },
+        );
+    }
 
     let (save_requested, remove_requested, close_requested, still_open, values) = {
         let mut state = app
@@ -141,6 +154,177 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
     app.dispatch(UiCommand::SetFileInfoVisible(!close));
 }
 
+#[cfg(target_os = "android")]
+fn show_android_file_info(ctx: &egui::Context, state: &mut FileInfoViewportState) {
+    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        state.open = false;
+        state.close_requested = true;
+        return;
+    }
+
+    let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
+    let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels()
+        .filter(|layout| layout.has_current_insets())
+    else {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        return;
+    };
+    let screen = egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(
+            layout.width as f32 / pixels_per_point,
+            layout.height as f32 / pixels_per_point,
+        ),
+    );
+    let insets = layout.insets;
+    let left_inset = insets.left as f32 / pixels_per_point;
+    let top_inset = insets.top as f32 / pixels_per_point;
+    let right_inset = insets.right as f32 / pixels_per_point;
+    let bottom_inset = insets.bottom as f32 / pixels_per_point;
+    let horizontal_margin = 16.0;
+    let vertical_margin = 12.0;
+    let content_width =
+        (screen.width() - left_inset - right_inset - horizontal_margin * 2.0).max(1.0);
+    let content_height =
+        (screen.height() - top_inset - bottom_inset - vertical_margin * 2.0).max(1.0);
+
+    egui::Area::new(egui::Id::new("xmms-android-file-info"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            ui.painter()
+                .rect_filled(ui.max_rect(), 0.0, egui::Color32::from_gray(46));
+            ui.add_space(top_inset + vertical_margin);
+            ui.horizontal(|ui| {
+                ui.add_space(left_inset + horizontal_margin);
+                ui.vertical(|ui| {
+                    ui.set_width(content_width);
+                    ui.set_min_height(content_height);
+                    super::preferences::apply_android_preferences_style(ui);
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_sized([88.0, 48.0], egui::Button::new("Close"))
+                            .clicked()
+                        {
+                            state.open = false;
+                            state.close_requested = true;
+                        }
+                        ui.heading(file_info_title(state.details.as_ref()));
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| render_android_file_info_contents(ui, state));
+                });
+            });
+        });
+}
+
+#[cfg(target_os = "android")]
+fn render_android_file_info_contents(ui: &mut egui::Ui, state: &mut FileInfoViewportState) {
+    let Some(details) = state.details.clone() else {
+        ui.label("No current or selected playlist entry.");
+        return;
+    };
+
+    ui.label("Filename");
+    let mut filename = details.filename.clone();
+    ui.add_sized(
+        [ui.available_width(), 48.0],
+        egui::TextEdit::singleline(&mut filename).interactive(false),
+    );
+    ui.separator();
+    ui.heading(details.tag_frame);
+    android_tag_field(
+        ui,
+        "Title",
+        &mut state.editor.values.title,
+        details.editable,
+    );
+    android_tag_field(
+        ui,
+        "Artist",
+        &mut state.editor.values.artist,
+        details.editable,
+    );
+    android_tag_field(
+        ui,
+        "Album",
+        &mut state.editor.values.album,
+        details.editable,
+    );
+    android_tag_field(
+        ui,
+        "Comment",
+        &mut state.editor.values.comment,
+        details.editable,
+    );
+    android_tag_field(
+        ui,
+        details.date_label.trim_end_matches(':'),
+        &mut state.editor.values.year,
+        details.editable,
+    );
+    android_tag_field(
+        ui,
+        "Track number",
+        &mut state.editor.values.track_number,
+        details.editable,
+    );
+    android_tag_field(
+        ui,
+        "Genre",
+        &mut state.editor.values.genre,
+        details.editable,
+    );
+
+    ui.horizontal(|ui| {
+        let save = ui.add_enabled_ui(details.editable, |ui| {
+            ui.add_sized([120.0, 52.0], egui::Button::new("Save"))
+        });
+        if save.inner.clicked() {
+            state.save_requested = true;
+        }
+        let remove_label = if details.tag_frame == "ID3 Tag:" {
+            "Remove ID3"
+        } else {
+            "Remove Tag"
+        };
+        let remove = ui.add_enabled_ui(details.editable && details.has_tag, |ui| {
+            ui.add_sized([140.0, 52.0], egui::Button::new(remove_label))
+        });
+        if remove.inner.clicked() {
+            state.remove_requested = true;
+        }
+    });
+
+    ui.separator();
+    ui.heading(details.info_frame);
+    android_labelled_value(ui, "Format", &details.format);
+    android_labelled_value(ui, "Duration", &details.duration);
+    android_labelled_value(ui, "File size", &details.file_size);
+    android_labelled_value(ui, "URI", &details.uri);
+}
+
+#[cfg(target_os = "android")]
+fn android_tag_field(ui: &mut egui::Ui, label: &str, value: &mut String, editable: bool) {
+    ui.label(label);
+    ui.add_enabled_ui(editable, |ui| {
+        ui.add_sized(
+            [ui.available_width(), 48.0],
+            egui::TextEdit::singleline(value),
+        );
+    });
+}
+
+#[cfg(target_os = "android")]
+fn android_labelled_value(ui: &mut egui::Ui, label: &str, value: &str) {
+    ui.label(label);
+    ui.monospace(value);
+}
+
+#[cfg(not(target_os = "android"))]
 fn render_file_info_viewport(ui: &mut egui::Ui, state: &mut FileInfoViewportState) {
     if let Some(details) = state.details.clone() {
         let mut save_requested = false;
@@ -169,6 +353,7 @@ fn render_file_info_viewport(ui: &mut egui::Ui, state: &mut FileInfoViewportStat
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn show_file_info_contents(
     ui: &mut egui::Ui,
     details: &FileInfoDetails,
@@ -303,6 +488,7 @@ fn selected_or_current_entry(app: &EguiFrontendState) -> Option<PlaylistEntry> {
         .cloned()
 }
 
+#[cfg(not(target_os = "android"))]
 fn tag_field(ui: &mut egui::Ui, label: &str, value: &mut String, editable: bool, wide: bool) {
     ui.horizontal(|ui| {
         ui.label(label);
@@ -314,6 +500,7 @@ fn tag_field(ui: &mut egui::Ui, label: &str, value: &mut String, editable: bool,
     });
 }
 
+#[cfg(not(target_os = "android"))]
 fn labelled_value(ui: &mut egui::Ui, label: &str, value: &str) {
     ui.horizontal_wrapped(|ui| {
         ui.label(label);

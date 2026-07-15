@@ -2,16 +2,14 @@
 
 use crate::app::command::{AudioCommand, EqualizerCommand, PanelCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
-use crate::app::equalizer_actions::{
-    EqualizerPresetAction, EQUALIZER_CONFIGURE_PRESET_ITEM, EQUALIZER_PRESET_MENU_SECTIONS,
-};
+use crate::app::equalizer_actions::{EqualizerPresetAction, EQUALIZER_PRESET_FILE_ITEMS};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, eq_shaded_position_to_balance, eq_shaded_position_to_volume,
     eq_slider_pixel_to_position, equalizer_view_model, volume_to_eq_shaded_position,
     EqualizerViewModel,
 };
 use crate::app_log_info;
-use crate::equalizer::{winamp_original_presets, EqualizerPreset};
+use crate::equalizer::{built_in_equalizer_presets, EqualizerPreset};
 use crate::render::{
     equalizer_slider_layout, EqualizerControl, EqualizerRenderState, EqualizerSlider,
     EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH,
@@ -20,7 +18,7 @@ use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, LayoutPanelKind, PanelTitleButton, SkinRect,
 };
 
-use super::app::EguiFrontendState;
+use super::app::{CachedEqualizerTexture, EguiFrontendState};
 use super::layout::clamp_popup_to_rect;
 use super::skin_texture::{pixel_snapped_rect, render_equalizer_color_image, upload_color_image};
 
@@ -34,11 +32,33 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         return;
     }
     let render_state = equalizer_render_state(app, &view_model);
-    let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
-        ui.label("failed to render skinned equalizer");
-        return;
-    };
-    let texture = upload_color_image(ui.ctx(), "xmms-equalizer", image);
+    let needs_texture_update = app.texture_cache.equalizer.as_ref().is_none_or(|cached| {
+        cached.generation != app.texture_cache.generation || cached.state != render_state
+    });
+    if needs_texture_update {
+        let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
+            ui.label("failed to render skinned equalizer");
+            return;
+        };
+        if let Some(cached) = &mut app.texture_cache.equalizer {
+            cached.texture.set(image, egui::TextureOptions::NEAREST);
+            cached.generation = app.texture_cache.generation;
+            cached.state = render_state;
+        } else {
+            app.texture_cache.equalizer = Some(CachedEqualizerTexture {
+                generation: app.texture_cache.generation,
+                state: render_state,
+                texture: upload_color_image(ui.ctx(), "xmms-equalizer", image),
+            });
+        }
+    }
+    let texture_id = app
+        .texture_cache
+        .equalizer
+        .as_ref()
+        .expect("equalizer texture initialized")
+        .texture
+        .id();
     let base_height = if view_model.shaded {
         crate::render::MAIN_TITLEBAR_HEIGHT
     } else {
@@ -50,7 +70,7 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
-        texture.id(),
+        texture_id,
         pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
@@ -251,7 +271,11 @@ pub(crate) fn show_equalizer_presets_popover(
     }
 
     let presets_button = equalizer_control_rect(EqualizerControl::Presets);
-    let estimated_popup_width = 240.0;
+    let estimated_popup_width = if cfg!(target_os = "android") {
+        300.0
+    } else {
+        240.0
+    };
     // egui Areas are clipped to the OS window. The Presets button sits near the
     // right edge of the 275px equalizer, while this popup is much wider, so an
     // unadjusted right-opening popup is clipped. Move it left as needed so the
@@ -270,77 +294,78 @@ pub(crate) fn show_equalizer_presets_popover(
         .fixed_pos(popup_pos)
         .constrain(false)
         .show(ctx, |ui| {
+            #[cfg(target_os = "android")]
+            super::preferences::apply_android_preferences_style(ui);
             egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_min_width(220.0);
-                for section in EQUALIZER_PRESET_MENU_SECTIONS {
-                    ui.menu_button(section.label, |ui| {
-                        for item in section.items {
-                            if ui.button(item.label).clicked() {
-                                dispatch_equalizer_preset_action(app, item.action);
+                ui.set_min_width(if cfg!(target_os = "android") {
+                    280.0
+                } else {
+                    220.0
+                });
+                for item in EQUALIZER_PRESET_FILE_ITEMS {
+                    if equalizer_popup_button(ui, item.label).clicked() {
+                        dispatch_equalizer_preset_action(app, item.action);
+                        close_after_click = true;
+                    }
+                }
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(420.0)
+                    .show(ui, |ui| {
+                        for preset in built_in_equalizer_presets() {
+                            if equalizer_popup_button(ui, &preset.name).clicked() {
+                                apply_equalizer_preset(app, &preset);
                                 close_after_click = true;
-                                ui.close();
-                            }
-                        }
-                        if section.label == "Load" {
-                            ui.separator();
-                            ui.label("Winamp original presets");
-                            for preset in winamp_original_presets().into_iter().take(12) {
-                                if ui.button(&preset.name).clicked() {
-                                    apply_equalizer_preset(app, &preset);
-                                    close_after_click = true;
-                                    ui.close();
-                                }
                             }
                         }
                     });
-                }
-                if ui.button(EQUALIZER_CONFIGURE_PRESET_ITEM.label).clicked() {
-                    dispatch_equalizer_preset_action(app, EQUALIZER_CONFIGURE_PRESET_ITEM.action);
-                    close_after_click = true;
-                }
             });
         });
 
     let clicked_outside = ctx.input(|input| {
-        input.pointer.any_released()
-            && input.pointer.latest_pos().is_some_and(|pos| {
-                let presets_rect =
-                    scale_skin_rect(equalizer_rect, presets_button, app.scale_factor);
-                !response.response.rect.contains(pos) && !presets_rect.contains(pos)
-            })
+        let pointer_triggered = if cfg!(target_os = "android") {
+            input.pointer.any_pressed()
+        } else {
+            input.pointer.any_released()
+        };
+        pointer_triggered
+            && input
+                .pointer
+                .interact_pos()
+                .or_else(|| input.pointer.latest_pos())
+                .is_some_and(|pos| {
+                    let presets_rect =
+                        scale_skin_rect(equalizer_rect, presets_button, app.scale_factor);
+                    !response.response.rect.contains(pos) && !presets_rect.contains(pos)
+                })
     });
     if close_after_click || clicked_outside {
         app.equalizer_presets_open = false;
     }
 }
 
+fn equalizer_popup_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    #[cfg(target_os = "android")]
+    {
+        return ui.add_sized([ui.available_width(), 56.0], egui::Button::new(label));
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        ui.button(label)
+    }
+}
+
 fn dispatch_equalizer_preset_action(app: &mut EguiFrontendState, action: EqualizerPresetAction) {
     match action {
-        EqualizerPresetAction::LoadDefault => {
-            apply_equalizer_preset(app, &EqualizerPreset::zero("Default"));
-        }
-        EqualizerPresetAction::LoadZero => {
-            apply_equalizer_preset(app, &EqualizerPreset::zero("Zero"));
-        }
-        EqualizerPresetAction::LoadFromFile | EqualizerPresetAction::LoadFromWinampFile => {
+        EqualizerPresetAction::Load => {
             app.apply_effect(AppEffect::OpenFileDialog(
                 FileDialogRequest::LoadEqualizerPreset,
             ));
         }
-        EqualizerPresetAction::ImportWinampPresets => {
-            app.apply_effect(AppEffect::OpenFileDialog(
-                FileDialogRequest::LoadEqualizerPreset,
-            ));
-        }
-        EqualizerPresetAction::SaveToFile | EqualizerPresetAction::SaveToWinampFile => {
+        EqualizerPresetAction::Save => {
             app.apply_effect(AppEffect::OpenFileDialog(
                 FileDialogRequest::SaveEqualizerPreset,
             ));
-        }
-        other => {
-            if let Some(message) = other.unsupported_egui_message() {
-                app.runtime.pending_messages.push(message.to_string());
-            }
         }
     }
 }

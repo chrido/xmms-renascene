@@ -6,9 +6,12 @@ import hashlib
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 if __package__ is None:
@@ -97,8 +100,119 @@ class FlatpakInstaller:
         cargo_lock = tomllib.loads(Path("Cargo.lock").read_text())
         sources = []
         seen = set()
+        source_config = {
+            "crates-io": {"replace-with": "vendored-sources"},
+            "vendored-sources": {"directory": "cargo/vendor"},
+        }
+        git_packages = [
+            package
+            for package in cargo_lock["package"]
+            if package.get("source", "").startswith("git+")
+        ]
+        cargo_metadata = {}
+        package_target = REPO_DIR / ".flatpak-cargo-package"
+        if git_packages:
+            metadata = subprocess.run(
+                [
+                    "cargo",
+                    "metadata",
+                    "--locked",
+                    "--format-version",
+                    "1",
+                    "--all-features",
+                ],
+                cwd=REPO_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            cargo_metadata = {
+                (package["name"], package["version"], package["source"]): package
+                for package in json.loads(metadata.stdout)["packages"]
+            }
+            shutil.rmtree(package_target, ignore_errors=True)
+            subprocess.run(
+                [
+                    "cargo",
+                    "vendor",
+                    "--locked",
+                    "--versioned-dirs",
+                    str(package_target),
+                ],
+                cwd=REPO_DIR,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         for package in cargo_lock["package"]:
-            if package.get("source") != "registry+https://github.com/rust-lang/crates.io-index":
+            source = package.get("source", "")
+            if source.startswith("git+"):
+                parsed = urlsplit(source.removeprefix("git+"))
+                commit = parsed.fragment
+                repo_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+                query = parse_qs(parsed.query)
+                source_entry = {"git": repo_url, "replace-with": "vendored-sources"}
+                for ref_kind in ("branch", "tag", "rev"):
+                    if ref_kind in query:
+                        source_entry[ref_kind] = query[ref_kind][0]
+                        break
+                source_config[repo_url] = source_entry
+
+                repo_name = f"{Path(parsed.path).stem}-{commit[:7]}"
+                repo_dest = f"flatpak-cargo/git/{repo_name}"
+                repo_key = (repo_url, commit)
+                if repo_key not in seen:
+                    seen.add(repo_key)
+                    sources.append(
+                        {
+                            "type": "git",
+                            "url": repo_url,
+                            "commit": commit,
+                            "dest": repo_dest,
+                        }
+                    )
+
+                name = package["name"]
+                version = package["version"]
+                metadata_package = cargo_metadata[(name, version, source)]
+                manifest_path = Path(metadata_package["manifest_path"])
+                checkout_root = next(
+                    parent
+                    for parent in (manifest_path.parent, *manifest_path.parents)
+                    if (parent / ".cargo-ok").exists()
+                )
+                package_path = manifest_path.parent.relative_to(checkout_root)
+                source_path = Path(repo_dest) / package_path
+                crate_dir = f"{name}-{version}"
+                cargo_toml = (package_target / crate_dir / "Cargo.toml").read_text()
+
+                sources.append(
+                    {
+                        "type": "shell",
+                        "commands": [
+                            f'mkdir -p "cargo/vendor/{crate_dir}"',
+                            f'cp -a --reflink=auto "{source_path}/." "cargo/vendor/{crate_dir}/"',
+                        ],
+                    }
+                )
+                sources.append(
+                    {
+                        "type": "inline",
+                        "dest": f"cargo/vendor/{crate_dir}",
+                        "dest-filename": "Cargo.toml",
+                        "contents": cargo_toml,
+                    }
+                )
+                sources.append(
+                    {
+                        "type": "inline",
+                        "dest": f"cargo/vendor/{crate_dir}",
+                        "dest-filename": ".cargo-checksum.json",
+                        "contents": json.dumps({"package": None, "files": {}}),
+                    }
+                )
+                continue
+            if source != "registry+https://github.com/rust-lang/crates.io-index":
                 continue
             name = package["name"]
             version = package["version"]
@@ -109,9 +223,16 @@ class FlatpakInstaller:
             seen.add(crate_dir)
             sources.append({"type": "archive", "archive-type": "tar-gzip", "url": f"https://static.crates.io/crates/{name}/{crate_dir}.crate", "sha256": checksum, "dest": f"cargo/vendor/{crate_dir}"})
             sources.append({"type": "inline", "dest": f"cargo/vendor/{crate_dir}", "dest-filename": ".cargo-checksum.json", "contents": json.dumps({"package": checksum, "files": {}})})
-        sources.append({"type": "inline", "dest": ".cargo", "dest-filename": "config.toml", "contents": '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "cargo/vendor"\n'})
+        config_lines = []
+        for source_name, config in source_config.items():
+            config_lines.append(f'[source."{source_name}"]')
+            for key, value in config.items():
+                config_lines.append(f'{key} = {json.dumps(value)}')
+            config_lines.append("")
+        sources.append({"type": "inline", "dest": ".cargo", "dest-filename": "config.toml", "contents": "\n".join(config_lines)})
         Path("cargo-sources.json").write_text(json.dumps(sources, indent=2) + "\n")
-        logging.info("Generated cargo-sources.json with %d crates", len(seen))
+        shutil.rmtree(package_target, ignore_errors=True)
+        logging.info("Generated cargo-sources.json with %d sources", len(seen))
 
     def _validate_cargo_sources(self) -> None:
         logging.info("Validating vendored Cargo sources...")
