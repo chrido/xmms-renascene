@@ -187,6 +187,7 @@ struct StoreSnapshot {
     shuffle: bool,
     repeat: bool,
     no_advance: bool,
+    playlist_selection: Vec<bool>,
 }
 
 impl StoreSnapshot {
@@ -210,6 +211,12 @@ impl StoreSnapshot {
             shuffle: state.playlist.shuffle(),
             repeat: state.playlist.repeat(),
             no_advance: state.playlist.no_advance(),
+            playlist_selection: state
+                .playlist
+                .entries()
+                .iter()
+                .map(|entry| entry.selected)
+                .collect(),
         }
     }
 
@@ -227,6 +234,7 @@ impl StoreSnapshot {
             || self.shuffle != next.shuffle
             || self.repeat != next.repeat
             || self.no_advance != next.no_advance
+            || self.playlist_selection != next.playlist_selection
         {
             changes |= StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST;
         }
@@ -575,7 +583,8 @@ impl Default for AppStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::command::{PanelCommand, UiCommand};
+    use crate::app::command::{PanelCommand, PlaylistCommand, UiCommand};
+    use crate::player::PlayerState;
 
     #[test]
     fn store_dispatch_updates_revision_and_notifies_subscribers() {
@@ -600,6 +609,50 @@ mod tests {
 
         assert!(store.state().ui.preferences_visible);
         assert!(result.changes.contains(StateChangeSet::DIALOGS));
+    }
+
+    #[test]
+    fn store_selection_reports_playlist_change_without_changing_playback() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///music/one.ogg");
+        state.playlist.add_uri("file:///music/two.ogg");
+        state.playlist.set_position(0);
+        state.player.mark_playing();
+        let mut store = AppStore::new(state);
+
+        let result = store.dispatch(PlaylistCommand::SelectEntry(1));
+
+        assert_eq!(store.state().playlist.position(), Some(0));
+        assert_eq!(store.state().player.state(), PlayerState::Playing);
+        assert!(store.state().playlist.entries()[1].selected);
+        assert!(!result.changes.contains(StateChangeSet::PLAYER));
+        assert!(result.changes.contains(StateChangeSet::PLAYLIST));
+        assert!(!result
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::StartPlaybackUri { .. })));
+    }
+
+    #[test]
+    fn store_activation_switches_current_playback() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///music/one.ogg");
+        state.playlist.add_uri("file:///music/two.ogg");
+        state.playlist.set_position(0);
+        state.player.mark_playing();
+        let mut store = AppStore::new(state);
+
+        let result = store.dispatch(PlaylistCommand::ActivateEntry(1));
+
+        assert_eq!(store.state().playlist.position(), Some(1));
+        assert_eq!(store.state().player.state(), PlayerState::Playing);
+        assert!(store.state().playlist.entries()[1].selected);
+        assert!(result.changes.contains(StateChangeSet::PLAYER));
+        assert!(result.changes.contains(StateChangeSet::PLAYLIST));
+        assert!(result.effects.contains(&AppEffect::StartPlaybackUri {
+            uri: "file:///music/two.ogg".to_string(),
+            position_ms: 0,
+        }));
     }
 
     #[test]

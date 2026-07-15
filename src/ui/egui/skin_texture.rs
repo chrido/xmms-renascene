@@ -14,8 +14,15 @@ pub const TRANSPORT_BUTTONS_WIDTH: i32 = 114;
 pub const TRANSPORT_BUTTONS_HEIGHT: i32 = 18;
 pub const PLAYER_INFO_X: usize = 111;
 pub const PLAYER_INFO_Y: usize = 27;
-pub const PLAYER_INFO_WIDTH: usize = 157;
-pub const PLAYER_INFO_HEIGHT: usize = 26;
+pub const PLAYER_INFO_CONTENT_WIDTH: usize = 157;
+pub const PLAYER_INFO_CONTENT_HEIGHT: usize = 26;
+pub const PLAYER_INFO_EXPANSION: usize = 7;
+pub const PLAYER_INFO_RIGHT_TRIM: usize = 4;
+pub const PLAYER_INFO_BOTTOM_TRIM: usize = 4;
+pub const PLAYER_INFO_WIDTH: usize =
+    PLAYER_INFO_CONTENT_WIDTH + 2 * PLAYER_INFO_EXPANSION - PLAYER_INFO_RIGHT_TRIM;
+pub const PLAYER_INFO_HEIGHT: usize =
+    PLAYER_INFO_CONTENT_HEIGHT + 2 * PLAYER_INFO_EXPANSION - PLAYER_INFO_BOTTOM_TRIM;
 
 pub fn player_info_render_state(
     title: &str,
@@ -119,27 +126,18 @@ pub fn crop_color_image(
     }
 }
 
-fn flatten_color_image_onto_black(mut image: egui::ColorImage) -> egui::ColorImage {
-    // Imported MAIN images can contain keyed transparency; widgets need an opaque rectangle.
-    for pixel in &mut image.pixels {
-        let [red, green, blue, _] = pixel.to_array();
-        *pixel = egui::Color32::from_rgb(red, green, blue);
-    }
-    image
-}
-
 pub fn render_player_info_color_image(
     skin: &DefaultSkin,
     state: &MainWindowRenderState,
 ) -> Result<egui::ColorImage, RenderError> {
     let image = render_main_player_color_image(skin, state)?;
-    Ok(flatten_color_image_onto_black(crop_color_image(
+    Ok(crop_color_image(
         &image,
-        PLAYER_INFO_X,
-        PLAYER_INFO_Y,
+        PLAYER_INFO_X - PLAYER_INFO_EXPANSION,
+        PLAYER_INFO_Y - PLAYER_INFO_EXPANSION,
         PLAYER_INFO_WIDTH,
         PLAYER_INFO_HEIGHT,
-    )))
+    ))
 }
 
 pub fn render_equalizer_color_image(
@@ -315,15 +313,37 @@ mod tests {
     }
 
     #[test]
-    fn player_info_image_is_native_information_rectangle() {
+    fn player_info_image_matches_trimmed_main_slice_without_atlas_bleeding() {
         let skin = DefaultSkin::load_bundled().unwrap();
         let state = player_info_render_state("Widget title", 192, 44, 2, 0);
         let full = render_main_player_color_image(&skin, &state).unwrap();
         let info = render_player_info_color_image(&skin, &state).unwrap();
 
         assert_eq!(info.size, [PLAYER_INFO_WIDTH, PLAYER_INFO_HEIGHT]);
+        assert_eq!(
+            (
+                PLAYER_INFO_X - PLAYER_INFO_EXPANSION,
+                PLAYER_INFO_Y - PLAYER_INFO_EXPANSION,
+                PLAYER_INFO_WIDTH,
+                PLAYER_INFO_HEIGHT
+            ),
+            (104, 20, 167, 36)
+        );
+        assert_eq!(
+            PLAYER_INFO_X - PLAYER_INFO_EXPANSION + PLAYER_INFO_WIDTH,
+            271
+        );
+        assert_eq!(
+            PLAYER_INFO_Y - PLAYER_INFO_EXPANSION + PLAYER_INFO_HEIGHT,
+            56
+        );
+        assert!(271 <= MAIN_WINDOW_WIDTH as usize);
+        assert!(56 <= MAIN_WINDOW_HEIGHT as usize);
         for y in 0..PLAYER_INFO_HEIGHT {
-            let full_start = (PLAYER_INFO_Y + y) * MAIN_WINDOW_WIDTH as usize + PLAYER_INFO_X;
+            let full_start = (PLAYER_INFO_Y - PLAYER_INFO_EXPANSION + y)
+                * MAIN_WINDOW_WIDTH as usize
+                + PLAYER_INFO_X
+                - PLAYER_INFO_EXPANSION;
             let info_start = y * PLAYER_INFO_WIDTH;
             assert_eq!(
                 &info.pixels[info_start..info_start + PLAYER_INFO_WIDTH],
@@ -333,15 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn player_info_image_has_no_transparent_corner_or_skin_pixels() {
-        let transparent = egui::ColorImage::from_rgba_unmultiplied(
-            [2, 1],
-            &[255, 255, 255, 0, 200, 100, 50, 128],
-        );
-        let flattened = flatten_color_image_onto_black(transparent);
-        assert!(flattened.pixels.iter().all(|pixel| pixel.a() == 255));
-        assert_eq!(flattened.pixels[0], egui::Color32::BLACK);
-
+    fn player_info_image_has_no_synthetic_alpha_or_rounded_corners() {
         let skin = DefaultSkin::load_bundled().unwrap();
         let image = render_player_info_color_image(
             &skin,

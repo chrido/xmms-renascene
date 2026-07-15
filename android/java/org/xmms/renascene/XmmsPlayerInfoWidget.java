@@ -15,8 +15,8 @@ import android.os.SystemClock;
 import android.widget.RemoteViews;
 
 public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
-    private static final int INFO_WIDTH = 157;
-    private static final int INFO_HEIGHT = 26;
+    private static final int INFO_WIDTH = 167;
+    private static final int INFO_HEIGHT = 36;
     private static final int FRAME_WIDTH = INFO_WIDTH + 4;
     private static final int FRAME_HEIGHT = INFO_HEIGHT + 4;
     private static final int OPEN_PLAYER_REQUEST_CODE = 1000;
@@ -26,7 +26,8 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
     private static final int MARQUEE_OFFSET_SHIFT = 2;
     private static final String PREFERENCES = "xmms_player_info_widget";
     private static final String KEY_PLAYBACK_STATE = "playbackState";
-    private static final String KEY_TITLE = "title";
+    private static final String KEY_FILENAME = "filename";
+    private static final String KEY_METADATA_TITLE = "metadataTitle";
     private static final String KEY_BITRATE = "bitrate";
     private static final String KEY_FREQUENCY = "frequency";
     private static final String KEY_CHANNELS = "channels";
@@ -86,10 +87,29 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
             int channels,
             int titleOffsetPx);
 
+    private static native String nativeFormatPlayerTitle(
+            String filesDir,
+            String filename,
+            String metadataTitle);
+
     private static native long nativeUpdateTitleMarquee(
             String title,
             int playbackState,
             long elapsedMs);
+
+    static String formatTitle(Context context, String filename, String metadataTitle) {
+        String formattedTitle = nativeFormatPlayerTitle(
+                context.getFilesDir().getAbsolutePath(),
+                filename == null ? "" : filename,
+                metadataTitle == null ? "" : metadataTitle);
+        return formattedTitle == null || formattedTitle.isEmpty()
+                ? "XMMS Renascene"
+                : formattedTitle;
+    }
+
+    static String persistedTitle(Context context) {
+        return loadState(context).title;
+    }
 
     @Override
     public void onUpdate(Context context, AppWidgetManager manager, int[] widgetIds) {
@@ -117,17 +137,26 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
     static void updateAll(
             Context context,
             int playbackState,
-            String title,
+            String filename,
+            String metadataTitle,
             int bitrate,
             int frequency,
             int channels) {
         Context applicationContext = context.getApplicationContext();
         WidgetState state =
-                new WidgetState(playbackState, title, bitrate, frequency, channels);
+                new WidgetState(
+                        applicationContext,
+                        playbackState,
+                        filename,
+                        metadataTitle,
+                        bitrate,
+                        frequency,
+                        channels);
         applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
                 .edit()
                 .putInt(KEY_PLAYBACK_STATE, state.playbackState)
-                .putString(KEY_TITLE, state.title)
+                .putString(KEY_FILENAME, state.filename)
+                .putString(KEY_METADATA_TITLE, state.metadataTitle)
                 .putInt(KEY_BITRATE, state.bitrate)
                 .putInt(KEY_FREQUENCY, state.frequency)
                 .putInt(KEY_CHANNELS, state.channels)
@@ -242,8 +271,10 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
         SharedPreferences preferences =
                 context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
         return new WidgetState(
+                context,
                 preferences.getInt(KEY_PLAYBACK_STATE, 0),
-                preferences.getString(KEY_TITLE, "XMMS Renascene"),
+                preferences.getString(KEY_FILENAME, ""),
+                preferences.getString(KEY_METADATA_TITLE, ""),
                 preferences.getInt(KEY_BITRATE, 0),
                 preferences.getInt(KEY_FREQUENCY, 0),
                 preferences.getInt(KEY_CHANNELS, 0));
@@ -283,19 +314,25 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
 
     private static final class WidgetState {
         final int playbackState;
+        final String filename;
+        final String metadataTitle;
         final String title;
         final int bitrate;
         final int frequency;
         final int channels;
 
         WidgetState(
+                Context context,
                 int playbackState,
-                String title,
+                String filename,
+                String metadataTitle,
                 int bitrate,
                 int frequency,
                 int channels) {
             this.playbackState = Math.max(0, Math.min(2, playbackState));
-            this.title = title == null || title.isEmpty() ? "XMMS Renascene" : title;
+            this.filename = filename == null ? "" : filename;
+            this.metadataTitle = metadataTitle == null ? "" : metadataTitle;
+            this.title = formatTitle(context, this.filename, this.metadataTitle);
             this.bitrate = Math.max(0, bitrate);
             this.frequency = Math.max(0, frequency);
             this.channels = Math.max(0, channels);

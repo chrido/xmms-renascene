@@ -74,11 +74,13 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     #[cfg(target_os = "android")]
     {
+        let back_enabled = super::app::android_back_target_for(app)
+            == Some(super::app::AndroidBackTarget::Preferences);
         let skin_entries = app.skin_entries.clone();
         let state = Arc::clone(&app.preferences_viewport);
         let mut state = state.lock().expect("preferences viewport state poisoned");
         let before = state.config.clone();
-        show_android_preferences(ctx, &mut state, &skin_entries);
+        show_android_preferences(ctx, &mut state, &skin_entries, back_enabled);
         let changed = state.config != before;
         if changed {
             state.changed = true;
@@ -250,6 +252,7 @@ fn show_android_preferences(
     ctx: &egui::Context,
     state: &mut PreferencesViewportState,
     skin_entries: &[SkinEntry],
+    back_enabled: bool,
 ) {
     update_android_swipe_start(ctx, state);
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
@@ -266,8 +269,9 @@ fn show_android_preferences(
             layout.height as f32 / pixels_per_point,
         ),
     );
-    let back_requested = ctx.input(|input| input.key_pressed(egui::Key::Escape))
-        || take_android_back_swipe(ctx, state, screen);
+    let back_swipe = take_android_back_swipe(ctx, state, screen);
+    let back_requested =
+        android_preferences_back_key_pressed(ctx, back_enabled) || (back_enabled && back_swipe);
     if back_requested {
         navigate_android_preferences_back(state);
         ctx.request_repaint();
@@ -930,6 +934,18 @@ fn update_android_swipe_start(ctx: &egui::Context, state: &mut PreferencesViewpo
     }
 }
 
+#[cfg(any(target_os = "android", test))]
+fn android_preferences_back_key_pressed(ctx: &egui::Context, enabled: bool) -> bool {
+    if !enabled {
+        return false;
+    }
+    ctx.input_mut(|input| {
+        [egui::Key::Escape, egui::Key::BrowserBack]
+            .into_iter()
+            .any(|key| input.consume_key(egui::Modifiers::NONE, key))
+    })
+}
+
 #[cfg(target_os = "android")]
 fn take_android_back_swipe(
     ctx: &egui::Context,
@@ -1092,6 +1108,24 @@ mod tests {
         navigate_android_preferences_back(&mut state);
         assert!(!state.open);
         assert!(state.close_requested);
+    }
+
+    #[test]
+    fn android_system_back_key_is_supported() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::BrowserBack,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+
+        assert!(android_preferences_back_key_pressed(&ctx, true));
+        let _ = ctx.end_pass();
     }
 
     #[test]

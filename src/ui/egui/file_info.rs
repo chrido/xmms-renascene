@@ -78,11 +78,13 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     #[cfg(target_os = "android")]
     {
+        let back_enabled = super::app::android_back_target_for(app)
+            == Some(super::app::AndroidBackTarget::FileInfo);
         let mut state = app
             .file_info_viewport
             .lock()
             .expect("file info viewport state poisoned");
-        show_android_file_info(ctx, &mut state);
+        show_android_file_info(ctx, &mut state, back_enabled);
     }
 
     #[cfg(not(target_os = "android"))]
@@ -155,8 +157,12 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
 }
 
 #[cfg(target_os = "android")]
-fn show_android_file_info(ctx: &egui::Context, state: &mut FileInfoViewportState) {
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+fn show_android_file_info(
+    ctx: &egui::Context,
+    state: &mut FileInfoViewportState,
+    back_enabled: bool,
+) {
+    if android_file_info_back_key_pressed(ctx, back_enabled) {
         state.open = false;
         state.close_requested = true;
         return;
@@ -219,6 +225,18 @@ fn show_android_file_info(ctx: &egui::Context, state: &mut FileInfoViewportState
                 });
             });
         });
+}
+
+#[cfg(any(target_os = "android", test))]
+fn android_file_info_back_key_pressed(ctx: &egui::Context, enabled: bool) -> bool {
+    if !enabled {
+        return false;
+    }
+    ctx.input_mut(|input| {
+        [egui::Key::Escape, egui::Key::BrowserBack]
+            .into_iter()
+            .any(|key| input.consume_key(egui::Modifiers::NONE, key))
+    })
 }
 
 #[cfg(target_os = "android")]
@@ -551,5 +569,45 @@ fn remove_file_info_tag(app: &mut EguiFrontendState, details: &FileInfoDetails) 
                 .push(format!("failed to remove ID3 tag: {err}"));
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context_with_key(key: egui::Key) -> egui::Context {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+        ctx
+    }
+
+    #[test]
+    fn android_file_info_consumes_escape_and_system_back() {
+        for key in [egui::Key::Escape, egui::Key::BrowserBack] {
+            let ctx = context_with_key(key);
+
+            assert!(android_file_info_back_key_pressed(&ctx, true));
+            assert!(!ctx.input(|input| input.key_pressed(key)));
+            let _ = ctx.end_pass();
+        }
+    }
+
+    #[test]
+    fn android_system_back_is_untouched_when_file_info_lacks_priority() {
+        let ctx = context_with_key(egui::Key::BrowserBack);
+
+        assert!(!android_file_info_back_key_pressed(&ctx, false));
+        assert!(ctx.input(|input| input.key_pressed(egui::Key::BrowserBack)));
+        let _ = ctx.end_pass();
     }
 }

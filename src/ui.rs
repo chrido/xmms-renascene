@@ -7756,7 +7756,7 @@ impl MainWindowUiState {
         self.playlist_ui.last_click = Some((index, now));
         self.playlist_ui.pending_double_click = is_double_click.then_some(index);
         for command in playlist_row_click_commands(index, false, false) {
-            self.dispatch_store_command(command);
+            self.dispatch_store_command_and_apply_local_effects(command);
         }
         self.playlist_ui.pointer = PlaylistPointer::DraggingEntry {
             index,
@@ -8074,7 +8074,7 @@ impl MainWindowUiState {
 
     fn select_single_playlist_entry(&mut self, index: usize) {
         for command in playlist_row_click_commands(index, false, false) {
-            self.dispatch_store_command(command);
+            self.dispatch_store_command_and_apply_local_effects(command);
         }
     }
 
@@ -10014,6 +10014,27 @@ mod tests {
         assert_eq!(state.app_state.playlist.position(), Some(1));
         assert_eq!(state.playback_position_ms, 0);
         assert_eq!(state.playback_position_ms, 0);
+    }
+
+    #[test]
+    fn playlist_row_selection_does_not_change_active_playback() {
+        let mut state = MainWindowUiState::default();
+        state
+            .app_state
+            .playlist
+            .add_timed_uri("file:///music/one.ogg", "One", 120_000);
+        state
+            .app_state
+            .playlist
+            .add_timed_uri("file:///music/two.ogg", "Two", 120_000);
+        state.app_state.playlist.set_position(0);
+        state.app_state.player.mark_playing();
+
+        assert!(state.playlist_press(20, 31));
+
+        assert!(state.app_state.playlist.entries()[1].selected);
+        assert_eq!(state.app_state.playlist.position(), Some(0));
+        assert_eq!(state.last_playback_request(), None);
     }
 
     #[test]

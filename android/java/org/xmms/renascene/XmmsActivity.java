@@ -246,6 +246,8 @@ public final class XmmsActivity extends NativeActivity {
     public void updatePlaybackNotification(
             int state,
             String title,
+            String filename,
+            String metadataTitle,
             int bitrate,
             int frequency,
             int channels,
@@ -260,6 +262,8 @@ public final class XmmsActivity extends NativeActivity {
                     .setAction(XmmsPlaybackService.ACTION_UPDATE)
                     .putExtra(XmmsPlaybackService.EXTRA_STATE, state)
                     .putExtra(XmmsPlaybackService.EXTRA_TITLE, title)
+                    .putExtra(XmmsPlaybackService.EXTRA_FILENAME, filename)
+                    .putExtra(XmmsPlaybackService.EXTRA_METADATA_TITLE, metadataTitle)
                     .putExtra(XmmsPlaybackService.EXTRA_BITRATE, bitrate)
                     .putExtra(XmmsPlaybackService.EXTRA_FREQUENCY, frequency)
                     .putExtra(XmmsPlaybackService.EXTRA_CHANNELS, channels)
@@ -270,7 +274,8 @@ public final class XmmsActivity extends NativeActivity {
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_PREVIOUS, hasPrevious)
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_NEXT, hasNext);
             if (state == 0) {
-                XmmsPlayerInfoWidget.updateAll(this, state, title, 0, 0, 0);
+                XmmsPlayerInfoWidget.updateAll(
+                        this, state, filename, metadataTitle, 0, 0, 0);
                 stopService(intent);
             } else if (Build.VERSION.SDK_INT >= 26) {
                 startForegroundService(intent);

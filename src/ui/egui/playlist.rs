@@ -2,7 +2,7 @@
 
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::{AppEffect, FileDialogRequest};
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 use crate::app::playlist_actions::playlist_play_first_selected_commands;
 use crate::app::playlist_actions::{
     playlist_row_click_commands, PlaylistSortAction, PLAYLIST_SORT_MENU_ITEMS,
@@ -764,7 +764,7 @@ fn has_vertical_swipe_momentum(
         || (gesture_duration <= std::time::Duration::from_secs(1) && average_speed >= 300.0)
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn set_swiped_playlist_selection(app: &mut EguiFrontendState, swiped_index: usize, selected: bool) {
     let Some(entry) = app
         .controller()
@@ -776,12 +776,16 @@ fn set_swiped_playlist_selection(app: &mut EguiFrontendState, swiped_index: usiz
         return;
     };
     if entry.selected != selected {
-        app.dispatch(PlaylistCommand::ToggleEntrySelection(swiped_index));
+        if selected {
+            app.dispatch(PlaylistCommand::SelectEntry(swiped_index));
+        } else {
+            app.dispatch(PlaylistCommand::ToggleEntrySelection(swiped_index));
+        }
         app_log_info!(playlist, "swipe selection applied", swiped_index, selected);
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn play_first_selected_playlist_entry(app: &mut EguiFrontendState) {
     let action = {
         let state = app.controller().state();
@@ -1277,6 +1281,35 @@ mod tests {
         assert!(!is_playlist_left_swipe(egui::vec2(-47.0, 0.0)));
         assert!(!is_playlist_left_swipe(egui::vec2(80.0, 0.0)));
         assert!(!is_playlist_left_swipe(egui::vec2(-60.0, 50.0)));
+    }
+
+    #[test]
+    fn android_swipe_selection_waits_for_swipe_up_before_activation() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .add_uri("file:///music/one.ogg");
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .add_uri("file:///music/two.ogg");
+        app.controller_mut().state_mut().playlist.set_position(0);
+        app.controller_mut().state_mut().player.mark_playing();
+
+        set_swiped_playlist_selection(&mut app, 1, true);
+
+        assert!(app.controller().state().playlist.entries()[1].selected);
+        assert_eq!(app.controller().state().playlist.position(), Some(0));
+
+        play_first_selected_playlist_entry(&mut app);
+
+        assert_eq!(app.controller().state().playlist.position(), Some(1));
+        assert_eq!(
+            app.controller().state().player.state(),
+            crate::player::PlayerState::Playing
+        );
     }
 
     #[test]

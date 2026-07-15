@@ -899,8 +899,7 @@ source = "git+https://github.com/chrido/winit?branch=fix-window-configchanged-an
 [[package]]
 name = "ecolor"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6758be723a3f298bbfda4db75748bc2ba0abafe096b6383c7c32da264764fbc3"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "bytemuck",
  "emath",
@@ -909,8 +908,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc8234e2f681b2afd2b2e8c332fa614de2fddbdcb28d0acf5c420449682ea90"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -946,15 +944,14 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796c98d50b79631281d516343a6f6e93c0666462ca36e2c93b39f25d7793325"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "accesskit",
  "ahash",
  "bitflags 2.13.0",
  "emath",
  "epaint",
- "itertools 0.14.0",
+ "itertools",
  "log",
  "nohash-hasher",
  "profiling",
@@ -965,8 +962,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2e6cfac0725563555fa4f91e9f799b9d7c6c5dd831fca6abc8234afc64b7a34"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -985,8 +981,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ea6bf3608db949588b95b8b341ee358d0c3f95cf4dc3f53d8d76717edee87db"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "accesskit_winit",
  "arboard",
@@ -1007,8 +1002,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52274b9bfb8d8e252cd0f00c9f6214f360d75a0962baa77a2d62ddb002fe99d4"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "bytemuck",
  "egui",
@@ -1028,8 +1022,7 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 [[package]]
 name = "emath"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd4ec073c9898516584d8c6cfdcee95b530b3d941cd5031ef4050aa36812308b"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "bytemuck",
 ]
@@ -1073,8 +1066,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e60a8888b51da911df23918fd7301359b1d43a406a0ff3b8863af093dd7fc6c"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -1098,8 +1090,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.35.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13ee4e1f553a3584c301f3a56ff1a775f1384781396cea301c8d952e9b93f560"
+source = "git+https://github.com/chrido/egui?rev=b7ba8277edff50a8effced89c8db9b12e8d41ff5#b7ba8277edff50a8effced89c8db9b12e8d41ff5"
 
 [[package]]
 name = "equivalent"
@@ -1742,7 +1733,7 @@ dependencies = [
  "futures-util",
  "glib",
  "gstreamer-sys",
- "itertools 0.15.0",
+ "itertools",
  "kstring",
  "libc",
  "muldiv",
@@ -2173,15 +2164,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
@@ -2522,8 +2504,7 @@ dependencies = [
 [[package]]
 name = "ndk-context"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+source = "git+https://github.com/chrido/ndk-context.git?rev=26568795d0038e168620fa73579f0e214d716170#26568795d0038e168620fa73579f0e214d716170"
 
 [[package]]
 name = "ndk-sys"
@@ -5228,6 +5209,7 @@ dependencies = [
  "image",
  "image-extras",
  "jni 0.21.1",
+ "ndk-context",
  "rfd",
  "rodio",
  "serde_json",

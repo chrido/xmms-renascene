@@ -785,6 +785,9 @@ impl Visualization {
     }
 
     pub fn tick(&mut self, data: Option<&[f32]>) {
+        if self.mode == VisMode::Off {
+            return;
+        }
         if let Some(data) = data {
             self.set_data(data);
         }
@@ -797,6 +800,9 @@ impl Visualization {
     }
 
     pub fn set_mode(&mut self, mode: VisMode) {
+        if self.mode != mode && mode == VisMode::Analyzer {
+            self.clear_data();
+        }
         self.mode = mode;
         self.widget.queue_draw();
     }
@@ -902,34 +908,38 @@ impl MonoStereoIndicator {
     }
 
     pub fn segments(&self) -> [IndicatorSegment; 2] {
-        let (stereo_y, mono_y) = match self.channels {
-            2 => (0, 12),
-            1 => (12, 0),
-            _ => (12, 12),
-        };
-        [
-            IndicatorSegment {
-                source: SkinSource {
-                    kind: self.skin,
-                    x: 0,
-                    y: stereo_y,
-                },
-                dest_x: 0,
-                width: 29,
-                height: 12,
-            },
-            IndicatorSegment {
-                source: SkinSource {
-                    kind: self.skin,
-                    x: 29,
-                    y: mono_y,
-                },
-                dest_x: 29,
-                width: 27,
-                height: 12,
-            },
-        ]
+        mono_stereo_segments(self.skin, self.channels)
     }
+}
+
+pub(crate) fn mono_stereo_segments(skin: SkinPixmapKind, channels: i32) -> [IndicatorSegment; 2] {
+    let (stereo_y, mono_y) = match channels {
+        2 => (0, 12),
+        1 => (12, 0),
+        _ => (12, 12),
+    };
+    [
+        IndicatorSegment {
+            source: SkinSource {
+                kind: skin,
+                x: 29,
+                y: mono_y,
+            },
+            dest_x: 0,
+            width: 27,
+            height: 12,
+        },
+        IndicatorSegment {
+            source: SkinSource {
+                kind: skin,
+                x: 0,
+                y: stereo_y,
+            },
+            dest_x: 27,
+            width: 29,
+            height: 12,
+        },
+    ]
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1537,6 +1547,19 @@ mod tests {
     }
 
     #[test]
+    fn visualization_off_mode_ignores_audio_until_reenabled() {
+        let mut vis = Visualization::new(WidgetId(6), 0, 0, 75);
+        vis.set_data(&[0.5]);
+        vis.set_mode(VisMode::Off);
+        vis.tick(Some(&[1.0]));
+        assert_eq!(vis.data()[0], 0.5);
+
+        vis.set_mode(VisMode::Analyzer);
+        assert_eq!(vis.data()[0], 0.0);
+        assert_eq!(vis.peak()[0], 0.0);
+    }
+
+    #[test]
     fn visualization_falloff_change_requests_redraw() {
         let mut vis = Visualization::new(WidgetId(6), 0, 0, 75);
         assert!(!vis.widget().needs_redraw());
@@ -1547,28 +1570,32 @@ mod tests {
     }
 
     #[test]
-    fn mono_stereo_indicator_maps_channels_to_segments() {
+    fn mono_stereo_indicator_matches_xmms_segment_placement() {
         let mut indicator = MonoStereoIndicator::new(WidgetId(7), 1, 2, SkinPixmapKind::MonoStereo);
         assert_eq!(indicator.widget().rect().width, 56);
         assert_eq!(indicator.widget().rect().height, 12);
 
         indicator.set_channels(2);
         let stereo = indicator.segments();
-        assert_eq!(stereo[0].source.y, 0);
-        assert_eq!(stereo[1].source.y, 12);
+        assert_eq!((stereo[0].source.x, stereo[0].source.y), (29, 12));
+        assert_eq!((stereo[0].dest_x, stereo[0].width), (0, 27));
+        assert_eq!((stereo[1].source.x, stereo[1].source.y), (0, 0));
+        assert_eq!((stereo[1].dest_x, stereo[1].width), (27, 29));
         assert!(indicator.widget().needs_redraw());
 
         indicator.set_channels(1);
         let mono = indicator.segments();
-        assert_eq!(mono[0].source.y, 12);
-        assert_eq!(mono[1].source.y, 0);
+        assert_eq!((mono[0].source.x, mono[0].source.y), (29, 0));
+        assert_eq!((mono[0].dest_x, mono[0].width), (0, 27));
+        assert_eq!((mono[1].source.x, mono[1].source.y), (0, 12));
+        assert_eq!((mono[1].dest_x, mono[1].width), (27, 29));
 
         indicator.set_channels(0);
         let inactive = indicator.segments();
         assert_eq!(inactive[0].source.y, 12);
         assert_eq!(inactive[1].source.y, 12);
-        assert_eq!(inactive[0].width, 29);
-        assert_eq!(inactive[1].width, 27);
+        assert_eq!(inactive[0].width, 27);
+        assert_eq!(inactive[1].width, 29);
     }
 
     #[test]

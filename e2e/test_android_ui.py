@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import time
 import wave
@@ -29,6 +30,52 @@ from gui import (
 pytest: Any = import_module("pytest")
 
 pytestmark = pytest.mark.android
+
+MAIN_TIMER_RECT = (39, 26, 59, 13)
+MAIN_ANALYZER_RECT = (24, 43, 76, 16)
+
+
+def _main_skin_region_pixels(
+    android_device: AndroidDevice,
+    rect: tuple[int, int, int, int],
+) -> bytes:
+    left, top, right, _bottom = android_device.main_player_bounds()
+    scale = (right - left) / BASE_MAIN_WIDTH
+    x, y, width, height = rect
+    with Image.open(BytesIO(android_device.framebuffer_png())) as screenshot:
+        return screenshot.convert("RGB").crop(
+            (
+                round(left + x * scale),
+                round(top + y * scale),
+                round(left + (x + width) * scale),
+                round(top + (y + height) * scale),
+            )
+        ).tobytes()
+
+
+def _wait_for_main_skin_regions_to_change(
+    android_device: AndroidDevice,
+    initial: dict[str, bytes],
+    timeout: float = 5.0,
+) -> None:
+    changed: set[str] = set()
+    deadline = time.monotonic() + timeout
+    regions = {
+        "elapsed time": MAIN_TIMER_RECT,
+        "analyzer": MAIN_ANALYZER_RECT,
+    }
+    while time.monotonic() < deadline:
+        for name, rect in regions.items():
+            if (
+                name not in changed
+                and _main_skin_region_pixels(android_device, rect) != initial[name]
+            ):
+                changed.add(name)
+        if changed == set(regions):
+            return
+        time.sleep(0.15)
+    missing = ", ".join(sorted(set(regions) - changed))
+    raise AssertionError(f"player regions did not advance after activation: {missing}")
 
 
 def test_android_checkpoints_background_playback_position(
@@ -262,8 +309,24 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
 ) -> None:
     android_device.restart_app(reset_data=True)
     android_device.main_player_bounds()
+    manifest = android_device.apk_xmltree("AndroidManifest.xml")
+    assert "android:screenOrientation" in manifest
+    assert "(type 0x10)0x4" in manifest
+
     android_device.set_landscape()
     android_device.wait_for_app()
+    assert (
+        android_device.shell(
+            "settings", "get", "system", "accelerometer_rotation"
+        ).stdout.strip()
+        == "0"
+    )
+    assert (
+        android_device.shell(
+            "settings", "get", "system", "user_rotation"
+        ).stdout.strip()
+        == "0"
+    )
     geometry = android_device.display_geometry()
     scale = android_device.main_player_scale()
     player_bounds = android_device.main_player_bounds()
@@ -302,6 +365,11 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     portrait_scale = (portrait_stack[2] - portrait_stack[0]) / BASE_MAIN_WIDTH
     player_and_equalizer_height = 2 * MAIN_PLAYER_BASE_HEIGHT * portrait_scale
     assert portrait_stack[3] - portrait_stack[1] > player_and_equalizer_height + 20
+
+    portrait_before_tap = android_device.screenshot(test_output.screenshot_path())
+    android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.REPEAT])
+    portrait_after_tap = android_device.screenshot(test_output.screenshot_path())
+    assert portrait_before_tap.read_bytes() != portrait_after_tap.read_bytes()
 
 
 def test_android_persists_player_configuration(
@@ -622,7 +690,19 @@ def _prepare_android_swipe_playlist(android_device: AndroidDevice) -> None:
             wav.setnchannels(1)
             wav.setsampwidth(1)
             wav.setframerate(8_000)
-            wav.writeframes(bytes([128]) * 8_000 * 20)
+            samples = bytearray()
+            for sample_index in range(8_000 * 20):
+                seconds = sample_index / 8_000
+                frequency = 220.0 + (int(seconds * 4) % 8) * 55.0
+                amplitude = 25.0 + (int(seconds * 8) % 4) * 25.0
+                samples.append(
+                    round(
+                        128.0
+                        + amplitude
+                        * math.sin(2.0 * math.pi * frequency * seconds)
+                    )
+                )
+            wav.writeframes(samples)
         android_device.write_private_bytes(
             f"files/imports/{name}.wav",
             audio.getvalue(),
@@ -681,10 +761,15 @@ def test_android_playlist_swipe_up_starts_only_selected_item(
     config_path = "files/config/xmms-renascene/config"
     _prepare_android_swipe_playlist(android_device)
     _swipe_playlist_row_horizontally(android_device, 1, selected=True)
+    initial_regions = {
+        "elapsed time": _main_skin_region_pixels(android_device, MAIN_TIMER_RECT),
+        "analyzer": _main_skin_region_pixels(android_device, MAIN_ANALYZER_RECT),
+    }
 
     _swipe_playlist_up(android_device, touched_index=0, selected_index=1)
 
     android_device.assert_log_contains(
+        "command Playlist(ActivateEntry(1))",
         "playlist: swipe playback started, selected_index=1",
         "backend: egui play_uri, "
         "uri=file:///data/user/0/org.xmms.renascene/files/imports/second.wav"
@@ -694,6 +779,7 @@ def test_android_playlist_swipe_up_starts_only_selected_item(
         config_path,
         "playlist_position=1",
     )
+    _wait_for_main_skin_regions_to_change(android_device, initial_regions)
 
 
 def test_android_playlist_swipe_up_starts_first_selected_item_in_playlist_order(
@@ -802,7 +888,7 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
     assert resumed_position > paused_position
 
 
-def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
+def test_android_misc_popup_dismisses_outside_and_system_back_closes_file_info(
     android_device: AndroidDevice,
     test_output: Any,
 ) -> None:
@@ -835,7 +921,7 @@ def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
     open_misc()
     android_device.tap_usable_fraction(0.67, 0.85)
     file_info = android_device.screenshot(test_output.screenshot_path())
-    android_device.tap_usable_fraction(0.13, 0.043)
+    original_pid = android_device.close_activity()
     returned = android_device.screenshot(test_output.screenshot_path())
 
     def image_pixels(path: Path) -> bytes:
@@ -846,6 +932,7 @@ def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
     assert image_pixels(popup) != image_pixels(dismissed)
     assert image_pixels(dismissed) != image_pixels(file_info)
     assert image_pixels(file_info) != image_pixels(returned)
+    assert android_device.app_pid() == original_pid
 
 
 def test_android_clear_list_stops_playback_and_resets_playlist(
@@ -969,6 +1056,10 @@ def test_android_player_widget_is_packaged(
         Path(__file__).resolve().parents[1]
         / "src/ui/egui/android_file_picker.rs"
     ).read_text()
+    widget_render_source = (
+        Path(__file__).resolve().parents[1]
+        / "src/ui/egui/skin_texture.rs"
+    ).read_text()
 
     assert ".XmmsPlayerWidget" in manifest
     assert ".XmmsPlayerInfoWidget" in manifest
@@ -1047,8 +1138,17 @@ def test_android_player_widget_is_packaged(
         "render_transport_buttons_color_image(skin, pressed)"
         in native_widget_source
     )
-    assert "INFO_WIDTH = 157" in info_widget_source
-    assert "INFO_HEIGHT = 26" in info_widget_source
+    assert "INFO_WIDTH = 167" in info_widget_source
+    assert "INFO_HEIGHT = 36" in info_widget_source
+    assert "PLAYER_INFO_EXPANSION: usize = 7" in widget_render_source
+    assert "PLAYER_INFO_RIGHT_TRIM: usize = 4" in widget_render_source
+    assert "PLAYER_INFO_BOTTOM_TRIM: usize = 4" in widget_render_source
+    assert "PLAYER_INFO_X - PLAYER_INFO_EXPANSION" in widget_render_source
+    assert "PLAYER_INFO_Y - PLAYER_INFO_EXPANSION" in widget_render_source
+    assert "PLAYER_INFO_FEATHER" not in widget_render_source
+    assert "feather_color_image" not in widget_render_source
+    assert "super::skin_texture::PLAYER_INFO_WIDTH" in native_widget_source
+    assert "super::skin_texture::PLAYER_INFO_HEIGHT" in native_widget_source
     assert "FRAME_WIDTH = INFO_WIDTH + 4" in info_widget_source
     assert "FRAME_HEIGHT = INFO_HEIGHT + 4" in info_widget_source
     assert "OPEN_PLAYER_REQUEST_CODE = 1000" in info_widget_source
@@ -1061,6 +1161,11 @@ def test_android_player_widget_is_packaged(
     assert "widget_player_info_content" in info_widget_source
     assert "views.setOnClickPendingIntent(open" in info_widget_source
     assert "nativeUpdateTitleMarquee(" in info_widget_source
+    assert "nativeFormatPlayerTitle(" in info_widget_source
+    assert ".putString(KEY_FILENAME, state.filename)" in info_widget_source
+    assert ".putString(KEY_METADATA_TITLE, state.metadataTitle)" in info_widget_source
+    assert ".putString(KEY_TITLE" not in info_widget_source
+    assert "format_title_for_preferences(" in native_widget_source
     assert "MARQUEE_HANDLER.postDelayed(this, MARQUEE_TICK_MS)" in info_widget_source
     assert "titleOffsetPx" in info_widget_source
     assert "TextView" not in info_widget_source
@@ -1117,3 +1222,62 @@ def test_android_player_widget_is_packaged(
         b"Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeUpdateTitleMarquee"
         in library_bytes
     )
+    assert (
+        b"Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeFormatPlayerTitle"
+        in library_bytes
+    )
+
+
+def test_android_info_widget_title_format_uses_persisted_config_after_cold_start(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    filename = "file:///music/File_Artist%20-%20File_Title.mp3?download=1"
+    metadata_title = "Meta_Artist%20-%20Meta_Title"
+
+    def probe(expected: str, *, persist: bool = False, load_persisted: bool = False) -> None:
+        android_device.force_stop()
+        android_device.clear_logcat()
+        command = [
+            "am",
+            "start",
+            "-W",
+            "-n",
+            ANDROID_AUTO_PROBE_ACTIVITY,
+        ]
+        if load_persisted:
+            command.extend(["--ez", "loadPersistedWidgetTitle", "true"])
+        else:
+            command.extend(
+                [
+                    "--es",
+                    "widgetFilename",
+                    filename,
+                    "--es",
+                    "widgetMetadataTitle",
+                    metadata_title,
+                ]
+            )
+            if persist:
+                command.extend(["--ez", "persistWidgetState", "true"])
+        android_device.shell(*command)
+        android_device.assert_log_contains(f"widget title={expected}")
+
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.write_private_file(
+        config_path,
+        "[xmms]\n"
+        "convert_underscore=true\n"
+        "convert_twenty=true\n"
+        "title_format=%t (%p) [%f]\n",
+    )
+    probe("Meta Title (Meta Artist) [File Artist - File Title]", persist=True)
+
+    android_device.write_private_file(
+        config_path,
+        "[xmms]\n"
+        "convert_underscore=false\n"
+        "convert_twenty=false\n"
+        "title_format=%f\n",
+    )
+    probe("File_Artist%20-%20File_Title", load_persisted=True)

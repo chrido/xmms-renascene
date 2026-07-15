@@ -213,6 +213,8 @@ impl AppController {
                 self.state.playlist.invert_selection();
                 self.playlist_changed_effects()
             }
+            PlaylistCommand::SelectEntry(index) => self.select_playlist_entry(index),
+            PlaylistCommand::ActivateEntry(index) => self.activate_playlist_entry(index),
             PlaylistCommand::SetPosition(index) => {
                 self.state.playlist.set_position(index);
                 self.playlist_changed_effects()
@@ -399,6 +401,32 @@ impl AppController {
         ]
     }
 
+    fn select_playlist_entry(&mut self, index: usize) -> Vec<AppEffect> {
+        let Some(entry) = self.state.playlist.entries_mut().get_mut(index) else {
+            return Vec::new();
+        };
+        entry.selected = true;
+        self.playlist_changed_effects()
+    }
+
+    fn activate_playlist_entry(&mut self, index: usize) -> Vec<AppEffect> {
+        let Some(entry) = self.state.playlist.entries_mut().get_mut(index) else {
+            return Vec::new();
+        };
+        entry.selected = true;
+        if entry.filename.trim().is_empty() {
+            let mut effects = self.playlist_changed_effects();
+            effects.push(AppEffect::ShowError(
+                "cannot play playlist entry with an empty location".to_string(),
+            ));
+            return effects;
+        }
+        self.state.playlist.set_position(index);
+        let mut effects = self.start_current_playlist_playback(0);
+        effects.push(AppEffect::SaveConfig);
+        effects
+    }
+
     fn clear_playlist(&mut self) -> Vec<AppEffect> {
         self.state.playlist.clear();
         self.state.player.stop();
@@ -531,6 +559,8 @@ impl AppController {
         let uri = entry.filename.clone();
         let position_ms = position_ms.max(0);
         self.state.config.playback_position_ms = position_ms;
+        self.state.player.stop();
+        self.state.player.clear_visualization_data();
         self.state.player.mark_playing();
         vec![
             AppEffect::StartPlaybackUri { uri, position_ms },
@@ -635,6 +665,109 @@ mod tests {
             uri: "file:///tmp/two.ogg".to_string(),
             position_ms: 0,
         }));
+    }
+
+    #[test]
+    fn selecting_an_entry_only_changes_selection_in_all_player_states() {
+        for player_state in [
+            PlayerState::Playing,
+            PlayerState::Paused,
+            PlayerState::Stopped,
+        ] {
+            let mut state = AppState::default();
+            state.playlist.add_uri("file:///music/one.ogg");
+            state.playlist.add_uri("file:///music/two.ogg");
+            state.playlist.set_position(0);
+            state.player.mark_playing();
+            state
+                .player
+                .apply_playback_event(&PlaybackEvent::DurationChanged(Some(42_000)));
+            state.config.playback_position_ms = 12_000;
+            if player_state == PlayerState::Paused {
+                state.player.pause();
+            } else if player_state == PlayerState::Stopped {
+                state.player.stop();
+            }
+            let duration_before = state.player.duration_ms();
+            let mut controller = AppController::new(state);
+
+            let effects = controller.handle_command(PlaylistCommand::SelectEntry(1).into());
+
+            assert_eq!(controller.state().playlist.position(), Some(0));
+            assert_eq!(controller.state().player.state(), player_state);
+            assert!(controller.state().playlist.entries()[1].selected);
+            assert_eq!(controller.state().config.playback_position_ms, 12_000);
+            assert_eq!(controller.state().player.duration_ms(), duration_before);
+            assert!(!effects
+                .iter()
+                .any(|effect| matches!(effect, AppEffect::StartPlaybackUri { .. })));
+        }
+    }
+
+    #[test]
+    fn activating_an_entry_starts_it_in_all_player_states() {
+        for player_state in [
+            PlayerState::Playing,
+            PlayerState::Paused,
+            PlayerState::Stopped,
+        ] {
+            let mut state = AppState::default();
+            state.playlist.add_uri("file:///music/one.ogg");
+            state.playlist.add_uri("file:///music/two.ogg");
+            state.playlist.set_position(0);
+            state.player.mark_playing();
+            if player_state == PlayerState::Paused {
+                state.player.pause();
+            } else if player_state == PlayerState::Stopped {
+                state.player.stop();
+            }
+            let mut controller = AppController::new(state);
+
+            let effects = controller.handle_command(PlaylistCommand::ActivateEntry(1).into());
+
+            assert_eq!(controller.state().playlist.position(), Some(1));
+            assert_eq!(controller.state().player.state(), PlayerState::Playing);
+            assert!(controller.state().playlist.entries()[1].selected);
+            assert_eq!(
+                effects
+                    .iter()
+                    .filter(|effect| matches!(effect, AppEffect::StartPlaybackUri { .. }))
+                    .count(),
+                1
+            );
+            assert!(effects.contains(&AppEffect::StartPlaybackUri {
+                uri: "file:///music/two.ogg".to_string(),
+                position_ms: 0,
+            }));
+            assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::All)));
+        }
+    }
+
+    #[test]
+    fn selecting_empty_entry_is_allowed_but_activation_reports_error() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///music/current.ogg");
+        state.playlist.add_uri("");
+        state.playlist.set_position(0);
+        state.player.mark_playing();
+        let mut controller = AppController::new(state);
+
+        let selection_effects = controller.handle_command(PlaylistCommand::SelectEntry(1).into());
+        assert_eq!(controller.state().playlist.position(), Some(0));
+        assert!(controller.state().playlist.entries()[1].selected);
+        assert!(!selection_effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::StartPlaybackUri { .. })));
+        assert!(!selection_effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::ShowError(_))));
+
+        let activation_effects =
+            controller.handle_command(PlaylistCommand::ActivateEntry(1).into());
+        assert_eq!(controller.state().playlist.position(), Some(0));
+        assert!(activation_effects.contains(&AppEffect::ShowError(
+            "cannot play playlist entry with an empty location".to_string()
+        )));
     }
 
     #[test]

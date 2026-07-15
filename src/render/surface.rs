@@ -431,6 +431,12 @@ impl Context {
         }
     }
 
+    pub fn new_path(&self) {
+        let mut state = self.state.borrow_mut();
+        state.rect = None;
+        state.path.clear();
+    }
+
     pub fn set_source_rgb(&self, r: f64, g: f64, b: f64) {
         let mut state = self.state.borrow_mut();
         state.color = [unit_to_u8(r), unit_to_u8(g), unit_to_u8(b), 255];

@@ -733,6 +733,36 @@ mod tests {
     }
 
     #[test]
+    fn title_preferences_pipeline_covers_widget_raw_track_inputs() {
+        let filename = "file:///music/File_Artist%20-%20File_Title.mp3?download=1";
+        let metadata_title = "Meta_Artist%20-%20Meta_Title";
+        let mut config = Config::default();
+        config.title_format = "%t (%p) [%f]".to_string();
+
+        assert_eq!(
+            format_title_for_preferences(&config.title_format, filename, metadata_title, &config,),
+            "Meta Title (Meta Artist) [File Artist - File Title]"
+        );
+
+        let generated_title = crate::playlist::format_title(filename, None);
+        assert_eq!(
+            format_title_for_preferences("%p - %t", filename, &generated_title, &config,),
+            "File Artist - File Title"
+        );
+
+        config.convert_underscore = false;
+        config.convert_twenty = false;
+        assert_eq!(
+            format_title_for_preferences("%f", filename, metadata_title, &config),
+            "File_Artist%20-%20File_Title"
+        );
+        assert_eq!(
+            format_title_for_preferences("%p - %t", filename, "Solo_Title", &Config::default()),
+            "Solo Title"
+        );
+    }
+
+    #[test]
     fn playlist_rows_render_state_applies_preferences_title_format() {
         let mut state = AppState::default();
         state.config.title_format = "%t (%p)".to_string();

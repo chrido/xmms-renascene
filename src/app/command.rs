@@ -65,6 +65,8 @@ pub enum PlaylistCommand {
     SelectAll,
     SelectNone,
     InvertSelection,
+    SelectEntry(usize),
+    ActivateEntry(usize),
     SetPosition(usize),
     ToggleEntrySelection(usize),
     MoveEntry {

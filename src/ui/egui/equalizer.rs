@@ -22,6 +22,8 @@ use super::app::{CachedEqualizerTexture, EguiFrontendState};
 use super::layout::clamp_popup_to_rect;
 use super::skin_texture::{pixel_snapped_rect, render_equalizer_color_image, upload_color_image};
 
+const ANDROID_EQUALIZER_SHADE_HIT_WIDTH: i32 = 36;
+
 pub fn equalizer_band_count(view_model: &EqualizerViewModel) -> usize {
     view_model.band_positions.len()
 }
@@ -32,21 +34,30 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         return;
     }
     let render_state = equalizer_render_state(app, &view_model);
+    let texture_manager_id = texture_manager_id(ui.ctx());
     let needs_texture_update = app.texture_cache.equalizer.as_ref().is_none_or(|cached| {
-        cached.generation != app.texture_cache.generation || cached.state != render_state
+        cached.texture_manager_id != texture_manager_id
+            || cached.generation != app.texture_cache.generation
+            || cached.state != render_state
     });
     if needs_texture_update {
         let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
             ui.label("failed to render skinned equalizer");
             return;
         };
-        if let Some(cached) = &mut app.texture_cache.equalizer {
+        if let Some(cached) = app
+            .texture_cache
+            .equalizer
+            .as_mut()
+            .filter(|cached| cached.texture_manager_id == texture_manager_id)
+        {
             cached.texture.set(image, egui::TextureOptions::NEAREST);
             cached.generation = app.texture_cache.generation;
             cached.state = render_state;
         } else {
             app.texture_cache.equalizer = Some(CachedEqualizerTexture {
                 generation: app.texture_cache.generation,
+                texture_manager_id,
                 state: render_state,
                 texture: upload_color_image(ui.ctx(), "xmms-equalizer", image),
             });
@@ -81,6 +92,10 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+}
+
+fn texture_manager_id(ctx: &egui::Context) -> usize {
+    std::sync::Arc::as_ptr(&ctx.tex_manager()) as usize
 }
 
 fn equalizer_render_state(
@@ -177,12 +192,18 @@ fn add_equalizer_titlebar_drag_region(
 }
 
 fn equalizer_titlebar_drag_excluded(x: i32, y: i32, shaded: bool) -> bool {
+    equalizer_titlebar_drag_excluded_for(x, y, shaded, cfg!(target_os = "android"))
+}
+
+fn equalizer_titlebar_drag_excluded_for(
+    x: i32,
+    y: i32,
+    shaded: bool,
+    touch_friendly: bool,
+) -> bool {
     [PanelTitleButton::Shade, PanelTitleButton::Close]
         .into_iter()
-        .any(|button| {
-            panel_title_button_rect(LayoutPanelKind::Equalizer, button, EQUALIZER_WINDOW_WIDTH)
-                .contains(x, y)
-        })
+        .any(|button| equalizer_title_button_hit_rect_for(button, touch_friendly).contains(x, y))
         || (shaded
             && [
                 EqualizerSlider::ShadedVolume,
@@ -200,7 +221,7 @@ fn add_equalizer_title_button_hits(
     for button in [PanelTitleButton::Shade, PanelTitleButton::Close] {
         let rect = scale_skin_rect(
             base_rect,
-            panel_title_button_rect(LayoutPanelKind::Equalizer, button, EQUALIZER_WINDOW_WIDTH),
+            equalizer_title_button_hit_rect(button),
             app.scale_factor,
         );
         let response = ui.interact(
@@ -218,6 +239,25 @@ fn add_equalizer_title_button_hits(
                 }
             }
         }
+    }
+}
+
+fn equalizer_title_button_hit_rect(button: PanelTitleButton) -> SkinRect {
+    equalizer_title_button_hit_rect_for(button, cfg!(target_os = "android"))
+}
+
+fn equalizer_title_button_hit_rect_for(button: PanelTitleButton, touch_friendly: bool) -> SkinRect {
+    let visible =
+        panel_title_button_rect(LayoutPanelKind::Equalizer, button, EQUALIZER_WINDOW_WIDTH);
+    if touch_friendly && button == PanelTitleButton::Shade {
+        SkinRect::new(
+            visible.x + visible.width - ANDROID_EQUALIZER_SHADE_HIT_WIDTH,
+            visible.y,
+            ANDROID_EQUALIZER_SHADE_HIT_WIDTH,
+            visible.height,
+        )
+    } else {
+        visible
     }
 }
 
@@ -438,6 +478,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn equalizer_texture_cache_distinguishes_recreated_egui_contexts() {
+        let original = egui::Context::default();
+        let cloned = original.clone();
+        let recreated = egui::Context::default();
+
+        assert_eq!(
+            texture_manager_id(&original),
+            texture_manager_id(&cloned),
+            "clones of one activity context share the texture manager"
+        );
+        assert_ne!(
+            texture_manager_id(&original),
+            texture_manager_id(&recreated),
+            "a recreated activity must upload equalizer textures to its new manager"
+        );
+    }
+
+    #[test]
     fn equalizer_controls_dispatch_to_app_state() {
         let mut app =
             EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
@@ -505,5 +563,48 @@ mod tests {
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(42.0 * scale, 8.0 * scale)),
         );
         assert_eq!(app.controller().state().player.balance(), -100);
+    }
+
+    #[test]
+    fn android_equalizer_shade_uses_larger_leftward_touch_target() {
+        let visible = panel_title_button_rect(
+            LayoutPanelKind::Equalizer,
+            PanelTitleButton::Shade,
+            EQUALIZER_WINDOW_WIDTH,
+        );
+        assert_eq!(
+            equalizer_title_button_hit_rect_for(PanelTitleButton::Shade, true),
+            SkinRect::new(227, 3, ANDROID_EQUALIZER_SHADE_HIT_WIDTH, 9)
+        );
+        assert_eq!(
+            equalizer_title_button_hit_rect_for(PanelTitleButton::Shade, false),
+            visible
+        );
+        assert_eq!(
+            equalizer_title_button_hit_rect_for(PanelTitleButton::Close, true),
+            panel_title_button_rect(
+                LayoutPanelKind::Equalizer,
+                PanelTitleButton::Close,
+                EQUALIZER_WINDOW_WIDTH,
+            )
+        );
+    }
+
+    #[test]
+    fn android_equalizer_shade_touch_target_preserves_drag_and_shaded_sliders() {
+        for shaded in [false, true] {
+            assert!(equalizer_titlebar_drag_excluded_for(227, 3, shaded, true));
+            assert!(!equalizer_titlebar_drag_excluded_for(226, 3, shaded, true));
+        }
+
+        let hit = equalizer_title_button_hit_rect_for(PanelTitleButton::Shade, true);
+        let balance = equalizer_slider_layout(EqualizerSlider::ShadedBalance).rect;
+        assert!(balance.x + balance.width < hit.x);
+        let close = panel_title_button_rect(
+            LayoutPanelKind::Equalizer,
+            PanelTitleButton::Close,
+            EQUALIZER_WINDOW_WIDTH,
+        );
+        assert!(hit.x + hit.width <= close.x);
     }
 }

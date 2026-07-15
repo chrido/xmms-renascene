@@ -43,13 +43,19 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
 }
 
 #[test]
-fn android_activity_handles_bevy_configuration_change_set() {
+fn android_activity_uses_sensor_autorotation_and_handles_configuration_changes() {
     let cargo = include_str!("../Cargo.toml");
     let packaging = include_str!("../scripts/repo.py");
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
     let changes = "layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode";
 
     assert!(cargo.contains(&format!("config_changes = \"{changes}\"")));
     assert!(packaging.contains(&format!("android:configChanges=\"{changes}\"")));
+    assert!(cargo.contains("orientation = \"sensor\""));
+    assert!(packaging.contains("android:screenOrientation=\"sensor\""));
+    assert!(!cargo.contains("orientation = \"unspecified\""));
+    assert!(!packaging.contains("android:screenOrientation=\"unspecified\""));
+    assert!(!java.contains("setRequestedOrientation("));
 }
 
 #[test]
@@ -59,9 +65,8 @@ fn android_winit_patch_uses_the_reproducible_git_fork() {
     let fork = "https://github.com/chrido/winit";
     let branch = "fix-window-configchanged-android";
 
-    assert!(cargo.contains(
-        "winit = { version = \"0.30.13\", optional = true, default-features = false"
-    ));
+    assert!(cargo
+        .contains("winit = { version = \"0.30.13\", optional = true, default-features = false"));
     assert!(cargo.contains("\"android-native-activity\""));
     assert!(cargo.contains(&format!(
         "winit = {{ git = \"{fork}\", branch = \"{branch}\" }}"
@@ -74,9 +79,7 @@ fn android_winit_patch_uses_the_reproducible_git_fork() {
         .collect();
     assert_eq!(winit_packages.len(), 1);
     assert!(winit_packages[0].contains("version = \"0.30.13\""));
-    assert!(winit_packages[0].contains(&format!(
-        "source = \"git+{fork}?branch={branch}#"
-    )));
+    assert!(winit_packages[0].contains(&format!("source = \"git+{fork}?branch={branch}#")));
 }
 
 #[test]
@@ -102,8 +105,8 @@ fn activity_exposes_atomic_window_geometry_and_insets_for_rotation_layout() {
 #[test]
 fn player_info_widget_is_packaged_and_opens_player() {
     let provider = include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java");
-    assert!(provider.contains("INFO_WIDTH = 157"));
-    assert!(provider.contains("INFO_HEIGHT = 26"));
+    assert!(provider.contains("INFO_WIDTH = 167"));
+    assert!(provider.contains("INFO_HEIGHT = 36"));
     assert!(provider.contains("FRAME_WIDTH = INFO_WIDTH + 4"));
     assert!(provider.contains("FRAME_HEIGHT = INFO_HEIGHT + 4"));
     assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE = 1000"));
@@ -131,8 +134,8 @@ fn player_info_widget_is_packaged_and_opens_player() {
     assert!(info.contains("android:initialLayout=\"@layout/widget_player_info\""));
     assert!(info.contains("android:previewImage=\"@drawable/widget_player_info_preview\""));
     assert!(info.contains("android:previewLayout=\"@layout/widget_player_info_preview\""));
-    assert!(info.contains("android:minWidth=\"161dp\""));
-    assert!(info.contains("android:minHeight=\"30dp\""));
+    assert!(info.contains("android:minWidth=\"171dp\""));
+    assert!(info.contains("android:minHeight=\"40dp\""));
     assert!(info.contains("android:resizeMode=\"horizontal|vertical\""));
 
     let packaging = include_str!("../scripts/repo.py");
@@ -191,7 +194,7 @@ fn widget_picker_metadata_has_visible_legacy_and_modern_previews() {
     assert_eq!(&player_png[..8], b"\x89PNG\r\n\x1a\n");
     assert_eq!(&info_png[..8], b"\x89PNG\r\n\x1a\n");
     let info_image = image::load_from_memory(info_png).unwrap().to_rgba8();
-    assert_eq!(info_image.dimensions(), (644, 120));
+    assert_eq!(info_image.dimensions(), (684, 160));
     assert!(info_image.pixels().all(|pixel| pixel.0[3] == 255));
     for x in 0..info_image.width() {
         for y in 0..8 {
@@ -227,18 +230,29 @@ fn player_info_widget_uses_shared_skin_and_exact_main_crop() {
     assert!(native.contains("render_player_info_color_image"));
     assert!(native.contains("title_offset_px"));
     assert!(native.contains("player_info_render_state("));
+    assert!(native.contains("super::skin_texture::PLAYER_INFO_WIDTH"));
+    assert!(native.contains("super::skin_texture::PLAYER_INFO_HEIGHT"));
+    assert!(native.contains("unexpected widget player information size"));
 
     let render = include_str!("../src/ui/egui/skin_texture.rs");
     for coordinate in [
         "PLAYER_INFO_X: usize = 111",
         "PLAYER_INFO_Y: usize = 27",
-        "PLAYER_INFO_WIDTH: usize = 157",
-        "PLAYER_INFO_HEIGHT: usize = 26",
+        "PLAYER_INFO_CONTENT_WIDTH: usize = 157",
+        "PLAYER_INFO_CONTENT_HEIGHT: usize = 26",
+        "PLAYER_INFO_EXPANSION: usize = 7",
+        "PLAYER_INFO_RIGHT_TRIM: usize = 4",
+        "PLAYER_INFO_BOTTOM_TRIM: usize = 4",
     ] {
         assert!(render.contains(coordinate), "missing {coordinate}");
     }
-    assert!(render.contains("for y in 0..PLAYER_INFO_HEIGHT"));
-    assert!(render.contains("&info.pixels[info_start..info_start + PLAYER_INFO_WIDTH]"));
+    assert!(render.contains("PLAYER_INFO_X - PLAYER_INFO_EXPANSION"));
+    assert!(render.contains("PLAYER_INFO_Y - PLAYER_INFO_EXPANSION"));
+    assert!(!render.contains("PLAYER_INFO_FEATHER"));
+    assert!(!render.contains("feather_color_image"));
+    assert!(!render.contains("flatten_color_image_onto_black"));
+    assert!(render.contains("(104, 20, 167, 36)"));
+    assert!(render.contains("without_atlas_bleeding"));
 }
 
 #[test]
@@ -257,10 +271,64 @@ fn player_info_widget_maps_title_audio_fields_and_channel_mode() {
     assert!(mapping.contains("channels: channels.max(0)"));
     assert!(mapping.contains("title_offset_px: title_offset_px.max(0)"));
 
-    let renderer = include_str!("../src/render/main.rs");
-    assert!(renderer.contains("2 => (0, 12)"));
-    assert!(renderer.contains("1 => (12, 0)"));
-    assert!(renderer.contains("_ => (12, 12)"));
+    let widgets = include_str!("../src/skin/widget.rs");
+    let channel_layout = widgets
+        .split("pub(crate) fn mono_stereo_segments(")
+        .nth(1)
+        .expect("shared mono/stereo segment layout")
+        .split("#[cfg(test)]")
+        .next()
+        .expect("shared mono/stereo segment layout body");
+    assert!(channel_layout.contains("2 => (0, 12)"));
+    assert!(channel_layout.contains("1 => (12, 0)"));
+    assert!(channel_layout.contains("_ => (12, 12)"));
+}
+
+#[test]
+fn player_info_widget_formats_persisted_raw_track_data_in_rust() {
+    let provider = include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java");
+    assert!(provider.contains("KEY_FILENAME"));
+    assert!(provider.contains("KEY_METADATA_TITLE"));
+    assert!(provider.contains(".putString(KEY_FILENAME, state.filename)"));
+    assert!(provider.contains(".putString(KEY_METADATA_TITLE, state.metadataTitle)"));
+    assert!(!provider.contains(".putString(KEY_TITLE"));
+    assert!(provider.contains("nativeFormatPlayerTitle("));
+    assert!(provider.contains("preferences.getString(KEY_FILENAME, \"\")"));
+    assert!(provider.contains("preferences.getString(KEY_METADATA_TITLE, \"\")"));
+
+    let native = include_str!("../src/ui/egui/android_file_picker.rs");
+    let formatter = native
+        .split("fn format_persisted_widget_title(")
+        .nth(1)
+        .expect("persisted widget title formatter")
+        .split("fn with_widget_skin")
+        .next()
+        .expect("persisted widget title formatter body");
+    assert!(formatter.contains("Config::load_from_file(&config_path)"));
+    assert!(formatter.contains("Config::default()"));
+    assert!(formatter.contains("format_title_for_preferences("));
+    assert!(formatter.contains("&config.title_format"));
+    assert!(native.contains("Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeFormatPlayerTitle"));
+}
+
+#[test]
+fn widget_raw_title_data_crosses_warm_and_cold_playback_paths() {
+    let activity = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    assert!(activity.contains("String filename"));
+    assert!(activity.contains("String metadataTitle"));
+    assert!(activity.contains("XmmsPlaybackService.EXTRA_FILENAME"));
+    assert!(activity.contains("XmmsPlaybackService.EXTRA_METADATA_TITLE"));
+
+    let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
+    assert!(service.contains("private String playbackFilename = \"\""));
+    assert!(service.contains("private String playbackMetadataTitle = \"\""));
+    assert!(service.contains("playbackFilename.equals(normalizedFilename)"));
+    assert!(service.contains("playbackMetadataTitle.equals(normalizedMetadataTitle)"));
+    assert!(service.contains("playbackFilename,\n                    playbackMetadataTitle,"));
+
+    let native = include_str!("../src/ui/egui/android_file_picker.rs");
+    assert!(native.contains("entry.filename.clone(),\n        entry.title.clone(),"));
+    assert!(native.contains("(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;IIIJJJIZZ)V"));
 }
 
 #[test]
@@ -492,4 +560,18 @@ fn native_widget_renderer_maps_controls_to_pressed_sprites() {
         );
     }
     assert!(render.contains("render_transport_buttons_color_image(skin, pressed)"));
+}
+
+#[test]
+fn android_eframe_redraw_returns_to_wait_instead_of_polling() {
+    let cargo = include_str!("../Cargo.toml");
+    let lock = include_str!("../Cargo.lock");
+    let revision = "b7ba8277edff50a8effced89c8db9b12e8d41ff5";
+
+    assert!(cargo.contains(&format!(
+        "eframe = {{ git = \"https://github.com/chrido/egui\", rev = \"{revision}\" }}"
+    )));
+    assert!(lock.contains(&format!(
+        "source = \"git+https://github.com/chrido/egui?rev={revision}#{revision}\""
+    )));
 }

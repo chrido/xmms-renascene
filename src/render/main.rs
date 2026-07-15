@@ -10,8 +10,8 @@ use crate::skin::layout::{
     MainToggleButton, SkinRect, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::widget::{
-    NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisMode, VisScopeMode,
-    VisVuMode,
+    mono_stereo_segments, NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle,
+    VisMode, VisScopeMode, VisVuMode,
 };
 use crate::skin::{DefaultSkin, SkinPixmapKind};
 
@@ -202,7 +202,9 @@ pub fn render_main_player_state(
     }
 
     if state.shaded {
-        render_windowshade_visualization(cr, skin, 79, 5, &state.visualization)?;
+        if state.play_status != PlayStatusValue::Stopped {
+            render_windowshade_visualization(cr, skin, 79, 5, &state.visualization)?;
+        }
         render_text(cr, skin, &state.shaded_time_min, 130, 4, 15)?;
         render_text(cr, skin, &state.shaded_time_sec, 147, 4, 10)?;
         if state.shaded_position_visible {
@@ -348,7 +350,9 @@ pub fn render_main_player_state(
         rendered |= render_number(cr, skin, *value, x, 26)?;
     }
 
-    render_visualization(cr, skin, 24, 43, 76, &state.visualization)?;
+    if state.play_status != PlayStatusValue::Stopped {
+        render_visualization(cr, skin, 24, 43, 76, &state.visualization)?;
+    }
     if state.shaded {
         render_windowshade_visualization(cr, skin, 79, 5, &state.visualization)?;
     }
@@ -433,6 +437,7 @@ fn render_visualization_reset(
     cr.save()?;
     cr.rectangle(f64::from(xdest), f64::from(ydest), f64::from(width), 16.0);
     cr.clip();
+    cr.new_path();
     cr.set_source_rgb(
         f64::from(bg[0]) / 255.0,
         f64::from(bg[1]) / 255.0,
@@ -463,10 +468,10 @@ pub fn render_visualization(
     width: i32,
     state: &VisualizationRenderState,
 ) -> Result<(), RenderError> {
-    render_visualization_reset(cr, skin, xdest, ydest, width)?;
     if state.mode == VisMode::Off {
         return Ok(());
     }
+    render_visualization_reset(cr, skin, xdest, ydest, width)?;
 
     let mut levels = [0; SPECTRUM_BANDS];
     for (index, value) in state.data.iter().enumerate() {
@@ -490,17 +495,17 @@ pub fn render_windowshade_visualization(
     ydest: i32,
     state: &VisualizationRenderState,
 ) -> Result<(), RenderError> {
+    if state.mode == VisMode::Off {
+        return Ok(());
+    }
+
     let colors = skin.vis_colors();
     cr.save()?;
     cr.rectangle(f64::from(xdest), f64::from(ydest), 38.0, 5.0);
     cr.clip();
+    cr.new_path();
     set_vis_color(cr, colors, 0);
     cr.paint()?;
-
-    if state.mode == VisMode::Off {
-        cr.restore()?;
-        return Ok(());
-    }
 
     if state.mode == VisMode::Scope {
         const SCOPE_COLORS: [usize; 5] = [20, 19, 18, 19, 20];
@@ -786,24 +791,20 @@ fn render_mono_stereo(
     xdest: i32,
     ydest: i32,
 ) -> Result<bool, RenderError> {
-    let (stereo_y, mono_y) = match channels {
-        2 => (0, 12),
-        1 => (12, 0),
-        _ => (12, 12),
-    };
-    let mut rendered = blit_skin_rect(
-        cr,
-        skin,
-        SkinPixmapKind::MonoStereo,
-        SkinRect::new(0, stereo_y, 29, 12),
-        (xdest, ydest),
-    )?;
-    rendered |= blit_skin_rect(
-        cr,
-        skin,
-        SkinPixmapKind::MonoStereo,
-        SkinRect::new(29, mono_y, 27, 12),
-        (xdest + 29, ydest),
-    )?;
+    let mut rendered = false;
+    for segment in mono_stereo_segments(SkinPixmapKind::MonoStereo, channels) {
+        rendered |= blit_skin_rect(
+            cr,
+            skin,
+            segment.source.kind,
+            SkinRect::new(
+                segment.source.x,
+                segment.source.y,
+                segment.width,
+                segment.height,
+            ),
+            (xdest + segment.dest_x, ydest),
+        )?;
+    }
     Ok(rendered)
 }

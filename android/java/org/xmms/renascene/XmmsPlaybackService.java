@@ -38,6 +38,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     static final String EXTRA_WIDGET_CONTROL = "widgetControl";
     static final String EXTRA_STATE = "state";
     static final String EXTRA_TITLE = "title";
+    static final String EXTRA_FILENAME = "filename";
+    static final String EXTRA_METADATA_TITLE = "metadataTitle";
     static final String EXTRA_BITRATE = "bitrate";
     static final String EXTRA_FREQUENCY = "frequency";
     static final String EXTRA_CHANNELS = "channels";
@@ -104,6 +106,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     private int playbackState;
     private String playbackTitle = "XMMS Renascene";
+    private String playbackFilename = "";
+    private String playbackMetadataTitle = "";
     private int playbackBitrate;
     private int playbackFrequency;
     private int playbackChannels;
@@ -227,6 +231,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         applyNativePlaybackState(
                 intent.getIntExtra(EXTRA_STATE, 0),
                 intent.getStringExtra(EXTRA_TITLE),
+                intent.getStringExtra(EXTRA_FILENAME),
+                intent.getStringExtra(EXTRA_METADATA_TITLE),
                 intent.getIntExtra(EXTRA_BITRATE, 0),
                 intent.getIntExtra(EXTRA_FREQUENCY, 0),
                 intent.getIntExtra(EXTRA_CHANNELS, 0),
@@ -242,6 +248,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     public void applyNativePlaybackState(
             int state,
             String title,
+            String filename,
+            String metadataTitle,
             int bitrate,
             int frequency,
             int channels,
@@ -253,17 +261,23 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             boolean next) {
         String normalizedTitle =
                 title == null || title.isEmpty() ? "XMMS Renascene" : title;
+        String normalizedFilename = filename == null ? "" : filename;
+        String normalizedMetadataTitle = metadataTitle == null ? "" : metadataTitle;
         int normalizedBitrate = Math.max(0, bitrate);
         int normalizedFrequency = Math.max(0, frequency);
         int normalizedChannels = Math.max(0, channels);
         boolean playbackChanged = playbackState != state;
         boolean infoChanged =
                 !playbackTitle.equals(normalizedTitle)
+                        || !playbackFilename.equals(normalizedFilename)
+                        || !playbackMetadataTitle.equals(normalizedMetadataTitle)
                         || playbackBitrate != normalizedBitrate
                         || playbackFrequency != normalizedFrequency
                         || playbackChannels != normalizedChannels;
         playbackState = state;
         playbackTitle = normalizedTitle;
+        playbackFilename = normalizedFilename;
+        playbackMetadataTitle = normalizedMetadataTitle;
         playbackBitrate = normalizedBitrate;
         playbackFrequency = normalizedFrequency;
         playbackChannels = normalizedChannels;
@@ -281,7 +295,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             XmmsPlayerInfoWidget.updateAll(
                     this,
                     playbackState,
-                    playbackTitle,
+                    playbackFilename,
+                    playbackMetadataTitle,
                     playbackBitrate,
                     playbackFrequency,
                     playbackChannels);
@@ -598,7 +613,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         XmmsPlayerInfoWidget.updateAll(
                 this,
                 playbackState,
-                playbackTitle,
+                playbackFilename,
+                playbackMetadataTitle,
                 playbackBitrate,
                 playbackFrequency,
                 playbackChannels);

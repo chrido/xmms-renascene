@@ -10,12 +10,37 @@ import java.util.List;
 
 public final class XmmsAutoProbeActivity extends Activity {
     private static final String TAG = "XMMS_AUTO_PROBE";
+    private static final String EXTRA_WIDGET_FILENAME = "widgetFilename";
+    private static final String EXTRA_WIDGET_METADATA_TITLE = "widgetMetadataTitle";
+    private static final String EXTRA_PERSIST_WIDGET_STATE = "persistWidgetState";
+    private static final String EXTRA_LOAD_PERSISTED_WIDGET_TITLE = "loadPersistedWidgetTitle";
 
     private MediaBrowser browser;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (getIntent().getBooleanExtra(EXTRA_LOAD_PERSISTED_WIDGET_TITLE, false)) {
+            Log.i(TAG, "widget title=" + XmmsPlayerInfoWidget.persistedTitle(this));
+            finish();
+            return;
+        }
+        if (getIntent().hasExtra(EXTRA_WIDGET_FILENAME)) {
+            String filename = getIntent().getStringExtra(EXTRA_WIDGET_FILENAME);
+            String metadataTitle =
+                    getIntent().getStringExtra(EXTRA_WIDGET_METADATA_TITLE);
+            if (getIntent().getBooleanExtra(EXTRA_PERSIST_WIDGET_STATE, false)) {
+                XmmsPlayerInfoWidget.updateAll(
+                        this, 0, filename, metadataTitle, 0, 0, 0);
+            }
+            String title = XmmsPlayerInfoWidget.formatTitle(
+                    this,
+                    filename,
+                    metadataTitle);
+            Log.i(TAG, "widget title=" + title);
+            finish();
+            return;
+        }
         browser = new MediaBrowser(
                 this,
                 new ComponentName(this, XmmsPlaybackService.class),

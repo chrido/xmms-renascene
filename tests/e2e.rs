@@ -729,6 +729,23 @@ fn clicked_playlist_rows_update_single_selection() {
 }
 
 #[test]
+fn clicking_playlist_row_while_playing_only_changes_selection() {
+    let mut app = playlist_app();
+
+    app.drop_on_playlist(["file:///music/first.ogg", "file:///music/second.ogg"])
+        .double_click_playlist_row(0)
+        .assert_playlist_position(Some(0))
+        .assert_last_playback_request(Some("file:///music/first.ogg"))
+        .click_playlist_row(1)
+        .assert_playlist_entry_selected(0, false)
+        .assert_playlist_entry_selected(1, true)
+        .assert_playlist_position(Some(0))
+        .assert_current_playlist_entry("file:///music/first.ogg")
+        .assert_last_playback_request(Some("file:///music/first.ogg"))
+        .assert_player_state(PlayerState::Playing);
+}
+
+#[test]
 fn ctrl_tab_cycles_visible_player_equalizer_playlist() {
     let mut app = docked_panels_app();
 
@@ -817,15 +834,15 @@ fn docked_title_focus_routes_vertical_arrows() {
         .click_playlist_row(1)
         .assert_docked_panel_focused(PanelKind::Playlist, true)
         .press_docked_arrow_right()
-        .assert_position(121)
+        .assert_position(21)
         .press_docked_arrow_left()
-        .assert_position(99)
+        .assert_position(0)
         .click_docked_panel(PanelTarget::EqualizerOn)
         .assert_docked_panel_focused(PanelKind::Equalizer, true)
         .press_docked_arrow_right()
-        .assert_position(121)
+        .assert_position(21)
         .press_docked_arrow_left()
-        .assert_position(99)
+        .assert_position(0)
         .press_shortcut(Shortcut::ShadeMain)
         .assert_equalizer_shaded()
         .press_docked_arrow_right()

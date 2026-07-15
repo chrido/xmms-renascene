@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 from conftest import (
     EGUI_FRONTEND,
     assert_app_log_contains,
@@ -28,6 +30,22 @@ from gui import (
 
 EGUI_PLAYLIST_TITLE = "Playlist"
 PLAYLIST_FIRST_ROW_RECT = SkinRect(12, 20, PLAYLIST_DEFAULT_WIDTH - 31, 11)
+MAIN_TIMER_RECT = SkinRect(39, 26, 59, 13)
+
+
+def main_skin_region_pixels(window: MainWindow, rect: SkinRect, path: Path) -> bytes:
+    screenshot_window(window.window_id, path)
+    geometry = window.geometry()
+    scale = geometry.width / 275
+    with Image.open(path) as screenshot:
+        return screenshot.convert("RGB").crop(
+            (
+                round(rect.x * scale),
+                round(rect.y * scale),
+                round((rect.x + rect.width) * scale),
+                round((rect.y + rect.height) * scale),
+            )
+        ).tobytes()
 
 
 def focus_detached_window_for_xvfb(main_window: MainWindow, window_id: str) -> None:
@@ -85,20 +103,37 @@ def start_detached_playlist_app(
 def test_egui_detached_playlist_double_click_starts_selected_track(
     tmp_path: Path,
     generated_tracks: list[Path],
+    test_output: Any,
 ) -> None:
     with start_detached_playlist_app(tmp_path, generated_tracks) as process:
         assert isinstance(process, subprocess.Popen)
-        _main_window: MainWindow = wait_for_main_window_with_log(process)
+        main_window: MainWindow = wait_for_main_window_with_log(process)
         playlist_window = wait_for_visible_window(EGUI_PLAYLIST_TITLE, process=process)
-        focus_detached_window_for_xvfb(_main_window, playlist_window)
+        focus_detached_window_for_xvfb(main_window, playlist_window)
 
         double_click_detached_rect(playlist_window, PLAYLIST_FIRST_ROW_RECT)
 
         assert_app_log_contains(
             process,
-            "command Playlist(SetPosition(0))",
-            "command Player(StartCurrentTrack)",
+            "command Playlist(ActivateEntry(0))",
         )
+        first = main_skin_region_pixels(
+            main_window,
+            MAIN_TIMER_RECT,
+            test_output.screenshot_path(),
+        )
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            time.sleep(0.2)
+            current = main_skin_region_pixels(
+                main_window,
+                MAIN_TIMER_RECT,
+                test_output.screenshot_path(),
+            )
+            if current != first:
+                break
+        else:
+            raise AssertionError("elapsed time did not redraw after playlist activation")
 
 
 def test_egui_detached_playlist_scrollbar_drag_updates_visible_rows(

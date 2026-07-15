@@ -12,7 +12,7 @@ use xmms_renascene::render::{
     PLAYLIST_DEFAULT_WIDTH,
 };
 use xmms_renascene::render::{Context, Format, ImageSurface};
-use xmms_renascene::skin::widget::{VisAnalyzerMode, VisMode, VisScopeMode};
+use xmms_renascene::skin::widget::{PlayStatusValue, VisAnalyzerMode, VisMode, VisScopeMode};
 use xmms_renascene::skin::{DefaultSkin, SkinPixmapKind};
 
 fn repo_root() -> PathBuf {
@@ -521,4 +521,95 @@ fn analyzer_and_scope_submodes_change_rendered_output() {
         rendered_visualization_bytes(dot),
         rendered_visualization_bytes(solid)
     );
+}
+
+#[test]
+fn inactive_unshaded_visualization_preserves_main_skin_pixels() {
+    let skin = default_skin();
+    let main = surface_from_xpm(skin.get(SkinPixmapKind::Main).unwrap()).unwrap();
+
+    for state in [
+        MainWindowRenderState::default(),
+        MainWindowRenderState {
+            play_status: PlayStatusValue::Playing,
+            visualization: VisualizationRenderState {
+                mode: VisMode::Off,
+                ..VisualizationRenderState::default()
+            },
+            ..MainWindowRenderState::default()
+        },
+    ] {
+        let mut rendered =
+            render_with_skin(&skin, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, |cr, skin| {
+                render_main_player_state(cr, skin, &state).unwrap();
+            });
+        let mut expected = main.clone();
+        for y in 0..16 {
+            for x in 0..76 {
+                assert_eq!(
+                    pixel_rgb(&mut rendered, 24 + x, 43 + y),
+                    pixel_rgb(&mut expected, 24 + x, 43 + y),
+                    "visualization pixel ({x}, {y})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn active_analyzer_uses_viscolor_background_and_grid() {
+    let skin = default_skin();
+    let state = MainWindowRenderState {
+        play_status: PlayStatusValue::Playing,
+        ..MainWindowRenderState::default()
+    };
+    let mut rendered =
+        render_with_skin(&skin, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, |cr, skin| {
+            render_main_player_state(cr, skin, &state).unwrap();
+        });
+
+    assert_eq!(pixel_rgb(&mut rendered, 24, 43), skin.vis_colors()[0]);
+    assert_eq!(pixel_rgb(&mut rendered, 24, 44), skin.vis_colors()[1]);
+    assert_eq!(pixel_rgb(&mut rendered, 25, 44), skin.vis_colors()[0]);
+}
+
+#[test]
+fn inactive_windowshade_visualization_preserves_titlebar_pixels() {
+    let skin = default_skin();
+    let titlebar = surface_from_xpm(skin.get(SkinPixmapKind::Titlebar).unwrap()).unwrap();
+
+    for state in [
+        MainWindowRenderState {
+            shaded: true,
+            ..MainWindowRenderState::default()
+        },
+        MainWindowRenderState {
+            shaded: true,
+            play_status: PlayStatusValue::Playing,
+            visualization: VisualizationRenderState {
+                mode: VisMode::Off,
+                ..VisualizationRenderState::default()
+            },
+            ..MainWindowRenderState::default()
+        },
+    ] {
+        let mut rendered = render_with_skin(
+            &skin,
+            MAIN_WINDOW_WIDTH,
+            MAIN_TITLEBAR_HEIGHT,
+            |cr, skin| {
+                render_main_player_state(cr, skin, &state).unwrap();
+            },
+        );
+        let mut expected = titlebar.clone();
+        for y in 0..5 {
+            for x in 0..38 {
+                assert_eq!(
+                    pixel_rgb(&mut rendered, 79 + x, 5 + y),
+                    pixel_rgb(&mut expected, 106 + x, 34 + y),
+                    "windowshade visualization pixel ({x}, {y})"
+                );
+            }
+        }
+    }
 }

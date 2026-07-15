@@ -47,17 +47,14 @@ pub fn playlist_row_click_commands(
     multi_select_modifier: bool,
 ) -> Vec<AppCommand> {
     if double_click {
-        return vec![
-            PlaylistCommand::SetPosition(index).into(),
-            PlayerCommand::StartCurrentTrack.into(),
-        ];
+        return vec![PlaylistCommand::ActivateEntry(index).into()];
     }
     if multi_select_modifier {
         return vec![PlaylistCommand::ToggleEntrySelection(index).into()];
     }
     vec![
         PlaylistCommand::SelectNone.into(),
-        PlaylistCommand::ToggleEntrySelection(index).into(),
+        PlaylistCommand::SelectEntry(index).into(),
     ]
 }
 
@@ -164,12 +161,9 @@ mod tests {
     fn playlist_row_click_commands_match_frontend_selection_semantics() {
         let single = vec![
             PlaylistCommand::SelectNone.into(),
-            PlaylistCommand::ToggleEntrySelection(3).into(),
+            PlaylistCommand::SelectEntry(3).into(),
         ];
-        let play = vec![
-            PlaylistCommand::SetPosition(3).into(),
-            PlayerCommand::StartCurrentTrack.into(),
-        ];
+        let play = vec![PlaylistCommand::ActivateEntry(3).into()];
         assert_eq!(playlist_row_click_commands(3, false, false), single);
         assert_eq!(
             playlist_row_click_commands(3, false, true),
@@ -224,10 +218,7 @@ mod tests {
             playlist_play_first_selected_commands(&playlist, PlayerState::Stopped),
             Some(PlaylistSelectedPlaybackCommands {
                 selected_index: 0,
-                commands: vec![
-                    PlaylistCommand::SetPosition(0).into(),
-                    PlayerCommand::StartCurrentTrack.into(),
-                ],
+                commands: vec![PlaylistCommand::ActivateEntry(0).into()],
             })
         );
     }
@@ -246,10 +237,7 @@ mod tests {
             playlist_play_first_selected_commands(&playlist, PlayerState::Paused),
             Some(PlaylistSelectedPlaybackCommands {
                 selected_index: 1,
-                commands: vec![
-                    PlaylistCommand::SetPosition(1).into(),
-                    PlayerCommand::StartCurrentTrack.into(),
-                ],
+                commands: vec![PlaylistCommand::ActivateEntry(1).into()],
             })
         );
 

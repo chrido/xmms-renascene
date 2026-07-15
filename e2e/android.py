@@ -279,23 +279,44 @@ class AndroidDevice:
         raise TimeoutError(f"Android external file was not created: {path}")
 
     def set_portrait(self) -> None:
-        self._set_rotation(0)
+        self._set_physical_orientation(landscape=False)
 
     def set_landscape(self) -> None:
-        self._set_rotation(1)
+        self._set_physical_orientation(landscape=True)
 
-    def _set_rotation(self, rotation: int) -> None:
+    def _set_physical_orientation(self, *, landscape: bool) -> None:
         self.shell("settings", "put", "system", "accelerometer_rotation", "0")
-        self.shell("settings", "put", "system", "user_rotation", str(rotation))
-        expected_landscape = rotation in {1, 3}
+        self.shell("settings", "put", "system", "user_rotation", "0")
+        for _ in range(4):
+            acceleration = self.command(
+                "emu", "sensor", "get", "acceleration"
+            ).stdout
+            match = re.search(
+                r"acceleration = ([^:]+):([^:]+):", acceleration
+            )
+            if match is None:
+                raise AssertionError(
+                    f"Could not determine emulator orientation: {acceleration.strip()}"
+                )
+            x, y = map(float, match.groups())
+            is_landscape = abs(x) > abs(y)
+            is_upright_portrait = not is_landscape and y > 0
+            if is_landscape == landscape and (landscape or is_upright_portrait):
+                break
+            self.command("emu", "rotate")
+            time.sleep(0.5)
+        else:
+            raise TimeoutError("Android emulator did not reach the requested orientation")
+
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             geometry = self.display_geometry()
-            if (geometry.width > geometry.height) == expected_landscape:
+            if (geometry.width > geometry.height) == landscape:
                 time.sleep(0.5)
                 return
             time.sleep(0.2)
-        raise TimeoutError(f"Android display did not rotate to {rotation}")
+        orientation = "landscape" if landscape else "portrait"
+        raise TimeoutError(f"Android display did not rotate to {orientation}")
 
     def display_geometry(self) -> DisplayGeometry:
         window_dump = self.shell("dumpsys", "window").stdout
