@@ -23,6 +23,7 @@ ANDROID_ACTIVITY = f"{ANDROID_PACKAGE}/org.xmms.renascene.XmmsActivity"
 ANDROID_AUTO_PROBE_ACTIVITY = (
     f"{ANDROID_PACKAGE}/org.xmms.renascene.XmmsAutoProbeActivity"
 )
+ANDROID_HOME_PACKAGE = "com.google.android.apps.nexuslauncher"
 MAIN_PLAYER_BASE_HEIGHT = 116
 
 
@@ -151,6 +152,10 @@ class AndroidDevice:
         self.shell("input", "keyevent", "4")
         time.sleep(1.0)
         return pid
+
+    def go_home(self) -> None:
+        self.shell("input", "keyevent", "3")
+        self.wait_for_focus(ANDROID_HOME_PACKAGE)
 
     def start_activity(self) -> None:
         self.clear_logcat()
