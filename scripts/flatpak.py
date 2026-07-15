@@ -109,28 +109,12 @@ class FlatpakInstaller:
             for package in cargo_lock["package"]
             if package.get("source", "").startswith("git+")
         ]
-        cargo_metadata = {}
         package_target = REPO_DIR / ".flatpak-cargo-package"
+        git_target = REPO_DIR / ".flatpak-cargo-git"
+        git_staging_target = REPO_DIR / ".flatpak-cargo-git.new"
         if git_packages:
-            metadata = subprocess.run(
-                [
-                    "cargo",
-                    "metadata",
-                    "--locked",
-                    "--format-version",
-                    "1",
-                    "--all-features",
-                ],
-                cwd=REPO_DIR,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            cargo_metadata = {
-                (package["name"], package["version"], package["source"]): package
-                for package in json.loads(metadata.stdout)["packages"]
-            }
             shutil.rmtree(package_target, ignore_errors=True)
+            shutil.rmtree(git_staging_target, ignore_errors=True)
             subprocess.run(
                 [
                     "cargo",
@@ -147,70 +131,25 @@ class FlatpakInstaller:
         for package in cargo_lock["package"]:
             source = package.get("source", "")
             if source.startswith("git+"):
-                parsed = urlsplit(source.removeprefix("git+"))
-                commit = parsed.fragment
-                repo_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-                query = parse_qs(parsed.query)
-                source_entry = {"git": repo_url, "replace-with": "vendored-sources"}
-                for ref_kind in ("branch", "tag", "rev"):
-                    if ref_kind in query:
-                        source_entry[ref_kind] = query[ref_kind][0]
-                        break
-                source_config[repo_url] = source_entry
-
-                repo_name = f"{Path(parsed.path).stem}-{commit[:7]}"
-                repo_dest = f"flatpak-cargo/git/{repo_name}"
-                repo_key = (repo_url, commit)
-                if repo_key not in seen:
-                    seen.add(repo_key)
-                    sources.append(
-                        {
-                            "type": "git",
-                            "url": repo_url,
-                            "commit": commit,
-                            "dest": repo_dest,
-                        }
-                    )
-
                 name = package["name"]
                 version = package["version"]
-                metadata_package = cargo_metadata[(name, version, source)]
-                manifest_path = Path(metadata_package["manifest_path"])
-                checkout_root = next(
-                    parent
-                    for parent in (manifest_path.parent, *manifest_path.parents)
-                    if (parent / ".cargo-ok").exists()
-                )
-                package_path = manifest_path.parent.relative_to(checkout_root)
-                source_path = Path(repo_dest) / package_path
                 crate_dir = f"{name}-{version}"
-                cargo_toml = (package_target / crate_dir / "Cargo.toml").read_text()
+                vendored_package = package_target / crate_dir
+                if not vendored_package.is_dir():
+                    raise RuntimeError(f"cargo vendor did not produce {crate_dir}")
+                shutil.copytree(vendored_package, git_staging_target / crate_dir)
+                sources.append({"type": "dir", "path": f".flatpak-cargo-git/{crate_dir}", "dest": f"cargo/vendor/{crate_dir}"})
 
-                sources.append(
-                    {
-                        "type": "shell",
-                        "commands": [
-                            f'mkdir -p "cargo/vendor/{crate_dir}"',
-                            f'cp -a --reflink=auto "{source_path}/." "cargo/vendor/{crate_dir}/"',
-                        ],
-                    }
-                )
-                sources.append(
-                    {
-                        "type": "inline",
-                        "dest": f"cargo/vendor/{crate_dir}",
-                        "dest-filename": "Cargo.toml",
-                        "contents": cargo_toml,
-                    }
-                )
-                sources.append(
-                    {
-                        "type": "inline",
-                        "dest": f"cargo/vendor/{crate_dir}",
-                        "dest-filename": ".cargo-checksum.json",
-                        "contents": json.dumps({"package": None, "files": {}}),
-                    }
-                )
+                source_name = source.rsplit("#", 1)[0]
+                parsed = urlsplit(source.removeprefix("git+"))
+                repo_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+                source_config[source_name] = {"git": repo_url, "replace-with": "vendored-sources"}
+                query = parse_qs(parsed.query)
+                for key in ("branch", "tag", "rev"):
+                    if key in query:
+                        source_config[source_name][key] = query[key][0]
+                        break
+                seen.add(source_name)
                 continue
             if source != "registry+https://github.com/rust-lang/crates.io-index":
                 continue
@@ -230,7 +169,15 @@ class FlatpakInstaller:
                 config_lines.append(f'{key} = {json.dumps(value)}')
             config_lines.append("")
         sources.append({"type": "inline", "dest": ".cargo", "dest-filename": "config.toml", "contents": "\n".join(config_lines)})
-        Path("cargo-sources.json").write_text(json.dumps(sources, indent=2) + "\n")
+        cargo_sources = REPO_DIR / "cargo-sources.json"
+        cargo_sources_staging = REPO_DIR / "cargo-sources.json.new"
+        cargo_sources_staging.write_text(json.dumps(sources, indent=2) + "\n")
+        if git_packages:
+            shutil.rmtree(git_target, ignore_errors=True)
+            git_staging_target.rename(git_target)
+        else:
+            shutil.rmtree(git_target, ignore_errors=True)
+        cargo_sources_staging.replace(cargo_sources)
         shutil.rmtree(package_target, ignore_errors=True)
         logging.info("Generated cargo-sources.json with %d sources", len(seen))
 

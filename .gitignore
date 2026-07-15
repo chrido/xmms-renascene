@@ -3,6 +3,8 @@ testoutput/
 dist/
 build-flatpak/
 .flatpak-builder/
+.flatpak-cargo-*/
+cargo-sources.json
 .pi-lens/
 __pycache__/
 *.pyc
