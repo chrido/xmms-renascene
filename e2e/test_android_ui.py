@@ -133,32 +133,52 @@ def test_android_preferences_use_touch_layout_and_back_navigation(
     android_device.restart_app(reset_data=True)
     original_pid = android_device.app_pid()
 
+    player = android_device.framebuffer_png()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
-    categories = android_device.screenshot(test_output.screenshot_path())
+    categories = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=player,
+    )
 
     android_device.tap_usable_fraction(0.5, 0.22)
-    player_page = android_device.screenshot(test_output.screenshot_path())
+    player_page = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=categories,
+    )
     android_device.swipe_usable_fraction(0.20, 0.5, 0.70, 0.5)
-    categories_after_back = android_device.screenshot(test_output.screenshot_path())
+    categories_after_back = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=player_page,
+    )
     android_device.tap_usable_fraction(0.5, 0.463)
-    skins_page = android_device.screenshot(test_output.screenshot_path())
+    skins_page = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=categories_after_back,
+    )
     android_device.swipe_usable_fraction(0.20, 0.5, 0.70, 0.5)
-    categories_after_skin_back = android_device.screenshot(
-        test_output.screenshot_path()
+    categories_after_skin_back = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=skins_page,
     )
     android_device.tap_usable_fraction(0.13, 0.045)
-    closed = android_device.screenshot(test_output.screenshot_path())
+    closed = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=categories_after_skin_back,
+    )
 
     android_device.assert_log_contains(
         "command Ui(SetPreferencesVisible(true))",
         "command Ui(SetPreferencesVisible(false))",
     )
     assert android_device.app_pid() == original_pid
-    assert categories.read_bytes() != player_page.read_bytes()
-    assert categories.read_bytes() == categories_after_back.read_bytes()
-    assert categories.read_bytes() != skins_page.read_bytes()
-    assert categories.read_bytes() == categories_after_skin_back.read_bytes()
-    assert categories.read_bytes() != closed.read_bytes()
+    assert not android_device.rendered_screens_match(categories, player_page)
+    assert android_device.rendered_screens_match(categories, categories_after_back)
+    assert not android_device.rendered_screens_match(categories, skins_page)
+    assert android_device.rendered_screens_match(
+        categories,
+        categories_after_skin_back,
+    )
+    assert not android_device.rendered_screens_match(categories, closed)
 
 
 def test_android_equalizer_presets_menu_saves_winamp_eqf(
@@ -211,16 +231,23 @@ def test_android_menu_button_opens_preferences_directly(
     android_device.restart_app(reset_data=True)
     player_bounds = android_device.main_player_bounds()
 
+    player = android_device.framebuffer_png()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU], player_bounds)
-    preferences = android_device.screenshot(test_output.screenshot_path())
+    preferences = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=player,
+    )
     android_device.tap_usable_fraction(0.13, 0.045)
-    player = android_device.screenshot(test_output.screenshot_path())
+    player_after_close = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=preferences,
+    )
 
     android_device.assert_log_contains(
         "command Ui(SetPreferencesVisible(true))",
         "command Ui(SetPreferencesVisible(false))",
     )
-    assert preferences.read_bytes() != player.read_bytes()
+    assert not android_device.rendered_screens_match(preferences, player_after_close)
 
 
 def test_android_landscape_uses_full_height_and_accepts_skin_taps(
@@ -676,7 +703,9 @@ def test_android_playlist_swipe_down_pauses_and_does_not_resume(
         500,
         timeout=5.0,
     )
+    background = android_device.framebuffer_png()
     android_device.start_activity()
+    android_device.wait_for_rendered_screen(changed_from=background)
 
     _swipe_playlist_down(android_device, touched_index=0)
 
@@ -717,7 +746,9 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
         1_500,
         timeout=5.0,
     )
+    background = android_device.framebuffer_png()
     android_device.start_activity()
+    android_device.wait_for_rendered_screen(changed_from=background)
 
     _swipe_playlist_up(android_device, touched_index=1)
 

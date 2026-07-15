@@ -384,6 +384,70 @@ class AndroidDevice:
             raise AssertionError("Could not capture the Android framebuffer")
         return result.stdout
 
+    def wait_for_rendered_screen(
+        self,
+        *,
+        changed_from: bytes | Path | None = None,
+        timeout: float = 5.0,
+        stable_for: float = 0.3,
+        minimum_changed_fraction: float = 0.01,
+    ) -> bytes:
+        geometry = self.display_geometry()
+        reference = (
+            _rendered_screen_pixels(changed_from, geometry)
+            if changed_from is not None
+            else None
+        )
+        deadline = time.monotonic() + timeout
+        candidate: tuple[tuple[int, int], bytes] | None = None
+        candidate_since = 0.0
+        latest_png = b""
+        while time.monotonic() < deadline:
+            latest_png = self.framebuffer_png()
+            rendered = _rendered_screen_pixels(latest_png, geometry)
+            if reference is not None and (
+                _changed_byte_fraction(reference, rendered)
+                < minimum_changed_fraction
+            ):
+                candidate = None
+                time.sleep(0.1)
+                continue
+            now = time.monotonic()
+            if rendered != candidate:
+                candidate = rendered
+                candidate_since = now
+            elif now - candidate_since >= stable_for:
+                return latest_png
+            time.sleep(0.1)
+        expectation = (
+            "change and stabilize" if reference is not None else "stabilize"
+        )
+        raise AssertionError(
+            f"Android framebuffer did not {expectation} within {timeout:.1f}s"
+        )
+
+    def wait_for_rendered_screenshot(
+        self,
+        path: Path,
+        *,
+        changed_from: bytes | Path | None = None,
+        timeout: float = 5.0,
+    ) -> Path:
+        png = self.wait_for_rendered_screen(
+            changed_from=changed_from,
+            timeout=timeout,
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(png)
+        return path
+
+    def rendered_screens_match(self, first: bytes | Path, second: bytes | Path) -> bool:
+        geometry = self.display_geometry()
+        return _rendered_screen_pixels(
+            first,
+            geometry,
+        ) == _rendered_screen_pixels(second, geometry)
+
     def main_player_bounds(self) -> tuple[int, int, int, int]:
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
@@ -706,3 +770,36 @@ def _horizontal_button_group_centers(
         ((candidate[1] + candidate[2]) // 2, (top + bottom) // 2)
         for candidate in group
     ]
+
+
+def _rendered_screen_pixels(
+    screenshot: bytes | Path,
+    geometry: DisplayGeometry,
+) -> tuple[tuple[int, int], bytes]:
+    contents = screenshot.read_bytes() if isinstance(screenshot, Path) else screenshot
+    with Image.open(BytesIO(contents)) as image:
+        rendered = image.convert("RGB").crop(
+            (
+                geometry.left_inset,
+                geometry.top_inset,
+                geometry.width - geometry.right_inset,
+                geometry.height - geometry.bottom_inset,
+            )
+        )
+        return rendered.size, rendered.tobytes()
+
+
+def _changed_byte_fraction(
+    first: tuple[tuple[int, int], bytes],
+    second: tuple[tuple[int, int], bytes],
+) -> float:
+    if first[0] != second[0]:
+        return 1.0
+    first_pixels = first[1]
+    second_pixels = second[1]
+    if len(first_pixels) != len(second_pixels):
+        return 1.0
+    return sum(
+        first_value != second_value
+        for first_value, second_value in zip(first_pixels, second_pixels)
+    ) / len(first_pixels)
