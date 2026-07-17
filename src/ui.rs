@@ -848,7 +848,7 @@ fn apply_store_effects_gtk(
                     }
                 }
             }
-            AppEffect::SetBackendVolume(volume) => {
+            AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume) => {
                 if let Some(backend) = &state.playback_backend {
                     let _ = backend.borrow().set_volume(volume);
                 }
@@ -5476,7 +5476,7 @@ impl MainWindowUiState {
                     }
                 }
             }
-            AppEffect::SetBackendVolume(volume) => {
+            AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume) => {
                 if let Some(backend) = &self.playback_backend {
                     let _ = backend.borrow().set_volume(volume);
                 }

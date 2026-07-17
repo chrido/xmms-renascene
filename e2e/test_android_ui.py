@@ -929,6 +929,50 @@ def test_android_auto_media_browser_surface(
     )
 
 
+def test_android_external_media_volume_source_bridge() -> None:
+    root = Path(__file__).resolve().parents[1]
+    activity = (
+        root / "android/java/org/xmms/renascene/XmmsActivity.java"
+    ).read_text()
+    bridge = (root / "src/ui/egui/android_file_picker.rs").read_text()
+    app = (root / "src/ui/egui/app.rs").read_text()
+    store = (root / "src/app/store.rs").read_text()
+
+    assert "new ContentObserver(MAIN_HANDLER)" in activity
+    assert "Settings.System.CONTENT_URI, true, mediaVolumeObserver" in activity
+    assert "registerMediaVolumeObserver();" in activity
+    assert "unregisterMediaVolumeObserver();" in activity
+    assert "nativeOnMediaVolumeChanged(volumePercent);" in activity
+    assert "volumePercent == lastReportedMediaVolumePercent" in activity
+    assert "pendingAppMediaVolumePercent = clampedPercent" in activity
+
+    assert "EXTERNAL_MEDIA_VOLUME_PERCENT" in bridge
+    assert (
+        "Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged"
+        in bridge
+    )
+    assert "Some(volume_percent.clamp(0, 100))" in bridge
+    assert "take_latest_external_media_volume_percent" in bridge
+    assert ".take()" in bridge
+    assert "request_registered_repaint();" in bridge
+
+    assert "sync_external_output_volume(volume)" in app
+    assert "persist_android_state();" in app
+    external_poll = app.split("fn poll_external_android_media_volume", 1)[1].split(
+        "fn poll_android_media_controls", 1
+    )[0]
+    assert "AudioCommand::SetVolume" not in external_poll
+    assert "set_media_volume_percent" not in external_poll
+
+    store_sync = store.split("pub fn sync_external_output_volume", 1)[1].split(
+        "pub fn complete_stop_fade", 1
+    )[0]
+    assert "state.player.set_volume(volume)" in store_sync
+    assert "state.config.volume = volume" in store_sync
+    assert "SetOutputVolume" not in store_sync
+    assert "SetBackendVolume" not in store_sync
+
+
 def test_android_player_widget_is_packaged(
     android_device: AndroidDevice,
 ) -> None:
@@ -965,6 +1009,14 @@ def test_android_player_widget_is_packaged(
         Path(__file__).resolve().parents[1]
         / "android/res/layout/widget_player_info_preview.xml"
     ).read_text()
+    info_widget_metadata_source = (
+        Path(__file__).resolve().parents[1]
+        / "android/res/xml/player_info_widget_info.xml"
+    ).read_text()
+    info_widget_preview_path = (
+        Path(__file__).resolve().parents[1]
+        / "android/res/drawable-nodpi/widget_player_info_preview.png"
+    )
     native_widget_source = (
         Path(__file__).resolve().parents[1]
         / "src/ui/egui/android_file_picker.rs"
@@ -997,6 +1049,12 @@ def test_android_player_widget_is_packaged(
     assert 'android:id="@android:id/background"' in info_widget_preview_source
     assert 'android:clipToOutline="true"' in info_widget_preview_source
     assert 'android:outlineProvider="none"' in info_widget_preview_source
+    assert 'android:minWidth="168dp"' in info_widget_metadata_source
+    assert 'android:minResizeWidth="168dp"' in info_widget_metadata_source
+    assert 'android:minHeight="41dp"' in info_widget_metadata_source
+    assert 'android:minResizeHeight="41dp"' in info_widget_metadata_source
+    with Image.open(info_widget_preview_path) as info_widget_preview:
+        assert info_widget_preview.size == (672, 164)
     assert "PLAYER_WIDTH = 114" in widget_source
     assert "PLAYER_HEIGHT = 18" in widget_source
     assert "onAppWidgetOptionsChanged" in widget_source
@@ -1047,8 +1105,8 @@ def test_android_player_widget_is_packaged(
         "render_transport_buttons_color_image(skin, pressed)"
         in native_widget_source
     )
-    assert "INFO_WIDTH = 157" in info_widget_source
-    assert "INFO_HEIGHT = 26" in info_widget_source
+    assert "INFO_WIDTH = 164" in info_widget_source
+    assert "INFO_HEIGHT = 37" in info_widget_source
     assert "FRAME_WIDTH = INFO_WIDTH + 4" in info_widget_source
     assert "FRAME_HEIGHT = INFO_HEIGHT + 4" in info_widget_source
     assert "OPEN_PLAYER_REQUEST_CODE = 1000" in info_widget_source

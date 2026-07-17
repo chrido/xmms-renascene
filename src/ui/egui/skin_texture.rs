@@ -12,10 +12,10 @@ use crate::skin::DefaultSkin;
 
 pub const TRANSPORT_BUTTONS_WIDTH: i32 = 114;
 pub const TRANSPORT_BUTTONS_HEIGHT: i32 = 18;
-pub const PLAYER_INFO_X: usize = 111;
-pub const PLAYER_INFO_Y: usize = 27;
-pub const PLAYER_INFO_WIDTH: usize = 157;
-pub const PLAYER_INFO_HEIGHT: usize = 26;
+pub const PLAYER_INFO_X: usize = 104;
+pub const PLAYER_INFO_Y: usize = 20;
+pub const PLAYER_INFO_WIDTH: usize = 164;
+pub const PLAYER_INFO_HEIGHT: usize = 37;
 
 pub fn player_info_render_state(
     title: &str,
@@ -321,6 +321,10 @@ mod tests {
         let full = render_main_player_color_image(&skin, &state).unwrap();
         let info = render_player_info_color_image(&skin, &state).unwrap();
 
+        assert_eq!(PLAYER_INFO_X, 104);
+        assert_eq!(PLAYER_INFO_Y, 20);
+        assert_eq!(PLAYER_INFO_X + PLAYER_INFO_WIDTH, 268);
+        assert_eq!(PLAYER_INFO_Y + PLAYER_INFO_HEIGHT, 57);
         assert_eq!(info.size, [PLAYER_INFO_WIDTH, PLAYER_INFO_HEIGHT]);
         for y in 0..PLAYER_INFO_HEIGHT {
             let full_start = (PLAYER_INFO_Y + y) * MAIN_WINDOW_WIDTH as usize + PLAYER_INFO_X;

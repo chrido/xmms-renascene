@@ -56,6 +56,7 @@ impl EguiRuntime {
             | AppEffect::StopPlayback
             | AppEffect::BeginStopFade { .. }
             | AppEffect::SeekPlayback(_)
+            | AppEffect::SetOutputVolume(_)
             | AppEffect::SetBackendVolume(_)
             | AppEffect::SetBackendBalance(_)
             | AppEffect::SetBackendEqualizer

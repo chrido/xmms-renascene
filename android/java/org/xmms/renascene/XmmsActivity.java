@@ -7,6 +7,7 @@ import android.content.ClipData;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.pm.PackageManager;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
@@ -17,6 +18,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.view.DisplayCutout;
 import android.view.RoundedCorner;
 import android.view.WindowInsets;
@@ -48,6 +50,7 @@ public final class XmmsActivity extends NativeActivity {
     private native void nativeOnDocumentsSelected(
             int requestCode, String[] paths, String error);
     private native void nativeOnMediaControl(int control);
+    private native void nativeOnMediaVolumeChanged(int volumePercent);
     private native void nativeRequestRepaint();
 
     private static final class SafeInsetSnapshot {
@@ -107,6 +110,20 @@ public final class XmmsActivity extends NativeActivity {
     private boolean mediaControlPending;
     private boolean nativeLoopReady;
     private int pendingMediaControl;
+    private boolean mediaVolumeObserverRegistered;
+    private int lastReportedMediaVolumePercent = -1;
+    private volatile int pendingAppMediaVolumePercent = -1;
+    private final ContentObserver mediaVolumeObserver = new ContentObserver(MAIN_HANDLER) {
+        @Override
+        public void onChange(boolean selfChange) {
+            onObservedMediaVolumeChanged();
+        }
+
+        @Override
+        public void onChange(boolean selfChange, Uri uri) {
+            onObservedMediaVolumeChanged();
+        }
+    };
     private final Object geometryLock = new Object();
     private long configGeneration = 1;
     private volatile SafeInsetSnapshot safeInsetSnapshot = SafeInsetSnapshot.EMPTY;
@@ -151,11 +168,13 @@ public final class XmmsActivity extends NativeActivity {
     protected void onResume() {
         super.onResume();
         nativeLoopReady = true;
+        registerMediaVolumeObserver();
         getWindow().getDecorView().post(this::dispatchPendingMediaControl);
     }
 
     @Override
     protected void onPause() {
+        unregisterMediaVolumeObserver();
         nativeLoopReady = false;
         super.onPause();
     }
@@ -291,6 +310,85 @@ public final class XmmsActivity extends NativeActivity {
         if (audioManager != null && audioFocusRequest != null) {
             audioManager.abandonAudioFocusRequest(audioFocusRequest);
         }
+    }
+
+    private void registerMediaVolumeObserver() {
+        if (mediaVolumeObserverRegistered) {
+            return;
+        }
+        getContentResolver().registerContentObserver(
+                Settings.System.CONTENT_URI, true, mediaVolumeObserver);
+        mediaVolumeObserverRegistered = true;
+        reportMediaVolumeIfChanged();
+    }
+
+    private void unregisterMediaVolumeObserver() {
+        if (!mediaVolumeObserverRegistered) {
+            return;
+        }
+        mediaVolumeObserverRegistered = false;
+        try {
+            getContentResolver().unregisterContentObserver(mediaVolumeObserver);
+        } catch (IllegalArgumentException | IllegalStateException ignored) {
+            // The observer is already detached; keep lifecycle teardown idempotent.
+        }
+    }
+
+    private void onObservedMediaVolumeChanged() {
+        if (mediaVolumeObserverRegistered) {
+            reportMediaVolumeIfChanged();
+        }
+    }
+
+    private void reportMediaVolumeIfChanged() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            MAIN_HANDLER.post(this::reportMediaVolumeIfChanged);
+            return;
+        }
+        int volumePercent = getMediaVolumePercent();
+        if (volumePercent < 0 || volumePercent > 100) {
+            return;
+        }
+        int requestedPercent = pendingAppMediaVolumePercent;
+        pendingAppMediaVolumePercent = -1;
+        if (requestedPercent == volumePercent) {
+            lastReportedMediaVolumePercent = volumePercent;
+            return;
+        }
+        if (requestedPercent < 0 && volumePercent == lastReportedMediaVolumePercent) {
+            return;
+        }
+        lastReportedMediaVolumePercent = volumePercent;
+        nativeOnMediaVolumeChanged(volumePercent);
+    }
+
+    public boolean setMediaVolumePercent(int volumePercent) {
+        if (audioManager == null) {
+            return false;
+        }
+        int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        if (maxVolume <= 0) {
+            return false;
+        }
+        int clampedPercent = Math.max(0, Math.min(100, volumePercent));
+        int streamVolume = (int) Math.round(maxVolume * (clampedPercent / 100.0));
+        audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, streamVolume, 0);
+        pendingAppMediaVolumePercent = clampedPercent;
+        reportMediaVolumeIfChanged();
+        return true;
+    }
+
+    public int getMediaVolumePercent() {
+        if (audioManager == null) {
+            return -1;
+        }
+        int maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        if (maxVolume <= 0) {
+            return -1;
+        }
+        int currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+        int clampedVolume = Math.max(0, Math.min(maxVolume, currentVolume));
+        return (int) Math.round(100.0 * clampedVolume / maxVolume);
     }
 
     public void refreshPlayerWidgets() {

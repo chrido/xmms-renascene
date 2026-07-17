@@ -127,6 +127,7 @@ static WIDGET_TITLE_MARQUEE: OnceLock<Mutex<TitleMarquee>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
 static SERVICE_PLAYBACK_EVENTS: OnceLock<Mutex<Vec<PlaybackEvent>>> = OnceLock::new();
 static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
+static EXTERNAL_MEDIA_VOLUME_PERCENT: OnceLock<Mutex<Option<i32>>> = OnceLock::new();
 static STATE_IO: OnceLock<Mutex<()>> = OnceLock::new();
 static LAST_POSITION_CHECKPOINT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
@@ -159,6 +160,10 @@ pub fn initialize(app: &winit::platform::android::activity::AndroidApp) -> Resul
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
     *MEDIA_NOTIFICATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *EXTERNAL_MEDIA_VOLUME_PERCENT
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
@@ -407,6 +412,14 @@ pub fn shared_playback_backend() -> Result<RodioBackend, String> {
     Ok(created)
 }
 
+pub fn take_latest_external_media_volume_percent() -> Option<i32> {
+    EXTERNAL_MEDIA_VOLUME_PERCENT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .take()
+}
+
 pub fn sync_media_playlist(playlist: &Playlist, titles: Vec<String>) {
     *MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(None))
@@ -575,6 +588,56 @@ pub fn request_playback_audio_focus() -> Result<(), String> {
     }
 }
 
+pub fn set_media_volume_percent(volume: i32) -> Result<(), String> {
+    let context = android_context()?;
+    let context = context
+        .as_ref()
+        .ok_or_else(|| "Android activity is not initialized".to_string())?;
+    let mut env = context
+        .vm
+        .attach_current_thread()
+        .map_err(|err| format!("failed to attach Android media-volume thread: {err}"))?;
+    let applied = env
+        .call_method(
+            context.activity.as_obj(),
+            "setMediaVolumePercent",
+            "(I)Z",
+            &[JValue::Int(volume)],
+        )
+        .and_then(|value| value.z())
+        .map_err(|err| format!("failed to set Android media volume: {err}"))?;
+    if applied {
+        Ok(())
+    } else {
+        Err("Android media volume is unavailable".to_string())
+    }
+}
+
+pub fn media_volume_percent() -> Result<i32, String> {
+    let context = android_context()?;
+    let context = context
+        .as_ref()
+        .ok_or_else(|| "Android activity is not initialized".to_string())?;
+    let mut env = context
+        .vm
+        .attach_current_thread()
+        .map_err(|err| format!("failed to attach Android media-volume thread: {err}"))?;
+    let volume = env
+        .call_method(
+            context.activity.as_obj(),
+            "getMediaVolumePercent",
+            "()I",
+            &[],
+        )
+        .and_then(|value| value.i())
+        .map_err(|err| format!("failed to read Android media volume: {err}"))?;
+    if volume >= 0 {
+        Ok(volume.clamp(0, 100))
+    } else {
+        Err("Android media volume is unavailable".to_string())
+    }
+}
+
 pub fn abandon_playback_audio_focus() {
     let Ok(context) = android_context() else {
         return;
@@ -663,6 +726,19 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaControl
         _ => return,
     };
     handle_android_media_control(env, None, control);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged(
+    _env: JNIEnv,
+    _activity: JObject,
+    volume_percent: jint,
+) {
+    *EXTERNAL_MEDIA_VOLUME_PERCENT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(volume_percent.clamp(0, 100));
+    request_registered_repaint();
 }
 
 #[unsafe(no_mangle)]

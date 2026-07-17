@@ -266,6 +266,14 @@ impl EguiFrontendState {
         if use_android_defaults {
             app_state.config.playlist_visible = true;
         }
+        #[cfg(target_os = "android")]
+        match super::android_file_picker::media_volume_percent() {
+            Ok(volume) => {
+                app_state.player.set_volume(volume);
+                app_state.config.volume = volume;
+            }
+            Err(err) => app_log_debug!(frontend, "failed to read Android media volume", err),
+        }
         #[cfg(not(target_os = "android"))]
         let mut app_state = AppState::default();
         #[cfg(not(target_os = "android"))]
@@ -952,6 +960,12 @@ impl EguiFrontendState {
 
     pub(crate) fn apply_effect(&mut self, effect: AppEffect) {
         app_log_debug!(frontend_effect, "egui {effect:?}");
+        #[cfg(target_os = "android")]
+        if let AppEffect::SetOutputVolume(volume) = &effect {
+            if let Err(err) = super::android_file_picker::set_media_volume_percent(*volume) {
+                self.runtime.pending_messages.push(err);
+            }
+        }
         let clear_visualization = matches!(
             &effect,
             AppEffect::StopPlayback | AppEffect::BeginStopFade { .. }
@@ -1021,6 +1035,12 @@ impl EguiFrontendState {
                     }
                 }
                 AppEffect::SetBackendVolume(volume) => {
+                    if let Err(err) = backend.set_volume(*volume) {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+                #[cfg(not(target_os = "android"))]
+                AppEffect::SetOutputVolume(volume) => {
                     if let Err(err) = backend.set_volume(*volume) {
                         self.runtime.pending_messages.push(err);
                     }
@@ -1289,6 +1309,22 @@ impl EguiFrontendState {
     }
 
     #[cfg(target_os = "android")]
+    fn poll_external_android_media_volume(&mut self, ctx: &egui::Context) {
+        let Some(volume) = super::android_file_picker::take_latest_external_media_volume_percent()
+        else {
+            return;
+        };
+        let result = self.controller.sync_external_output_volume(volume);
+        if result.changes.is_empty() {
+            return;
+        }
+        self.sync_frontend_state_from_store();
+        self.apply_effects(result.effects);
+        self.persist_android_state();
+        ctx.request_repaint();
+    }
+
+    #[cfg(target_os = "android")]
     fn poll_android_media_controls(&mut self, ctx: &egui::Context) -> bool {
         super::android_file_picker::register_repaint_context(ctx);
         let controls = super::android_file_picker::drain_media_controls();
@@ -1472,6 +1508,7 @@ impl eframe::App for EguiFrontendState {
         #[cfg(target_os = "android")]
         let android_media_control_handled = {
             let handled = self.poll_android_media_controls(ctx);
+            self.poll_external_android_media_volume(ctx);
             self.poll_android_file_picker_results();
             handled
         };
@@ -3629,7 +3666,68 @@ mod tests {
     use super::*;
     use crate::app::command::PanelCommand;
     use crate::audio_model::SPECTRUM_BANDS;
+    use crate::playback::model::EqualizerBackendState;
     use crate::player::PlaybackEvent;
+
+    #[derive(Clone)]
+    struct RecordingVolumeBackend {
+        volumes: Arc<Mutex<Vec<i32>>>,
+    }
+
+    impl PlaybackBackend for RecordingVolumeBackend {
+        fn play_uri(&self, _uri: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn pause(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn unpause(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn stop(&self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn seek(&self, _position_ms: i64) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn set_volume(&self, volume: i32) -> Result<(), String> {
+            self.volumes
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push(volume);
+            Ok(())
+        }
+
+        fn set_balance(&self, _balance: i32) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn set_equalizer(&self, _state: EqualizerBackendState) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn desktop_egui_applies_output_volume_to_playback_backend() {
+        let volumes = Arc::new(Mutex::new(Vec::new()));
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.playback_backend = Some(Box::new(RecordingVolumeBackend {
+            volumes: Arc::clone(&volumes),
+        }));
+
+        app.apply_effect(AppEffect::SetOutputVolume(37));
+
+        assert_eq!(
+            *volumes.lock().unwrap_or_else(|poison| poison.into_inner()),
+            vec![37]
+        );
+    }
 
     #[test]
     fn egui_app_constructs_without_native_window() {

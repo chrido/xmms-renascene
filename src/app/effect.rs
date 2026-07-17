@@ -37,6 +37,7 @@ pub enum AppEffect {
     StopPlayback,
     BeginStopFade { start_volume: i32 },
     SeekPlayback(i64),
+    SetOutputVolume(i32),
     SetBackendVolume(i32),
     SetBackendBalance(i32),
     SetBackendEqualizer,
