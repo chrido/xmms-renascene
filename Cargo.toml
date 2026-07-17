@@ -112,5 +112,5 @@ has_code = true
 name = "org.xmms.renascene.XmmsActivity"
 config_changes = "layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode"
 exported = true
-orientation = "unspecified"
+orientation = "sensor"
 resizeable_activity = true

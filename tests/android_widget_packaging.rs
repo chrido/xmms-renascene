@@ -154,11 +154,13 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
 }
 
 #[test]
-fn android_activity_handles_bevy_configuration_change_set() {
+fn android_activity_uses_sensor_rotation_and_handles_configuration_changes() {
     let cargo = include_str!("../Cargo.toml");
     let packaging = include_str!("../scripts/repo.py");
     let changes = "layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode";
 
+    assert!(cargo.contains("orientation = \"sensor\""));
+    assert!(packaging.contains("android:screenOrientation=\"sensor\""));
     assert!(cargo.contains(&format!("config_changes = \"{changes}\"")));
     assert!(packaging.contains(&format!("android:configChanges=\"{changes}\"")));
 }
