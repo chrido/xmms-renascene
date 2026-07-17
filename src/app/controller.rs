@@ -622,6 +622,7 @@ mod tests {
         state.playlist.add_uri("file:///tmp/one.ogg");
         state.playlist.add_uri("file:///tmp/two.ogg");
         state.playlist.set_position(0);
+        state.player.mark_playing();
         let mut controller = AppController::new(state);
 
         let effects = controller.handle_command(PlayerCommand::NextTrack.into());

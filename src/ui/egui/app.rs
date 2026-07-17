@@ -87,6 +87,11 @@ use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
 
+#[cfg(any(test, target_os = "android"))]
+fn android_playback_focus_request_required(state: PlayerState) -> bool {
+    state != PlayerState::Playing
+}
+
 pub(crate) struct CachedMainTexture {
     pub generation: u64,
     pub state: MainWindowRenderState,
@@ -984,9 +989,15 @@ impl EguiFrontendState {
         }
         #[cfg(target_os = "android")]
         if matches!(effect, AppEffect::StartPlaybackUri { .. }) {
-            if let Err(err) = super::android_file_picker::request_playback_audio_focus() {
-                self.handle_frontend_playback_error(err);
-                return;
+            let request_audio_focus = self
+                .playback_backend
+                .as_ref()
+                .is_none_or(|backend| android_playback_focus_request_required(backend.state()));
+            if request_audio_focus {
+                if let Err(err) = super::android_file_picker::request_playback_audio_focus() {
+                    self.handle_frontend_playback_error(err);
+                    return;
+                }
             }
         }
         if let Some(backend) = &self.playback_backend {
@@ -3668,6 +3679,17 @@ mod tests {
     use crate::audio_model::SPECTRUM_BANDS;
     use crate::playback::model::EqualizerBackendState;
     use crate::player::PlaybackEvent;
+
+    #[test]
+    fn android_audio_focus_is_only_requested_when_backend_is_not_playing() {
+        assert!(!android_playback_focus_request_required(
+            PlayerState::Playing
+        ));
+        assert!(android_playback_focus_request_required(PlayerState::Paused));
+        assert!(android_playback_focus_request_required(
+            PlayerState::Stopped
+        ));
+    }
 
     #[derive(Clone)]
     struct RecordingVolumeBackend {

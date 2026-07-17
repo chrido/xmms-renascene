@@ -89,6 +89,25 @@ fn android_output_volume_uses_stream_music_without_backend_scaling() {
 }
 
 #[test]
+fn android_track_changes_reuse_existing_playback_audio_focus() {
+    let app = include_str!("../src/ui/egui/app.rs");
+
+    assert!(app.contains("fn android_playback_focus_request_required(state: PlayerState) -> bool"));
+    assert!(app.contains("state != PlayerState::Playing"));
+
+    let start_playback = app
+        .split("#[cfg(target_os = \"android\")]\n        if matches!(effect, AppEffect::StartPlaybackUri { .. })")
+        .nth(1)
+        .expect("Android StartPlaybackUri focus handling")
+        .split("if let Some(backend) = &self.playback_backend")
+        .next()
+        .expect("Android focus handling body");
+    assert!(start_playback.contains("android_playback_focus_request_required(backend.state())"));
+    assert!(start_playback.contains("if request_audio_focus"));
+    assert!(start_playback.contains("request_playback_audio_focus()"));
+}
+
+#[test]
 fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
     let bridge = include_str!("../src/ui/egui/android_file_picker.rs");
