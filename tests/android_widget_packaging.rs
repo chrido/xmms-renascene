@@ -43,11 +43,143 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
 }
 
 #[test]
-fn android_activity_handles_bevy_configuration_change_set() {
+fn android_output_volume_uses_stream_music_without_backend_scaling() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let app = include_str!("../src/ui/egui/app.rs");
+    let gtk = include_str!("../src/ui.rs");
+    let controller = include_str!("../src/app/controller.rs");
+    let store = include_str!("../src/app/store.rs");
+
+    assert!(java.contains("setVolumeControlStream(AudioManager.STREAM_MUSIC)"));
+    assert!(java.contains("public boolean setMediaVolumePercent(int volumePercent)"));
+    assert!(java.contains("if (audioManager == null)"));
+    assert!(java.contains("Math.max(0, Math.min(100, volumePercent))"));
+    assert!(java.contains("getStreamMaxVolume(AudioManager.STREAM_MUSIC)"));
+    assert!(java.contains("Math.round(maxVolume * (clampedPercent / 100.0))"));
+    assert!(java.contains("setStreamVolume(AudioManager.STREAM_MUSIC, streamVolume, 0)"));
+    assert!(java.contains("public int getMediaVolumePercent()"));
+    assert!(java.contains("if (maxVolume <= 0)"));
+
+    assert!(rust.contains("pub fn set_media_volume_percent(volume: i32) -> Result<(), String>"));
+    assert!(rust.contains("\"setMediaVolumePercent\""));
+    assert!(rust.contains("\"(I)Z\""));
+    assert!(rust.contains("pub fn media_volume_percent() -> Result<i32, String>"));
+    assert!(rust.contains("\"getMediaVolumePercent\""));
+    assert!(app.contains("match super::android_file_picker::media_volume_percent()"));
+
+    let output_effect = app
+        .split("if let AppEffect::SetOutputVolume(volume) = &effect")
+        .nth(1)
+        .expect("Android output-volume effect")
+        .split("let clear_visualization")
+        .next()
+        .expect("Android output-volume effect body");
+    assert!(output_effect.contains("set_media_volume_percent(*volume)"));
+    assert!(!output_effect.contains("backend.set_volume"));
+
+    assert!(controller.contains("AppEffect::SetOutputVolume(self.state.player.volume())"));
+    assert_eq!(
+        gtk.matches("AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume)")
+            .count(),
+        2
+    );
+    assert!(store.contains("AppEffect::SetBackendVolume(volume)"));
+    assert!(store.contains("AppEffect::SetBackendVolume(restore_volume)"));
+}
+
+#[test]
+fn android_track_changes_reuse_existing_playback_audio_focus() {
+    let app = include_str!("../src/ui/egui/app.rs");
+
+    assert!(app.contains("fn android_playback_focus_request_required(state: PlayerState) -> bool"));
+    assert!(app.contains("state != PlayerState::Playing"));
+
+    let start_playback = app
+        .split("#[cfg(target_os = \"android\")]\n        if matches!(effect, AppEffect::StartPlaybackUri { .. })")
+        .nth(1)
+        .expect("Android StartPlaybackUri focus handling")
+        .split("if let Some(backend) = &self.playback_backend")
+        .next()
+        .expect("Android focus handling body");
+    assert!(start_playback.contains("android_playback_focus_request_required(backend.state())"));
+    assert!(start_playback.contains("if request_audio_focus"));
+    assert!(start_playback.contains("request_playback_audio_focus()"));
+}
+
+#[test]
+fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let bridge = include_str!("../src/ui/egui/android_file_picker.rs");
+    let app = include_str!("../src/ui/egui/app.rs");
+    let store = include_str!("../src/app/store.rs");
+
+    assert!(java.contains("new ContentObserver(MAIN_HANDLER)"));
+    assert!(java.contains("Settings.System.CONTENT_URI, true, mediaVolumeObserver"));
+    assert!(java.contains("registerMediaVolumeObserver();"));
+    assert!(java.contains("unregisterMediaVolumeObserver();"));
+    assert!(java.contains("if (mediaVolumeObserverRegistered)"));
+    assert!(java.contains("if (!mediaVolumeObserverRegistered)"));
+    assert!(java.contains("Looper.myLooper() != Looper.getMainLooper()"));
+    assert!(java.contains("private native void nativeOnMediaVolumeChanged(int volumePercent)"));
+    assert!(java.contains("volumePercent == lastReportedMediaVolumePercent"));
+    assert!(java.contains("pendingAppMediaVolumePercent = clampedPercent"));
+    assert!(java.contains("requestedPercent == volumePercent"));
+
+    assert!(bridge.contains("static EXTERNAL_MEDIA_VOLUME_PERCENT: OnceLock<Mutex<Option<i32>>>"));
+    assert!(bridge.contains("Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged"));
+    assert!(bridge.contains("Some(volume_percent.clamp(0, 100))"));
+    assert!(bridge.contains("pub fn take_latest_external_media_volume_percent()"));
+    assert!(bridge.contains(".take()"));
+    assert!(bridge.contains("request_registered_repaint();"));
+    let initialization = bridge
+        .split("pub fn initialize(")
+        .nth(1)
+        .expect("Android initialization")
+        .split("pub fn persist_app_state")
+        .next()
+        .expect("Android initialization body");
+    assert!(initialization.contains("EXTERNAL_MEDIA_VOLUME_PERCENT"));
+    assert!(initialization.contains("Mutex::new(None)"));
+
+    let external_poll = app
+        .split("fn poll_external_android_media_volume")
+        .nth(1)
+        .expect("external media-volume poll")
+        .split("fn poll_android_media_controls")
+        .next()
+        .expect("external media-volume poll body");
+    assert!(external_poll.contains("take_latest_external_media_volume_percent"));
+    assert!(external_poll.contains("sync_external_output_volume(volume)"));
+    assert!(external_poll.contains("sync_frontend_state_from_store()"));
+    assert!(external_poll.contains("persist_android_state()"));
+    assert!(external_poll.contains("ctx.request_repaint()"));
+    assert!(!external_poll.contains("AudioCommand::SetVolume"));
+    assert!(!external_poll.contains("set_media_volume_percent"));
+
+    let store_sync = store
+        .split("pub fn sync_external_output_volume")
+        .nth(1)
+        .expect("external output-volume store method")
+        .split("pub fn complete_stop_fade")
+        .next()
+        .expect("external output-volume store body");
+    assert!(store_sync.contains("state.player.set_volume(volume)"));
+    assert!(store_sync.contains("state.config.volume = volume"));
+    assert!(store_sync
+        .contains("StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN"));
+    assert!(!store_sync.contains("SetOutputVolume"));
+    assert!(!store_sync.contains("SetBackendVolume"));
+}
+
+#[test]
+fn android_activity_uses_sensor_rotation_and_handles_configuration_changes() {
     let cargo = include_str!("../Cargo.toml");
     let packaging = include_str!("../scripts/repo.py");
     let changes = "layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode";
 
+    assert!(cargo.contains("orientation = \"sensor\""));
+    assert!(packaging.contains("android:screenOrientation=\"sensor\""));
     assert!(cargo.contains(&format!("config_changes = \"{changes}\"")));
     assert!(packaging.contains(&format!("android:configChanges=\"{changes}\"")));
 }
@@ -59,9 +191,8 @@ fn android_winit_patch_uses_the_reproducible_git_fork() {
     let fork = "https://github.com/chrido/winit";
     let branch = "fix-window-configchanged-android";
 
-    assert!(cargo.contains(
-        "winit = { version = \"0.30.13\", optional = true, default-features = false"
-    ));
+    assert!(cargo
+        .contains("winit = { version = \"0.30.13\", optional = true, default-features = false"));
     assert!(cargo.contains("\"android-native-activity\""));
     assert!(cargo.contains(&format!(
         "winit = {{ git = \"{fork}\", branch = \"{branch}\" }}"
@@ -74,9 +205,7 @@ fn android_winit_patch_uses_the_reproducible_git_fork() {
         .collect();
     assert_eq!(winit_packages.len(), 1);
     assert!(winit_packages[0].contains("version = \"0.30.13\""));
-    assert!(winit_packages[0].contains(&format!(
-        "source = \"git+{fork}?branch={branch}#"
-    )));
+    assert!(winit_packages[0].contains(&format!("source = \"git+{fork}?branch={branch}#")));
 }
 
 #[test]
@@ -102,8 +231,8 @@ fn activity_exposes_atomic_window_geometry_and_insets_for_rotation_layout() {
 #[test]
 fn player_info_widget_is_packaged_and_opens_player() {
     let provider = include_str!("../android/java/org/xmms/renascene/XmmsPlayerInfoWidget.java");
-    assert!(provider.contains("INFO_WIDTH = 157"));
-    assert!(provider.contains("INFO_HEIGHT = 26"));
+    assert!(provider.contains("INFO_WIDTH = 164"));
+    assert!(provider.contains("INFO_HEIGHT = 37"));
     assert!(provider.contains("FRAME_WIDTH = INFO_WIDTH + 4"));
     assert!(provider.contains("FRAME_HEIGHT = INFO_HEIGHT + 4"));
     assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE = 1000"));
@@ -131,8 +260,10 @@ fn player_info_widget_is_packaged_and_opens_player() {
     assert!(info.contains("android:initialLayout=\"@layout/widget_player_info\""));
     assert!(info.contains("android:previewImage=\"@drawable/widget_player_info_preview\""));
     assert!(info.contains("android:previewLayout=\"@layout/widget_player_info_preview\""));
-    assert!(info.contains("android:minWidth=\"161dp\""));
-    assert!(info.contains("android:minHeight=\"30dp\""));
+    assert!(info.contains("android:minWidth=\"168dp\""));
+    assert!(info.contains("android:minResizeWidth=\"168dp\""));
+    assert!(info.contains("android:minHeight=\"41dp\""));
+    assert!(info.contains("android:minResizeHeight=\"41dp\""));
     assert!(info.contains("android:resizeMode=\"horizontal|vertical\""));
 
     let packaging = include_str!("../scripts/repo.py");
@@ -191,7 +322,7 @@ fn widget_picker_metadata_has_visible_legacy_and_modern_previews() {
     assert_eq!(&player_png[..8], b"\x89PNG\r\n\x1a\n");
     assert_eq!(&info_png[..8], b"\x89PNG\r\n\x1a\n");
     let info_image = image::load_from_memory(info_png).unwrap().to_rgba8();
-    assert_eq!(info_image.dimensions(), (644, 120));
+    assert_eq!(info_image.dimensions(), (672, 164));
     assert!(info_image.pixels().all(|pixel| pixel.0[3] == 255));
     for x in 0..info_image.width() {
         for y in 0..8 {
@@ -230,10 +361,10 @@ fn player_info_widget_uses_shared_skin_and_exact_main_crop() {
 
     let render = include_str!("../src/ui/egui/skin_texture.rs");
     for coordinate in [
-        "PLAYER_INFO_X: usize = 111",
-        "PLAYER_INFO_Y: usize = 27",
-        "PLAYER_INFO_WIDTH: usize = 157",
-        "PLAYER_INFO_HEIGHT: usize = 26",
+        "PLAYER_INFO_X: usize = 104",
+        "PLAYER_INFO_Y: usize = 20",
+        "PLAYER_INFO_WIDTH: usize = 164",
+        "PLAYER_INFO_HEIGHT: usize = 37",
     ] {
         assert!(render.contains(coordinate), "missing {coordinate}");
     }

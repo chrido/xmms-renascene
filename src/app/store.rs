@@ -400,6 +400,30 @@ impl AppStore {
         )
     }
 
+    pub fn sync_external_output_volume(&mut self, volume: i32) -> DispatchResult {
+        let requested_volume = volume;
+        let volume = volume.clamp(0, 100);
+        let state = self.controller.state_mut();
+        if state.player.volume() == volume && state.config.volume == volume {
+            return self.finish_dispatch_logged(
+                ConsoleLogLevel::Trace,
+                format!(
+                    "external-output-volume requested_volume={requested_volume} volume={volume}"
+                ),
+                StateChangeSet::empty(),
+                Vec::new(),
+            );
+        }
+        state.player.set_volume(volume);
+        state.config.volume = volume;
+        self.finish_dispatch_logged(
+            ConsoleLogLevel::Info,
+            format!("external-output-volume requested_volume={requested_volume} volume={volume}"),
+            StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN,
+            Vec::new(),
+        )
+    }
+
     pub fn complete_stop_fade(&mut self, restore_volume: i32) -> DispatchResult {
         let requested_restore_volume = restore_volume;
         let before = StoreSnapshot::from_state(self.state());
@@ -624,5 +648,54 @@ mod tests {
             line,
             "event: command Playlist(Clear); revision=7; changes=playlist|render-playlist; effects=[QueueRender(Playlist)]"
         );
+    }
+
+    #[test]
+    fn internal_volume_transitions_only_emit_backend_volume_effects() {
+        let mut store = AppStore::default();
+
+        let fading = store.set_runtime_volume_for_transition(25);
+        assert!(fading.effects.contains(&AppEffect::SetBackendVolume(25)));
+        assert!(!fading
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::SetOutputVolume(_))));
+
+        let stopped = store.complete_stop_fade(60);
+        assert!(stopped.effects.contains(&AppEffect::SetBackendVolume(60)));
+        assert!(!stopped
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::SetOutputVolume(_))));
+    }
+
+    #[test]
+    fn external_output_volume_sync_updates_player_and_config_without_output_effects() {
+        let mut store = AppStore::default();
+
+        let result = store.sync_external_output_volume(37);
+
+        assert_eq!(store.state().player.volume(), 37);
+        assert_eq!(store.state().config.volume, 37);
+        assert_eq!(
+            result.changes,
+            StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
+        );
+        assert!(!result.effects.iter().any(|effect| matches!(
+            effect,
+            AppEffect::SetOutputVolume(_) | AppEffect::SetBackendVolume(_)
+        )));
+    }
+
+    #[test]
+    fn external_output_volume_sync_is_idempotent_when_unchanged() {
+        let mut store = AppStore::default();
+        let changed = store.sync_external_output_volume(37);
+
+        let unchanged = store.sync_external_output_volume(37);
+
+        assert_eq!(unchanged.revision, changed.revision);
+        assert!(unchanged.changes.is_empty());
+        assert!(unchanged.effects.is_empty());
     }
 }

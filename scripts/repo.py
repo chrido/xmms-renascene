@@ -555,7 +555,7 @@ class RepoTool:
             android:configChanges="layoutDirection|locale|orientation|keyboardHidden|screenSize|smallestScreenSize|density|keyboard|navigation|screenLayout|uiMode"
             android:exported="true"
             android:resizeableActivity="true"
-            android:screenOrientation="unspecified">
+            android:screenOrientation="sensor">
             <meta-data android:name="android.app.lib_name" android:value="xmms_renascene" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

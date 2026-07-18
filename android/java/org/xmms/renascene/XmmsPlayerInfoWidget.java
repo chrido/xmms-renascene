@@ -15,8 +15,8 @@ import android.os.SystemClock;
 import android.widget.RemoteViews;
 
 public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
-    private static final int INFO_WIDTH = 157;
-    private static final int INFO_HEIGHT = 26;
+    private static final int INFO_WIDTH = 164;
+    private static final int INFO_HEIGHT = 37;
     private static final int FRAME_WIDTH = INFO_WIDTH + 4;
     private static final int FRAME_HEIGHT = INFO_HEIGHT + 4;
     private static final int OPEN_PLAYER_REQUEST_CODE = 1000;

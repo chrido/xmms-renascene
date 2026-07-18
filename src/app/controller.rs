@@ -63,7 +63,7 @@ impl AppController {
             AudioCommand::SetVolume(volume) => {
                 self.state.player.set_volume(volume);
                 vec![
-                    AppEffect::SetBackendVolume(self.state.player.volume()),
+                    AppEffect::SetOutputVolume(self.state.player.volume()),
                     AppEffect::SaveConfig,
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
@@ -561,15 +561,31 @@ mod tests {
     use crate::app::effect::RenderTarget;
 
     #[test]
-    fn controller_volume_command_clamps_and_returns_backend_effects() {
+    fn controller_volume_command_clamps_and_returns_output_effects() {
         let mut controller = AppController::new(AppState::default());
 
         let effects = controller.handle_command(AudioCommand::SetVolume(150).into());
 
         assert_eq!(controller.state().player.volume(), 100);
-        assert_eq!(effects[0], AppEffect::SetBackendVolume(100));
+        assert_eq!(effects[0], AppEffect::SetOutputVolume(100));
+        assert!(!effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::SetBackendVolume(_))));
         assert!(effects.contains(&AppEffect::SaveConfig));
         assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::All)));
+    }
+
+    #[test]
+    fn equalizer_preamp_remains_a_backend_equalizer_effect() {
+        let mut controller = AppController::new(AppState::default());
+
+        let effects = controller.handle_command(EqualizerCommand::SetPreamp(73).into());
+
+        assert_eq!(controller.state().config.equalizer_preamp_pos, 73);
+        assert!(effects.contains(&AppEffect::SetBackendEqualizer));
+        assert!(!effects
+            .iter()
+            .any(|effect| matches!(effect, AppEffect::SetOutputVolume(_))));
     }
 
     #[test]
@@ -606,6 +622,7 @@ mod tests {
         state.playlist.add_uri("file:///tmp/one.ogg");
         state.playlist.add_uri("file:///tmp/two.ogg");
         state.playlist.set_position(0);
+        state.player.mark_playing();
         let mut controller = AppController::new(state);
 
         let effects = controller.handle_command(PlayerCommand::NextTrack.into());

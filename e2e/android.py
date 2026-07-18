@@ -25,6 +25,12 @@ ANDROID_AUTO_PROBE_ACTIVITY = (
 )
 ANDROID_HOME_PACKAGE = "com.google.android.apps.nexuslauncher"
 MAIN_PLAYER_BASE_HEIGHT = 116
+_ROTATION_ACCELERATION_VECTORS = {
+    0: "0:9.81:0",
+    1: "9.81:0:0",
+    2: "0:-9.81:0",
+    3: "-9.81:0:0",
+}
 
 
 @dataclass(frozen=True)
@@ -285,8 +291,21 @@ class AndroidDevice:
         self._set_rotation(1)
 
     def _set_rotation(self, rotation: int) -> None:
+        try:
+            acceleration = _ROTATION_ACCELERATION_VECTORS[rotation]
+        except KeyError as error:
+            raise ValueError("rotation must be between 0 and 3") from error
         self.shell("settings", "put", "system", "accelerometer_rotation", "0")
         self.shell("settings", "put", "system", "user_rotation", str(rotation))
+        if self.serial is not None and self.serial.startswith("emulator-"):
+            self.command(
+                "emu",
+                "sensor",
+                "set",
+                "acceleration",
+                acceleration,
+                check=False,
+            )
         expected_landscape = rotation in {1, 3}
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
