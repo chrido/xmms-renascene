@@ -27,7 +27,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class XmmsActivity extends NativeActivity {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
@@ -39,10 +41,6 @@ public final class XmmsActivity extends NativeActivity {
             "org.xmms.renascene.action.RESUME_PLAYBACK";
     static final String ACTION_NEXT_TRACK =
             "org.xmms.renascene.action.NEXT_TRACK";
-    private static final int MEDIA_CONTROL_PAUSE_PLAYBACK = 1;
-    private static final int MEDIA_CONTROL_RESUME_PLAYBACK = 2;
-    private static final int MEDIA_CONTROL_NEXT_TRACK = 3;
-
     static {
         System.loadLibrary("xmms_renascene");
     }
@@ -105,14 +103,56 @@ public final class XmmsActivity extends NativeActivity {
         }
     }
 
+    private enum MediaControl {
+        PAUSE(1),
+        RESUME(2),
+        NEXT(3);
+
+        final int jniCode;
+
+        MediaControl(int jniCode) {
+            this.jniCode = jniCode;
+        }
+    }
+
+    private static final class MediaControlDispatch {
+        private final ArrayDeque<MediaControl> queued = new ArrayDeque<>();
+        private boolean inFlight;
+
+        void enqueue(MediaControl control) {
+            queued.addLast(control);
+        }
+
+        MediaControl take(boolean ready) {
+            if (!ready || inFlight) {
+                return null;
+            }
+            MediaControl control = queued.pollFirst();
+            inFlight = control != null;
+            return control;
+        }
+
+        boolean complete() {
+            if (!inFlight) {
+                return false;
+            }
+            inFlight = false;
+            return queued.isEmpty();
+        }
+    }
+
     private AudioManager audioManager;
+    // Fallback audio focus request held by the activity for the brief window before the
+    // playback service starts.  The service is the authoritative focus owner once running;
+    // see requestPlaybackAudioFocus() / abandonPlaybackAudioFocus().
     private AudioFocusRequest audioFocusRequest;
-    private boolean mediaControlPending;
+    private final MediaControlDispatch mediaControls = new MediaControlDispatch();
     private boolean nativeLoopReady;
-    private int pendingMediaControl;
     private boolean mediaVolumeObserverRegistered;
     private int lastReportedMediaVolumePercent = -1;
-    private volatile int pendingAppMediaVolumePercent = -1;
+    // Null when no app-initiated volume change is in flight; non-null holds the clamped
+    // percent value set by setMediaVolumePercent() until the observer confirms it.
+    private final AtomicReference<Integer> pendingAppMediaVolumePercent = new AtomicReference<>();
     private final ContentObserver mediaVolumeObserver = new ContentObserver(MAIN_HANDLER) {
         @Override
         public void onChange(boolean selfChange) {
@@ -216,12 +256,11 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     private void dispatchPendingMediaControl() {
-        if (!nativeLoopReady || pendingMediaControl == 0) {
+        MediaControl control = mediaControls.take(nativeLoopReady);
+        if (control == null) {
             return;
         }
-        int control = pendingMediaControl;
-        pendingMediaControl = 0;
-        dispatchMediaControl(control);
+        dispatchMediaControl(control.jniCode);
     }
 
     private boolean handleMediaControlIntent(Intent intent) {
@@ -229,22 +268,19 @@ public final class XmmsActivity extends NativeActivity {
             return false;
         }
         if (ACTION_PAUSE_PLAYBACK.equals(intent.getAction())) {
-            mediaControlPending = true;
-            pendingMediaControl = MEDIA_CONTROL_PAUSE_PLAYBACK;
+            mediaControls.enqueue(MediaControl.PAUSE);
             setIntent(new Intent(this, XmmsActivity.class));
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
             return true;
         }
         if (ACTION_RESUME_PLAYBACK.equals(intent.getAction())) {
-            mediaControlPending = true;
-            pendingMediaControl = MEDIA_CONTROL_RESUME_PLAYBACK;
+            mediaControls.enqueue(MediaControl.RESUME);
             setIntent(new Intent(this, XmmsActivity.class));
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
             return true;
         }
         if (ACTION_NEXT_TRACK.equals(intent.getAction())) {
-            mediaControlPending = true;
-            pendingMediaControl = MEDIA_CONTROL_NEXT_TRACK;
+            mediaControls.enqueue(MediaControl.NEXT);
             setIntent(new Intent(this, XmmsActivity.class));
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
             return true;
@@ -254,10 +290,11 @@ public final class XmmsActivity extends NativeActivity {
 
     public void completeMediaControl() {
         runOnUiThread(() -> {
-            if (mediaControlPending) {
-                mediaControlPending = false;
+            if (mediaControls.complete()) {
                 nativeLoopReady = false;
                 moveTaskToBack(true);
+            } else {
+                dispatchPendingMediaControl();
             }
         });
     }
@@ -300,6 +337,14 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     public boolean requestPlaybackAudioFocus() {
+        // Prefer the playback service as the authoritative focus owner, so ducking,
+        // transient-loss, and resume-after-gain are handled in one state machine.
+        if (XmmsPlaybackService.requestAudioFocusFromActivity()) {
+            return true;
+        }
+        // Fallback for the brief window before the service starts.  The listener is
+        // intentionally empty: when the service starts it will request AUDIOFOCUS_GAIN
+        // and become the sole owner, overriding this temporary grant.
         return audioManager != null
                 && audioFocusRequest != null
                 && audioManager.requestAudioFocus(audioFocusRequest)
@@ -307,6 +352,9 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     public void abandonPlaybackAudioFocus() {
+        // Delegate to the service first so it can update its internal focus state machine.
+        XmmsPlaybackService.abandonAudioFocusFromActivity();
+        // Also release any fallback grant held directly by the activity.
         if (audioManager != null && audioFocusRequest != null) {
             audioManager.abandonAudioFocusRequest(audioFocusRequest);
         }
@@ -349,13 +397,12 @@ public final class XmmsActivity extends NativeActivity {
         if (volumePercent < 0 || volumePercent > 100) {
             return;
         }
-        int requestedPercent = pendingAppMediaVolumePercent;
-        pendingAppMediaVolumePercent = -1;
-        if (requestedPercent == volumePercent) {
+        Integer requestedPercent = pendingAppMediaVolumePercent.getAndSet(null);
+        if (requestedPercent != null && requestedPercent == volumePercent) {
             lastReportedMediaVolumePercent = volumePercent;
             return;
         }
-        if (requestedPercent < 0 && volumePercent == lastReportedMediaVolumePercent) {
+        if (requestedPercent == null && volumePercent == lastReportedMediaVolumePercent) {
             return;
         }
         lastReportedMediaVolumePercent = volumePercent;
@@ -373,7 +420,7 @@ public final class XmmsActivity extends NativeActivity {
         int clampedPercent = Math.max(0, Math.min(100, volumePercent));
         int streamVolume = (int) Math.round(maxVolume * (clampedPercent / 100.0));
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, streamVolume, 0);
-        pendingAppMediaVolumePercent = clampedPercent;
+        pendingAppMediaVolumePercent.set(clampedPercent);
         reportMediaVolumeIfChanged();
         return true;
     }

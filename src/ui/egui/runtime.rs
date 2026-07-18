@@ -20,7 +20,9 @@ impl EguiRuntime {
         match effect {
             AppEffect::QueueRender(target) => {
                 self.repaint_requested = true;
-                self.dirty_targets.push(target);
+                if !self.dirty_targets.contains(&target) {
+                    self.dirty_targets.push(target);
+                }
             }
             AppEffect::ShowError(message) | AppEffect::ShowMessage(message) => {
                 self.pending_messages.push(message);
@@ -74,6 +76,7 @@ mod tests {
         let mut runtime = EguiRuntime::default();
 
         runtime.apply_effects([
+            AppEffect::QueueRender(RenderTarget::Main),
             AppEffect::QueueRender(RenderTarget::Main),
             AppEffect::ShowMessage("hello".to_string()),
         ]);

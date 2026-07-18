@@ -134,13 +134,13 @@ fn sync_viewport_state_from_app(app: &mut EguiFrontendState) {
         .preferences_viewport
         .lock()
         .expect("preferences viewport state poisoned");
-    if !state.open && app.preferences_open {
+    if !state.open && app.preferences_open() {
         *state = PreferencesViewportState::new(
             &app.controller().state().config,
             app.selected_preferences_page,
             true,
         );
-    } else if !app.preferences_open {
+    } else if !app.preferences_open() {
         state.open = false;
     } else {
         // While Preferences stays open, panel visibility/detach/shade and
@@ -161,7 +161,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     let mut open_skin_browser = false;
     #[cfg(target_os = "android")]
     let mut open_playlist_manager = false;
-    let mut next_open = app.preferences_open;
+    let mut next_open = app.preferences_open();
     let next_page;
     let mut next_config = None;
     #[cfg(target_os = "android")]

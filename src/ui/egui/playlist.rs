@@ -45,7 +45,7 @@ fn android_saved_playlist_row_size(available_width: f32) -> egui::Vec2 {
 #[cfg(target_os = "android")]
 pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiFrontendState) {
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.android_playlist_manager_open = false;
+        app.android.playlist_manager_open = false;
         return;
     }
 
@@ -74,7 +74,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
         (screen.width() - left_inset - right_inset - horizontal_margin * 2.0).max(1.0);
     let content_height =
         (screen.height() - top_inset - bottom_inset - vertical_margin * 2.0).max(1.0);
-    let saved_playlists = app.android_saved_playlists.clone();
+    let saved_playlists = app.android.saved_playlists.clone();
 
     egui::Area::new(egui::Id::new("xmms-android-playlist-manager"))
         .order(egui::Order::Foreground)
@@ -95,7 +95,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                             .add_sized([88.0, 48.0], egui::Button::new("Close"))
                             .clicked()
                         {
-                            app.android_playlist_manager_open = false;
+                            app.android.playlist_manager_open = false;
                         }
                         ui.heading("Playlists");
                     });
@@ -104,7 +104,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                     ui.label("Playlist name");
                     ui.add_sized(
                         [ui.available_width(), 48.0],
-                        egui::TextEdit::singleline(&mut app.android_playlist_name),
+                        egui::TextEdit::singleline(&mut app.android.playlist_name),
                     );
                     if ui
                         .add_sized([ui.available_width(), 56.0], egui::Button::new("Save"))
@@ -597,20 +597,15 @@ fn handle_playlist_touch_scroll(
             .flatten()
     });
     if let Some(drag_start) = drag_start {
-        app.playlist_touch_scroll_remainder = 0.0;
-        app.playlist_touch_drag_delta = egui::Vec2::ZERO;
-        app.playlist_touch_gesture_delta = egui::Vec2::ZERO;
-        app.playlist_touch_drag_direction_decided = false;
-        app.playlist_touch_drag_horizontal = false;
-        app.playlist_touch_drag_start = Some((drag_start, std::time::Instant::now()));
-        app.playlist_touch_drag_row = {
+        let row = {
             let row =
                 ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
             let index = app.playlist_scroll_offset.saturating_add(row);
             view_model.rows.get(index).map(|model| model.index)
         };
+        app.playlist_touch_gesture.begin(drag_start, row);
     }
-    if let Some((drag_start, _)) = app.playlist_touch_drag_start {
+    if let Some(drag_start) = app.playlist_touch_gesture.start() {
         let event_delta = ui.ctx().input(|input| {
             input
                 .events
@@ -624,59 +619,36 @@ fn handle_playlist_touch_scroll(
                 .max_by(|left, right| left.length_sq().total_cmp(&right.length_sq()))
         });
         if let Some(event_delta) = event_delta {
-            if event_delta.length_sq() > app.playlist_touch_gesture_delta.length_sq() {
-                app.playlist_touch_gesture_delta = event_delta;
-            }
+            app.playlist_touch_gesture.observe(event_delta);
         }
     }
     if response.dragged() {
-        let frame_drag_delta = response.drag_delta();
-        app.playlist_touch_drag_delta += frame_drag_delta;
-        if !app.playlist_touch_drag_direction_decided
-            && (app.playlist_touch_drag_delta.x.abs() >= 8.0
-                || app.playlist_touch_drag_delta.y.abs() >= 8.0)
-        {
-            app.playlist_touch_drag_direction_decided = true;
-            app.playlist_touch_drag_horizontal =
-                app.playlist_touch_drag_delta.x.abs() > app.playlist_touch_drag_delta.y.abs();
-        }
-        if app.playlist_touch_drag_direction_decided && !app.playlist_touch_drag_horizontal {
-            let row_height = 11.0 * app.scale_factor;
-            app.playlist_touch_scroll_remainder += -frame_drag_delta.y / row_height;
-            let rows = app.playlist_touch_scroll_remainder.trunc() as i32;
-            if rows != 0 {
-                scroll_playlist_rows(app, rows);
-                app.playlist_touch_scroll_remainder -= rows as f32;
-                ui.ctx().request_repaint();
-            }
+        let rows = app.playlist_touch_gesture.drag(
+            response.total_drag_delta().unwrap_or_default(),
+            11.0 * app.scale_factor,
+        );
+        if rows != 0 {
+            scroll_playlist_rows(app, rows);
+            ui.ctx().request_repaint();
         }
     }
     let drag_released = response.drag_stopped()
-        || (app.playlist_touch_drag_start.is_some()
+        || (app.playlist_touch_gesture.is_active()
             && !ui.ctx().input(|input| input.pointer.primary_down()));
     if drag_released {
         let release_pointer = ui
             .ctx()
             .input(|input| input.pointer.latest_pos())
             .or_else(|| response.interact_pointer_pos());
-        let (endpoint_delta, gesture_duration) = app
-            .playlist_touch_drag_start
-            .and_then(|(start, started_at)| {
-                release_pointer.map(|end| (end - start, started_at.elapsed()))
-            })
-            .unwrap_or((app.playlist_touch_drag_delta, std::time::Duration::MAX));
-        let drag_delta = [
-            endpoint_delta,
-            app.playlist_touch_drag_delta,
-            app.playlist_touch_gesture_delta,
-        ]
-        .into_iter()
-        .max_by(|left, right| left.length_sq().total_cmp(&right.length_sq()))
-        .unwrap_or_default();
+        let release = app
+            .playlist_touch_gesture
+            .release(release_pointer)
+            .expect("active playlist gesture");
+        let drag_delta = release.delta;
         gesture_handled = drag_delta.length_sq() >= 8.0_f32.powi(2);
         let release_velocity = ui.ctx().input(|input| input.pointer.velocity());
         if is_playlist_right_swipe(drag_delta) || is_playlist_left_swipe(drag_delta) {
-            let swiped_index = app.playlist_touch_drag_row.or_else(|| {
+            let swiped_index = release.row.or_else(|| {
                 response.interact_pointer_pos().and_then(|pointer| {
                     let drag_start = pointer - drag_delta;
                     let row = ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor()
@@ -693,24 +665,17 @@ fn handle_playlist_touch_scroll(
                 }
             }
         } else {
-            if is_playlist_upward_play_swipe(drag_delta, release_velocity, gesture_duration) {
+            if is_playlist_upward_play_swipe(drag_delta, release_velocity, release.duration) {
                 play_first_selected_playlist_entry(app);
             } else if is_playlist_downward_pause_swipe(
                 drag_delta,
                 release_velocity,
-                gesture_duration,
+                release.duration,
             ) {
                 app.dispatch(PlayerCommand::Pause);
                 app_log_info!(playlist, "swipe playback paused");
             }
         }
-        app.playlist_touch_scroll_remainder = 0.0;
-        app.playlist_touch_drag_delta = egui::Vec2::ZERO;
-        app.playlist_touch_gesture_delta = egui::Vec2::ZERO;
-        app.playlist_touch_drag_direction_decided = false;
-        app.playlist_touch_drag_horizontal = false;
-        app.playlist_touch_drag_row = None;
-        app.playlist_touch_drag_start = None;
     }
     gesture_handled
 }

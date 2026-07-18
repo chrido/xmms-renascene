@@ -62,6 +62,19 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     static final int CONTROL_STOP = 6;
     private static final int CONTROL_PLAY_MEDIA_ITEM = 7;
 
+    /** Playback state values received from the Rust JNI layer via applyNativePlaybackState(). */
+    private static final int STATE_STOPPED = 0;
+    private static final int STATE_PLAYING = 1;
+    @SuppressWarnings("unused") // retained for documentation; received from JNI
+    private static final int STATE_PAUSED = 2;
+
+    /**
+     * Current service instance.  Set in onCreate() and cleared in onDestroy() so that
+     * XmmsActivity can route audio focus requests through the service (the authoritative
+     * owner) rather than managing a separate AudioFocusRequest.
+     */
+    private static volatile XmmsPlaybackService instance;
+
     static {
         System.loadLibrary("xmms_renascene");
     }
@@ -79,13 +92,13 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
     private MediaSession mediaSession;
-    private boolean resumeAfterFocusGain;
+    private volatile boolean resumeAfterFocusGain;
     private boolean noisyReceiverRegistered;
     private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())
-                    && playbackState == 1) {
+                    && playbackState == STATE_PLAYING) {
                 resumeAfterFocusGain = false;
                 nativeOnMediaControl(CONTROL_PAUSE, 0);
             }
@@ -95,7 +108,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private final Runnable playbackPoll = new Runnable() {
         @Override
         public void run() {
-            if (playbackState != 0) {
+            if (playbackState != STATE_STOPPED) {
                 nativePollPlayback();
             }
             playbackHandler.postDelayed(this, 250);
@@ -117,6 +130,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         nativeInitializeMediaLibrary(
                 getFilesDir().getAbsolutePath(), getCacheDir().getAbsolutePath());
         notificationManager =
@@ -214,7 +228,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             nativeOnMediaControl(
                     intent.getIntExtra(EXTRA_WIDGET_CONTROL, CONTROL_PLAY), 0);
             playbackHandler.postDelayed(() -> {
-                if (playbackState == 0) {
+                if (playbackState == STATE_STOPPED) {
                     stopPlaybackService();
                 }
             }, 1500);
@@ -277,7 +291,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                 this,
                 hasPrevious,
                 hasNext);
-        if (state != 0 && (infoChanged || playbackChanged)) {
+        if (state != STATE_STOPPED && (infoChanged || playbackChanged)) {
             XmmsPlayerInfoWidget.updateAll(
                     this,
                     playbackState,
@@ -289,11 +303,11 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         refreshMediaQueue();
         notifyChildrenChanged(PLAYLIST_ID);
 
-        if (state == 0) {
+        if (state == STATE_STOPPED) {
             stopPlaybackService();
             return;
         }
-        boolean playing = state == 1;
+        boolean playing = state == STATE_PLAYING;
         updateWakeLock(playing);
         updateAudioFocus(playing);
         updateMediaSession(playing);
@@ -310,11 +324,12 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     public void applyNativePlaybackPosition(long positionMs) {
         playbackPositionMs = Math.max(0, positionMs);
-        updatePlaybackState(playbackState == 1);
+        updatePlaybackState(playbackState == STATE_PLAYING);
     }
 
     @Override
     public void onDestroy() {
+        instance = null;
         playbackHandler.removeCallbacks(playbackPoll);
         if (noisyReceiverRegistered) {
             unregisterReceiver(noisyReceiver);
@@ -559,7 +574,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             }
             return;
         }
-        if (playbackState != 1) {
+        if (playbackState != STATE_PLAYING) {
             return;
         }
         resumeAfterFocusGain =
@@ -572,6 +587,31 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         resumeAfterFocusGain = false;
         if (audioManager != null && audioFocusRequest != null) {
             audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        }
+    }
+
+    /**
+     * Called by {@link XmmsActivity#requestPlaybackAudioFocus()} to route the focus request
+     * through the service (the authoritative audio focus owner).  Returns {@code false} if
+     * the service is not currently running.
+     */
+    static boolean requestAudioFocusFromActivity() {
+        XmmsPlaybackService svc = instance;
+        if (svc == null || svc.audioManager == null || svc.audioFocusRequest == null) {
+            return false;
+        }
+        return svc.audioManager.requestAudioFocus(svc.audioFocusRequest)
+                == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+    }
+
+    /**
+     * Called by {@link XmmsActivity#abandonPlaybackAudioFocus()} to route focus abandonment
+     * through the service.  A no-op if the service is not running.
+     */
+    static void abandonAudioFocusFromActivity() {
+        XmmsPlaybackService svc = instance;
+        if (svc != null) {
+            svc.abandonAudioFocus();
         }
     }
 
@@ -590,7 +630,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     }
 
     private void stopPlaybackService() {
-        playbackState = 0;
+        playbackState = STATE_STOPPED;
         XmmsPlayerWidget.updateAll(
                 this,
                 hasPrevious,

@@ -22,6 +22,8 @@ use crate::session::{
 };
 use crate::skin::DefaultSkin;
 
+pub use super::android_runtime::AndroidSystemInsets;
+
 struct AndroidPickerContext {
     vm: Arc<JavaVM>,
     activity: GlobalRef,
@@ -31,6 +33,37 @@ pub struct AndroidPickerResult {
     pub request: FileDialogRequest,
     pub paths: Vec<PathBuf>,
     pub error: Option<String>,
+}
+
+pub enum AndroidPlatformEvent {
+    Picker(AndroidPickerResult),
+    MediaControl(AndroidMediaControlEvent),
+    Playback(PlaybackEvent),
+    ExternalVolumeChanged(i32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AndroidMediaControlEvent {
+    pub control: AndroidMediaControl,
+    pub backend_executed: bool,
+}
+
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AndroidPlaybackState {
+    Stopped = 0,
+    Playing = 1,
+    Paused = 2,
+}
+
+impl From<PlayerState> for AndroidPlaybackState {
+    fn from(state: PlayerState) -> Self {
+        match state {
+            PlayerState::Stopped => Self::Stopped,
+            PlayerState::Playing => Self::Playing,
+            PlayerState::Paused => Self::Paused,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +80,7 @@ pub enum AndroidMediaControl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AndroidMediaNotification {
-    state: i32,
+    state: AndroidPlaybackState,
     title: String,
     bitrate: i32,
     frequency: i32,
@@ -65,14 +98,6 @@ struct AndroidMediaPlaylist {
     titles: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub struct AndroidSystemInsets {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct AndroidWindowLayoutSnapshot {
     pub width: i32,
@@ -86,6 +111,21 @@ pub struct AndroidWindowLayoutSnapshot {
     pub inset_generation: i64,
     pub insets_fresh: bool,
 }
+
+const LAYOUT_WIDTH: usize = 0;
+const LAYOUT_HEIGHT: usize = 1;
+const LAYOUT_ORIENTATION: usize = 2;
+const LAYOUT_INSET_LEFT: usize = 3;
+const LAYOUT_INSET_TOP: usize = 4;
+const LAYOUT_INSET_RIGHT: usize = 5;
+const LAYOUT_INSET_BOTTOM: usize = 6;
+const LAYOUT_INSET_WIDTH: usize = 7;
+const LAYOUT_INSET_HEIGHT: usize = 8;
+const LAYOUT_INSET_ORIENTATION: usize = 9;
+const LAYOUT_CONFIG_GENERATION: usize = 10;
+const LAYOUT_INSET_GENERATION: usize = 11;
+const LAYOUT_INSETS_FRESH: usize = 12;
+const LAYOUT_FIELD_COUNT: usize = 13;
 
 impl AndroidWindowLayoutSnapshot {
     pub fn has_current_insets(self) -> bool {
@@ -117,17 +157,14 @@ impl AndroidWindowLayoutSnapshot {
 }
 
 static CONTEXT: OnceLock<Mutex<Option<AndroidPickerContext>>> = OnceLock::new();
-static RESULTS: OnceLock<Mutex<Vec<AndroidPickerResult>>> = OnceLock::new();
-static MEDIA_CONTROLS: OnceLock<Mutex<Vec<AndroidMediaControl>>> = OnceLock::new();
+static EVENTS: OnceLock<Mutex<Vec<AndroidPlatformEvent>>> = OnceLock::new();
 static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
 static WIDGET_SKIN: OnceLock<Mutex<Option<(Option<String>, DefaultSkin)>>> = OnceLock::new();
 static WIDGET_TITLE_MARQUEE: OnceLock<Mutex<TitleMarquee>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
-static SERVICE_PLAYBACK_EVENTS: OnceLock<Mutex<Vec<PlaybackEvent>>> = OnceLock::new();
 static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
-static EXTERNAL_MEDIA_VOLUME_PERCENT: OnceLock<Mutex<Option<i32>>> = OnceLock::new();
 static STATE_IO: OnceLock<Mutex<()>> = OnceLock::new();
 static LAST_POSITION_CHECKPOINT: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
@@ -163,11 +200,7 @@ pub fn initialize(app: &winit::platform::android::activity::AndroidApp) -> Resul
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
-    *EXTERNAL_MEDIA_VOLUME_PERCENT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = None;
-    RESULTS
+    EVENTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
@@ -277,7 +310,7 @@ pub fn open(request: FileDialogRequest) -> Result<(), String> {
     }
     let (request_code, mime_type, multiple) = match request {
         FileDialogRequest::AddAudioFiles => (100, "audio/*", true),
-        FileDialogRequest::LoadPlaylist => (101, "*/*", false),
+        FileDialogRequest::LoadPlaylist | FileDialogRequest::ImportPlaylist => (107, "*/*", false),
         FileDialogRequest::LoadEqualizerPreset => (102, "*/*", false),
         FileDialogRequest::ImportSkin => (103, "*/*", false),
         FileDialogRequest::AddAudioDirectory => unreachable!(),
@@ -359,12 +392,16 @@ fn create_document(
     Ok(())
 }
 
-pub fn drain_results() -> Vec<AndroidPickerResult> {
-    let mut results = RESULTS
+pub fn drain_platform_events() -> Vec<AndroidPlatformEvent> {
+    let _order = MEDIA_CONTROL_ORDER
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let mut events = EVENTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .unwrap();
-    std::mem::take(&mut *results)
+        .unwrap_or_else(|poison| poison.into_inner());
+    std::mem::take(&mut *events)
 }
 
 pub fn register_repaint_context(context: &egui::Context) {
@@ -374,16 +411,11 @@ pub fn register_repaint_context(context: &egui::Context) {
         .unwrap_or_else(|poison| poison.into_inner()) = Some(context.clone());
 }
 
-pub fn drain_media_controls() -> Vec<AndroidMediaControl> {
-    let _order = MEDIA_CONTROL_ORDER
-        .get_or_init(|| Mutex::new(()))
+pub fn unregister_repaint_context() {
+    *REPAINT_CONTEXT
+        .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let mut controls = MEDIA_CONTROLS
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    std::mem::take(&mut *controls)
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
 }
 
 pub fn begin_local_media_control() -> MutexGuard<'static, ()> {
@@ -391,11 +423,11 @@ pub fn begin_local_media_control() -> MutexGuard<'static, ()> {
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    MEDIA_CONTROLS
+    EVENTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .clear();
+        .retain(|event| !matches!(event, AndroidPlatformEvent::MediaControl(_)));
     order
 }
 
@@ -412,14 +444,6 @@ pub fn shared_playback_backend() -> Result<RodioBackend, String> {
     Ok(created)
 }
 
-pub fn take_latest_external_media_volume_percent() -> Option<i32> {
-    EXTERNAL_MEDIA_VOLUME_PERCENT
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .take()
-}
-
 pub fn sync_media_playlist(playlist: &Playlist, titles: Vec<String>) {
     *MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(None))
@@ -430,16 +454,8 @@ pub fn sync_media_playlist(playlist: &Playlist, titles: Vec<String>) {
     });
 }
 
-pub fn drain_service_playback_events() -> Vec<PlaybackEvent> {
-    let mut events = SERVICE_PLAYBACK_EVENTS
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    std::mem::take(&mut *events)
-}
-
 pub fn update_playback_notification(
-    state: i32,
+    state: AndroidPlaybackState,
     title: &str,
     bitrate: i32,
     frequency: i32,
@@ -487,7 +503,7 @@ pub fn update_playback_notification(
         "updatePlaybackNotification",
         "(ILjava/lang/String;IIIJJJIZZ)V",
         &[
-            JValue::Int(state),
+            JValue::Int(state as i32),
             JValue::Object(&title),
             JValue::Int(bitrate),
             JValue::Int(frequency),
@@ -538,27 +554,27 @@ pub fn window_layout_snapshot_pixels() -> Option<AndroidWindowLayoutSnapshot> {
         .and_then(|value| value.l())
         .ok()
         .map(JLongArray::from)?;
-    if env.get_array_length(&array).ok()? != 13 {
+    if env.get_array_length(&array).ok()? != LAYOUT_FIELD_COUNT as i32 {
         return None;
     }
-    let mut values = [0_i64; 13];
+    let mut values = [0_i64; LAYOUT_FIELD_COUNT];
     env.get_long_array_region(&array, 0, &mut values).ok()?;
     let snapshot = AndroidWindowLayoutSnapshot {
-        width: i32::try_from(values[0]).ok()?,
-        height: i32::try_from(values[1]).ok()?,
-        orientation: i32::try_from(values[2]).ok()?,
+        width: i32::try_from(values[LAYOUT_WIDTH]).ok()?,
+        height: i32::try_from(values[LAYOUT_HEIGHT]).ok()?,
+        orientation: i32::try_from(values[LAYOUT_ORIENTATION]).ok()?,
         insets: AndroidSystemInsets {
-            left: i32::try_from(values[3]).ok()?,
-            top: i32::try_from(values[4]).ok()?,
-            right: i32::try_from(values[5]).ok()?,
-            bottom: i32::try_from(values[6]).ok()?,
+            left: i32::try_from(values[LAYOUT_INSET_LEFT]).ok()?,
+            top: i32::try_from(values[LAYOUT_INSET_TOP]).ok()?,
+            right: i32::try_from(values[LAYOUT_INSET_RIGHT]).ok()?,
+            bottom: i32::try_from(values[LAYOUT_INSET_BOTTOM]).ok()?,
         },
-        inset_width: i32::try_from(values[7]).ok()?,
-        inset_height: i32::try_from(values[8]).ok()?,
-        inset_orientation: i32::try_from(values[9]).ok()?,
-        config_generation: values[10],
-        inset_generation: values[11],
-        insets_fresh: values[12] != 0,
+        inset_width: i32::try_from(values[LAYOUT_INSET_WIDTH]).ok()?,
+        inset_height: i32::try_from(values[LAYOUT_INSET_HEIGHT]).ok()?,
+        inset_orientation: i32::try_from(values[LAYOUT_INSET_ORIENTATION]).ok()?,
+        config_generation: values[LAYOUT_CONFIG_GENERATION],
+        inset_generation: values[LAYOUT_INSET_GENERATION],
+        insets_fresh: values[LAYOUT_INSETS_FRESH] != 0,
     };
     Some(snapshot)
 }
@@ -665,6 +681,7 @@ fn request_from_code(code: jint) -> Option<FileDialogRequest> {
         104 => Some(FileDialogRequest::AddAudioDirectory),
         105 => Some(FileDialogRequest::SaveEqualizerPreset),
         106 => Some(FileDialogRequest::SavePlaylist),
+        107 => Some(FileDialogRequest::ImportPlaylist),
         _ => None,
     }
 }
@@ -702,15 +719,16 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSel
             .ok()
             .map(|error| error.to_string_lossy().into_owned())
     };
-    RESULTS
+    EVENTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .unwrap()
-        .push(AndroidPickerResult {
+        .unwrap_or_else(|poison| poison.into_inner())
+        .push(AndroidPlatformEvent::Picker(AndroidPickerResult {
             request,
             paths: selected_paths,
             error,
-        });
+        }));
+    request_registered_repaint();
 }
 
 #[unsafe(no_mangle)]
@@ -734,10 +752,14 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeC
     _activity: JObject,
     volume_percent: jint,
 ) {
-    *EXTERNAL_MEDIA_VOLUME_PERCENT
-        .get_or_init(|| Mutex::new(None))
+    let volume = volume_percent.clamp(0, 100);
+    let mut events = EVENTS
+        .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = Some(volume_percent.clamp(0, 100));
+        .unwrap_or_else(|poison| poison.into_inner());
+    events.retain(|event| !matches!(event, AndroidPlatformEvent::ExternalVolumeChanged(_)));
+    events.push(AndroidPlatformEvent::ExternalVolumeChanged(volume));
+    drop(events);
     request_registered_repaint();
 }
 
@@ -1084,7 +1106,7 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
     };
     let mut eof = false;
     let mut refresh_state = false;
-    let mut queued = SERVICE_PLAYBACK_EVENTS
+    let mut queued = EVENTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
@@ -1092,13 +1114,17 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
         if matches!(event, PlaybackEvent::EndOfStream) {
             eof = true;
         } else if let PlaybackEvent::Spectrum(data) = event {
-            if let Some(existing) = queued
-                .iter_mut()
-                .find(|event| matches!(event, PlaybackEvent::Spectrum(_)))
-            {
-                *existing = PlaybackEvent::Spectrum(data);
+            if let Some(existing) = queued.iter_mut().find(|event| {
+                matches!(
+                    event,
+                    AndroidPlatformEvent::Playback(PlaybackEvent::Spectrum(_))
+                )
+            }) {
+                *existing = AndroidPlatformEvent::Playback(PlaybackEvent::Spectrum(data));
             } else {
-                queued.push(PlaybackEvent::Spectrum(data));
+                queued.push(AndroidPlatformEvent::Playback(PlaybackEvent::Spectrum(
+                    data,
+                )));
             }
         } else {
             refresh_state |= matches!(
@@ -1107,20 +1133,28 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativePollPla
                     | PlaybackEvent::StreamInfo(_)
                     | PlaybackEvent::AsyncDone
             );
-            queued.push(event);
+            queued.push(AndroidPlatformEvent::Playback(event));
         }
     }
     drop(queued);
     if eof {
-        if let Err(err) = advance_after_end_of_stream(&backend) {
-            eprintln!("xmms-rs: Android background playlist advance failed: {err}");
-            let _ = backend.stop();
+        let backend_executed = !ui_runtime_registered();
+        if backend_executed {
+            if let Err(err) = advance_after_end_of_stream(&backend) {
+                eprintln!("xmms-rs: Android background playlist advance failed: {err}");
+                let _ = backend.stop();
+            }
         }
-        MEDIA_CONTROLS
+        EVENTS
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .push(AndroidMediaControl::PlaylistEof);
+            .push(AndroidPlatformEvent::MediaControl(
+                AndroidMediaControlEvent {
+                    control: AndroidMediaControl::PlaylistEof,
+                    backend_executed,
+                },
+            ));
         update_service_from_backend(&mut env, &service);
     } else if refresh_state {
         update_service_from_backend(&mut env, &service);
@@ -1186,20 +1220,37 @@ fn handle_android_media_control(
         .get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let result = execute_android_media_control(control);
-    if let Err(err) = result {
-        eprintln!("xmms-rs: Android media control failed: {err}");
-        return;
+    let backend_executed = !ui_runtime_registered();
+    if backend_executed {
+        if let Err(err) = execute_android_media_control(control) {
+            eprintln!("xmms-rs: Android media control failed: {err}");
+            return;
+        }
     }
-    MEDIA_CONTROLS
+    EVENTS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .push(control);
-    if let Some(service) = service {
-        update_service_from_backend(&mut env, &service);
+        .push(AndroidPlatformEvent::MediaControl(
+            AndroidMediaControlEvent {
+                control,
+                backend_executed,
+            },
+        ));
+    if backend_executed {
+        if let Some(service) = service {
+            update_service_from_backend(&mut env, &service);
+        }
     }
     request_registered_repaint();
+}
+
+fn ui_runtime_registered() -> bool {
+    REPAINT_CONTEXT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .is_some()
 }
 
 fn request_registered_repaint() {
@@ -1358,11 +1409,7 @@ fn update_service_from_backend(env: &mut JNIEnv, service: &JObject) {
     let Ok(backend) = shared_playback_backend() else {
         return;
     };
-    let state = match backend.state() {
-        PlayerState::Stopped => 0,
-        PlayerState::Playing => 1,
-        PlayerState::Paused => 2,
-    };
+    let state = AndroidPlaybackState::from(backend.state());
     let (_, title, entry_duration_ms) = current_media_entry().unwrap_or_else(|| {
         (
             String::new(),
@@ -1396,7 +1443,7 @@ fn update_service_from_backend(env: &mut JNIEnv, service: &JObject) {
         "applyNativePlaybackState",
         "(ILjava/lang/String;IIIJJJIZZ)V",
         &[
-            JValue::Int(state),
+            JValue::Int(state as i32),
             JValue::Object(&title),
             JValue::Int(stream_info.bitrate.unwrap_or_default()),
             JValue::Int(stream_info.frequency.unwrap_or_default()),

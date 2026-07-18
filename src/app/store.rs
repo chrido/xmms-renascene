@@ -5,9 +5,6 @@
 //! `dispatch`, then update their widgets/windows from the returned change set
 //! and immutable state/view-model reads.
 
-use std::fmt;
-use std::sync::mpsc::{self, Receiver, Sender};
-
 use crate::app::command::AppCommand;
 use crate::app::controller::AppController;
 use crate::app::effect::{AppEffect, RenderTarget};
@@ -17,6 +14,7 @@ use crate::app_state::{AppState, RuntimeSnapshot};
 use crate::config::Config;
 use crate::player::PlaybackEvent;
 use crate::playlist::DurationIndexResult;
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StateChangeSet(u64);
@@ -130,12 +128,6 @@ pub struct DispatchResult {
     pub revision: u64,
     pub changes: StateChangeSet,
     pub effects: Vec<AppEffect>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StoreUpdate {
-    pub revision: u64,
-    pub changes: StateChangeSet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,7 +260,6 @@ impl StoreSnapshot {
 pub struct AppStore {
     controller: AppController,
     revision: u64,
-    subscribers: Vec<Sender<StoreUpdate>>,
 }
 
 impl AppStore {
@@ -276,7 +267,6 @@ impl AppStore {
         Self {
             controller: AppController::new(state),
             revision: 0,
-            subscribers: Vec::new(),
         }
     }
 
@@ -284,16 +274,9 @@ impl AppStore {
         self.controller.state()
     }
 
-    /// Transitional escape hatch for loading files/preferences that have not
-    /// yet been modeled as first-class commands. New app behavior should use
-    /// `dispatch` instead.
-    pub fn state_mut_for_migration(&mut self) -> &mut AppState {
-        self.controller.state_mut()
-    }
-
-    /// Alias used while migrating existing frontend code to the store API.
+    #[cfg(test)]
     pub fn state_mut(&mut self) -> &mut AppState {
-        self.state_mut_for_migration()
+        self.controller.state_mut()
     }
 
     pub fn revision(&self) -> u64 {
@@ -309,12 +292,6 @@ impl AppStore {
     /// commands/events.
     pub fn replace_state_for_migration(&mut self, state: AppState) {
         self.controller = AppController::new(state);
-    }
-
-    pub fn subscribe(&mut self) -> Receiver<StoreUpdate> {
-        let (sender, receiver) = mpsc::channel();
-        self.subscribers.push(sender);
-        receiver
     }
 
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) -> DispatchResult {
@@ -571,22 +548,12 @@ impl AppStore {
     ) -> DispatchResult {
         if !changes.is_empty() || !effects.is_empty() {
             self.revision = self.revision.saturating_add(1);
-            self.notify_subscribers(changes);
         }
         DispatchResult {
             revision: self.revision,
             changes,
             effects,
         }
-    }
-
-    fn notify_subscribers(&mut self, changes: StateChangeSet) {
-        let update = StoreUpdate {
-            revision: self.revision,
-            changes,
-        };
-        self.subscribers
-            .retain(|subscriber| subscriber.send(update.clone()).is_ok());
     }
 }
 
@@ -602,18 +569,14 @@ mod tests {
     use crate::app::command::{PanelCommand, UiCommand};
 
     #[test]
-    fn store_dispatch_updates_revision_and_notifies_subscribers() {
+    fn store_dispatch_updates_revision() {
         let mut store = AppStore::default();
-        let updates = store.subscribe();
 
         let result = store.dispatch(PanelCommand::SetPlaylistVisibility(true));
 
         assert_eq!(result.revision, 1);
         assert!(result.changes.contains(StateChangeSet::PANELS));
         assert!(store.state().config.playlist_visible);
-        let update = updates.recv().expect("store update");
-        assert_eq!(update.revision, result.revision);
-        assert!(update.changes.contains(StateChangeSet::PANELS));
     }
 
     #[test]

@@ -28,7 +28,7 @@ impl EguiPrompt {
 }
 
 pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    if !app.main_menu_open {
+    if !app.main_menu_open() {
         return;
     }
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {

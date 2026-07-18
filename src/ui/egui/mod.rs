@@ -5,9 +5,13 @@
 
 #[cfg(target_os = "android")]
 pub mod android_file_picker;
+#[cfg(any(target_os = "android", test))]
+pub mod android_runtime;
 pub mod app;
 pub mod equalizer;
 pub mod file_info;
+#[cfg(any(target_os = "android", test))]
+pub mod interaction;
 pub mod layout;
 pub mod main_player;
 pub mod menu;

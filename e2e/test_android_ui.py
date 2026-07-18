@@ -944,25 +944,31 @@ def test_android_external_media_volume_source_bridge() -> None:
     assert "unregisterMediaVolumeObserver();" in activity
     assert "nativeOnMediaVolumeChanged(volumePercent);" in activity
     assert "volumePercent == lastReportedMediaVolumePercent" in activity
-    assert "pendingAppMediaVolumePercent = clampedPercent" in activity
+    assert "pendingAppMediaVolumePercent.set(clampedPercent)" in activity
+    assert "pendingAppMediaVolumePercent.getAndSet(null)" in activity
 
-    assert "EXTERNAL_MEDIA_VOLUME_PERCENT" in bridge
+    assert "ExternalVolumeChanged(i32)" in bridge
     assert (
         "Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged"
         in bridge
     )
-    assert "Some(volume_percent.clamp(0, 100))" in bridge
-    assert "take_latest_external_media_volume_percent" in bridge
-    assert ".take()" in bridge
+    assert "let volume = volume_percent.clamp(0, 100);" in bridge
+    assert "AndroidPlatformEvent::ExternalVolumeChanged(volume)" in bridge
+    assert (
+        "retain(|event| !matches!(event, "
+        "AndroidPlatformEvent::ExternalVolumeChanged(_)))"
+        in bridge
+    )
     assert "request_registered_repaint();" in bridge
 
     assert "sync_external_output_volume(volume)" in app
-    assert "persist_android_state();" in app
-    external_poll = app.split("fn poll_external_android_media_volume", 1)[1].split(
-        "fn poll_android_media_controls", 1
+    assert "self.android.mark_persistence();" in app
+    platform_poll = app.split("fn poll_android_platform_events", 1)[1].split(
+        "fn sync_android_playback_notification", 1
     )[0]
-    assert "AudioCommand::SetVolume" not in external_poll
-    assert "set_media_volume_percent" not in external_poll
+    assert "AndroidPlatformEvent::ExternalVolumeChanged(volume)" in platform_poll
+    assert "AudioCommand::SetVolume" not in platform_poll
+    assert "set_media_volume_percent" not in platform_poll
 
     store_sync = store.split("pub fn sync_external_output_volume", 1)[1].split(
         "pub fn complete_stop_fade", 1

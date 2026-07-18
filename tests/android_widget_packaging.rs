@@ -123,14 +123,13 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
     assert!(java.contains("Looper.myLooper() != Looper.getMainLooper()"));
     assert!(java.contains("private native void nativeOnMediaVolumeChanged(int volumePercent)"));
     assert!(java.contains("volumePercent == lastReportedMediaVolumePercent"));
-    assert!(java.contains("pendingAppMediaVolumePercent = clampedPercent"));
+    assert!(java.contains("pendingAppMediaVolumePercent.set(clampedPercent)"));
     assert!(java.contains("requestedPercent == volumePercent"));
 
-    assert!(bridge.contains("static EXTERNAL_MEDIA_VOLUME_PERCENT: OnceLock<Mutex<Option<i32>>>"));
+    assert!(bridge.contains("AndroidPlatformEvent::ExternalVolumeChanged"));
     assert!(bridge.contains("Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged"));
-    assert!(bridge.contains("Some(volume_percent.clamp(0, 100))"));
-    assert!(bridge.contains("pub fn take_latest_external_media_volume_percent()"));
-    assert!(bridge.contains(".take()"));
+    assert!(bridge.contains("events.retain(|event|"));
+    assert!(bridge.contains("events.push(AndroidPlatformEvent::ExternalVolumeChanged(volume))"));
     assert!(bridge.contains("request_registered_repaint();"));
     let initialization = bridge
         .split("pub fn initialize(")
@@ -139,20 +138,18 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
         .split("pub fn persist_app_state")
         .next()
         .expect("Android initialization body");
-    assert!(initialization.contains("EXTERNAL_MEDIA_VOLUME_PERCENT"));
-    assert!(initialization.contains("Mutex::new(None)"));
+    assert!(initialization.contains("EVENTS"));
+    assert!(initialization.contains("Mutex::new(Vec::new())"));
 
     let external_poll = app
-        .split("fn poll_external_android_media_volume")
+        .split("fn handle_external_android_media_volume")
         .nth(1)
-        .expect("external media-volume poll")
-        .split("fn poll_android_media_controls")
+        .expect("external media-volume handler")
+        .split("fn handle_android_media_control")
         .next()
-        .expect("external media-volume poll body");
-    assert!(external_poll.contains("take_latest_external_media_volume_percent"));
+        .expect("external media-volume handler body");
     assert!(external_poll.contains("sync_external_output_volume(volume)"));
-    assert!(external_poll.contains("sync_frontend_state_from_store()"));
-    assert!(external_poll.contains("persist_android_state()"));
+    assert!(external_poll.contains("android.mark_persistence()"));
     assert!(external_poll.contains("ctx.request_repaint()"));
     assert!(!external_poll.contains("AudioCommand::SetVolume"));
     assert!(!external_poll.contains("set_media_volume_percent"));
@@ -432,7 +429,7 @@ fn playback_callbacks_refresh_info_for_display_or_transport_changes() {
         .expect("playback callback body");
     assert!(apply.contains("boolean infoChanged"));
     assert!(apply.contains("boolean playbackChanged"));
-    assert!(apply.contains("if (state != 0 && (infoChanged || playbackChanged))"));
+    assert!(apply.contains("if (state != STATE_STOPPED && (infoChanged || playbackChanged))"));
     assert!(apply.contains("XmmsPlayerInfoWidget.updateAll("));
 
     let position = service
@@ -520,11 +517,11 @@ fn skin_config_is_persisted_before_widget_refresh() {
         .split("pub(crate) fn apply_preferences_config")
         .nth(1)
         .expect("preferences config application")
-        .split("fn persist_android_state")
+        .split("fn flush_android_persistence")
         .next()
         .expect("apply_preferences_config body");
     let persist = apply
-        .find("self.persist_android_state();")
+        .find("self.flush_android_persistence(true);")
         .expect("Android config persistence");
     let refresh = apply
         .find("refresh_player_widgets()")

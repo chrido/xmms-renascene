@@ -48,7 +48,7 @@ pub struct FileInfoViewportState {
 }
 
 pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    if !app.file_info_open {
+    if !app.file_info_open() {
         let mut state = app
             .file_info_viewport
             .lock()
