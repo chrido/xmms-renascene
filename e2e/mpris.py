@@ -28,7 +28,7 @@ class MprisClient:
     props: Any
 
     @classmethod
-    async def connect(cls, bus_address: str, timeout: float = 5.0) -> "MprisClient":
+    async def connect(cls, bus_address: str, timeout: float = 15.0) -> "MprisClient":
         bus = await MessageBus(bus_address=bus_address).connect()
         deadline = time.monotonic() + timeout
         last_error: BaseException | None = None

@@ -26,7 +26,7 @@ pub(crate) fn build_playlist_window(
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
         let skin = state.active_skin();
-        let shaded = state.playlist_ui.panel.shaded;
+        let shaded = state.is_playlist_shaded();
         let focused = state.playlist_focused();
         let playlist_width = state.playlist_ui.width;
         let playlist_height = state.playlist_ui.height;
@@ -100,7 +100,7 @@ pub(crate) fn build_playlist_window(
                 return;
             }
             let scale = state.scale_factor();
-            let base_height = if state.playlist_ui.panel.shaded {
+            let base_height = if state.is_playlist_shaded() {
                 state.playlist_ui.height
             } else {
                 unscale_dim(height, scale).max(PLAYLIST_MIN_HEIGHT)

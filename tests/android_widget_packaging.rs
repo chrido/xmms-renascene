@@ -85,7 +85,7 @@ fn android_output_volume_uses_stream_music_without_backend_scaling() {
     assert_eq!(
         gtk.matches("AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume)")
             .count(),
-        2
+        1
     );
     assert!(store.contains("AppEffect::SetBackendVolume(volume)"));
     assert!(store.contains("AppEffect::SetBackendVolume(restore_volume)"));

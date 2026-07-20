@@ -293,17 +293,6 @@ impl AppStore {
         self.controller.into_state()
     }
 
-    /// Synchronizes the legacy GTK mirror before an explicit store transition.
-    ///
-    /// This is the sole legacy mutable-state exception. GTK still owns a widget
-    /// mirror while it is being migrated, so the mirror must be imported before
-    /// the store applies a command. Importing that already-existing state is not
-    /// a domain transition and therefore does not increment the revision.
-    #[cfg(feature = "gtk-ui")]
-    pub(crate) fn sync_legacy_frontend_state(&mut self, state: AppState) {
-        self.controller = AppController::new(state);
-    }
-
     pub fn dispatch(&mut self, command: impl Into<AppCommand>) -> DispatchResult {
         let command = command.into();
         let event = format!("command {command:?}");
@@ -376,6 +365,39 @@ impl AppStore {
         )
     }
 
+    /// Applies a playback-runtime position observation without seeking the
+    /// backend that produced it.
+    pub fn update_playback_position_from_runtime(&mut self, position_ms: i64) -> DispatchResult {
+        let requested_position_ms = position_ms;
+        let position_ms = {
+            let state = self.state();
+            let position_ms = position_ms.max(0);
+            state
+                .player
+                .duration_ms()
+                .filter(|duration_ms| *duration_ms > 0)
+                .map_or(position_ms, |duration_ms| position_ms.min(duration_ms))
+        };
+        let changed = self.state().config.playback_position_ms != position_ms;
+        self.controller.state_mut().config.playback_position_ms = position_ms;
+        self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
+            format!(
+                "runtime-playback-position requested_position_ms={requested_position_ms} position_ms={position_ms}"
+            ),
+            if changed {
+                StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
+            } else {
+                StateChangeSet::empty()
+            },
+            if changed {
+                vec![AppEffect::QueueRender(RenderTarget::All)]
+            } else {
+                Vec::new()
+            },
+        )
+    }
+
     /// Applies an internal playback-transition volume event.
     pub fn set_runtime_volume_for_transition(&mut self, volume: i32) -> DispatchResult {
         let requested_volume = volume;
@@ -428,21 +450,30 @@ impl AppStore {
     pub fn complete_stop_fade(&mut self, restore_volume: i32) -> DispatchResult {
         let requested_restore_volume = restore_volume;
         let restore_volume = restore_volume.clamp(0, 100);
+        let position_changed = self.state().config.playback_position_ms != 0;
         {
             let state = self.controller.state_mut();
             state.player.stop();
             state.player.clear_visualization_data();
             state.player.set_volume(restore_volume);
+            state.config.playback_position_ms = 0;
         }
         self.finish_dispatch_logged(
             ConsoleLogLevel::Trace,
             format!(
                 "complete-stop-fade requested_restore_volume={requested_restore_volume} restore_volume={restore_volume}"
             ),
-            StateChangeSet::PLAYER | StateChangeSet::RENDER_ALL,
+            StateChangeSet::PLAYER
+                | StateChangeSet::RENDER_ALL
+                | if position_changed {
+                    StateChangeSet::CONFIG
+                } else {
+                    StateChangeSet::empty()
+                },
             vec![
                 AppEffect::StopPlayback,
                 AppEffect::SetBackendVolume(restore_volume),
+                AppEffect::SaveConfig,
                 AppEffect::QueueRender(RenderTarget::All),
             ],
         )
@@ -699,13 +730,16 @@ mod tests {
             .iter()
             .any(|effect| matches!(effect, AppEffect::SetOutputVolume(_))));
 
+        store.state_mut().config.playback_position_ms = 42_000;
         let stopped = store.complete_stop_fade(60);
         assert_eq!(
             stopped.changes,
-            StateChangeSet::PLAYER | StateChangeSet::RENDER_ALL
+            StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_ALL
         );
         assert_eq!(stopped.revision, 2);
+        assert_eq!(store.state().config.playback_position_ms, 0);
         assert!(stopped.effects.contains(&AppEffect::SetBackendVolume(60)));
+        assert!(stopped.effects.contains(&AppEffect::SaveConfig));
         assert!(!stopped
             .effects
             .iter()
@@ -769,6 +803,24 @@ mod tests {
         );
         assert_eq!(result.revision, 1);
         assert_eq!(store.state().config.playback_position_ms, 250);
+    }
+
+    #[test]
+    fn runtime_position_observations_are_clamped_and_idempotent() {
+        let mut store = AppStore::default();
+        store.handle_playback_event(PlaybackEvent::DurationChanged(Some(1_000)));
+
+        let changed = store.update_playback_position_from_runtime(1_500);
+        assert_eq!(store.state().config.playback_position_ms, 1_000);
+        assert_eq!(
+            changed.changes,
+            StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
+        );
+
+        let unchanged = store.update_playback_position_from_runtime(1_500);
+        assert_eq!(unchanged.revision, changed.revision);
+        assert!(unchanged.changes.is_empty());
+        assert!(unchanged.effects.is_empty());
     }
 
     #[test]
@@ -858,6 +910,37 @@ mod tests {
         let unchanged = store.apply_equalizer_preset_positions(25, band_positions);
         assert!(unchanged.changes.is_empty());
         assert_eq!(unchanged.revision, 2);
+    }
+
+    #[test]
+    fn gtk_style_commands_and_runtime_events_keep_revision_monotonic() {
+        let mut store = AppStore::default();
+        let mut revisions = Vec::new();
+
+        revisions.push(store.dispatch(PanelCommand::SetMainShade(true)).revision);
+        revisions.push(
+            store
+                .dispatch(UiCommand::SetPreferencesVisible(true))
+                .revision,
+        );
+        revisions.push(
+            store
+                .apply_equalizer_preset_positions(25, [40; 10])
+                .revision,
+        );
+        revisions.push(
+            store
+                .handle_playback_event(PlaybackEvent::StreamInfo(crate::player::StreamInfo {
+                    bitrate: Some(192),
+                    frequency: Some(44_100),
+                    channels: Some(2),
+                }))
+                .revision,
+        );
+        revisions.push(store.update_playback_position_from_runtime(250).revision);
+
+        assert!(revisions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(store.revision(), *revisions.last().unwrap());
     }
 
     #[test]

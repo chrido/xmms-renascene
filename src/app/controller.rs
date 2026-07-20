@@ -467,8 +467,10 @@ impl AppController {
         }
         self.state.player.stop();
         self.state.player.clear_visualization_data();
+        self.state.config.playback_position_ms = 0;
         vec![
             AppEffect::StopPlayback,
+            AppEffect::SaveConfig,
             AppEffect::QueueRender(RenderTarget::All),
         ]
     }
@@ -502,7 +504,14 @@ impl AppController {
     }
 
     fn seek_to(&mut self, position_ms: i64) -> Vec<AppEffect> {
-        let position_ms = position_ms.max(0);
+        let position_ms = self
+            .state
+            .player
+            .duration_ms()
+            .filter(|duration_ms| *duration_ms > 0)
+            .map_or(position_ms.max(0), |duration_ms| {
+                position_ms.clamp(0, duration_ms)
+            });
         self.state.config.playback_position_ms = position_ms;
         vec![
             AppEffect::SeekPlayback(position_ms),
@@ -517,15 +526,19 @@ impl AppController {
         }
         let Some(position) = self.state.playlist.position() else {
             self.state.player.stop();
+            self.state.config.playback_position_ms = 0;
             return vec![
                 AppEffect::StopPlayback,
+                AppEffect::SaveConfig,
                 AppEffect::QueueRender(RenderTarget::All),
             ];
         };
         let Some(entry) = self.state.playlist.entries().get(position) else {
             self.state.player.stop();
+            self.state.config.playback_position_ms = 0;
             return vec![
                 AppEffect::StopPlayback,
+                AppEffect::SaveConfig,
                 AppEffect::QueueRender(RenderTarget::All),
             ];
         };
@@ -615,6 +628,20 @@ mod tests {
             uri: "file:///tmp/one.ogg".to_string(),
             position_ms: 0,
         }));
+    }
+
+    #[test]
+    fn play_without_a_current_entry_resets_the_saved_position() {
+        let mut state = AppState::default();
+        state.config.playback_position_ms = 42_000;
+        let mut controller = AppController::new(state);
+
+        let effects = controller.handle_command(PlayerCommand::Play.into());
+
+        assert_eq!(controller.state().player.state(), PlayerState::Stopped);
+        assert_eq!(controller.state().config.playback_position_ms, 0);
+        assert!(effects.contains(&AppEffect::StopPlayback));
+        assert!(effects.contains(&AppEffect::SaveConfig));
     }
 
     #[test]

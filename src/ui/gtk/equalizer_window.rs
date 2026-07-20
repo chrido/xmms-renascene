@@ -120,7 +120,7 @@ pub(crate) fn show_docked_equalizer_presets_menu(
     let (base_width, base_height) = state.docked_panel_size();
     let scale_x = area.allocated_width().max(1) as f64 / f64::from(base_width);
     let scale_y = area.allocated_height().max(1) as f64 / f64::from(base_height);
-    let y_offset = main_window_height(state.shaded);
+    let y_offset = main_window_height(state.is_shaded());
     let rect = gtk::gdk::Rectangle::new(
         (217.0 * scale_x) as i32,
         (f64::from(y_offset + 30) * scale_y) as i32,
