@@ -19,6 +19,8 @@ pub struct Config {
     pub skin: Option<String>,
     pub timer_mode: TimerMode,
     pub output_device: Option<String>,
+    // Persisted startup values. Once AppState is live, Player/Playlist are the
+    // runtime authorities and AppState::persistence_snapshot projects them.
     pub volume: i32,
     pub balance: i32,
     pub no_playlist_advance: bool,

@@ -37,13 +37,17 @@ def focus_detached_window_for_xvfb(main_window: MainWindow, window_id: str) -> N
     time.sleep(0.1)
     main_window.focus_main_window()
     run_xdotool("windowfocus", window_id, check=False)
+    run_xdotool("windowraise", window_id, check=False)
     time.sleep(0.4)
 
 
 def double_click_detached_rect(window_id: str, rect: SkinRect) -> None:
     x, y = scaled_skin_point(window_id, rect, base_width=PLAYLIST_DEFAULT_WIDTH)
     geometry = window_geometry(window_id)
+    run_xdotool("mousemove", str(geometry.x - 10), str(geometry.y - 10))
+    time.sleep(0.1)
     run_xdotool("mousemove", str(geometry.x + x), str(geometry.y + y))
+    time.sleep(0.2)
     for _ in range(2):
         run_xdotool("mousedown", "1")
         time.sleep(0.04)

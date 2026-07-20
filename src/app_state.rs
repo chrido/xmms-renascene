@@ -2,6 +2,12 @@ use crate::config::Config;
 use crate::player::{Player, PlayerState};
 use crate::playlist::Playlist;
 
+/// Live application state.
+///
+/// `Player` owns runtime volume and balance. `Playlist` owns runtime shuffle,
+/// repeat, no-advance, and position. The matching `Config` fields are startup
+/// inputs and serialized output fields only; use [`AppState::persistence_snapshot`]
+/// when writing them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
     pub config: Config,
@@ -29,6 +35,19 @@ pub struct RuntimeSnapshot {
     pub equalizer_detached: bool,
 }
 
+#[derive(Debug)]
+pub struct PersistenceSnapshot<'a> {
+    pub config: Config,
+    pub playlist: &'a Playlist,
+}
+
+impl PersistenceSnapshot<'_> {
+    pub fn with_playback_position(mut self, position_ms: i64) -> Self {
+        self.config.playback_position_ms = position_ms.max(0);
+        self
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self::from_config(Config::default())
@@ -54,7 +73,7 @@ impl AppState {
         }
     }
 
-    pub fn apply_config_to_runtime(&mut self) {
+    pub(crate) fn apply_config_to_runtime(&mut self) {
         self.player.set_volume(self.config.volume);
         self.player.set_balance(self.config.balance);
         self.playlist.set_shuffle(self.config.shuffle);
@@ -67,17 +86,21 @@ impl AppState {
         }
     }
 
-    pub fn sync_config_from_runtime(&mut self) {
-        self.config.volume = self.player.volume();
-        self.config.balance = self.player.balance();
-        self.config.shuffle = self.playlist.shuffle();
-        self.config.repeat = self.playlist.repeat();
-        self.config.no_playlist_advance = self.playlist.no_advance();
-        self.config.playlist_position = self
+    pub fn persistence_snapshot(&self) -> PersistenceSnapshot<'_> {
+        let mut config = self.config.clone();
+        config.volume = self.player.volume();
+        config.balance = self.player.balance();
+        config.shuffle = self.playlist.shuffle();
+        config.repeat = self.playlist.repeat();
+        config.no_playlist_advance = self.playlist.no_advance();
+        config.playlist_position = self
             .playlist
             .position()
-            .map(|position| position as i32)
-            .unwrap_or(-1);
+            .map_or(-1, |position| position.min(i32::MAX as usize) as i32);
+        PersistenceSnapshot {
+            config,
+            playlist: &self.playlist,
+        }
     }
 
     pub fn snapshot(&self) -> RuntimeSnapshot {
@@ -117,19 +140,25 @@ mod tests {
     }
 
     #[test]
-    fn app_state_syncs_runtime_values_back_to_config() {
+    fn persistence_snapshot_projects_runtime_owners_without_mutating_app_state() {
         let mut state = AppState::default();
+        let original_config = state.config.clone();
         state.player.set_volume(44);
         state.player.set_balance(20);
         state.playlist.set_shuffle(true);
+        state.playlist.set_repeat(true);
+        state.playlist.set_no_advance(true);
         state.playlist.add_uri("file:///tmp/song.mp3");
         state.playlist.set_position(0);
 
-        state.sync_config_from_runtime();
+        let snapshot = state.persistence_snapshot();
 
-        assert_eq!(state.config.volume, 44);
-        assert_eq!(state.config.balance, 20);
-        assert!(state.config.shuffle);
-        assert_eq!(state.config.playlist_position, 0);
+        assert_eq!(snapshot.config.volume, 44);
+        assert_eq!(snapshot.config.balance, 20);
+        assert!(snapshot.config.shuffle);
+        assert!(snapshot.config.repeat);
+        assert!(snapshot.config.no_playlist_advance);
+        assert_eq!(snapshot.config.playlist_position, 0);
+        assert_eq!(state.config, original_config);
     }
 }

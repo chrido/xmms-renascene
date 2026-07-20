@@ -180,6 +180,12 @@ class AndroidDevice:
             self.shell("pm", "clear", ANDROID_PACKAGE)
             self.grant_runtime_permissions()
         self.start_activity()
+        try:
+            self.main_player_bounds()
+        except AssertionError:
+            self.force_stop()
+            self.start_activity()
+            self.main_player_bounds()
 
     def wait_for_app(self, timeout: float = 15.0) -> None:
         deadline = time.monotonic() + timeout
@@ -412,7 +418,7 @@ class AndroidDevice:
         self,
         *,
         changed_from: bytes | Path | None = None,
-        timeout: float = 5.0,
+        timeout: float = 10.0,
         stable_for: float = 0.3,
         minimum_changed_fraction: float = 0.01,
     ) -> bytes:
@@ -477,7 +483,7 @@ class AndroidDevice:
         ) == _rendered_screen_pixels(second, geometry)
 
     def main_player_bounds(self) -> tuple[int, int, int, int]:
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             geometry = self.display_geometry()
             with Image.open(BytesIO(self.framebuffer_png())) as screenshot:

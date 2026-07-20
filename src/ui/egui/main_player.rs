@@ -17,7 +17,8 @@ use crate::skin::layout::{
 };
 use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 
-use super::app::{CachedMainTexture, EguiFrontendState};
+use super::app::EguiFrontendState;
+use super::render_cache::CachedMainTexture;
 use super::skin_texture::{pixel_snapped_rect, render_main_player_color_image, upload_color_image};
 
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
@@ -57,28 +58,28 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         app.visualization_render_state(),
     );
     render_state.title_offset_px = app.title_marquee.offset_px();
-    let needs_texture_update = app.texture_cache.main.as_ref().is_none_or(|cached| {
-        cached.generation != app.texture_cache.generation || cached.state != render_state
+    let needs_texture_update = app.render_cache.main.as_ref().is_none_or(|cached| {
+        cached.generation != app.render_cache.generation || cached.state != render_state
     });
     if needs_texture_update {
         let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
             ui.label("failed to render skinned main player");
             return;
         };
-        if let Some(cached) = &mut app.texture_cache.main {
+        if let Some(cached) = &mut app.render_cache.main {
             cached.texture.set(image, egui::TextureOptions::NEAREST);
-            cached.generation = app.texture_cache.generation;
+            cached.generation = app.render_cache.generation;
             cached.state = render_state.clone();
         } else {
-            app.texture_cache.main = Some(CachedMainTexture {
-                generation: app.texture_cache.generation,
+            app.render_cache.main = Some(CachedMainTexture {
+                generation: app.render_cache.generation,
                 state: render_state.clone(),
                 texture: upload_color_image(ui.ctx(), "xmms-main-player", image),
             });
         }
     }
     let texture_id = app
-        .texture_cache
+        .render_cache
         .main
         .as_ref()
         .expect("main texture initialized")

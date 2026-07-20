@@ -23,8 +23,15 @@ use crate::skin::layout::{
     PlaylistMenuButton, SkinRect,
 };
 
-use super::app::{CachedPlaylistTexture, EguiFrontendState, PlaylistTextureKey};
+#[cfg(target_os = "android")]
+use super::android::playlist_manager::{
+    managed_playlist_name, PlaylistManager, PlaylistManagerAction,
+};
+#[cfg(target_os = "android")]
+use super::android_runtime::AndroidLayoutSnapshot;
+use super::app::EguiFrontendState;
 use super::layout::clamp_popup_to_rect;
+use super::render_cache::{CachedPlaylistTexture, PlaylistTextureKey};
 use super::skin_texture::{
     pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
     upload_color_image,
@@ -43,18 +50,18 @@ fn android_saved_playlist_row_size(available_width: f32) -> egui::Vec2 {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiFrontendState) {
+pub(crate) fn show_android_playlist_manager(
+    ctx: &egui::Context,
+    manager: &mut PlaylistManager,
+    layout: Option<AndroidLayoutSnapshot>,
+) -> Option<PlaylistManagerAction> {
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.android.playlist_manager_open = false;
-        return;
+        return Some(PlaylistManagerAction::Close);
     }
 
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
-    let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels()
-        .filter(|layout| layout.has_current_insets())
-    else {
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        return;
+    let Some(layout) = layout else {
+        return None;
     };
     let screen = egui::Rect::from_min_size(
         egui::Pos2::ZERO,
@@ -74,7 +81,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
         (screen.width() - left_inset - right_inset - horizontal_margin * 2.0).max(1.0);
     let content_height =
         (screen.height() - top_inset - bottom_inset - vertical_margin * 2.0).max(1.0);
-    let saved_playlists = app.android.saved_playlists.clone();
+    let saved_playlists = manager.saved_playlists().to_vec();
+    let mut action = None;
 
     egui::Area::new(egui::Id::new("xmms-android-playlist-manager"))
         .order(egui::Order::Foreground)
@@ -95,7 +103,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                             .add_sized([88.0, 48.0], egui::Button::new("Close"))
                             .clicked()
                         {
-                            app.android.playlist_manager_open = false;
+                            action = Some(PlaylistManagerAction::Close);
                         }
                         ui.heading("Playlists");
                     });
@@ -104,13 +112,13 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                     ui.label("Playlist name");
                     ui.add_sized(
                         [ui.available_width(), 48.0],
-                        egui::TextEdit::singleline(&mut app.android.playlist_name),
+                        egui::TextEdit::singleline(manager.name_mut()),
                     );
                     if ui
                         .add_sized([ui.available_width(), 56.0], egui::Button::new("Save"))
                         .clicked()
                     {
-                        app.save_android_playlist();
+                        action = Some(PlaylistManagerAction::Save);
                     }
                     if ui
                         .add_sized(
@@ -119,7 +127,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                         )
                         .clicked()
                     {
-                        app.begin_android_playlist_import();
+                        action = Some(PlaylistManagerAction::Import);
                     }
 
                     ui.separator();
@@ -134,7 +142,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                 let name = path
                                     .file_name()
                                     .and_then(|name| name.to_str())
-                                    .map(super::app::managed_playlist_name)
+                                    .map(managed_playlist_name)
                                     .filter(|name| !name.is_empty())
                                     .unwrap_or_else(|| "Playlist".to_string());
                                 ui.allocate_ui_with_layout(
@@ -148,7 +156,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                             )
                                             .clicked()
                                         {
-                                            app.delete_android_playlist(&path);
+                                            action =
+                                                Some(PlaylistManagerAction::Delete(path.clone()));
                                         }
                                         if ui
                                             .add_sized(
@@ -157,7 +166,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                             )
                                             .clicked()
                                         {
-                                            app.export_android_playlist(&path);
+                                            action =
+                                                Some(PlaylistManagerAction::Export(path.clone()));
                                         }
                                         if ui
                                             .add_sized(
@@ -166,7 +176,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                             )
                                             .clicked()
                                         {
-                                            app.load_android_playlist(&path);
+                                            action =
+                                                Some(PlaylistManagerAction::Load(path.clone()));
                                         }
                                         ui.with_layout(
                                             egui::Layout::left_to_right(egui::Align::Center),
@@ -181,6 +192,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                 });
             });
         });
+    action
 }
 
 pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
@@ -201,7 +213,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
     let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
     let texture_key = PlaylistTextureKey {
-        generation: app.texture_cache.generation,
+        generation: app.render_cache.generation,
         focused: true,
         shaded: view_model.shaded,
         width: app.playlist_width,
@@ -214,7 +226,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         render_scale_bits: render_scale.to_bits(),
     };
     if app
-        .texture_cache
+        .render_cache
         .playlist
         .as_ref()
         .is_none_or(|cached| cached.key != texture_key)
@@ -235,18 +247,18 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
             ui.label("failed to render skinned playlist");
             return;
         };
-        if let Some(cached) = &mut app.texture_cache.playlist {
+        if let Some(cached) = &mut app.render_cache.playlist {
             cached.texture.set(image, egui::TextureOptions::NEAREST);
             cached.key = texture_key;
         } else {
-            app.texture_cache.playlist = Some(CachedPlaylistTexture {
+            app.render_cache.playlist = Some(CachedPlaylistTexture {
                 key: texture_key,
                 texture: upload_color_image(ui.ctx(), "xmms-playlist", image),
             });
         }
     }
     let texture_id = app
-        .texture_cache
+        .render_cache
         .playlist
         .as_ref()
         .expect("playlist texture initialized")
@@ -323,13 +335,13 @@ fn add_playlist_hit_regions(
     base_rect: egui::Rect,
     view_model: &PlaylistViewModel,
 ) {
-    app.playlist_menu_hover = None;
+    app.ui.playlist_menu_hover = None;
     add_playlist_title_button_hits(ui, app, base_rect);
     if view_model.shaded {
         return;
     }
 
-    if app.playlist_menu_open.is_none() {
+    if app.ui.playlist_menu_open.is_none() {
         add_playlist_rows_hit_region(ui, app, base_rect, view_model);
     }
     for menu in [
@@ -536,7 +548,7 @@ fn add_playlist_rows_hit_region(
             ui.close();
         }
         if ui.button("Physically Delete").clicked() {
-            app.confirm_physical_delete_open = true;
+            app.ui.confirm_physical_delete_open = true;
             ui.close();
         }
         ui.separator();
@@ -777,12 +789,12 @@ fn scroll_playlist_rows(app: &mut EguiFrontendState, rows: i32) {
 pub(crate) fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
     let menu_name = format!("{menu:?}");
     app_log_info!(playlist, "menu opened", menu_name);
-    app.playlist_sort_menu_open = false;
-    app.playlist_menu_open = Some(menu);
+    app.ui.playlist_sort_menu_open = false;
+    app.ui.playlist_menu_open = Some(menu);
 }
 
 fn show_physical_delete_confirmation(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    if !app.confirm_physical_delete_open {
+    if !app.ui.confirm_physical_delete_open {
         return;
     }
     let selected_count = app
@@ -804,16 +816,16 @@ fn show_physical_delete_confirmation(ctx: &egui::Context, app: &mut EguiFrontend
             ));
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
-                    app.confirm_physical_delete_open = false;
+                    app.ui.confirm_physical_delete_open = false;
                 }
                 if ui.button("Delete").clicked() {
                     app.dispatch(PlaylistCommand::PhysicallyDeleteSelected);
-                    app.confirm_physical_delete_open = false;
+                    app.ui.confirm_physical_delete_open = false;
                 }
             });
         });
     if !open {
-        app.confirm_physical_delete_open = false;
+        app.ui.confirm_physical_delete_open = false;
     }
 }
 
@@ -822,11 +834,11 @@ fn add_playlist_menu_popover(
     app: &mut EguiFrontendState,
     base_rect: egui::Rect,
 ) {
-    let Some(kind) = app.playlist_menu_open else {
+    let Some(kind) = app.ui.playlist_menu_open else {
         return;
     };
     if ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.playlist_menu_open = None;
+        app.ui.playlist_menu_open = None;
         return;
     }
     #[cfg(target_os = "android")]
@@ -837,7 +849,7 @@ fn add_playlist_menu_popover(
     let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
     let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor);
     let item_height = 18.0 * app.scale_factor;
-    app.playlist_menu_hover = None;
+    app.ui.playlist_menu_hover = None;
     let mut clicked_item = None;
     for index in 0..kind.item_count() {
         let item_rect = egui::Rect::from_min_size(
@@ -853,7 +865,7 @@ fn add_playlist_menu_popover(
             egui::Sense::click(),
         );
         if response.hovered() {
-            app.playlist_menu_hover = Some((kind, index));
+            app.ui.playlist_menu_hover = Some((kind, index));
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if response.clicked() {
@@ -915,13 +927,14 @@ fn add_playlist_menu_popover(
         });
         if let Some(index) = clicked_item {
             dispatch_playlist_menu_item(app, PlaylistMenuKind::Misc, index);
-            app.playlist_menu_open = None;
+            app.ui.playlist_menu_open = None;
         } else if clicked_outside {
-            app.playlist_menu_open = None;
+            app.ui.playlist_menu_open = None;
         }
     }
 
     let hover = app
+        .ui
         .playlist_menu_hover
         .and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
     let render_state = PlaylistMenuRenderState { kind, hover };
@@ -971,9 +984,9 @@ fn add_playlist_menu_popover(
 
     if let Some(index) = clicked_item {
         dispatch_playlist_menu_item(app, kind, index);
-        app.playlist_menu_open = None;
+        app.ui.playlist_menu_open = None;
     } else if clicked_outside {
-        app.playlist_menu_open = None;
+        app.ui.playlist_menu_open = None;
     }
 }
 
@@ -984,8 +997,8 @@ pub(crate) fn dispatch_playlist_menu_item(
 ) {
     match (kind, index) {
         (PlaylistMenuKind::Add, 0) => {
-            app.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);
-            app.prompt_text.clear();
+            app.ui.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);
+            app.ui.prompt_text.clear();
         }
         (PlaylistMenuKind::Add, 1) => app.apply_effect(AppEffect::OpenFileDialog(
             FileDialogRequest::AddAudioDirectory,
@@ -993,7 +1006,7 @@ pub(crate) fn dispatch_playlist_menu_item(
         (PlaylistMenuKind::Add, 2) => {
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
         }
-        (PlaylistMenuKind::Misc, 0) => app.playlist_sort_menu_open = true,
+        (PlaylistMenuKind::Misc, 0) => app.ui.playlist_sort_menu_open = true,
         _ => app.dispatch(PlaylistCommand::ExecuteMenu { kind, index }),
     }
 }
@@ -1003,11 +1016,11 @@ fn show_playlist_sort_popover(
     app: &mut EguiFrontendState,
     playlist_rect: egui::Rect,
 ) {
-    if !app.playlist_sort_menu_open {
+    if !app.ui.playlist_sort_menu_open {
         return;
     }
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.playlist_sort_menu_open = false;
+        app.ui.playlist_sort_menu_open = false;
         return;
     }
 
@@ -1081,7 +1094,7 @@ fn show_playlist_sort_popover(
                 })
     });
     if close_after_click || clicked_outside {
-        app.playlist_sort_menu_open = false;
+        app.ui.playlist_sort_menu_open = false;
     }
 }
 
@@ -1215,10 +1228,10 @@ mod tests {
             "Song",
             12_000,
         );
-        app.playlist_sort_menu_open = true;
+        app.ui.playlist_sort_menu_open = true;
         dispatch_playlist_menu_button(&mut app, PlaylistMenuKind::Select);
-        assert_eq!(app.playlist_menu_open, Some(PlaylistMenuKind::Select));
-        assert!(!app.playlist_sort_menu_open);
+        assert_eq!(app.ui.playlist_menu_open, Some(PlaylistMenuKind::Select));
+        assert!(!app.ui.playlist_sort_menu_open);
         dispatch_playlist_menu_item(&mut app, PlaylistMenuKind::Select, 2);
         assert!(app.controller().state().playlist.entries()[0].selected);
 

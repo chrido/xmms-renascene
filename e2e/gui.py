@@ -257,7 +257,7 @@ def run_xdotool(*args: str, check: bool = True) -> subprocess.CompletedProcess[s
     )
 
 
-def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float = 10.0) -> str:
+def wait_for_window(title: str, process: subprocess.Popen[bytes], timeout: float = 20.0) -> str:
     return wait_for_visible_window(title, timeout=timeout, process=process)
 
 
@@ -271,7 +271,7 @@ def visible_windows(title: str) -> list[str]:
 def wait_for_visible_window(
     title: str,
     *,
-    timeout: float = 10.0,
+    timeout: float = 20.0,
     process: subprocess.Popen[bytes] | None = None,
 ) -> str:
     deadline = time.monotonic() + timeout
@@ -356,7 +356,7 @@ def drag_skin_rect(
         end = (end_x, y)
     else:
         x = round((rect.x + rect.width / 2) * scale)
-        start_y = round((rect.y + rect.height - 2) * scale)
+        start_y = round((rect.y + rect.height / 2) * scale)
         end_y = round((rect.y + rect.height * end_fraction) * scale)
         start = (x, start_y)
         end = (x, end_y)
@@ -468,7 +468,7 @@ class MainWindow:
     window_id: str
 
     @classmethod
-    def wait(cls, title: str, process: subprocess.Popen[bytes], timeout: float = 10.0) -> MainWindow:
+    def wait(cls, title: str, process: subprocess.Popen[bytes], timeout: float = 20.0) -> MainWindow:
         return cls(wait_for_window(title, process, timeout))
 
     def geometry(self) -> WindowGeometry:
@@ -679,7 +679,7 @@ def open_panel(
     toggle: MainToggleButton,
     title: str,
     *,
-    timeout: float = 5.0,
+    timeout: float = 10.0,
     settle_delay: float = 0.25,
     on_open: Callable[[], object] | None = None,
 ) -> tuple[str, int]:

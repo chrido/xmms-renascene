@@ -4,7 +4,7 @@
 //! concrete UI frontends such as GTK or future mobile frontends.
 
 pub mod command;
-pub mod controller;
+mod controller;
 pub mod effect;
 pub mod equalizer_actions;
 pub mod file_info;

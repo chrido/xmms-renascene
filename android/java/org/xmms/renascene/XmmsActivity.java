@@ -9,8 +9,6 @@ import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.database.Cursor;
-import android.media.AudioAttributes;
-import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -29,8 +27,17 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Android main-thread owner for Activity lifecycle, SAF, geometry, and volume observation.
+ *
+ * <p>Native callbacks from this class are one-way adapters: they validate/convert and enqueue
+ * typed Rust events (or request repaint), but never execute domain or playback mutations.
+ * Activity-dependent methods may fail after teardown; background playback remains owned by
+ * {@link XmmsPlaybackService}.
+ */
 public final class XmmsActivity extends NativeActivity {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
     private static final int READ_FLAGS =
@@ -46,7 +53,7 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     private native void nativeOnDocumentsSelected(
-            int requestCode, String[] paths, String error);
+            int requestCode, long operationId, String[] paths, String error);
     private native void nativeOnMediaControl(int control);
     private native void nativeOnMediaVolumeChanged(int volumePercent);
     private native void nativeRequestRepaint();
@@ -116,36 +123,42 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     private static final class MediaControlDispatch {
+        // Main-thread transition table:
+        // IDLE + enqueue -> IDLE; IDLE + take(ready) -> IN_FLIGHT;
+        // IN_FLIGHT + enqueue/take -> IN_FLIGHT; IN_FLIGHT + complete -> IDLE.
+        private enum Phase {
+            IDLE,
+            IN_FLIGHT
+        }
+
         private final ArrayDeque<MediaControl> queued = new ArrayDeque<>();
-        private boolean inFlight;
+        private Phase phase = Phase.IDLE;
 
         void enqueue(MediaControl control) {
             queued.addLast(control);
         }
 
         MediaControl take(boolean ready) {
-            if (!ready || inFlight) {
+            if (!ready || phase == Phase.IN_FLIGHT) {
                 return null;
             }
             MediaControl control = queued.pollFirst();
-            inFlight = control != null;
+            if (control != null) {
+                phase = Phase.IN_FLIGHT;
+            }
             return control;
         }
 
         boolean complete() {
-            if (!inFlight) {
+            if (phase != Phase.IN_FLIGHT) {
                 return false;
             }
-            inFlight = false;
+            phase = Phase.IDLE;
             return queued.isEmpty();
         }
     }
 
     private AudioManager audioManager;
-    // Fallback audio focus request held by the activity for the brief window before the
-    // playback service starts.  The service is the authoritative focus owner once running;
-    // see requestPlaybackAudioFocus() / abandonPlaybackAudioFocus().
-    private AudioFocusRequest audioFocusRequest;
     private final MediaControlDispatch mediaControls = new MediaControlDispatch();
     private boolean nativeLoopReady;
     private boolean mediaVolumeObserverRegistered;
@@ -168,6 +181,7 @@ public final class XmmsActivity extends NativeActivity {
     private long configGeneration = 1;
     private volatile SafeInsetSnapshot safeInsetSnapshot = SafeInsetSnapshot.EMPTY;
     private byte[] pendingDocumentContents;
+    private final HashMap<Integer, Long> pickerOperationIds = new HashMap<>();
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
@@ -183,14 +197,6 @@ public final class XmmsActivity extends NativeActivity {
         }
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        AudioAttributes attributes = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build();
-        audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attributes)
-                .setOnAudioFocusChangeListener(focusChange -> {})
-                .build();
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) {
@@ -336,30 +342,6 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public boolean requestPlaybackAudioFocus() {
-        // Prefer the playback service as the authoritative focus owner, so ducking,
-        // transient-loss, and resume-after-gain are handled in one state machine.
-        if (XmmsPlaybackService.requestAudioFocusFromActivity()) {
-            return true;
-        }
-        // Fallback for the brief window before the service starts.  The listener is
-        // intentionally empty: when the service starts it will request AUDIOFOCUS_GAIN
-        // and become the sole owner, overriding this temporary grant.
-        return audioManager != null
-                && audioFocusRequest != null
-                && audioManager.requestAudioFocus(audioFocusRequest)
-                        == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-    }
-
-    public void abandonPlaybackAudioFocus() {
-        // Delegate to the service first so it can update its internal focus state machine.
-        XmmsPlaybackService.abandonAudioFocusFromActivity();
-        // Also release any fallback grant held directly by the activity.
-        if (audioManager != null && audioFocusRequest != null) {
-            audioManager.abandonAudioFocusRequest(audioFocusRequest);
-        }
-    }
-
     private void registerMediaVolumeObserver() {
         if (mediaVolumeObserverRegistered) {
             return;
@@ -446,8 +428,10 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public void openDocuments(int requestCode, String mimeType, boolean multiple) {
+    public void openDocuments(
+            int requestCode, long operationId, String mimeType, boolean multiple) {
         runOnUiThread(() -> {
+            pickerOperationIds.put(requestCode, operationId);
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType(mimeType);
@@ -457,8 +441,9 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public void openDirectory(int requestCode) {
+    public void openDirectory(int requestCode, long operationId) {
         runOnUiThread(() -> {
+            pickerOperationIds.put(requestCode, operationId);
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             intent.addFlags(READ_FLAGS);
             startActivityForResult(intent, requestCode);
@@ -466,8 +451,9 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     public void createDocument(
-            int requestCode, String mimeType, String title, byte[] contents) {
+            int requestCode, long operationId, String mimeType, String title, byte[] contents) {
         runOnUiThread(() -> {
+            pickerOperationIds.put(requestCode, operationId);
             pendingDocumentContents = contents;
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -702,11 +688,15 @@ public final class XmmsActivity extends NativeActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        Long operationId = pickerOperationIds.remove(requestCode);
+        if (operationId == null) {
+            return;
+        }
         if (resultCode != RESULT_OK || data == null) {
             if (requestCode == 105 || requestCode == 106) {
                 pendingDocumentContents = null;
             }
-            nativeOnDocumentsSelected(requestCode, new String[0], null);
+            nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
             return;
         }
         try {
@@ -726,7 +716,7 @@ public final class XmmsActivity extends NativeActivity {
                     }
                     output.write(contents);
                 }
-                nativeOnDocumentsSelected(requestCode, new String[0], null);
+                nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
                 return;
             }
             if (requestCode == 104) {
@@ -738,7 +728,10 @@ public final class XmmsActivity extends NativeActivity {
                         treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 File directory = copyTreeToPrivateStorage(treeUri);
                 nativeOnDocumentsSelected(
-                        requestCode, new String[] {directory.getAbsolutePath()}, null);
+                        requestCode,
+                        operationId,
+                        new String[] {directory.getAbsolutePath()},
+                        null);
                 return;
             }
             ArrayList<Uri> uris = selectedUris(data);
@@ -752,10 +745,14 @@ public final class XmmsActivity extends NativeActivity {
                 }
                 paths.add(copyToPrivateStorage(uri).getAbsolutePath());
             }
-            nativeOnDocumentsSelected(requestCode, paths.toArray(new String[0]), null);
+            nativeOnDocumentsSelected(
+                    requestCode, operationId, paths.toArray(new String[0]), null);
         } catch (Exception error) {
             nativeOnDocumentsSelected(
-                    requestCode, new String[0], "Failed to process selected document: " + error);
+                    requestCode,
+                    operationId,
+                    new String[0],
+                    "Failed to process selected document: " + error);
         }
     }
 

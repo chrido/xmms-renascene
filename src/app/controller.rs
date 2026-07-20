@@ -13,28 +13,29 @@ use crate::app_state::AppState;
 use crate::player::{PlaybackEvent, PlayerState};
 
 #[derive(Debug, Clone)]
-pub struct AppController {
+pub(super) struct AppController {
     state: AppState,
 }
 
 impl AppController {
-    pub fn new(state: AppState) -> Self {
+    pub(super) fn new(state: AppState) -> Self {
         Self { state }
     }
 
-    pub fn state(&self) -> &AppState {
+    pub(super) fn state(&self) -> &AppState {
         &self.state
     }
 
-    pub fn state_mut(&mut self) -> &mut AppState {
+    /// Mutable state access is confined to the controller/store implementation.
+    pub(super) fn state_mut(&mut self) -> &mut AppState {
         &mut self.state
     }
 
-    pub fn into_state(self) -> AppState {
+    pub(super) fn into_state(self) -> AppState {
         self.state
     }
 
-    pub fn handle_command(&mut self, command: AppCommand) -> Vec<AppEffect> {
+    pub(super) fn handle_command(&mut self, command: AppCommand) -> Vec<AppEffect> {
         match command {
             AppCommand::Player(command) => self.handle_player_command(command),
             AppCommand::Audio(command) => self.handle_audio_command(command),
@@ -538,7 +539,7 @@ impl AppController {
         ]
     }
 
-    pub fn handle_playback_event(&mut self, event: PlaybackEvent) -> Vec<AppEffect> {
+    pub(super) fn handle_playback_event(&mut self, event: PlaybackEvent) -> Vec<AppEffect> {
         if self.state.player.apply_playback_event(&event) {
             vec![AppEffect::QueueRender(RenderTarget::All)]
         } else {
@@ -546,7 +547,7 @@ impl AppController {
         }
     }
 
-    pub fn handle_playlist_eof(&mut self) -> Vec<AppEffect> {
+    pub(super) fn handle_playlist_eof(&mut self) -> Vec<AppEffect> {
         if self.state.playlist.eof_reached() {
             self.start_current_playlist_playback(0)
         } else {
@@ -716,6 +717,106 @@ mod tests {
 
         assert_eq!(controller.state().player.duration_ms(), Some(12_000));
         assert_eq!(effects, vec![AppEffect::QueueRender(RenderTarget::All)]);
+    }
+
+    #[test]
+    fn playlist_eof_advances_and_restarts_playback() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///tmp/one.ogg");
+        state.playlist.add_uri("file:///tmp/two.ogg");
+        state.playlist.set_position(0);
+        state.player.mark_playing();
+        let mut controller = AppController::new(state);
+
+        let effects = controller.handle_playlist_eof();
+
+        assert_eq!(controller.state().playlist.position(), Some(1));
+        assert!(effects.contains(&AppEffect::StartPlaybackUri {
+            uri: "file:///tmp/two.ogg".to_string(),
+            position_ms: 0,
+        }));
+    }
+
+    #[test]
+    fn playlist_eof_stops_at_the_end_without_repeat() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///tmp/one.ogg");
+        state.playlist.set_position(0);
+        state.player.mark_playing();
+        let mut controller = AppController::new(state);
+
+        let effects = controller.handle_playlist_eof();
+
+        assert_eq!(controller.state().player.state(), PlayerState::Stopped);
+        assert!(effects.contains(&AppEffect::StopPlayback));
+    }
+
+    #[test]
+    fn playlist_eof_repeats_the_final_track() {
+        let mut state = AppState::default();
+        state.playlist.add_uri("file:///tmp/one.ogg");
+        state.playlist.set_position(0);
+        state.playlist.set_repeat(true);
+        state.player.mark_playing();
+        let mut controller = AppController::new(state);
+
+        let effects = controller.handle_playlist_eof();
+
+        assert_eq!(controller.state().playlist.position(), Some(0));
+        assert!(effects.contains(&AppEffect::StartPlaybackUri {
+            uri: "file:///tmp/one.ogg".to_string(),
+            position_ms: 0,
+        }));
+    }
+
+    #[test]
+    fn playlist_eof_honors_no_advance_and_empty_playlists() {
+        let mut no_advance = AppState::default();
+        no_advance.playlist.add_uri("file:///tmp/one.ogg");
+        no_advance.playlist.add_uri("file:///tmp/two.ogg");
+        no_advance.playlist.set_position(0);
+        no_advance.playlist.set_no_advance(true);
+        no_advance.player.mark_playing();
+        let mut controller = AppController::new(no_advance);
+
+        let effects = controller.handle_playlist_eof();
+
+        assert_eq!(controller.state().playlist.position(), Some(0));
+        assert_eq!(controller.state().player.state(), PlayerState::Stopped);
+        assert!(effects.contains(&AppEffect::StopPlayback));
+
+        let mut empty = AppController::new(AppState::default());
+        let effects = empty.handle_playlist_eof();
+        assert_eq!(empty.state().player.state(), PlayerState::Stopped);
+        assert!(effects.contains(&AppEffect::StopPlayback));
+    }
+
+    #[test]
+    fn playlist_eof_with_shuffle_starts_an_entry_from_the_playlist() {
+        let mut state = AppState::default();
+        for uri in [
+            "file:///tmp/one.ogg",
+            "file:///tmp/two.ogg",
+            "file:///tmp/three.ogg",
+        ] {
+            state.playlist.add_uri(uri);
+        }
+        state.playlist.set_position(0);
+        state.playlist.set_shuffle(true);
+        state.playlist.set_repeat(true);
+        state.player.mark_playing();
+        let mut controller = AppController::new(state);
+
+        let effects = controller.handle_playlist_eof();
+
+        let started_uri = effects.iter().find_map(|effect| match effect {
+            AppEffect::StartPlaybackUri { uri, .. } => Some(uri.as_str()),
+            _ => None,
+        });
+        assert!(matches!(
+            started_uri,
+            Some("file:///tmp/one.ogg" | "file:///tmp/two.ogg" | "file:///tmp/three.ogg")
+        ));
     }
 
     #[test]

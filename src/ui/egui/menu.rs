@@ -54,8 +54,8 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
                 }
                 if ui.button("Open Location...").clicked() {
                     close_after_click = true;
-                    app.prompt_open = Some(EguiPrompt::OpenLocation);
-                    app.prompt_text.clear();
+                    app.ui.prompt_open = Some(EguiPrompt::OpenLocation);
+                    app.ui.prompt_text.clear();
                 }
                 if ui.button("Preferences").clicked() {
                     close_after_click = true;
@@ -94,7 +94,7 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
 }
 
 pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    let Some(prompt) = app.prompt_open else {
+    let Some(prompt) = app.ui.prompt_open else {
         return;
     };
     let mut open = true;
@@ -106,7 +106,7 @@ pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
         .resizable(false)
         .default_width(360.0)
         .show(ctx, |ui| {
-            ui.text_edit_singleline(&mut app.prompt_text)
+            ui.text_edit_singleline(&mut app.ui.prompt_text)
                 .on_hover_text(prompt.placeholder());
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
@@ -120,13 +120,13 @@ pub fn show_prompts(ctx: &egui::Context, app: &mut EguiFrontendState) {
     if accept_requested {
         accept_prompt(app, prompt);
     } else if cancel_requested || !open {
-        app.prompt_open = None;
-        app.prompt_text.clear();
+        app.ui.prompt_open = None;
+        app.ui.prompt_text.clear();
     }
 }
 
 fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
-    let text = app.prompt_text.trim().to_string();
+    let text = app.ui.prompt_text.trim().to_string();
     if text.is_empty() {
         return;
     }
@@ -145,8 +145,8 @@ fn accept_prompt(app: &mut EguiFrontendState, prompt: EguiPrompt) {
             }
         }
     }
-    app.prompt_open = None;
-    app.prompt_text.clear();
+    app.ui.prompt_open = None;
+    app.ui.prompt_text.clear();
 }
 
 pub fn show_pending_messages(ctx: &egui::Context, app: &mut EguiFrontendState) {

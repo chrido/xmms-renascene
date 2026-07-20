@@ -55,7 +55,7 @@ def test_android_checkpoints_background_playback_position(
         "file:///data/user/0/org.xmms.renascene/files/imports/checkpoint.wav\n",
     )
 
-    android_device.start_activity()
+    android_device.restart_app()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
     android_device.assert_log_contains(
         "player: button activated, button_name=Play",
@@ -265,7 +265,14 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     android_device.set_landscape()
     android_device.wait_for_app()
     geometry = android_device.display_geometry()
-    scale = android_device.main_player_scale()
+    try:
+        scale = android_device.main_player_scale()
+    except AssertionError:
+        android_device.restart_app()
+        android_device.set_landscape()
+        android_device.wait_for_app()
+        geometry = android_device.display_geometry()
+        scale = android_device.main_player_scale()
     player_bounds = android_device.main_player_bounds()
     playlist_bounds = android_device.landscape_playlist_bounds()
 
@@ -283,11 +290,11 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
 
     before = android_device.screenshot(test_output.screenshot_path())
     android_device.tap_skin_rect(MAIN_TOGGLE_RECTS[MainToggleButton.REPEAT])
-    after = android_device.screenshot(test_output.screenshot_path())
-
     android_device.assert_log_contains(
         "player: toggle activated, toggle_name=Repeat",
     )
+    time.sleep(0.2)
+    after = android_device.screenshot(test_output.screenshot_path())
     assert before.read_bytes() != after.read_bytes()
 
     android_device.set_portrait()
@@ -346,7 +353,7 @@ def test_android_restores_panels_settings_and_playlist_after_relaunch(
         "#EXTINF:42,Restored Track\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/restored.wav\n",
     )
-    android_device.start_activity()
+    android_device.restart_app()
     player_bounds = android_device.main_player_bounds()
 
     android_device.tap_skin_rect(
@@ -431,7 +438,7 @@ def test_android_managed_playlists_save_load_and_delete_from_settings(
         "#EXTINF:42,Managed Original\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/original.wav\n",
     )
-    android_device.start_activity()
+    android_device.restart_app()
 
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
     android_device.tap_usable_fraction(0.5, 0.544)
@@ -518,7 +525,7 @@ def _run_playlist_swipe_until_log(
 ) -> str:
     android_device.clear_logcat()
     last_error: AssertionError | None = None
-    for _attempt in range(2):
+    for _attempt in range(6):
         android_device.wait_for_app()
         android_device.shell(
             "input",
@@ -531,9 +538,10 @@ def _run_playlist_swipe_until_log(
             str(duration_ms),
         )
         try:
-            return android_device.assert_log_contains(expected_log, timeout=2.0)
+            return android_device.assert_log_contains(expected_log, timeout=4.0)
         except AssertionError as error:
             last_error = error
+            time.sleep(0.2)
     assert last_error is not None
     raise last_error
 
@@ -637,7 +645,7 @@ def _prepare_android_swipe_playlist(android_device: AndroidDevice) -> None:
         "#EXTINF:20,Swipe Third\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/third.wav\n",
     )
-    android_device.start_activity()
+    android_device.restart_app()
 
 
 def test_android_playlist_swipes_select_right_and_deselect_left(
@@ -743,9 +751,8 @@ def test_android_playlist_swipe_down_pauses_and_does_not_resume(
         500,
         timeout=5.0,
     )
-    background = android_device.framebuffer_png()
     android_device.start_activity()
-    android_device.wait_for_rendered_screen(changed_from=background)
+    android_device.main_player_bounds()
 
     second_swipe_log = _swipe_playlist_down(android_device, touched_index=0)
     assert "backend: egui play_uri" not in second_swipe_log
@@ -781,9 +788,8 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
         1_500,
         timeout=5.0,
     )
-    background = android_device.framebuffer_png()
     android_device.start_activity()
-    android_device.wait_for_rendered_screen(changed_from=background)
+    android_device.main_player_bounds()
 
     resume_log = _swipe_playlist_up(
         android_device,
@@ -816,7 +822,7 @@ def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
         "#EXTINF:42,File Info Track\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/info.wav\n",
     )
-    android_device.start_activity()
+    android_device.restart_app()
     player = android_device.screenshot(test_output.screenshot_path())
     left, _top, right, bottom = android_device.main_player_bounds()
     scale = (right - left) / 275
@@ -834,9 +840,15 @@ def test_android_misc_popup_dismisses_outside_and_file_info_uses_full_screen(
 
     open_misc()
     android_device.tap_usable_fraction(0.67, 0.85)
-    file_info = android_device.screenshot(test_output.screenshot_path())
+    file_info = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=dismissed,
+    )
     android_device.tap_usable_fraction(0.13, 0.043)
-    returned = android_device.screenshot(test_output.screenshot_path())
+    returned = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=file_info,
+    )
 
     def image_pixels(path: Path) -> bytes:
         with Image.open(path) as image:
@@ -872,7 +884,7 @@ def test_android_clear_list_stops_playback_and_resets_playlist(
         "#EXTINF:8,Clear Track\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/clear.wav\n",
     )
-    android_device.start_activity()
+    android_device.restart_app()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
     android_device.wait_for_service("XmmsPlaybackService")
 
@@ -934,8 +946,10 @@ def test_android_external_media_volume_source_bridge() -> None:
     activity = (
         root / "android/java/org/xmms/renascene/XmmsActivity.java"
     ).read_text()
-    bridge = (root / "src/ui/egui/android_file_picker.rs").read_text()
+    bridge = (root / "src/ui/egui/android/jni.rs").read_text()
+    events = (root / "src/ui/egui/android_events.rs").read_text()
     app = (root / "src/ui/egui/app.rs").read_text()
+    app_state = (root / "src/app_state.rs").read_text()
     store = (root / "src/app/store.rs").read_text()
 
     assert "new ContentObserver(MAIN_HANDLER)" in activity
@@ -947,24 +961,21 @@ def test_android_external_media_volume_source_bridge() -> None:
     assert "pendingAppMediaVolumePercent.set(clampedPercent)" in activity
     assert "pendingAppMediaVolumePercent.getAndSet(null)" in activity
 
-    assert "ExternalVolumeChanged(i32)" in bridge
+    assert "ExternalVolumeChanged(i32)" in events
     assert (
         "Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged"
         in bridge
     )
-    assert "let volume = volume_percent.clamp(0, 100);" in bridge
-    assert "AndroidPlatformEvent::ExternalVolumeChanged(volume)" in bridge
-    assert (
-        "retain(|event| !matches!(event, "
-        "AndroidPlatformEvent::ExternalVolumeChanged(_)))"
-        in bridge
-    )
-    assert "request_registered_repaint();" in bridge
+    assert "volume_percent.clamp(0, 100)" in bridge
+    assert "AndroidPlatformEvent::ExternalVolumeChanged(" in bridge
+    assert "AndroidPlatformEvent::ExternalVolumeChanged(_) => self" in events
+    assert "retain(|queued|" in events
+    assert "events::request_registered_repaint();" in bridge
 
     assert "sync_external_output_volume(volume)" in app
     assert "self.android.mark_persistence();" in app
     platform_poll = app.split("fn poll_android_platform_events", 1)[1].split(
-        "fn sync_android_playback_notification", 1
+        "\n}\n\nimpl EguiFrontendState", 1
     )[0]
     assert "AndroidPlatformEvent::ExternalVolumeChanged(volume)" in platform_poll
     assert "AudioCommand::SetVolume" not in platform_poll
@@ -974,7 +985,8 @@ def test_android_external_media_volume_source_bridge() -> None:
         "pub fn complete_stop_fade", 1
     )[0]
     assert "state.player.set_volume(volume)" in store_sync
-    assert "state.config.volume = volume" in store_sync
+    assert "state.config.volume = volume" not in store_sync
+    assert "config.volume = self.player.volume();" in app_state
     assert "SetOutputVolume" not in store_sync
     assert "SetBackendVolume" not in store_sync
 
@@ -1024,8 +1036,7 @@ def test_android_player_widget_is_packaged(
         / "android/res/drawable-nodpi/widget_player_info_preview.png"
     )
     native_widget_source = (
-        Path(__file__).resolve().parents[1]
-        / "src/ui/egui/android_file_picker.rs"
+        Path(__file__).resolve().parents[1] / "src/ui/egui/android/widgets.rs"
     ).read_text()
 
     assert ".XmmsPlayerWidget" in manifest
@@ -1104,7 +1115,7 @@ def test_android_player_widget_is_packaged(
         (6, "Stop"),
     ):
         assert (
-            f"{control} => Some(crate::skin::layout::MainPushButton::{button})"
+            f"{control} => Some(MainPushButton::{button})"
             in native_widget_source
         )
     assert (

@@ -14,6 +14,12 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.widget.RemoteViews;
 
+/**
+ * App-widget process boundary for synchronous native player-information rendering.
+ *
+ * <p>The provider may run without an Activity. It reads atomically replaced persisted state;
+ * process-local native skin/marquee caches are disposable accelerators, not authoritative state.
+ */
 public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
     private static final int INFO_WIDTH = 164;
     private static final int INFO_HEIGHT = 37;

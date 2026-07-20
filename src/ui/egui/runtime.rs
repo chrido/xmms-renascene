@@ -1,69 +1,142 @@
 //! egui-side interpreter for frontend-neutral application effects.
 
-use crate::app::effect::{AppEffect, RenderTarget};
+use std::time::Duration;
+
+use crate::app::effect::RenderTarget;
+use crate::app::store::StateChangeSet;
+
+use super::effect_executor::UiEffect;
+
+const ANDROID_LAYOUT_REPAINT_INTERVAL: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Default)]
 pub struct EguiRuntime {
     pub pending_messages: Vec<String>,
-    pub repaint_requested: bool,
-    pub dirty_targets: Vec<RenderTarget>,
+    repaint: RepaintPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AndroidLayoutRepaint {
+    AwaitingReadiness,
+    Stabilizing,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct RepaintSchedule {
+    pub immediate: bool,
+    pub after: Option<Duration>,
+}
+
+#[derive(Debug, Default)]
+struct RepaintPolicy {
+    state_change_pending: bool,
+    android_layout: Option<AndroidLayoutRepaint>,
+    dirty_targets: Vec<RenderTarget>,
+}
+
+impl RepaintPolicy {
+    fn queue_render(&mut self, target: RenderTarget) {
+        self.state_change_pending = true;
+        if !self.dirty_targets.contains(&target) {
+            self.dirty_targets.push(target);
+        }
+    }
+
+    fn request_android_layout(&mut self, repaint: AndroidLayoutRepaint) {
+        self.android_layout = match (self.android_layout, repaint) {
+            (Some(AndroidLayoutRepaint::AwaitingReadiness), _)
+            | (_, AndroidLayoutRepaint::AwaitingReadiness) => {
+                Some(AndroidLayoutRepaint::AwaitingReadiness)
+            }
+            _ => Some(AndroidLayoutRepaint::Stabilizing),
+        };
+    }
+
+    fn take_schedule(&mut self) -> RepaintSchedule {
+        let layout = self.android_layout.take();
+        let schedule = RepaintSchedule {
+            immediate: self.state_change_pending
+                || layout == Some(AndroidLayoutRepaint::AwaitingReadiness),
+            after: layout.map(|_| ANDROID_LAYOUT_REPAINT_INTERVAL),
+        };
+        self.state_change_pending = false;
+        self.dirty_targets.clear();
+        schedule
+    }
 }
 
 impl EguiRuntime {
-    pub fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
+    #[cfg(test)]
+    pub(crate) fn apply_effects(&mut self, effects: impl IntoIterator<Item = UiEffect>) {
         for effect in effects {
             self.apply_effect(effect);
         }
     }
 
-    pub fn apply_effect(&mut self, effect: AppEffect) {
+    pub(crate) fn apply_effect(&mut self, effect: UiEffect) {
         match effect {
-            AppEffect::QueueRender(target) => {
-                self.repaint_requested = true;
-                if !self.dirty_targets.contains(&target) {
-                    self.dirty_targets.push(target);
-                }
-            }
-            AppEffect::ShowError(message) | AppEffect::ShowMessage(message) => {
+            UiEffect::QueueRender(target) => self.repaint.queue_render(target),
+            UiEffect::ShowError(message) | UiEffect::ShowMessage(message) => {
                 self.pending_messages.push(message);
             }
-            AppEffect::OpenFileDialog(request) => {
+            UiEffect::OpenFileDialog(request) => {
                 self.pending_messages.push(format!(
                     "file dialog effect pending egui handler: {request:?}"
                 ));
             }
-            AppEffect::OpenPath(path) => {
+            UiEffect::OpenPath(path) => {
                 self.pending_messages.push(format!(
                     "open path effect pending egui handler: {}",
                     path.display()
                 ));
             }
-            AppEffect::OpenFileInfoDialog => self
+            UiEffect::OpenFileInfoDialog => self
                 .pending_messages
                 .push("file info dialog pending egui handler".to_string()),
-            AppEffect::OpenPreferences => self
+            UiEffect::OpenPreferences => self
                 .pending_messages
                 .push("preferences effect pending egui handler".to_string()),
-            AppEffect::OpenSkinBrowser => self
+            UiEffect::OpenSkinBrowser => self
                 .pending_messages
                 .push("skin browser effect pending egui handler".to_string()),
-            AppEffect::OpenSkinEditor => self
+            UiEffect::OpenSkinEditor => self
                 .pending_messages
                 .push("skin editor is GTK-only".to_string()),
-            AppEffect::StartPlayback
-            | AppEffect::StartPlaybackFromCurrent
-            | AppEffect::StartPlaybackUri { .. }
-            | AppEffect::ResumePlayback
-            | AppEffect::PausePlayback
-            | AppEffect::StopPlayback
-            | AppEffect::BeginStopFade { .. }
-            | AppEffect::SeekPlayback(_)
-            | AppEffect::SetOutputVolume(_)
-            | AppEffect::SetBackendVolume(_)
-            | AppEffect::SetBackendBalance(_)
-            | AppEffect::SetBackendEqualizer
-            | AppEffect::SaveConfig => {}
         }
+    }
+
+    pub fn invalidate_changes(&mut self, changes: StateChangeSet) {
+        if changes.contains(StateChangeSet::RENDER_ALL) {
+            self.repaint.queue_render(RenderTarget::All);
+            return;
+        }
+        if changes.intersects(StateChangeSet::RENDER_MAIN) {
+            self.repaint.queue_render(RenderTarget::Main);
+        }
+        if changes.intersects(StateChangeSet::RENDER_PLAYLIST) {
+            self.repaint.queue_render(RenderTarget::Playlist);
+        }
+        if changes.intersects(StateChangeSet::RENDER_EQUALIZER) {
+            self.repaint.queue_render(RenderTarget::Equalizer);
+        }
+    }
+
+    pub(crate) fn request_android_layout_repaint(&mut self, repaint: AndroidLayoutRepaint) {
+        self.repaint.request_android_layout(repaint);
+    }
+
+    pub(crate) fn take_repaint_schedule(&mut self) -> RepaintSchedule {
+        self.repaint.take_schedule()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn repaint_requested(&self) -> bool {
+        self.repaint.state_change_pending || self.repaint.android_layout.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn dirty_targets(&self) -> &[RenderTarget] {
+        &self.repaint.dirty_targets
     }
 }
 
@@ -76,13 +149,73 @@ mod tests {
         let mut runtime = EguiRuntime::default();
 
         runtime.apply_effects([
-            AppEffect::QueueRender(RenderTarget::Main),
-            AppEffect::QueueRender(RenderTarget::Main),
-            AppEffect::ShowMessage("hello".to_string()),
+            UiEffect::QueueRender(RenderTarget::Main),
+            UiEffect::QueueRender(RenderTarget::Main),
+            UiEffect::ShowMessage("hello".to_string()),
         ]);
 
-        assert!(runtime.repaint_requested);
-        assert_eq!(runtime.dirty_targets, vec![RenderTarget::Main]);
+        assert!(runtime.repaint_requested());
+        assert_eq!(runtime.dirty_targets(), &[RenderTarget::Main]);
         assert_eq!(runtime.pending_messages, vec!["hello"]);
+    }
+
+    #[test]
+    fn state_changes_share_the_render_invalidation_policy() {
+        let mut runtime = EguiRuntime::default();
+
+        runtime.invalidate_changes(StateChangeSet::RENDER_MAIN | StateChangeSet::RENDER_PLAYLIST);
+
+        assert_eq!(
+            runtime.dirty_targets(),
+            &[RenderTarget::Main, RenderTarget::Playlist]
+        );
+    }
+
+    #[test]
+    fn state_change_and_layout_repaints_remain_distinct() {
+        let mut runtime = EguiRuntime::default();
+
+        runtime.invalidate_changes(StateChangeSet::RENDER_MAIN);
+        assert_eq!(
+            runtime.take_repaint_schedule(),
+            RepaintSchedule {
+                immediate: true,
+                after: None,
+            }
+        );
+
+        runtime.request_android_layout_repaint(AndroidLayoutRepaint::Stabilizing);
+        assert_eq!(
+            runtime.take_repaint_schedule(),
+            RepaintSchedule {
+                immediate: false,
+                after: Some(ANDROID_LAYOUT_REPAINT_INTERVAL),
+            }
+        );
+
+        runtime.request_android_layout_repaint(AndroidLayoutRepaint::AwaitingReadiness);
+        assert_eq!(
+            runtime.take_repaint_schedule(),
+            RepaintSchedule {
+                immediate: true,
+                after: Some(ANDROID_LAYOUT_REPAINT_INTERVAL),
+            }
+        );
+    }
+
+    #[test]
+    fn awaiting_layout_readiness_takes_priority_over_stabilizing() {
+        let mut runtime = EguiRuntime::default();
+
+        runtime.request_android_layout_repaint(AndroidLayoutRepaint::AwaitingReadiness);
+        runtime.request_android_layout_repaint(AndroidLayoutRepaint::Stabilizing);
+
+        assert_eq!(
+            runtime.take_repaint_schedule(),
+            RepaintSchedule {
+                immediate: true,
+                after: Some(ANDROID_LAYOUT_REPAINT_INTERVAL),
+            }
+        );
     }
 }

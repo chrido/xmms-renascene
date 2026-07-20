@@ -31,6 +31,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
+/**
+ * Main-thread Android owner for MediaSession, foreground playback, wake lock, and audio focus.
+ *
+ * <p>The generated manifest does not assign a separate {@code android:process}, but this service
+ * can exist with no Activity. Rust transport callbacks execute the process-wide shared backend
+ * synchronously, then enqueue the matching domain transition tagged as already executed. This is
+ * required because an existing but paused Activity cannot drain egui events from a home-screen
+ * widget. MediaBrowser query JNI calls are synchronous read-only endpoints because Android
+ * requires immediate results.
+ */
 public final class XmmsPlaybackService extends MediaBrowserService {
     static final String ACTION_UPDATE = "org.xmms.renascene.service.UPDATE";
     static final String ACTION_WIDGET_CONTROL =
@@ -68,13 +78,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     @SuppressWarnings("unused") // retained for documentation; received from JNI
     private static final int STATE_PAUSED = 2;
 
-    /**
-     * Current service instance.  Set in onCreate() and cleared in onDestroy() so that
-     * XmmsActivity can route audio focus requests through the service (the authoritative
-     * owner) rather than managing a separate AudioFocusRequest.
-     */
-    private static volatile XmmsPlaybackService instance;
-
     static {
         System.loadLibrary("xmms_renascene");
     }
@@ -92,6 +95,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
     private MediaSession mediaSession;
+    private boolean audioFocusHeld;
     private volatile boolean resumeAfterFocusGain;
     private boolean noisyReceiverRegistered;
     private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
@@ -130,7 +134,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     @Override
     public void onCreate() {
         super.onCreate();
-        instance = this;
         nativeInitializeMediaLibrary(
                 getFilesDir().getAbsolutePath(), getCacheDir().getAbsolutePath());
         notificationManager =
@@ -329,7 +332,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     @Override
     public void onDestroy() {
-        instance = null;
         playbackHandler.removeCallbacks(playbackPoll);
         if (noisyReceiverRegistered) {
             unregisterReceiver(noisyReceiver);
@@ -561,8 +563,13 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     }
 
     private void updateAudioFocus(boolean playing) {
-        if (playing && audioManager != null && audioFocusRequest != null) {
-            audioManager.requestAudioFocus(audioFocusRequest);
+        if (playing
+                && !audioFocusHeld
+                && audioManager != null
+                && audioFocusRequest != null) {
+            audioFocusHeld =
+                    audioManager.requestAudioFocus(audioFocusRequest)
+                            == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
         }
     }
 
@@ -585,33 +592,9 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     private void abandonAudioFocus() {
         resumeAfterFocusGain = false;
-        if (audioManager != null && audioFocusRequest != null) {
+        if (audioFocusHeld && audioManager != null && audioFocusRequest != null) {
+            audioFocusHeld = false;
             audioManager.abandonAudioFocusRequest(audioFocusRequest);
-        }
-    }
-
-    /**
-     * Called by {@link XmmsActivity#requestPlaybackAudioFocus()} to route the focus request
-     * through the service (the authoritative audio focus owner).  Returns {@code false} if
-     * the service is not currently running.
-     */
-    static boolean requestAudioFocusFromActivity() {
-        XmmsPlaybackService svc = instance;
-        if (svc == null || svc.audioManager == null || svc.audioFocusRequest == null) {
-            return false;
-        }
-        return svc.audioManager.requestAudioFocus(svc.audioFocusRequest)
-                == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-    }
-
-    /**
-     * Called by {@link XmmsActivity#abandonPlaybackAudioFocus()} to route focus abandonment
-     * through the service.  A no-op if the service is not running.
-     */
-    static void abandonAudioFocusFromActivity() {
-        XmmsPlaybackService svc = instance;
-        if (svc != null) {
-            svc.abandonAudioFocus();
         }
     }
 

@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
-use crate::app_state::AppState;
+use crate::app_state::{AppState, PersistenceSnapshot};
 use crate::config::Config;
 use crate::playlist::{Playlist, PlaylistMenuKind};
 
@@ -180,16 +180,27 @@ pub fn restore_state_dict(app_state: &mut AppState, dict: &BTreeMap<String, bool
 }
 
 pub fn save_fallback_state(
-    app_state: &mut AppState,
+    app_state: &AppState,
     config_path: &Path,
     playlist_path: &Path,
 ) -> io::Result<()> {
-    app_state.sync_config_from_runtime();
-    app_state.config.save_to_file(config_path)?;
+    save_fallback_snapshot(
+        &app_state.persistence_snapshot(),
+        config_path,
+        playlist_path,
+    )
+}
+
+pub fn save_fallback_snapshot(
+    snapshot: &PersistenceSnapshot<'_>,
+    config_path: &Path,
+    playlist_path: &Path,
+) -> io::Result<()> {
+    snapshot.config.save_to_file(config_path)?;
     if let Some(parent) = playlist_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    app_state.playlist.save_m3u_file(playlist_path)
+    snapshot.playlist.save_m3u_file(playlist_path)
 }
 
 pub fn fallback_state_paths(config_dir: &Path) -> (PathBuf, PathBuf) {

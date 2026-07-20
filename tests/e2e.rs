@@ -248,12 +248,24 @@ fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
     let mut state = xmms_renascene::app_state::AppState::default();
     state.config.playlist_visible = true;
     state.config.equalizer_visible = true;
+    state.player.set_volume(43);
+    state.player.set_balance(-17);
+    state.playlist.set_shuffle(true);
+    state.playlist.set_repeat(true);
     state.playlist.add_uri("https://example.test/fallback.mp3");
+    state.playlist.set_position(0);
+    let config_before_save = state.config.clone();
 
-    save_fallback_state(&mut state, &config_path, &playlist_path).unwrap();
+    save_fallback_state(&state, &config_path, &playlist_path).unwrap();
+    assert_eq!(state.config, config_before_save);
     let loaded = load_saved_state(&config_path, &playlist_path, false).unwrap();
     assert!(loaded.config.playlist_visible);
     assert!(loaded.config.equalizer_visible);
+    assert_eq!(loaded.player.volume(), 43);
+    assert_eq!(loaded.player.balance(), -17);
+    assert!(loaded.playlist.shuffle());
+    assert!(loaded.playlist.repeat());
+    assert_eq!(loaded.playlist.position(), Some(0));
     assert_eq!(
         loaded.playlist.entries()[0].filename,
         "https://example.test/fallback.mp3"

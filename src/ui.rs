@@ -5392,7 +5392,7 @@ impl MainWindowUiState {
 
     fn dispatch_store_command(&mut self, command: impl Into<AppCommand>) -> DispatchResult {
         self.store
-            .replace_state_for_migration(self.store_ready_state_snapshot());
+            .sync_legacy_frontend_state(self.store_ready_state_snapshot());
         let result = self.store.dispatch(command.into());
         self.sync_frontend_state_from_store();
         result
@@ -5424,8 +5424,8 @@ impl MainWindowUiState {
 
     fn update_config_via_store(&mut self, update: impl FnOnce(&mut Config)) {
         self.store
-            .replace_state_for_migration(self.store_ready_state_snapshot());
-        let mut config = self.app_state.config.clone();
+            .sync_legacy_frontend_state(self.store_ready_state_snapshot());
+        let mut config = self.app_state.persistence_snapshot().config;
         update(&mut config);
         let effects = self.store.apply_config_from_preferences(config).effects;
         self.sync_frontend_state_from_store();
@@ -5605,7 +5605,7 @@ impl MainWindowUiState {
         playlist_path: &Path,
     ) -> io::Result<()> {
         self.sync_frontend_state_from_store();
-        save_fallback_state(&mut self.app_state, config_path, playlist_path)
+        save_fallback_state(&self.app_state, config_path, playlist_path)
     }
 
     pub(crate) fn set_playback_backend(&mut self, backend: SharedPlaybackBackend) {
@@ -6932,7 +6932,6 @@ impl MainWindowUiState {
         let start_volume = self.app_state.player.volume().max(0);
         if start_volume == 0 {
             self.stop_playback();
-            self.set_runtime_volume(self.app_state.config.volume);
             return;
         }
         self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
@@ -6940,7 +6939,7 @@ impl MainWindowUiState {
 
     fn set_runtime_volume(&mut self, volume: i32) {
         self.store
-            .replace_state_for_migration(self.store_ready_state_snapshot());
+            .sync_legacy_frontend_state(self.store_ready_state_snapshot());
         let result = self.store.set_runtime_volume_for_transition(volume);
         self.sync_frontend_state_from_store();
         for effect in result.effects {
@@ -8758,9 +8757,12 @@ impl MainWindowUiState {
             .fadeout()
             .is_some_and(|(remaining_ms, _)| remaining_ms == 0)
         {
-            let restore_volume = self.app_state.config.volume;
+            let restore_volume = next_transition
+                .fadeout()
+                .map(|(_, start_volume)| start_volume)
+                .unwrap_or_default();
             self.store
-                .replace_state_for_migration(self.store_ready_state_snapshot());
+                .sync_legacy_frontend_state(self.store_ready_state_snapshot());
             let result = self.store.complete_stop_fade(restore_volume);
             self.sync_frontend_state_from_store();
             for effect in result.effects {
@@ -8809,7 +8811,7 @@ impl MainWindowUiState {
                         backend_ready = true;
                     }
                     self.store
-                        .replace_state_for_migration(self.store_ready_state_snapshot());
+                        .sync_legacy_frontend_state(self.store_ready_state_snapshot());
                     let result = self.store.handle_playback_event(event);
                     self.sync_frontend_state_from_store();
                     for effect in result.effects {
@@ -8830,7 +8832,7 @@ impl MainWindowUiState {
             (backend.stream_info(), backend.duration_ms())
         };
         self.store
-            .replace_state_for_migration(self.store_ready_state_snapshot());
+            .sync_legacy_frontend_state(self.store_ready_state_snapshot());
         let result = self
             .store
             .handle_playback_event(PlaybackEvent::StreamInfo(stream_info));
@@ -8840,7 +8842,7 @@ impl MainWindowUiState {
         }
         if let Some(duration_ms) = duration_ms {
             self.store
-                .replace_state_for_migration(self.store_ready_state_snapshot());
+                .sync_legacy_frontend_state(self.store_ready_state_snapshot());
             let result =
                 self.store
                     .handle_playback_event(crate::player::PlaybackEvent::DurationChanged(Some(
@@ -8918,7 +8920,7 @@ impl MainWindowUiState {
     fn advance_playlist_after_eof(&mut self) {
         self.position_position = 0;
         self.store
-            .replace_state_for_migration(self.store_ready_state_snapshot());
+            .sync_legacy_frontend_state(self.store_ready_state_snapshot());
         let result = self.store.handle_playlist_eof();
         self.sync_frontend_state_from_store();
         for effect in result.effects {
