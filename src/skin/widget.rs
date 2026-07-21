@@ -911,21 +911,21 @@ impl MonoStereoIndicator {
             IndicatorSegment {
                 source: SkinSource {
                     kind: self.skin,
-                    x: 0,
-                    y: stereo_y,
+                    x: 29,
+                    y: mono_y,
                 },
                 dest_x: 0,
-                width: 29,
+                width: 27,
                 height: 12,
             },
             IndicatorSegment {
                 source: SkinSource {
                     kind: self.skin,
-                    x: 29,
-                    y: mono_y,
+                    x: 0,
+                    y: stereo_y,
                 },
-                dest_x: 29,
-                width: 27,
+                dest_x: 27,
+                width: 29,
                 height: 12,
             },
         ]
@@ -1554,21 +1554,23 @@ mod tests {
 
         indicator.set_channels(2);
         let stereo = indicator.segments();
-        assert_eq!(stereo[0].source.y, 0);
-        assert_eq!(stereo[1].source.y, 12);
+        assert_eq!((stereo[0].source.x, stereo[0].source.y), (29, 12));
+        assert_eq!((stereo[0].dest_x, stereo[0].width), (0, 27));
+        assert_eq!((stereo[1].source.x, stereo[1].source.y), (0, 0));
+        assert_eq!((stereo[1].dest_x, stereo[1].width), (27, 29));
         assert!(indicator.widget().needs_redraw());
 
         indicator.set_channels(1);
         let mono = indicator.segments();
-        assert_eq!(mono[0].source.y, 12);
-        assert_eq!(mono[1].source.y, 0);
+        assert_eq!(mono[0].source.y, 0);
+        assert_eq!(mono[1].source.y, 12);
 
         indicator.set_channels(0);
         let inactive = indicator.segments();
         assert_eq!(inactive[0].source.y, 12);
         assert_eq!(inactive[1].source.y, 12);
-        assert_eq!(inactive[0].width, 29);
-        assert_eq!(inactive[1].width, 27);
+        assert_eq!(inactive[0].width, 27);
+        assert_eq!(inactive[1].width, 29);
     }
 
     #[test]

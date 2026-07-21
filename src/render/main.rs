@@ -795,15 +795,15 @@ fn render_mono_stereo(
         cr,
         skin,
         SkinPixmapKind::MonoStereo,
-        SkinRect::new(0, stereo_y, 29, 12),
+        SkinRect::new(29, mono_y, 27, 12),
         (xdest, ydest),
     )?;
     rendered |= blit_skin_rect(
         cr,
         skin,
         SkinPixmapKind::MonoStereo,
-        SkinRect::new(29, mono_y, 27, 12),
-        (xdest + 29, ydest),
+        SkinRect::new(0, stereo_y, 29, 12),
+        (xdest + 27, ydest),
     )?;
     Ok(rendered)
 }
