@@ -1,11 +1,14 @@
 //! Playback-service and media-browser boundary.
 //!
-//! `MEDIA_PLAYLIST` is a one-way projection while egui is active and the
-//! authoritative fallback playlist while the Activity is absent.
+//! `MEDIA_PLAYLIST` explicitly records whether its playlist is the foreground
+//! Activity's read-only mirror or the paused/absent Activity's authoritative
+//! service state. Actual Activity lifecycle callbacks drive that transition;
+//! repaint registration is deliberately not consulted as a liveness proxy.
 //! `PLAYBACK_BACKEND` is process-wide so Activity and service callbacks use one
-//! backend. Service transport JNI executes that shared backend immediately,
-//! including while the Activity is paused, and tags the queued event with
-//! `backend_executed` so egui only applies the matching domain transition.
+//! backend. Service transport JNI mutates the backend and playlist only in
+//! authoritative mode. Foreground controls are queued for egui, while paused
+//! controls execute immediately and are tagged `backend_executed` so a resumed
+//! Activity applies only the matching domain transition.
 //! Media-browser JNI queries are synchronous read-only endpoints required by
 //! `MediaBrowserService`.
 
@@ -21,6 +24,10 @@ use crate::playback::rodio::RodioBackend;
 use crate::playlist::Playlist;
 use crate::session::{fallback_state_paths, load_saved_state};
 
+use super::super::android_media::{
+    AndroidActivityGeneration, AndroidAuthoritativeMediaPlaylist, AndroidMediaPlaylist,
+    AndroidMediaPlaylistAuthority, AndroidMediaPlaylistState,
+};
 use super::activity;
 use super::events::{
     self, AndroidMediaControl, AndroidMediaControlEvent, AndroidPlatformEvent, AndroidPlaybackState,
@@ -41,14 +48,8 @@ struct AndroidMediaNotification {
     has_next: bool,
 }
 
-#[derive(Clone)]
-struct AndroidMediaPlaylist {
-    playlist: Playlist,
-    titles: Vec<String>,
-}
-
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
-static MEDIA_PLAYLIST: OnceLock<Mutex<Option<AndroidMediaPlaylist>>> = OnceLock::new();
+static MEDIA_PLAYLIST: OnceLock<Mutex<AndroidMediaPlaylistState>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
 
 pub(crate) fn reset_notification() {
@@ -71,18 +72,56 @@ pub fn shared_playback_backend() -> Result<RodioBackend, String> {
     Ok(created)
 }
 
-pub fn sync_media_playlist(playlist: &Playlist, titles: Vec<String>) {
-    *MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+pub(crate) fn replace_activity(activity: AndroidActivityGeneration, resumed: bool) {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = Some(AndroidMediaPlaylist {
-        playlist: playlist.clone(),
-        titles,
-    });
+        .unwrap_or_else(|poison| poison.into_inner())
+        .replace_activity(activity, resumed);
+}
+
+pub(crate) fn activity_resumed(activity: AndroidActivityGeneration) {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .activity_resumed(activity);
+}
+
+pub(crate) fn activity_paused_or_exited(activity: AndroidActivityGeneration) {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .activity_paused_or_exited(activity);
+}
+
+pub(crate) fn is_foreground_mirror(activity: AndroidActivityGeneration) -> bool {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .is_mirror_for(activity)
+}
+
+pub fn sync_media_playlist(
+    activity: AndroidActivityGeneration,
+    playlist: &Playlist,
+    titles: Vec<String>,
+) -> bool {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .sync_mirror(
+            activity,
+            AndroidMediaPlaylist::new(playlist.clone(), titles),
+        )
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn update_playback_notification(
+    activity: AndroidActivityGeneration,
     state: AndroidPlaybackState,
     title: &str,
     bitrate: i32,
@@ -94,7 +133,16 @@ pub fn update_playback_notification(
     playlist_len: i32,
     has_previous: bool,
     has_next: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
+    if !is_foreground_mirror(activity) {
+        return Ok(false);
+    }
+    let Some(context) = activity::context_for_generation(activity) else {
+        return Ok(false);
+    };
+    let Some(context) = context.as_ref().filter(|context| context.resumed) else {
+        return Ok(false);
+    };
     let notification = AndroidMediaNotification {
         state,
         title: title.to_string(),
@@ -112,13 +160,9 @@ pub fn update_playback_notification(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     if previous.as_ref() == Some(&notification) {
-        return Ok(());
+        return Ok(true);
     }
 
-    let context = activity::context()?;
-    let context = context
-        .as_ref()
-        .ok_or_else(|| "Android activity is not initialized".to_string())?;
     let mut env = context
         .vm
         .attach_current_thread()
@@ -146,14 +190,16 @@ pub fn update_playback_notification(
     )
     .map_err(|err| format!("failed to update Android playback notification: {err}"))?;
     *previous = Some(notification);
-    Ok(())
+    Ok(true)
 }
 
-pub fn complete_media_control() -> Result<(), String> {
-    let context = activity::context()?;
-    let context = context
-        .as_ref()
-        .ok_or_else(|| "Android activity is not initialized".to_string())?;
+pub fn complete_media_control(activity: AndroidActivityGeneration) -> Result<(), String> {
+    let Some(context) = activity::context_for_generation(activity) else {
+        return Ok(());
+    };
+    let Some(context) = context.as_ref() else {
+        return Ok(());
+    };
     let mut env = context
         .vm
         .attach_current_thread()
@@ -169,19 +215,27 @@ pub fn complete_media_control() -> Result<(), String> {
 }
 
 pub(crate) fn initialize_media_library(files_dir: PathBuf, cache_dir: PathBuf) {
+    let _order = events::lock_media_control_order();
+    initialize_media_library_locked(files_dir, cache_dir);
+}
+
+pub(crate) fn initialize_media_library_locked(files_dir: PathBuf, cache_dir: PathBuf) {
     std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
-    std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
-    if MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .is_some()
-    {
+    std::env::set_var("XMMS_RS_CACHE_DIR", &cache_dir);
+    let media_playlist =
+        MEDIA_PLAYLIST.get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()));
+    if !matches!(
+        media_playlist
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .authority(),
+        AndroidMediaPlaylistAuthority::Uninitialized
+    ) {
         return;
     }
 
     let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
-    match load_saved_state(&config_path, &playlist_path, false) {
+    let media = match load_saved_state(&config_path, &playlist_path, false) {
         Ok(state) => {
             let titles = state
                 .playlist
@@ -189,18 +243,25 @@ pub(crate) fn initialize_media_library(files_dir: PathBuf, cache_dir: PathBuf) {
                 .iter()
                 .map(|entry| media_item_title(&entry.title, &entry.filename))
                 .collect();
-            sync_media_playlist(&state.playlist, titles);
+            AndroidMediaPlaylist::new(state.playlist, titles)
         }
-        Err(err) => eprintln!("xmms-rs: failed to load Android Auto media library: {err}"),
-    }
+        Err(err) => {
+            eprintln!("xmms-rs: failed to load Android Auto media library: {err}");
+            AndroidMediaPlaylist::new(Playlist::new(), Vec::new())
+        }
+    };
+    media_playlist
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .initialize_authoritative(media);
 }
 
 pub(crate) fn media_item_count() -> i32 {
     MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .as_ref()
+        .media()
         .map_or(0, |shared| {
             shared.playlist.len().min(i32::MAX as usize) as i32
         })
@@ -208,10 +269,10 @@ pub(crate) fn media_item_count() -> i32 {
 
 pub(crate) fn media_item_title_at(index: usize) -> Option<String> {
     MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .as_ref()
+        .media()
         .and_then(|shared| {
             let entry = shared.playlist.entries().get(index)?;
             Some(
@@ -226,20 +287,20 @@ pub(crate) fn media_item_title_at(index: usize) -> Option<String> {
 
 pub(crate) fn media_item_duration_ms(index: usize) -> Option<i64> {
     MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .as_ref()
+        .media()
         .and_then(|shared| shared.playlist.entries().get(index))
         .map(|entry| entry.length_ms)
 }
 
 pub(crate) fn current_media_item_index() -> Option<usize> {
     MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .as_ref()
+        .media()
         .and_then(|shared| shared.playlist.position())
 }
 
@@ -247,6 +308,7 @@ pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
     let Ok(backend) = shared_playback_backend() else {
         return;
     };
+    let order = events::lock_media_control_order();
     let Ok(playback_events) = backend.poll_events() else {
         return;
     };
@@ -267,19 +329,39 @@ pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
         }
     }
     events::push_all(queued);
-    if eof {
-        if let Err(err) = advance_after_end_of_stream(&backend) {
-            eprintln!("xmms-rs: Android background playlist advance failed: {err}");
-            let _ = backend.stop();
-        }
+    let backend_executed = eof.then(|| {
+        let mut state = MEDIA_PLAYLIST
+            .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let backend_executed = match state.authority() {
+            AndroidMediaPlaylistAuthority::Mirror(_) => false,
+            AndroidMediaPlaylistAuthority::Authoritative => {
+                let result = state
+                    .authoritative_mut()
+                    .expect("authoritative state exposes mutation capability")
+                    .advance_after_end_of_stream(|uri| backend.play_uri(uri), || backend.stop());
+                if let Err(err) = result {
+                    eprintln!("xmms-rs: Android background playlist advance failed: {err}");
+                    let _ = backend.stop();
+                }
+                true
+            }
+            AndroidMediaPlaylistAuthority::Uninitialized => {
+                let _ = backend.stop();
+                true
+            }
+        };
         events::push(AndroidPlatformEvent::MediaControl(
             AndroidMediaControlEvent {
                 control: AndroidMediaControl::PlaylistEof,
-                backend_executed: true,
+                backend_executed,
             },
         ));
-        update_service_from_backend(env, service);
-    } else if refresh_state {
+        backend_executed
+    });
+    drop(order);
+    if backend_executed == Some(true) || (!eof && refresh_state) {
         update_service_from_backend(env, service);
     }
     persistence::checkpoint_playback_position(&backend, current_media_item_index);
@@ -292,31 +374,67 @@ pub(crate) fn handle_media_control(
     control: AndroidMediaControl,
 ) {
     let _order = events::lock_media_control_order();
-    if let Err(err) = execute_android_media_control(control) {
-        eprintln!("xmms-rs: Android media control failed: {err}");
-        return;
-    }
+    let backend_executed = {
+        let mut state = MEDIA_PLAYLIST
+            .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match state.authority() {
+            AndroidMediaPlaylistAuthority::Mirror(_) => false,
+            AndroidMediaPlaylistAuthority::Authoritative => {
+                let backend = match shared_playback_backend() {
+                    Ok(backend) => backend,
+                    Err(err) => {
+                        eprintln!("xmms-rs: Android media control failed: {err}");
+                        return;
+                    }
+                };
+                let result = execute_android_media_control(
+                    control,
+                    &backend,
+                    &mut state
+                        .authoritative_mut()
+                        .expect("authoritative state exposes mutation capability"),
+                );
+                if let Err(err) = result {
+                    eprintln!("xmms-rs: Android media control failed: {err}");
+                    return;
+                }
+                true
+            }
+            AndroidMediaPlaylistAuthority::Uninitialized => {
+                eprintln!("xmms-rs: Android media playlist is unavailable");
+                return;
+            }
+        }
+    };
     events::push(AndroidPlatformEvent::MediaControl(
         AndroidMediaControlEvent {
             control,
-            backend_executed: true,
+            backend_executed,
         },
     ));
-    if let Some(service) = service {
-        update_service_from_backend(&mut env, &service);
+    if backend_executed {
+        if let Some(service) = service {
+            update_service_from_backend(&mut env, &service);
+        }
     }
     events::request_registered_repaint();
 }
 
-fn execute_android_media_control(control: AndroidMediaControl) -> Result<(), String> {
-    let backend = shared_playback_backend()?;
+fn execute_android_media_control(
+    control: AndroidMediaControl,
+    backend: &RodioBackend,
+    playlist: &mut AndroidAuthoritativeMediaPlaylist<'_>,
+) -> Result<(), String> {
     match control {
         AndroidMediaControl::PausePlayback => backend.pause(),
         AndroidMediaControl::ResumePlayback => {
             if backend.state() == PlayerState::Paused {
                 backend.unpause()
             } else if backend.state() == PlayerState::Stopped {
-                let uri = current_media_entry()
+                let uri = playlist
+                    .current_entry()
                     .map(|(uri, _, _)| uri)
                     .ok_or_else(|| "no current playlist entry to resume".to_string())?;
                 backend.play_uri(&uri)
@@ -324,85 +442,21 @@ fn execute_android_media_control(control: AndroidMediaControl) -> Result<(), Str
                 Ok(())
             }
         }
-        AndroidMediaControl::NextTrack => change_media_track(true, &backend),
-        AndroidMediaControl::PreviousTrack => change_media_track(false, &backend),
+        AndroidMediaControl::NextTrack => {
+            playlist.change_track(true, |uri| backend.play_uri(uri), || backend.seek(0))
+        }
+        AndroidMediaControl::PreviousTrack => {
+            playlist.change_track(false, |uri| backend.play_uri(uri), || backend.seek(0))
+        }
         AndroidMediaControl::SeekToMs(position_ms) => backend.seek(position_ms),
-        AndroidMediaControl::PlayMediaItem(index) => play_media_item(index, &backend),
+        AndroidMediaControl::PlayMediaItem(index) => {
+            playlist.play_media_item(index, |uri| backend.play_uri(uri))
+        }
         AndroidMediaControl::StopPlayback => backend.stop(),
-        AndroidMediaControl::PlaylistEof => Ok(()),
+        AndroidMediaControl::PlaylistEof => {
+            playlist.advance_after_end_of_stream(|uri| backend.play_uri(uri), || backend.stop())
+        }
     }
-}
-
-fn advance_after_end_of_stream(backend: &RodioBackend) -> Result<(), String> {
-    let mut shared = MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let Some(current) = shared.as_ref().cloned() else {
-        return backend.stop();
-    };
-    let mut updated = current;
-    if !updated.playlist.eof_reached() {
-        return backend.stop();
-    }
-    let position = updated
-        .playlist
-        .position()
-        .ok_or_else(|| "Android media playlist has no entry after EOF".to_string())?;
-    let uri = updated.playlist.entries()[position].filename.clone();
-    backend.play_uri(&uri)?;
-    *shared = Some(updated);
-    Ok(())
-}
-
-fn change_media_track(next: bool, backend: &RodioBackend) -> Result<(), String> {
-    let mut shared = MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let current = shared
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| "Android media playlist is unavailable".to_string())?;
-    let mut updated = current;
-    let advanced = if next {
-        updated.playlist.advance()
-    } else {
-        updated.playlist.previous()
-    };
-    if !advanced {
-        return backend.seek(0);
-    }
-    let position = updated
-        .playlist
-        .position()
-        .ok_or_else(|| "Android media playlist has no current entry".to_string())?;
-    let uri = updated.playlist.entries()[position].filename.clone();
-    backend.play_uri(&uri)?;
-    *shared = Some(updated);
-    Ok(())
-}
-
-fn play_media_item(index: usize, backend: &RodioBackend) -> Result<(), String> {
-    let mut shared = MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    let current = shared
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| "Android media playlist is unavailable".to_string())?;
-    let mut updated = current;
-    let uri = updated
-        .playlist
-        .entries()
-        .get(index)
-        .map(|entry| entry.filename.clone())
-        .ok_or_else(|| format!("Android media item index {index} is out of range"))?;
-    updated.playlist.set_position(index);
-    backend.play_uri(&uri)?;
-    *shared = Some(updated);
-    Ok(())
 }
 
 fn media_item_title(title: &str, filename: &str) -> String {
@@ -419,18 +473,10 @@ fn media_item_title(title: &str, filename: &str) -> String {
 
 fn current_media_entry() -> Option<(String, String, i64)> {
     let shared = MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    let shared = shared.as_ref()?;
-    let position = shared.playlist.position()?;
-    let entry = shared.playlist.entries().get(position)?;
-    let title = shared
-        .titles
-        .get(position)
-        .cloned()
-        .unwrap_or_else(|| entry.title.clone());
-    Some((entry.filename.clone(), title, entry.length_ms))
+    shared.media()?.current_entry()
 }
 
 fn update_service_position_from_backend(
@@ -468,10 +514,10 @@ fn update_service_from_backend(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
     let position_ms = backend.position_ms().unwrap_or(0).max(0);
     let stream_info = backend.stream_info();
     let (current_index, playlist_len) = MEDIA_PLAYLIST
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .as_ref()
+        .media()
         .map_or((-1, 0), |shared| {
             (
                 shared.playlist.position().map_or(-1, |index| index as i64),

@@ -2,9 +2,11 @@
 //!
 //! JNI entry points cannot borrow the lifecycle-owned [`AndroidRuntime`], so the
 //! inbox, ordering lock, and current repaint handle remain process registries.
-//! `initialize`/`on_exit` replace or clear lifecycle-owned contents. Ordered
-//! media controls are serialized with local player commands; replaceable volume
-//! and spectrum samples are coalesced by [`AndroidEventInbox`].
+//! Repaint registration is tagged with the owning Activity generation and is
+//! cleared on pause/replacement/exit; its presence is never treated as an
+//! Activity-liveness signal. Ordered media controls are serialized with local
+//! player commands; replaceable volume and spectrum samples are coalesced by
+//! [`AndroidEventInbox`].
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -12,12 +14,18 @@ pub use super::super::android_events::{
     AndroidEventInbox, AndroidMediaControl, AndroidMediaControlEvent, AndroidPickerResult,
     AndroidPlatformEvent, AndroidPlaybackState,
 };
+use super::super::android_media::AndroidActivityGeneration;
 
 static EVENTS: OnceLock<Mutex<AndroidEventInbox>> = OnceLock::new();
 static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
-static REPAINT_CONTEXT: OnceLock<Mutex<Option<egui::Context>>> = OnceLock::new();
+static REPAINT_CONTEXT: OnceLock<Mutex<Option<RegisteredRepaintContext>>> = OnceLock::new();
 
-pub(crate) fn reset() {
+struct RegisteredRepaintContext {
+    activity: AndroidActivityGeneration,
+    context: egui::Context,
+}
+
+pub(crate) fn replace_activity() {
     *REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -26,7 +34,7 @@ pub(crate) fn reset() {
         .get_or_init(|| Mutex::new(AndroidEventInbox::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .clear();
+        .replace_activity();
 }
 
 pub(crate) fn push(event: AndroidPlatformEvent) {
@@ -47,8 +55,7 @@ pub(crate) fn push_all(events: Vec<AndroidPlatformEvent>) {
     }
 }
 
-pub fn drain_platform_events() -> Vec<AndroidPlatformEvent> {
-    let _order = lock_media_control_order();
+pub(crate) fn drain_platform_events() -> Vec<AndroidPlatformEvent> {
     let mut events = EVENTS
         .get_or_init(|| Mutex::new(AndroidEventInbox::default()))
         .lock()
@@ -61,28 +68,38 @@ pub fn drain_platform_events() -> Vec<AndroidPlatformEvent> {
     drained
 }
 
-pub fn register_repaint_context(context: &egui::Context) {
+pub(crate) fn register_repaint_context(
+    activity: AndroidActivityGeneration,
+    context: &egui::Context,
+) {
     *REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = Some(context.clone());
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(RegisteredRepaintContext {
+        activity,
+        context: context.clone(),
+    });
 }
 
-pub fn unregister_repaint_context() {
-    *REPAINT_CONTEXT
+pub(crate) fn unregister_repaint_context(activity: AndroidActivityGeneration) {
+    let mut repaint = REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = None;
+        .unwrap_or_else(|poison| poison.into_inner());
+    if repaint
+        .as_ref()
+        .is_some_and(|registered| registered.activity == activity)
+    {
+        *repaint = None;
+    }
 }
 
-pub fn begin_local_media_control() -> MutexGuard<'static, ()> {
-    let order = lock_media_control_order();
+pub(crate) fn remove_unexecuted_media_controls() {
     EVENTS
         .get_or_init(|| Mutex::new(AndroidEventInbox::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
-        .remove_media_controls();
-    order
+        .remove_unexecuted_media_controls();
 }
 
 pub(crate) fn lock_media_control_order() -> MutexGuard<'static, ()> {
@@ -99,6 +116,6 @@ pub(crate) fn request_registered_repaint() {
         .unwrap_or_else(|poison| poison.into_inner())
         .as_ref()
     {
-        context.request_repaint();
+        context.context.request_repaint();
     }
 }

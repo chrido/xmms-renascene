@@ -11,6 +11,7 @@ use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app_state::AppState;
 use crate::player::{PlaybackEvent, PlayerState};
+use crate::playlist::Playlist;
 
 #[derive(Debug, Clone)]
 pub(super) struct AppController {
@@ -214,6 +215,16 @@ impl AppController {
                 self.state.playlist.invert_selection();
                 self.playlist_changed_effects()
             }
+            PlaylistCommand::Enqueue(index) => {
+                self.update_queue(|playlist| playlist.enqueue(index))
+            }
+            PlaylistCommand::Dequeue(index) => {
+                self.update_queue(|playlist| playlist.dequeue(index))
+            }
+            PlaylistCommand::ToggleQueue(indices) => {
+                self.update_queue(|playlist| playlist.toggle_queue(&indices))
+            }
+            PlaylistCommand::ClearQueue => self.update_queue(Playlist::clear_queue),
             PlaylistCommand::SetPosition(index) => {
                 self.state.playlist.set_position(index);
                 self.playlist_changed_effects()
@@ -398,6 +409,16 @@ impl AppController {
             AppEffect::SaveConfig,
             AppEffect::QueueRender(RenderTarget::Playlist),
         ]
+    }
+
+    fn queue_changed_effects(&self) -> Vec<AppEffect> {
+        vec![AppEffect::QueueRender(RenderTarget::Playlist)]
+    }
+
+    fn update_queue(&mut self, update: impl FnOnce(&mut Playlist) -> bool) -> Vec<AppEffect> {
+        update(&mut self.state.playlist)
+            .then(|| self.queue_changed_effects())
+            .unwrap_or_default()
     }
 
     fn clear_playlist(&mut self) -> Vec<AppEffect> {
@@ -862,6 +883,123 @@ mod tests {
     }
 
     #[test]
+    fn queue_commands_are_domain_transitions_with_playlist_render_effects() {
+        let mut state = AppState::default();
+        for name in ["one", "two", "three"] {
+            state.playlist.add_uri(format!("file:///tmp/{name}.ogg"));
+        }
+        let mut controller = AppController::new(state);
+
+        let enqueue = controller.handle_command(PlaylistCommand::Enqueue(1).into());
+        assert_eq!(controller.state().playlist.queued_indices(), vec![1]);
+        assert_eq!(
+            enqueue,
+            vec![AppEffect::QueueRender(RenderTarget::Playlist)]
+        );
+
+        assert!(controller
+            .handle_command(PlaylistCommand::Enqueue(1).into())
+            .is_empty());
+        controller.handle_command(PlaylistCommand::ToggleQueue(vec![1, 2]).into());
+        assert_eq!(controller.state().playlist.queued_indices(), vec![2]);
+
+        controller.handle_command(PlaylistCommand::Dequeue(2).into());
+        assert!(controller.state().playlist.queued_indices().is_empty());
+        assert!(controller
+            .handle_command(PlaylistCommand::Dequeue(2).into())
+            .is_empty());
+
+        controller.handle_command(PlaylistCommand::Enqueue(0).into());
+        controller.handle_command(PlaylistCommand::ClearQueue.into());
+        assert!(controller.state().playlist.queued_indices().is_empty());
+        assert!(controller
+            .handle_command(PlaylistCommand::ClearQueue.into())
+            .is_empty());
+    }
+
+    #[test]
+    fn controller_structural_commands_preserve_or_prune_queue_identity() {
+        let mut state = AppState::default();
+        for name in ["zulu", "alpha", "echo", "bravo"] {
+            state.playlist.add_uri(format!("file:///tmp/{name}.ogg"));
+        }
+        assert!(state.playlist.enqueue(1));
+        assert!(state.playlist.enqueue(3));
+        let mut controller = AppController::new(state);
+
+        controller.handle_command(
+            PlaylistCommand::AddUris(vec!["file:///tmp/charlie.ogg".to_string()]).into(),
+        );
+        assert_eq!(
+            controller_queued_titles(&controller),
+            vec!["alpha", "bravo"]
+        );
+
+        controller.handle_command(PlaylistCommand::MoveEntry { from: 1, to: 4 }.into());
+        assert_eq!(
+            controller_queued_titles(&controller),
+            vec!["alpha", "bravo"]
+        );
+
+        controller.handle_command(PlaylistCommand::Reverse.into());
+        assert_eq!(
+            controller_queued_titles(&controller),
+            vec!["alpha", "bravo"]
+        );
+
+        controller.handle_command(PlaylistCommand::Randomize.into());
+        assert_eq!(
+            controller_queued_titles(&controller),
+            vec!["alpha", "bravo"]
+        );
+
+        controller
+            .handle_command(PlaylistCommand::Sort(crate::playlist::PlaylistSortKey::Title).into());
+        assert_eq!(
+            controller_queued_titles(&controller),
+            vec!["alpha", "bravo"]
+        );
+
+        for title in ["zulu", "alpha", "bravo"] {
+            let index = controller_title_index(&controller, title);
+            controller.handle_command(PlaylistCommand::ToggleEntrySelection(index).into());
+        }
+        controller.handle_command(
+            PlaylistCommand::SortSelected(crate::playlist::PlaylistSortKey::Filename).into(),
+        );
+        assert_eq!(
+            controller_queued_titles(&controller),
+            vec!["alpha", "bravo"]
+        );
+
+        controller.handle_command(PlaylistCommand::SelectNone.into());
+        let alpha = controller_title_index(&controller, "alpha");
+        controller.handle_command(PlaylistCommand::ToggleEntrySelection(alpha).into());
+        controller.handle_command(PlaylistCommand::RemoveSelected.into());
+        assert_eq!(controller_queued_titles(&controller), vec!["bravo"]);
+
+        controller.handle_command(PlaylistCommand::Clear.into());
+        assert!(controller.state().playlist.queued_indices().is_empty());
+    }
+
+    #[test]
+    fn controller_single_remove_and_crop_prune_queue_atomically() {
+        let mut removed = controller_with_all_entries_queued();
+        removed.handle_command(PlaylistCommand::SetPosition(2).into());
+        removed.handle_command(PlaylistCommand::RemoveSelectedOrCurrent.into());
+        assert_eq!(
+            controller_queued_titles(&removed),
+            vec!["one", "two", "four"]
+        );
+
+        let mut cropped = controller_with_all_entries_queued();
+        cropped.handle_command(PlaylistCommand::ToggleEntrySelection(1).into());
+        cropped.handle_command(PlaylistCommand::ToggleEntrySelection(3).into());
+        cropped.handle_command(PlaylistCommand::CropToSelection.into());
+        assert_eq!(controller_queued_titles(&cropped), vec!["two", "four"]);
+    }
+
+    #[test]
     fn clearing_playlist_stops_and_resets_player() {
         for command in [
             AppCommand::from(PlaylistCommand::Clear),
@@ -921,5 +1059,35 @@ mod tests {
         assert!(controller.state().config.equalizer_active);
         assert!(effects.contains(&AppEffect::SetBackendEqualizer));
         assert!(effects.contains(&AppEffect::QueueRender(RenderTarget::Equalizer)));
+    }
+
+    fn controller_queued_titles(controller: &AppController) -> Vec<&str> {
+        let playlist = &controller.state().playlist;
+        playlist
+            .queued_indices()
+            .into_iter()
+            .map(|index| playlist.entries()[index].title.as_str())
+            .collect()
+    }
+
+    fn controller_title_index(controller: &AppController, title: &str) -> usize {
+        controller
+            .state()
+            .playlist
+            .entries()
+            .iter()
+            .position(|entry| entry.title == title)
+            .unwrap()
+    }
+
+    fn controller_with_all_entries_queued() -> AppController {
+        let mut state = AppState::default();
+        for name in ["one", "two", "three", "four"] {
+            state.playlist.add_uri(format!("file:///tmp/{name}.ogg"));
+        }
+        for index in 0..state.playlist.len() {
+            state.playlist.enqueue(index);
+        }
+        AppController::new(state)
     }
 }

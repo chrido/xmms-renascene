@@ -106,13 +106,25 @@ impl AndroidEventInbox {
         (events, !self.events.is_empty())
     }
 
-    pub fn clear(&mut self) {
-        self.events.clear();
+    pub fn replace_activity(&mut self) {
+        self.events.retain(|event| {
+            matches!(
+                event,
+                AndroidPlatformEvent::MediaControl(_) | AndroidPlatformEvent::Playback(_)
+            )
+        });
     }
 
-    pub fn remove_media_controls(&mut self) {
-        self.events
-            .retain(|event| !matches!(event, AndroidPlatformEvent::MediaControl(_)));
+    pub fn remove_unexecuted_media_controls(&mut self) {
+        self.events.retain(|event| {
+            !matches!(
+                event,
+                AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
+                    backend_executed: false,
+                    ..
+                })
+            )
+        });
     }
 }
 
@@ -206,19 +218,64 @@ mod tests {
     }
 
     #[test]
-    fn local_player_input_supersedes_only_queued_media_controls() {
+    fn local_player_input_supersedes_only_unexecuted_media_controls() {
         let mut inbox = AndroidEventInbox::default();
         inbox.push(media(AndroidMediaControl::NextTrack));
+        inbox.push(AndroidPlatformEvent::MediaControl(
+            AndroidMediaControlEvent {
+                control: AndroidMediaControl::PlayMediaItem(2),
+                backend_executed: true,
+            },
+        ));
         inbox.push(AndroidPlatformEvent::ExternalVolumeChanged(42));
         inbox.push(media(AndroidMediaControl::PreviousTrack));
 
-        inbox.remove_media_controls();
+        inbox.remove_unexecuted_media_controls();
         let (events, more) = inbox.drain_frame();
 
         assert!(!more);
         assert!(matches!(
             events.as_slice(),
-            [AndroidPlatformEvent::ExternalVolumeChanged(42)]
+            [
+                AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
+                    control: AndroidMediaControl::PlayMediaItem(2),
+                    backend_executed: true,
+                }),
+                AndroidPlatformEvent::ExternalVolumeChanged(42)
+            ]
+        ));
+    }
+
+    #[test]
+    fn activity_replacement_preserves_service_reconciliation_events() {
+        let mut inbox = AndroidEventInbox::default();
+        inbox.push(AndroidPlatformEvent::Picker(AndroidPickerResult {
+            request: FileDialogRequest::ImportSkin,
+            paths: Vec::new(),
+            error: None,
+        }));
+        inbox.push(AndroidPlatformEvent::ExternalVolumeChanged(42));
+        inbox.push(AndroidPlatformEvent::Playback(PlaybackEvent::AsyncDone));
+        inbox.push(AndroidPlatformEvent::MediaControl(
+            AndroidMediaControlEvent {
+                control: AndroidMediaControl::NextTrack,
+                backend_executed: true,
+            },
+        ));
+
+        inbox.replace_activity();
+        let (events, more) = inbox.drain_frame();
+
+        assert!(!more);
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AndroidPlatformEvent::Playback(PlaybackEvent::AsyncDone),
+                AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
+                    control: AndroidMediaControl::NextTrack,
+                    backend_executed: true,
+                })
+            ]
         ));
     }
 

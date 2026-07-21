@@ -22,7 +22,8 @@ pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelState, PanelVisibility};
 pub use crate::app::playlist_actions::PlaylistSortAction;
 use crate::app::playlist_actions::{
-    playlist_row_click_commands, PlaylistMenuCommand, PLAYLIST_SORT_MENU_ITEMS,
+    playlist_queue_target_indices, playlist_row_click_commands, PlaylistMenuCommand,
+    PLAYLIST_SORT_MENU_ITEMS,
 };
 use crate::app::preferences_model::{
     normalize_title_format, set_scale_factor as set_config_scale_factor, title_format_preview,
@@ -725,6 +726,9 @@ fn build_preview_window(
                 (redraw, events, properties)
             };
             mpris_service.emit_events(&mpris_events, &mpris_properties);
+            if handle_mpris_quit_request(&mpris_events, || app.quit()) {
+                return gtk::glib::ControlFlow::Break;
+            }
             if redraw {
                 drawing_area.queue_draw();
                 panel_windows.playlist_area.queue_draw();
@@ -746,6 +750,15 @@ fn build_preview_window(
         panel_windows.skin_editor.present();
     }
     Ok(())
+}
+
+fn handle_mpris_quit_request(events: &[MprisEvent], quit: impl FnOnce()) -> bool {
+    if events.contains(&MprisEvent::QuitRequested) {
+        quit();
+        true
+    } else {
+        false
+    }
 }
 
 fn poll_socket_control_gtk(
@@ -5212,7 +5225,7 @@ pub(crate) struct MainWindowUiState {
     playback_backend: Option<SharedPlaybackBackend>,
     duration_index_sender: Sender<DurationIndexResult>,
     duration_index_receiver: Receiver<DurationIndexResult>,
-    playback_requests: Vec<String>,
+    last_playback_request: Option<String>,
     docked_focus: KeyboardFocus,
     equalizer: EqualizerUiState,
     playlist_ui: PlaylistUiState,
@@ -5220,16 +5233,13 @@ pub(crate) struct MainWindowUiState {
     last_playlist_file_info: Option<String>,
     active_skin: DefaultSkin,
     playlist_options_opened: bool,
-    playlist_queue: Vec<usize>,
     queue_manager_opened: bool,
     preferences_page: PreferencesPage,
-    preferences_saved: bool,
     skin_browser: SkinBrowserState,
     skin_editor: SkinEditorState,
     output_device_groups: OutputDeviceGroups,
     output_switch_count: u32,
     mpris_events: Vec<MprisEvent>,
-    mpris_quit_requested: bool,
     playback_transition: PlaybackTransitionState,
     main_keyboard_slider: Option<MainSlider>,
     last_open_location: Option<String>,
@@ -5279,7 +5289,7 @@ impl MainWindowUiState {
             playback_backend: None,
             duration_index_sender,
             duration_index_receiver,
-            playback_requests: Vec::new(),
+            last_playback_request: None,
             docked_focus: KeyboardFocus::default(),
             equalizer: EqualizerUiState::new(),
             playlist_ui: PlaylistUiState::new(),
@@ -5287,16 +5297,13 @@ impl MainWindowUiState {
             last_playlist_file_info: None,
             active_skin,
             playlist_options_opened: false,
-            playlist_queue: Vec::new(),
             queue_manager_opened: false,
             preferences_page: PreferencesPage::Options,
-            preferences_saved: false,
             skin_browser: SkinBrowserState::default(),
             skin_editor: SkinEditorState::default(),
             output_device_groups: OutputDeviceGroups::default(),
             output_switch_count: 0,
             mpris_events: Vec::new(),
-            mpris_quit_requested: false,
             playback_transition: PlaybackTransitionState::stopped_at_or_idle(playback_position_ms),
             main_keyboard_slider: None,
             last_open_location: None,
@@ -5333,12 +5340,11 @@ impl MainWindowUiState {
         for effect in effects {
             self.apply_store_effect(effect);
         }
-        self.mark_preferences_saved();
     }
 
     fn start_backend_playback_uri(&mut self, uri: &str, position_ms: i64) {
         self.load_equalizer_auto_preset_for_uri(uri);
-        self.playback_requests.push(uri.to_string());
+        self.last_playback_request = Some(uri.to_string());
         self.playback_transition = if position_ms > 0 {
             PlaybackTransitionState::request_backend_seek(position_ms)
         } else {
@@ -6245,14 +6251,6 @@ impl MainWindowUiState {
         self.preferences_page = page;
     }
 
-    pub(crate) fn preferences_saved(&self) -> bool {
-        self.preferences_saved
-    }
-
-    fn mark_preferences_saved(&mut self) {
-        self.preferences_saved = true;
-    }
-
     pub(crate) fn reset_preferences_to_defaults(&mut self) {
         let effects = self
             .store
@@ -6265,7 +6263,6 @@ impl MainWindowUiState {
             self.store.state().config.playback_position_ms,
         );
         self.apply_visualization_preferences();
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn is_open_location_visible(&self) -> bool {
@@ -6365,10 +6362,6 @@ impl MainWindowUiState {
         std::mem::take(&mut self.mpris_events)
     }
 
-    pub(crate) fn mpris_quit_requested(&self) -> bool {
-        self.mpris_quit_requested
-    }
-
     pub(crate) fn set_mpris_volume(&mut self, volume: f64) {
         let percent = (volume * 100.0) as i32;
         self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(percent));
@@ -6378,10 +6371,7 @@ impl MainWindowUiState {
         let playback_position_ms = self.store.state().config.playback_position_ms;
         match app_action_for_mpris_command(&command, playback_position_ms) {
             MprisAppAction::Raise => self.mpris_events.push(MprisEvent::Raised),
-            MprisAppAction::Quit => {
-                self.mpris_quit_requested = true;
-                self.mpris_events.push(MprisEvent::QuitRequested);
-            }
+            MprisAppAction::Quit => self.mpris_events.push(MprisEvent::QuitRequested),
             MprisAppAction::Dispatch(app_command) => {
                 self.dispatch_store_command_and_apply_local_effects(app_command);
                 match command {
@@ -6903,7 +6893,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn last_playback_request(&self) -> Option<&str> {
-        self.playback_requests.last().map(String::as_str)
+        self.last_playback_request.as_deref()
     }
 
     pub(crate) fn add_timed_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
@@ -8053,44 +8043,21 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn toggle_queue_selected_playlist_entries(&mut self) -> bool {
-        let selected = self
-            .store
-            .state()
-            .playlist
-            .entries()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| entry.selected.then_some(index))
-            .collect::<Vec<_>>();
-        let targets = if selected.is_empty() {
-            self.selected_playlist_index()
-                .or_else(|| self.store.state().playlist.position())
-                .into_iter()
-                .collect::<Vec<_>>()
-        } else {
-            selected
-        };
+        let targets = playlist_queue_target_indices(&self.store.state().playlist);
         if targets.is_empty() {
             return false;
         }
-        for index in targets {
-            if let Some(position) = self
-                .playlist_queue
-                .iter()
-                .position(|queued| *queued == index)
-            {
-                self.playlist_queue.remove(position);
-            } else {
-                self.playlist_queue.push(index);
-            }
-        }
-        true
+        !self
+            .dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleQueue(targets))
+            .changes
+            .is_empty()
     }
 
     pub(crate) fn clear_playlist_queue(&mut self) -> bool {
-        let changed = !self.playlist_queue.is_empty();
-        self.playlist_queue.clear();
-        changed
+        !self
+            .dispatch_store_command_and_apply_local_effects(PlaylistCommand::ClearQueue)
+            .changes
+            .is_empty()
     }
 
     pub(crate) fn open_queue_manager(&mut self) -> bool {
@@ -8445,13 +8412,11 @@ impl MainWindowUiState {
     pub(crate) fn set_preference_volume(&mut self, volume: i32) {
         let volume = volume.clamp(0, 100);
         self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(volume));
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_balance(&mut self, balance: i32) {
         let balance = balance.clamp(-100, 100);
         self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetBalance(balance));
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_scale_factor(&mut self, scale: f64) {
@@ -8462,21 +8427,18 @@ impl MainWindowUiState {
         if self.store.state().playlist.repeat() != enabled {
             self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleRepeat);
         }
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_shuffle(&mut self, enabled: bool) {
         if self.store.state().playlist.shuffle() != enabled {
             self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleShuffle);
         }
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_no_playlist_advance(&mut self, enabled: bool) {
         if self.store.state().playlist.no_advance() != enabled {
             self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleNoAdvance);
         }
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn preference_no_playlist_advance(&self) -> bool {
@@ -8544,14 +8506,12 @@ impl MainWindowUiState {
             self.playlist_ui.width = PLAYLIST_MIN_WIDTH;
             self.clamp_playlist_scroll_offset();
         }
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_equalizer_docked(&mut self, docked: bool) {
         self.dispatch_store_command_and_apply_local_effects(PanelCommand::SetEqualizerDetached(
             !docked,
         ));
-        self.mark_preferences_saved();
     }
 
     pub(crate) fn set_preference_convert_underscore(&mut self, enabled: bool) {
@@ -10043,12 +10003,62 @@ mod tests {
             .changes
             .contains(crate::app::store::StateChangeSet::PLAYER));
         assert!(result.effects.contains(&AppEffect::SetOutputVolume(37)));
-        assert!(state.playback_requests.is_empty());
+        assert!(state.last_playback_request.is_none());
 
         for effect in result.effects {
             state.apply_store_effect(effect);
         }
-        assert!(state.playback_requests.is_empty());
+        assert!(state.last_playback_request.is_none());
+    }
+
+    #[test]
+    fn gtk_playlist_queue_shortcuts_use_the_shared_store_queue() {
+        let mut state = MainWindowUiState::default();
+        for uri in [
+            "file:///music/one.ogg",
+            "file:///music/two.ogg",
+            "file:///music/three.ogg",
+        ] {
+            state.add_playlist_uri(uri);
+        }
+        state.set_playlist_entry_selected(0, true);
+        state.set_playlist_entry_selected(2, true);
+
+        assert!(state.toggle_queue_selected_playlist_entries());
+        assert_eq!(state.store.playlist_queue(), vec![0, 2]);
+
+        state.reverse_playlist();
+        assert_eq!(state.store.playlist_queue(), vec![2, 0]);
+
+        assert!(state.clear_playlist_queue());
+        assert!(state.store.playlist_queue().is_empty());
+        assert!(!state.clear_playlist_queue());
+    }
+
+    #[test]
+    fn gtk_playback_request_observability_keeps_only_latest_uri() {
+        let mut state = MainWindowUiState::default();
+
+        state.start_backend_playback_uri("file:///music/one.ogg", 0);
+        state.start_backend_playback_uri("file:///music/two.ogg", 0);
+
+        assert_eq!(state.last_playback_request(), Some("file:///music/two.ogg"));
+    }
+
+    #[test]
+    fn gtk_mpris_quit_event_invokes_application_shutdown() {
+        let quit_count = std::cell::Cell::new(0);
+
+        assert!(!handle_mpris_quit_request(&[MprisEvent::Raised], || {
+            quit_count.set(quit_count.get() + 1);
+        }));
+        assert!(handle_mpris_quit_request(
+            &[MprisEvent::QuitRequested],
+            || {
+                quit_count.set(quit_count.get() + 1);
+            }
+        ));
+        assert_eq!(quit_count.get(), 1);
     }
 
     #[test]

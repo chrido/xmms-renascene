@@ -139,6 +139,8 @@ fn activity_media_control_state_machine_and_lifecycle_contract_are_explicit() {
         .next()
         .expect("onResume body");
     assert!(resume.contains("nativeLoopReady = true"));
+    assert!(resume.contains("activityResumed = true"));
+    assert!(resume.contains("nativeOnActivityResumed();"));
     assert!(resume.contains("dispatchPendingMediaControl"));
 
     let pause = activity
@@ -149,11 +151,29 @@ fn activity_media_control_state_machine_and_lifecycle_contract_are_explicit() {
         .next()
         .expect("onPause body");
     assert!(pause.contains("nativeLoopReady = false"));
+    assert!(pause.contains("activityResumed = false"));
+    assert!(pause.contains("nativeOnActivityPaused();"));
+    assert!(activity.contains("nativeOnActivityDestroyed();"));
+    assert!(activity.contains("public boolean isNativeActivityResumed()"));
+    assert!(activity.contains("if (hasFocus && activityResumed)"));
 }
 
 #[test]
 fn activity_jni_callbacks_do_not_execute_domain_or_backend_mutations() {
     let jni = include_str!("../src/ui/egui/android/jni.rs");
+    let lifecycle_callbacks = jni
+        .split("Java_org_xmms_renascene_XmmsActivity_nativeOnActivityResumed")
+        .nth(1)
+        .expect("Activity lifecycle callbacks")
+        .split("Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSelected")
+        .next()
+        .expect("Activity lifecycle callback section");
+    assert!(lifecycle_callbacks.contains("super::handle_activity_resumed"));
+    assert!(lifecycle_callbacks.contains("super::handle_activity_paused"));
+    assert!(lifecycle_callbacks.contains("super::handle_activity_destroyed"));
+    assert!(!lifecycle_callbacks.contains("shared_playback_backend"));
+    assert!(!lifecycle_callbacks.contains("AppStore"));
+
     let activity_callbacks = jni
         .split("Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSelected")
         .nth(1)
@@ -178,7 +198,7 @@ fn activity_jni_callbacks_do_not_execute_domain_or_backend_mutations() {
 }
 
 #[test]
-fn service_and_widget_controls_execute_without_waiting_for_egui() {
+fn service_and_widget_controls_execute_immediately_only_when_authoritative() {
     let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
     let widget = include_str!("../android/java/org/xmms/renascene/XmmsPlayerWidget.java");
     let media_session = include_str!("../src/ui/egui/android/media_session.rs");
@@ -194,10 +214,52 @@ fn service_and_widget_controls_execute_without_waiting_for_egui() {
         .split("fn execute_android_media_control")
         .next()
         .expect("service media-control handler body");
-    assert!(handler.contains("execute_android_media_control(control)"));
-    assert!(handler.contains("backend_executed: true"));
+    assert!(handler.contains("AndroidMediaPlaylistAuthority::Mirror(_) => false"));
+    assert!(handler.contains("AndroidMediaPlaylistAuthority::Authoritative"));
+    assert!(handler.contains("execute_android_media_control("));
+    assert!(handler.contains("backend_executed,"));
     assert!(!handler.contains("ui_runtime_registered"));
     assert!(!events.contains("fn ui_runtime_registered"));
+}
+
+#[test]
+fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
+    let state = include_str!("../src/ui/egui/android_media.rs");
+    let media_session = include_str!("../src/ui/egui/android/media_session.rs");
+    let android = include_str!("../src/ui/egui/android/mod.rs");
+    let activity = include_str!("../src/ui/egui/android/activity.rs");
+    let events = include_str!("../src/ui/egui/android/events.rs");
+    let app = include_str!("../src/ui/egui/app.rs");
+
+    assert!(state.contains("enum AndroidMediaPlaylistState"));
+    assert!(state.contains("Mirror {"));
+    assert!(state.contains("Authoritative(AndroidMediaPlaylist)"));
+    assert!(state.contains("fn authoritative_mut"));
+    assert!(
+        media_session.contains("static MEDIA_PLAYLIST: OnceLock<Mutex<AndroidMediaPlaylistState>>")
+    );
+    assert!(!media_session.contains("static MEDIA_PLAYLIST: OnceLock<Mutex<Option<"));
+
+    assert!(android.contains("handle_activity_resumed"));
+    assert!(android.contains("handle_activity_paused"));
+    assert!(android.contains("handle_activity_destroyed"));
+    assert!(android.contains("media_session::activity_paused_or_exited"));
+    assert!(events.contains("struct RegisteredRepaintContext"));
+    assert!(events.contains("activity: AndroidActivityGeneration"));
+    assert!(events.contains("never treated as an"));
+    assert!(activity.contains("static NEXT_GENERATION: AtomicU64"));
+    assert!(activity.contains("stale callbacks and egui exits"));
+    assert!(app.contains("self.android.activity_generation()"));
+    let play_media_item = app
+        .split("AndroidMediaControl::PlayMediaItem(index)")
+        .nth(1)
+        .expect("PlayMediaItem handler")
+        .split("let command = android_player_command_for_media_control")
+        .next()
+        .expect("PlayMediaItem handler body");
+    assert!(play_media_item.contains("PlayerCommand::StartCurrentTrack"));
+    assert!(play_media_item
+        .contains("EffectExecution::after_external_backend_execution(event.backend_executed)"));
 }
 
 #[test]
@@ -255,10 +317,10 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
         .split("pub fn initialize(")
         .nth(1)
         .expect("Android initialization")
-        .split("Ok(())")
+        .split("Ok(initialized.generation)")
         .next()
         .expect("Android initialization body");
-    assert!(initialization.contains("events::reset()"));
+    assert!(initialization.contains("events::replace_activity()"));
     assert!(event_bridge.contains("static EVENTS: OnceLock<Mutex<AndroidEventInbox>>"));
     assert!(event_bridge.contains("Mutex::new(AndroidEventInbox::default())"));
 

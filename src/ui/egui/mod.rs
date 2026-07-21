@@ -8,6 +8,8 @@ pub(crate) mod android;
 #[cfg(any(target_os = "android", test))]
 pub mod android_events;
 #[cfg(any(target_os = "android", test))]
+pub(crate) mod android_media;
+#[cfg(any(target_os = "android", test))]
 pub mod android_runtime;
 pub mod app;
 pub(crate) mod effect_executor;

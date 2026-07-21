@@ -54,6 +54,9 @@ public final class XmmsActivity extends NativeActivity {
 
     private native void nativeOnDocumentsSelected(
             int requestCode, long operationId, String[] paths, String error);
+    private native void nativeOnActivityResumed();
+    private native void nativeOnActivityPaused();
+    private native void nativeOnActivityDestroyed();
     private native void nativeOnMediaControl(int control);
     private native void nativeOnMediaVolumeChanged(int volumePercent);
     private native void nativeRequestRepaint();
@@ -160,6 +163,7 @@ public final class XmmsActivity extends NativeActivity {
 
     private AudioManager audioManager;
     private final MediaControlDispatch mediaControls = new MediaControlDispatch();
+    private volatile boolean activityResumed;
     private boolean nativeLoopReady;
     private boolean mediaVolumeObserverRegistered;
     private int lastReportedMediaVolumePercent = -1;
@@ -213,7 +217,9 @@ public final class XmmsActivity extends NativeActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         nativeLoopReady = true;
+        nativeOnActivityResumed();
         registerMediaVolumeObserver();
         getWindow().getDecorView().post(this::dispatchPendingMediaControl);
     }
@@ -222,13 +228,15 @@ public final class XmmsActivity extends NativeActivity {
     protected void onPause() {
         unregisterMediaVolumeObserver();
         nativeLoopReady = false;
+        activityResumed = false;
+        nativeOnActivityPaused();
         super.onPause();
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
+        if (hasFocus && activityResumed) {
             nativeLoopReady = true;
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
         }
@@ -253,7 +261,14 @@ public final class XmmsActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        activityResumed = false;
+        nativeLoopReady = false;
+        nativeOnActivityDestroyed();
         super.onDestroy();
+    }
+
+    public boolean isNativeActivityResumed() {
+        return activityResumed;
     }
 
     private void dispatchMediaControl(int control) {

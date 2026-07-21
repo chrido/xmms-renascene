@@ -10,6 +10,8 @@ use crate::playlist::Playlist;
 
 #[cfg(target_os = "android")]
 use super::android::playlist_manager::PlaylistManager;
+#[cfg(target_os = "android")]
+use super::android_media::AndroidActivityGeneration;
 
 const PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 const POST_ROTATION_REPAINT_FRAMES: u8 = 3;
@@ -21,6 +23,8 @@ pub(crate) struct AndroidRuntime {
     layout_view: AndroidLayoutView,
     #[cfg(target_os = "android")]
     pub playlist_manager: PlaylistManager,
+    #[cfg(target_os = "android")]
+    activity_generation: Option<AndroidActivityGeneration>,
     media_playlist_snapshot: Option<Playlist>,
     media_projection_pending: bool,
 }
@@ -42,6 +46,8 @@ impl AndroidRuntime {
             layout_view: AndroidLayoutView::Unavailable,
             #[cfg(target_os = "android")]
             playlist_manager: PlaylistManager::new(),
+            #[cfg(target_os = "android")]
+            activity_generation: None,
             media_playlist_snapshot: None,
             media_projection_pending: true,
         }
@@ -49,6 +55,17 @@ impl AndroidRuntime {
 
     pub fn mark_persistence(&mut self) {
         self.persistence_dirty = true;
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn bind_activity(&mut self, activity_generation: AndroidActivityGeneration) {
+        self.activity_generation = Some(activity_generation);
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn activity_generation(&self) -> AndroidActivityGeneration {
+        self.activity_generation
+            .expect("Android runtime must be bound to its Activity before the first frame")
     }
 
     pub fn take_persistence_due(&mut self, force: bool) -> bool {

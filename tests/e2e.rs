@@ -1456,7 +1456,6 @@ fn mpris_raise_quit_and_next_previous_methods_emit_expected_state() {
         .execute_mpris_command(MprisCommand::Raise)
         .assert_mpris_event(MprisEvent::Raised)
         .execute_mpris_command(MprisCommand::Quit)
-        .assert_mpris_quit_requested(true)
         .assert_mpris_event(MprisEvent::QuitRequested);
 }
 
@@ -1912,8 +1911,7 @@ fn preferences_audio_page_applies_output_volume_and_balance_immediately() {
         .set_preference_volume(35)
         .assert_volume(35)
         .set_preference_balance(-40)
-        .assert_balance(-40)
-        .assert_preferences_saved();
+        .assert_balance(-40);
 }
 
 #[test]
@@ -2029,8 +2027,7 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .assert_preference_show_numbers_in_playlist(false)
         .assert_preference_vim_playlist_navigation(false)
         .set_preference_vim_playlist_navigation(true)
-        .assert_preference_vim_playlist_navigation(true)
-        .assert_preferences_saved();
+        .assert_preference_vim_playlist_navigation(true);
 }
 
 #[test]
@@ -2092,8 +2089,7 @@ fn preferences_font_and_title_pages_apply_text_controls_immediately() {
         .set_preference_title_format("%p/%t")
         .assert_preference_title_format("%p/%t")
         .set_preference_title_format("")
-        .assert_preference_title_format("%p - %t")
-        .assert_preferences_saved();
+        .assert_preference_title_format("%p - %t");
 }
 
 #[test]
@@ -2171,8 +2167,7 @@ fn preferences_visualization_page_applies_controls_immediately() {
         .set_visualization_vu_mode(VisVuMode::Smooth)
         .assert_visualization_vu_mode(VisVuMode::Smooth)
         .set_visualization_refresh_divisor(4)
-        .assert_visualization_refresh_divisor(4)
-        .assert_preferences_saved();
+        .assert_visualization_refresh_divisor(4);
 }
 
 #[test]

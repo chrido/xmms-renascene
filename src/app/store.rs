@@ -180,6 +180,7 @@ struct StoreSnapshot {
     shuffle: bool,
     repeat: bool,
     no_advance: bool,
+    playlist_queue: Vec<usize>,
 }
 
 impl StoreSnapshot {
@@ -204,6 +205,7 @@ impl StoreSnapshot {
             shuffle: state.playlist.shuffle(),
             repeat: state.playlist.repeat(),
             no_advance: state.playlist.no_advance(),
+            playlist_queue: state.playlist.queued_indices(),
         }
     }
 
@@ -221,6 +223,7 @@ impl StoreSnapshot {
             || self.shuffle != next.shuffle
             || self.repeat != next.repeat
             || self.no_advance != next.no_advance
+            || self.playlist_queue != next.playlist_queue
         {
             changes |= StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST;
         }
@@ -274,6 +277,11 @@ impl AppStore {
 
     pub fn state(&self) -> &AppState {
         self.controller.state()
+    }
+
+    /// Returns queued playlist positions in queue order.
+    pub fn playlist_queue(&self) -> Vec<usize> {
+        self.state().playlist.queued_indices()
     }
 
     #[cfg(test)]
@@ -846,6 +854,7 @@ mod tests {
                 | StateChangeSet::RENDER_ALL
         );
         assert_eq!(result.revision, 1);
+        assert!(result.effects.contains(&AppEffect::SaveConfig));
 
         let unchanged = store.apply_config_from_preferences(store.state().config.clone());
         assert!(unchanged.changes.is_empty());
@@ -876,9 +885,30 @@ mod tests {
     }
 
     #[test]
+    fn store_exposes_queue_and_reports_queue_only_transitions() {
+        let mut store = AppStore::default();
+        store.state_mut().playlist.add_uri("file:///one.ogg");
+        store.state_mut().playlist.add_uri("file:///two.ogg");
+
+        let changed = store.dispatch(PlaylistCommand::Enqueue(1));
+        assert_eq!(store.playlist_queue(), vec![1]);
+        assert_eq!(
+            changed.changes,
+            StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST
+        );
+        assert!(!changed.effects.contains(&AppEffect::SaveConfig));
+
+        let unchanged = store.dispatch(PlaylistCommand::Enqueue(1));
+        assert!(unchanged.changes.is_empty());
+        assert!(unchanged.effects.is_empty());
+        assert_eq!(unchanged.revision, changed.revision);
+    }
+
+    #[test]
     fn playlist_load_detects_content_changes_with_the_same_shape() {
         let mut store = AppStore::default();
         store.state_mut().playlist.add_uri("file:///old.ogg");
+        store.state_mut().playlist.enqueue(0);
         let mut playlist = Playlist::new();
         playlist.add_uri("file:///new.ogg");
 
@@ -888,6 +918,7 @@ mod tests {
             StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST
         );
         assert_eq!(changed.revision, 1);
+        assert!(store.playlist_queue().is_empty());
 
         let unchanged = store.replace_playlist_for_file_load(playlist);
         assert!(unchanged.changes.is_empty());

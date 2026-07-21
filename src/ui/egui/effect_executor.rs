@@ -167,6 +167,9 @@ pub(crate) fn flush_android_persistence(
     pending_messages: &mut Vec<String>,
     force: bool,
 ) {
+    if !super::android::is_foreground_activity(android.activity_generation()) {
+        return;
+    }
     if !android.take_persistence_due(force) {
         return;
     }
@@ -193,6 +196,11 @@ pub(crate) fn flush_android_media_projection(
     if !android.take_media_projection_pending() {
         return;
     }
+    let activity_generation = android.activity_generation();
+    if !super::android::is_current_activity(activity_generation) {
+        android.mark_media_projection();
+        return;
+    }
     if android.playlist_changed(&state.playlist) {
         let titles = state
             .playlist
@@ -200,7 +208,10 @@ pub(crate) fn flush_android_media_projection(
             .iter()
             .map(|entry| formatted_playlist_entry_title(state, entry))
             .collect();
-        super::android::sync_media_playlist(&state.playlist, titles);
+        if !super::android::sync_media_playlist(activity_generation, &state.playlist, titles) {
+            android.mark_media_projection();
+            return;
+        }
         android.remember_playlist(state.playlist.clone());
     }
     let playback_state = super::android::AndroidPlaybackState::from(state.player.state());
@@ -211,7 +222,8 @@ pub(crate) fn flush_android_media_projection(
     let has_entries = !state.playlist.is_empty();
     let current_index = state.playlist.position().map_or(-1, |index| index as i64);
     let playlist_len = state.playlist.len().min(i32::MAX as usize) as i32;
-    if let Err(error) = super::android::update_playback_notification(
+    match super::android::update_playback_notification(
+        activity_generation,
         playback_state,
         &formatted_current_title(state),
         state.player.bitrate(),
@@ -224,7 +236,9 @@ pub(crate) fn flush_android_media_projection(
         has_entries,
         has_entries,
     ) {
-        pending_messages.push(error);
+        Ok(true) => {}
+        Ok(false) => android.mark_media_projection(),
+        Err(error) => pending_messages.push(error),
     }
 }
 

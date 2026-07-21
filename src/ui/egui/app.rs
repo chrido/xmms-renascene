@@ -50,10 +50,10 @@ use crate::playlist::Playlist;
 use crate::render::main_window_height;
 use crate::render::{
     docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
-    EqualizerControl, EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider,
-    MainToggleButton, PlaylistMenuRenderKind, PlaylistMenuRenderState, VisualizationRenderState,
-    EQUALIZER_WINDOW_HEIGHT, EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT,
-    PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT, PLAYLIST_MIN_WIDTH,
+    EqualizerControl, EqualizerRenderState, EqualizerSlider, PlaylistMenuRenderKind,
+    PlaylistMenuRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
+    PLAYLIST_MIN_WIDTH,
 };
 use crate::session::default_config_dir;
 #[cfg(target_os = "android")]
@@ -97,7 +97,9 @@ use super::skin_texture::{
     pixel_snapped_rect, render_equalizer_color_image, render_playlist_color_image,
     render_playlist_menu_color_image,
 };
-use super::ui_state::EguiUiState;
+#[cfg(test)]
+use super::ui_state::ActiveOverlay;
+use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
@@ -149,12 +151,25 @@ enum DetachedPanelAction {
     PlaylistScrollRows(i32),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum DetachedFocus {
+    #[default]
+    None,
+    Equalizer,
+    Playlist,
+}
+
+/// Shared only with deferred viewport callbacks.
+///
+/// `show_viewport_deferred` requires `'static` closures that can run outside
+/// the root viewport callback. The mutex protects transient snapshots and the
+/// action handoff across that callback boundary; it never owns domain state,
+/// and callers release each lock before dispatching commands or rendering.
 #[derive(Debug, Default)]
 struct DetachedViewportState {
     equalizer: Option<DetachedPanelSnapshot>,
     playlist: Option<DetachedPanelSnapshot>,
-    equalizer_focused: bool,
-    playlist_focused: bool,
+    focus: DetachedFocus,
     actions: Vec<DetachedPanelAction>,
     playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
     playlist_last_click: Option<(usize, Instant)>,
@@ -177,11 +192,8 @@ pub struct EguiFrontendState {
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
     pub active_skin: DefaultSkin,
-    pub main_pressed_push: Option<MainPushButton>,
-    pub main_pressed_toggle: Option<MainToggleButton>,
-    pub main_pressed_slider: Option<MainSlider>,
-    pub equalizer_pressed_control: Option<EqualizerControl>,
-    pub equalizer_pressed_slider: Option<EqualizerSlider>,
+    pub(crate) main_pressed: MainPressed,
+    pub(crate) equalizer_pressed: EqualizerPressed,
     pub equalizer_keyboard_slider: Option<EqualizerSlider>,
     pub playlist_scroll_offset: usize,
     pub playlist_width: i32,
@@ -303,11 +315,8 @@ impl EguiFrontendState {
             dock_panels: true,
             runtime,
             active_skin,
-            main_pressed_push: None,
-            main_pressed_toggle: None,
-            main_pressed_slider: None,
-            equalizer_pressed_control: None,
-            equalizer_pressed_slider: None,
+            main_pressed: MainPressed::None,
+            equalizer_pressed: EqualizerPressed::None,
             equalizer_keyboard_slider: None,
             playlist_scroll_offset: 0,
             playlist_width: playlist_size.width,
@@ -344,10 +353,19 @@ impl EguiFrontendState {
     pub(crate) fn dispatch_all(&mut self, commands: impl IntoIterator<Item = AppCommand>) {
         let commands: Vec<_> = commands.into_iter().collect();
         #[cfg(target_os = "android")]
-        let _media_control_order = commands
+        let _media_control_order = if commands
             .iter()
             .any(|command| matches!(command, AppCommand::Player(_)))
-            .then(super::android::begin_local_media_control);
+        {
+            let Some(order) =
+                super::android::begin_local_media_control(self.android.activity_generation())
+            else {
+                return;
+            };
+            Some(order)
+        } else {
+            None
+        };
         for command in commands {
             self.dispatch_one(command);
         }
@@ -1212,10 +1230,11 @@ impl EguiFrontendState {
                 .controller
                 .dispatch(PlaylistCommand::SetPosition(index));
             self.process_dispatch_result(result, EffectExecution::LOCAL);
-            if !event.backend_executed {
-                let result = self.controller.dispatch(PlayerCommand::StartCurrentTrack);
-                self.process_dispatch_result(result, EffectExecution::LOCAL);
-            }
+            let result = self.controller.dispatch(PlayerCommand::StartCurrentTrack);
+            self.process_dispatch_result(
+                result,
+                EffectExecution::after_external_backend_execution(event.backend_executed),
+            );
             return;
         }
         let command = android_player_command_for_media_control(control)
@@ -1229,10 +1248,14 @@ impl EguiFrontendState {
 
     #[cfg(target_os = "android")]
     fn poll_android_platform_events(&mut self, ctx: &egui::Context) -> bool {
-        super::android::register_repaint_context(ctx);
+        let activity_generation = self.android.activity_generation();
+        let Some(mut events) = super::android::drain_platform_events(activity_generation, ctx)
+        else {
+            return false;
+        };
         let mut media_control_handled = false;
         let mut playback_events = Vec::new();
-        for event in super::android::drain_platform_events() {
+        for event in &mut events {
             match event {
                 super::android::AndroidPlatformEvent::Picker(result) => {
                     self.handle_android_file_picker_result(result);
@@ -1250,6 +1273,7 @@ impl EguiFrontendState {
             }
         }
         self.handle_playback_events(playback_events);
+        self.poll_playback_backend();
         media_control_handled
     }
 
@@ -1337,9 +1361,12 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     #[cfg(target_os = "android")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        super::android::unregister_repaint_context();
-        self.android.mark_persistence();
-        self.flush_android_platform_policies(true);
+        let activity_generation = self.android.activity_generation();
+        if super::android::is_foreground_activity(activity_generation) {
+            self.android.mark_persistence();
+            self.flush_android_platform_policies(true);
+        }
+        super::android::runtime_exited(activity_generation);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1350,6 +1377,7 @@ impl eframe::App for EguiFrontendState {
         self.poll_socket_control(ctx);
         #[cfg(feature = "desktop-egui")]
         self.poll_mpris_requests(ctx);
+        #[cfg(not(target_os = "android"))]
         self.poll_playback_backend();
         self.poll_duration_index_results();
         self.tick_playback_position(ctx);
@@ -1357,7 +1385,9 @@ impl eframe::App for EguiFrontendState {
         {
             self.flush_android_platform_policies(false);
             if android_media_control_handled {
-                if let Err(err) = super::android::complete_media_control() {
+                if let Err(err) =
+                    super::android::complete_media_control(self.android.activity_generation())
+                {
                     self.runtime.pending_messages.push(err);
                 }
             }
@@ -1458,9 +1488,7 @@ impl EguiFrontendState {
     }
 
     pub(crate) fn close_player_menus(&mut self) {
-        self.ui.playlist_menu_open = None;
-        self.ui.playlist_menu_hover = None;
-        self.ui.playlist_sort_menu_open = false;
+        self.ui.dismiss_playlist_overlay();
         if self.main_menu_open() {
             self.dispatch(UiCommand::SetMainMenuVisible(false));
         }
@@ -1783,8 +1811,7 @@ fn sync_root_viewport_focus(ctx: &egui::Context, app: &mut EguiFrontendState) {
             .detached_viewports
             .lock()
             .expect("detached viewport state poisoned");
-        state.equalizer_focused = false;
-        state.playlist_focused = false;
+        state.focus = DetachedFocus::None;
     }
 }
 
@@ -1846,14 +1873,11 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
             playlist::dispatch_playlist_menu_button(app, menu)
         }
         DetachedPanelAction::PlaylistMenuItem(menu, index) => {
-            app.ui.playlist_menu_hover = None;
+            app.ui.dismiss_playlist_overlay();
             playlist::dispatch_playlist_menu_item(app, menu, index);
-            app.ui.playlist_menu_open = None;
         }
         DetachedPanelAction::ClosePlaylistMenu => {
-            app.ui.playlist_menu_hover = None;
-            app.ui.playlist_menu_open = None;
-            app.ui.playlist_sort_menu_open = false;
+            app.ui.dismiss_playlist_overlay();
         }
         DetachedPanelAction::PlaylistRowClick {
             index,
@@ -1873,22 +1897,20 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
 
 fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
     let config = app.controller().state().config.clone();
-    let (equalizer_focused, playlist_focused, playlist_menu_hover) = {
+    let (focus, playlist_menu_hover) = {
         let state = app
             .detached_viewports
             .lock()
             .expect("detached viewport state poisoned");
-        (
-            state.equalizer_focused,
-            state.playlist_focused,
-            state.playlist_menu_hover,
-        )
+        (state.focus, state.playlist_menu_hover)
     };
     let equalizer = (config.equalizer_visible && config.equalizer_detached)
-        .then(|| detached_equalizer_snapshot(app, equalizer_focused))
+        .then(|| detached_equalizer_snapshot(app, focus == DetachedFocus::Equalizer))
         .flatten();
     let playlist = (config.playlist_visible && config.playlist_detached)
-        .then(|| detached_playlist_snapshot(app, playlist_focused, playlist_menu_hover))
+        .then(|| {
+            detached_playlist_snapshot(app, focus == DetachedFocus::Playlist, playlist_menu_hover)
+        })
         .flatten();
     let mut state = app
         .detached_viewports
@@ -1903,13 +1925,14 @@ fn detached_equalizer_snapshot(
     focused: bool,
 ) -> Option<DetachedPanelSnapshot> {
     let view_model = equalizer_view_model(app.controller().state());
+    let (pressed_control, pressed_slider) = app.equalizer_pressed.render_parts();
     let render_state = EqualizerRenderState {
         focused,
         shaded: view_model.shaded,
         active: view_model.active,
         automatic: view_model.auto,
-        pressed_control: app.equalizer_pressed_control,
-        pressed_slider: app.equalizer_pressed_slider,
+        pressed_control,
+        pressed_slider,
         preamp_position: view_model.preamp_position,
         band_positions: view_model.band_positions,
         volume_position: volume_to_eq_shaded_position(app.controller().state().player.volume()),
@@ -1968,7 +1991,7 @@ fn detached_playlist_snapshot(
     )
     .ok()?;
     let playlist_menu_open = (!view_model.shaded)
-        .then_some(app.ui.playlist_menu_open)
+        .then_some(app.ui.active_overlay.playlist_menu())
         .flatten();
     if let Some(kind) = playlist_menu_open {
         let hover =
@@ -2077,19 +2100,18 @@ fn update_detached_panel_viewport_focus(
     focused: bool,
 ) -> bool {
     let mut state = shared.lock().expect("detached viewport state poisoned");
-    let before = (state.equalizer_focused, state.playlist_focused);
-    if equalizer_panel {
-        state.equalizer_focused = focused;
-        if focused {
-            state.playlist_focused = false;
-        }
+    let before = state.focus;
+    let panel = if equalizer_panel {
+        DetachedFocus::Equalizer
     } else {
-        state.playlist_focused = focused;
-        if focused {
-            state.equalizer_focused = false;
-        }
+        DetachedFocus::Playlist
+    };
+    if focused {
+        state.focus = panel;
+    } else if state.focus == panel {
+        state.focus = DetachedFocus::None;
     }
-    before != (state.equalizer_focused, state.playlist_focused)
+    before != state.focus
 }
 
 fn show_detached_panel_viewport(
@@ -2740,10 +2762,7 @@ fn global_shortcuts_suspended(ctx: &egui::Context, app: &EguiFrontendState) -> b
         || app.preferences_open()
         || app.skin_browser_open()
         || app.file_info_open()
-        || app.ui.equalizer_presets_open
-        || app.ui.playlist_menu_open.is_some()
-        || app.ui.playlist_sort_menu_open
-        || app.ui.confirm_physical_delete_open
+        || app.ui.active_overlay.is_open()
         || !app.runtime.pending_messages.is_empty()
 }
 
@@ -3021,11 +3040,13 @@ pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-pub fn run_egui_frontend_android(
+pub(crate) fn run_egui_frontend_android(
     options: PreviewOptions,
     android_app: winit::platform::android::activity::AndroidApp,
+    activity_generation: super::android::AndroidActivityGeneration,
 ) -> Result<(), String> {
-    let app = EguiFrontendState::new(options)?;
+    let mut app = EguiFrontendState::new(options)?;
+    app.android.bind_activity(activity_generation);
     eframe::run_native(
         "XMMS Renascene",
         eframe::NativeOptions {
@@ -3600,8 +3621,7 @@ mod tests {
                 .expect("detached viewport state poisoned");
             let equalizer = state.equalizer.as_ref().expect("equalizer snapshot");
             let playlist = state.playlist.as_ref().expect("playlist snapshot");
-            assert!(!state.equalizer_focused);
-            assert!(!state.playlist_focused);
+            assert_eq!(state.focus, DetachedFocus::None);
             (equalizer.image.clone(), playlist.image.clone())
         };
 
@@ -3617,8 +3637,7 @@ mod tests {
                 .lock()
                 .expect("detached viewport state poisoned");
             let equalizer = state.equalizer.as_ref().expect("equalizer snapshot");
-            assert!(state.equalizer_focused);
-            assert!(!state.playlist_focused);
+            assert_eq!(state.focus, DetachedFocus::Equalizer);
             assert_ne!(equalizer.image, inactive_equalizer);
         }
 
@@ -3634,10 +3653,52 @@ mod tests {
                 .lock()
                 .expect("detached viewport state poisoned");
             let playlist = state.playlist.as_ref().expect("playlist snapshot");
-            assert!(!state.equalizer_focused);
-            assert!(state.playlist_focused);
+            assert_eq!(state.focus, DetachedFocus::Playlist);
             assert_ne!(playlist.image, inactive_playlist);
         }
+
+        assert!(update_detached_panel_viewport_focus(
+            &app.detached_viewports,
+            false,
+            false
+        ));
+        let state = app
+            .detached_viewports
+            .lock()
+            .expect("detached viewport state poisoned");
+        assert_eq!(state.focus, DetachedFocus::None);
+    }
+
+    #[test]
+    fn detached_focus_transfers_and_clears_under_one_viewport_lock() {
+        let shared = Arc::new(Mutex::new(DetachedViewportState::default()));
+
+        assert!(update_detached_panel_viewport_focus(&shared, true, true));
+        assert_eq!(
+            shared
+                .lock()
+                .expect("detached viewport state poisoned")
+                .focus,
+            DetachedFocus::Equalizer
+        );
+
+        assert!(update_detached_panel_viewport_focus(&shared, false, true));
+        assert_eq!(
+            shared
+                .lock()
+                .expect("detached viewport state poisoned")
+                .focus,
+            DetachedFocus::Playlist
+        );
+
+        assert!(update_detached_panel_viewport_focus(&shared, false, false));
+        assert_eq!(
+            shared
+                .lock()
+                .expect("detached viewport state poisoned")
+                .focus,
+            DetachedFocus::None
+        );
     }
 
     #[test]
@@ -3653,7 +3714,7 @@ mod tests {
             detached_playlist_snapshot(&app, false, None).expect("closed playlist snapshot");
         assert!(closed.playlist_menu_open.is_none());
 
-        app.ui.playlist_menu_open = Some(PlaylistMenuButton::Add);
+        app.ui.active_overlay = ActiveOverlay::PlaylistMenu(PlaylistMenuButton::Add);
         let open = detached_playlist_snapshot(&app, false, None).expect("open playlist snapshot");
 
         assert_eq!(open.playlist_menu_open, Some(PlaylistMenuButton::Add));
@@ -3795,12 +3856,31 @@ mod tests {
         assert!(global_shortcuts_suspended(&ctx, &app));
         app.ui.prompt_open = None;
 
-        app.ui.playlist_menu_open = Some(PlaylistMenuRenderKind::Misc);
-        assert!(global_shortcuts_suspended(&ctx, &app));
-        app.ui.playlist_menu_open = None;
+        for overlay in [
+            ActiveOverlay::PlaylistMenu(PlaylistMenuRenderKind::Misc),
+            ActiveOverlay::PlaylistSort,
+            ActiveOverlay::EqualizerPresets,
+            ActiveOverlay::ConfirmPhysicalDelete,
+        ] {
+            app.ui.active_overlay = overlay;
+            assert!(global_shortcuts_suspended(&ctx, &app));
+        }
+        app.ui.active_overlay = ActiveOverlay::None;
 
         app.runtime.pending_messages.push("message".to_string());
         assert!(global_shortcuts_suspended(&ctx, &app));
+    }
+
+    #[test]
+    fn closing_player_menus_dismisses_playlist_overlay_and_hover() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.ui.active_overlay = ActiveOverlay::PlaylistMenu(PlaylistMenuRenderKind::Select);
+        app.ui.playlist_menu_hover = Some((PlaylistMenuRenderKind::Select, 1));
+
+        app.close_player_menus();
+
+        assert_eq!(app.ui.active_overlay, ActiveOverlay::None);
+        assert_eq!(app.ui.playlist_menu_hover, None);
     }
 
     #[test]

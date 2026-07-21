@@ -22,6 +22,7 @@ pub struct PlaylistRowRenderEntry {
     pub length_ms: i64,
     pub selected: bool,
     pub current: bool,
+    pub queue_position: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +261,9 @@ pub fn render_playlist_rows(
         }
 
         let mut title = normalize_playlist_text(&entry.title);
+        if let Some(queue_position) = entry.queue_position {
+            title = format!("[{}] {title}", queue_position + 1);
+        }
         if state.show_numbers {
             title = format!("{}. {title}", row + state.scroll_offset + 1);
         }

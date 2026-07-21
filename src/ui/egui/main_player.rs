@@ -20,6 +20,7 @@ use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 use super::app::EguiFrontendState;
 use super::render_cache::CachedMainTexture;
 use super::skin_texture::{pixel_snapped_rect, render_main_player_color_image, upload_color_image};
+use super::ui_state::MainPressed;
 
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
     &view_model.title
@@ -51,9 +52,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         current_duration_ms(app),
         config.equalizer_visible,
         config.playlist_visible,
-        app.main_pressed_push,
-        app.main_pressed_toggle,
-        app.main_pressed_slider,
+        app.main_pressed,
         config.timer_mode,
         app.visualization_render_state(),
     );
@@ -114,12 +113,11 @@ pub(crate) fn main_render_state(
     duration_ms: Option<i64>,
     equalizer_visible: bool,
     playlist_visible: bool,
-    pressed_push: Option<MainPushButton>,
-    pressed_toggle: Option<MainToggleButton>,
-    pressed_slider: Option<MainSlider>,
+    pressed: MainPressed,
     timer_mode: TimerMode,
     visualization: VisualizationRenderState,
 ) -> MainWindowRenderState {
+    let (pressed_push, pressed_toggle, pressed_slider) = pressed.render_parts();
     let (shaded_time_min, shaded_time_sec) = shaded_time_parts(
         view_model.player_state,
         playback_position_ms,
@@ -331,9 +329,7 @@ fn add_main_hit_regions(
     base_rect: egui::Rect,
     view_model: &MainPlayerViewModel,
 ) {
-    app.main_pressed_push = None;
-    app.main_pressed_toggle = None;
-    app.main_pressed_slider = None;
+    app.main_pressed = MainPressed::None;
 
     for &button in main_push_buttons(view_model.shaded) {
         let rect = scale_skin_rect(
@@ -347,7 +343,7 @@ fn add_main_hit_regions(
             egui::Sense::click(),
         );
         if response.is_pointer_button_down_on() {
-            app.main_pressed_push = Some(button);
+            app.main_pressed = MainPressed::Push(button);
             ui.ctx().request_repaint();
         }
         if response.clicked() {
@@ -371,7 +367,7 @@ fn add_main_hit_regions(
                 egui::Sense::click(),
             );
             if response.is_pointer_button_down_on() {
-                app.main_pressed_toggle = Some(toggle);
+                app.main_pressed = MainPressed::Toggle(toggle);
                 ui.ctx().request_repaint();
             }
             if response.clicked() {
@@ -390,7 +386,7 @@ fn add_main_hit_regions(
             egui::Sense::click_and_drag(),
         );
         if response.is_pointer_button_down_on() || response.dragged() {
-            app.main_pressed_slider = Some(slider);
+            app.main_pressed = MainPressed::Slider(slider);
             ui.ctx().request_repaint();
         }
         if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
@@ -577,9 +573,7 @@ mod tests {
             Some(120_000),
             true,
             true,
-            Some(MainPushButton::Play),
-            Some(MainToggleButton::Repeat),
-            Some(MainSlider::Volume),
+            MainPressed::Slider(MainSlider::Volume),
             TimerMode::Elapsed,
             VisualizationRenderState::default(),
         );
@@ -591,8 +585,8 @@ mod tests {
         assert!(state.bitrate_text.is_empty());
         assert!(state.equalizer_selected);
         assert!(state.playlist_selected);
-        assert_eq!(state.pressed_push, Some(MainPushButton::Play));
-        assert_eq!(state.pressed_toggle, Some(MainToggleButton::Repeat));
+        assert_eq!(state.pressed_push, None);
+        assert_eq!(state.pressed_toggle, None);
         assert_eq!(state.pressed_slider, Some(MainSlider::Volume));
     }
 
@@ -619,9 +613,7 @@ mod tests {
             None,
             false,
             false,
-            None,
-            None,
-            None,
+            MainPressed::None,
             TimerMode::Elapsed,
             visualization.clone(),
         );
@@ -649,9 +641,7 @@ mod tests {
             Some(130_000),
             false,
             false,
-            None,
-            None,
-            None,
+            MainPressed::None,
             TimerMode::Elapsed,
             VisualizationRenderState::default(),
         );
@@ -667,9 +657,7 @@ mod tests {
             Some(130_000),
             false,
             false,
-            None,
-            None,
-            None,
+            MainPressed::None,
             TimerMode::Remaining,
             VisualizationRenderState::default(),
         );
@@ -699,9 +687,7 @@ mod tests {
             Some(130_000),
             false,
             false,
-            None,
-            None,
-            None,
+            MainPressed::None,
             TimerMode::Elapsed,
             VisualizationRenderState::default(),
         );

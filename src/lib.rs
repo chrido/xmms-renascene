@@ -24,15 +24,21 @@ pub mod ui;
 #[cfg(all(target_os = "android", feature = "mobile-ui"))]
 #[unsafe(no_mangle)]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    if let Err(err) = egui_frontend::android::initialize(&app) {
-        app_log_error!(frontend, "failed to initialize Android file picker", err);
-    }
+    let activity_generation = match egui_frontend::android::initialize(&app) {
+        Ok(activity_generation) => activity_generation,
+        Err(err) => {
+            app_log_error!(frontend, "failed to initialize Android runtime", err);
+            return;
+        }
+    };
     let options = app::preview::PreviewOptions {
         frontend: app::preview::FrontendKind::Egui,
         reset: false,
         ..app::preview::PreviewOptions::default()
     };
-    if let Err(err) = egui_frontend::app::run_egui_frontend_android(options, app) {
+    let result = egui_frontend::app::run_egui_frontend_android(options, app, activity_generation);
+    egui_frontend::android::runtime_exited(activity_generation);
+    if let Err(err) = result {
         app_log_error!(frontend, "failed to start Android egui frontend", err);
     }
 }

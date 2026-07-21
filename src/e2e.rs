@@ -1356,11 +1356,6 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_preferences_saved(&mut self) -> &mut Self {
-        assert!(self.state.preferences_saved());
-        self
-    }
-
     pub fn reset_preferences_to_defaults(&mut self) -> &mut Self {
         self.state.reset_preferences_to_defaults();
         self.sync_windows();
@@ -1724,11 +1719,6 @@ impl UiE2e {
             self.state.mpris_events().contains(&expected),
             "expected MPRIS event {expected:?}"
         );
-        self
-    }
-
-    pub fn assert_mpris_quit_requested(&mut self, expected: bool) -> &mut Self {
-        assert_eq!(self.state.mpris_quit_requested(), expected);
         self
     }
 

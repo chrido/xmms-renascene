@@ -1,11 +1,12 @@
 //! JNI ABI adapters.
 //!
-//! `XmmsActivity` callbacks validate/convert inputs and enqueue typed events;
-//! they never mutate `AppStore`, playlists, or the playback backend. Repaint is
-//! a lifecycle signal rather than a domain mutation. Deliberate synchronous
-//! exceptions are limited to `XmmsPlaybackService` fallback transport/polling
-//! and media-library queries, plus widget query/render endpoints that Android
-//! requires to return a value immediately.
+//! `XmmsActivity` callbacks validate/convert inputs and either report lifecycle
+//! state or enqueue typed events; they never mutate `AppStore` or the playback
+//! backend. Repaint is only a callback request, not a liveness signal.
+//! Deliberate synchronous exceptions are limited to authoritative
+//! `XmmsPlaybackService` fallback transport/polling and media-library queries,
+//! plus widget query/render endpoints that Android requires to return a value
+//! immediately.
 
 use std::path::PathBuf;
 
@@ -17,14 +18,41 @@ use super::events::{self, AndroidMediaControl, AndroidPickerResult, AndroidPlatf
 use super::{media_session, picker, widgets};
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnActivityResumed(
+    mut env: JNIEnv,
+    activity: JObject,
+) {
+    super::handle_activity_resumed(&mut env, &activity);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnActivityPaused(
+    mut env: JNIEnv,
+    activity: JObject,
+) {
+    super::handle_activity_paused(&mut env, &activity);
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnActivityDestroyed(
+    mut env: JNIEnv,
+    activity: JObject,
+) {
+    super::handle_activity_destroyed(&mut env, &activity);
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSelected(
     mut env: JNIEnv,
-    _activity: JObject,
+    activity: JObject,
     request_code: jint,
     operation_id: jlong,
     paths: jobjectArray,
     error: JString,
 ) {
+    if !super::activity_callback_is_current(&mut env, &activity) {
+        return;
+    }
     let Ok(operation_id) = u64::try_from(operation_id) else {
         return;
     };
@@ -66,8 +94,8 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSel
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaControl(
-    _env: JNIEnv,
-    _activity: JObject,
+    mut env: JNIEnv,
+    activity: JObject,
     control: jint,
 ) {
     let control = match control {
@@ -76,21 +104,18 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaControl
         3 => AndroidMediaControl::NextTrack,
         _ => return,
     };
-    events::push(AndroidPlatformEvent::MediaControl(
-        super::events::AndroidMediaControlEvent {
-            control,
-            backend_executed: false,
-        },
-    ));
-    events::request_registered_repaint();
+    super::handle_activity_media_control(&mut env, &activity, control);
 }
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged(
-    _env: JNIEnv,
-    _activity: JObject,
+    mut env: JNIEnv,
+    activity: JObject,
     volume_percent: jint,
 ) {
+    if !super::activity_callback_is_current(&mut env, &activity) {
+        return;
+    }
     events::push(AndroidPlatformEvent::ExternalVolumeChanged(
         volume_percent.clamp(0, 100),
     ));
@@ -99,10 +124,10 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeC
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeRequestRepaint(
-    _env: JNIEnv,
-    _activity: JObject,
+    mut env: JNIEnv,
+    activity: JObject,
 ) {
-    events::request_registered_repaint();
+    super::request_activity_repaint(&mut env, &activity);
 }
 
 #[unsafe(no_mangle)]
