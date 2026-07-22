@@ -458,8 +458,8 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
     match button {
         MainPushButton::Previous => app.dispatch(PlayerCommand::PreviousTrack),
         MainPushButton::Play => app.dispatch(PlayerCommand::Play),
-        MainPushButton::Pause => app.dispatch(PlayerCommand::TogglePause),
-        MainPushButton::Stop => app.dispatch(PlayerCommand::Stop),
+        MainPushButton::Pause => app.dispatch(PlayerCommand::Pause),
+        MainPushButton::Stop => app.dispatch(PlayerCommand::Halt),
         MainPushButton::Next => app.dispatch(PlayerCommand::NextTrack),
         MainPushButton::Eject => app.apply_effect(crate::app::effect::AppEffect::OpenFileDialog(
             crate::app::effect::FileDialogRequest::AddAudioFiles,

@@ -70,7 +70,7 @@ pub enum AndroidMediaControl {
     PreviousTrack,
     SeekToMs(i64),
     PlayMediaItem(usize),
-    StopPlayback,
+    HaltPlayback,
     PlaylistEof,
 }
 

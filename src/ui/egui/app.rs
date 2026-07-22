@@ -116,7 +116,7 @@ fn android_player_command_for_media_control(
         AndroidMediaControl::NextTrack => Some(PlayerCommand::NextTrack),
         AndroidMediaControl::PreviousTrack => Some(PlayerCommand::PreviousTrack),
         AndroidMediaControl::SeekToMs(position_ms) => Some(PlayerCommand::SeekToMs(position_ms)),
-        AndroidMediaControl::StopPlayback => Some(PlayerCommand::Stop),
+        AndroidMediaControl::HaltPlayback => Some(PlayerCommand::Halt),
         AndroidMediaControl::PlayMediaItem(_) | AndroidMediaControl::PlaylistEof => None,
     }
 }
@@ -627,7 +627,9 @@ impl EguiFrontendState {
             MprisAppAction::Dispatch(app_command) => {
                 self.dispatch(app_command);
                 match command {
-                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
+                    MprisCommand::Seek { .. }
+                    | MprisCommand::SetPosition { .. }
+                    | MprisCommand::Stop => {
                         vec![MprisEvent::Seeked(
                             self.controller.state().config.playback_position_ms * 1_000,
                         )]
@@ -636,7 +638,6 @@ impl EguiFrontendState {
                     | MprisCommand::Previous
                     | MprisCommand::Pause
                     | MprisCommand::PlayPause
-                    | MprisCommand::Stop
                     | MprisCommand::Play => vec![MprisEvent::PlaybackStatusChanged],
                     MprisCommand::Raise | MprisCommand::Quit | MprisCommand::OpenUri(_) => {
                         Vec::new()
@@ -3301,8 +3302,8 @@ mod tests {
             Some(PlayerCommand::SeekToMs(4_200))
         );
         assert_eq!(
-            android_player_command_for_media_control(AndroidMediaControl::StopPlayback),
-            Some(PlayerCommand::Stop)
+            android_player_command_for_media_control(AndroidMediaControl::HaltPlayback),
+            Some(PlayerCommand::Halt)
         );
         assert_eq!(
             android_player_command_for_media_control(AndroidMediaControl::PlayMediaItem(2)),

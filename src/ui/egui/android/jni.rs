@@ -143,7 +143,7 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeOnMedia
         3 => AndroidMediaControl::NextTrack,
         4 => AndroidMediaControl::PreviousTrack,
         5 => AndroidMediaControl::SeekToMs(value.max(0)),
-        6 => AndroidMediaControl::StopPlayback,
+        6 => AndroidMediaControl::HaltPlayback,
         7 => AndroidMediaControl::PlayMediaItem(value.max(0) as usize),
         _ => return,
     };

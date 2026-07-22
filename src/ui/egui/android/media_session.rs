@@ -19,7 +19,7 @@ use jni::objects::{JObject, JValue};
 use jni::JNIEnv;
 
 use crate::playback::backend::PlaybackBackend;
-use crate::playback::model::{PlaybackEvent, PlayerState};
+use crate::playback::model::{PlaybackEvent, PlayerAction, PlayerTransition};
 use crate::playback::rodio::RodioBackend;
 use crate::playlist::Playlist;
 use crate::session::{fallback_state_paths, load_saved_state};
@@ -428,18 +428,23 @@ fn execute_android_media_control(
     playlist: &mut AndroidAuthoritativeMediaPlaylist<'_>,
 ) -> Result<(), String> {
     match control {
-        AndroidMediaControl::PausePlayback => backend.pause(),
+        AndroidMediaControl::PausePlayback => {
+            match backend.state().transition(PlayerAction::Pause) {
+                Some(PlayerTransition::Pause) => backend.pause(),
+                _ => Ok(()),
+            }
+        }
         AndroidMediaControl::ResumePlayback => {
-            if backend.state() == PlayerState::Paused {
-                backend.unpause()
-            } else if backend.state() == PlayerState::Stopped {
-                let uri = playlist
-                    .current_entry()
-                    .map(|(uri, _, _)| uri)
-                    .ok_or_else(|| "no current playlist entry to resume".to_string())?;
-                backend.play_uri(&uri)
-            } else {
-                Ok(())
+            match backend.state().transition(PlayerAction::Play) {
+                Some(PlayerTransition::Resume) => backend.unpause(),
+                Some(PlayerTransition::Start) => {
+                    let uri = playlist
+                        .current_entry()
+                        .map(|(uri, _, _)| uri)
+                        .ok_or_else(|| "no current playlist entry to resume".to_string())?;
+                    backend.play_uri(&uri)
+                }
+                _ => Ok(()),
             }
         }
         AndroidMediaControl::NextTrack => {
@@ -452,7 +457,7 @@ fn execute_android_media_control(
         AndroidMediaControl::PlayMediaItem(index) => {
             playlist.play_media_item(index, |uri| backend.play_uri(uri))
         }
-        AndroidMediaControl::StopPlayback => backend.stop(),
+        AndroidMediaControl::HaltPlayback => backend.seek(0),
         AndroidMediaControl::PlaylistEof => {
             playlist.advance_after_end_of_stream(|uri| backend.play_uri(uri), || backend.stop())
         }

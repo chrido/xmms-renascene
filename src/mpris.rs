@@ -197,8 +197,8 @@ pub fn app_action_for_mpris_command(
         MprisCommand::Next => MprisAppAction::Dispatch(PlayerCommand::NextTrack.into()),
         MprisCommand::Previous => MprisAppAction::Dispatch(PlayerCommand::PreviousTrack.into()),
         MprisCommand::Pause => MprisAppAction::Dispatch(PlayerCommand::Pause.into()),
-        MprisCommand::PlayPause => MprisAppAction::Dispatch(PlayerCommand::TogglePause.into()),
-        MprisCommand::Stop => MprisAppAction::Dispatch(PlayerCommand::Stop.into()),
+        MprisCommand::PlayPause => MprisAppAction::Dispatch(PlayerCommand::PlayPause.into()),
+        MprisCommand::Stop => MprisAppAction::Dispatch(PlayerCommand::Halt.into()),
         MprisCommand::Play => MprisAppAction::Dispatch(PlayerCommand::Play.into()),
         MprisCommand::Seek { offset_us } => {
             let target_ms = current_position_ms

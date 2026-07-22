@@ -1151,8 +1151,8 @@ pub(crate) fn dispatch_playlist_footer_button(
     match button {
         PlaylistFooterButton::Previous => app.dispatch(PlayerCommand::PreviousTrack),
         PlaylistFooterButton::Play => app.dispatch(PlayerCommand::Play),
-        PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::TogglePause),
-        PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Stop),
+        PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::Pause),
+        PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Halt),
         PlaylistFooterButton::Next => app.dispatch(PlayerCommand::NextTrack),
         PlaylistFooterButton::Eject => {
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles))

@@ -461,7 +461,7 @@ impl AppStore {
         let position_changed = self.state().config.playback_position_ms != 0;
         {
             let state = self.controller.state_mut();
-            state.player.stop();
+            state.player.terminate();
             state.player.clear_visualization_data();
             state.player.set_volume(restore_volume);
             state.config.playback_position_ms = 0;

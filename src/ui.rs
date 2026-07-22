@@ -4999,8 +4999,7 @@ enum MainControl {
 enum PlaybackControlEvent {
     Play,
     Pause,
-    PauseToggle,
-    Stop,
+    Halt,
     Previous,
     Next,
 }
@@ -5373,6 +5372,7 @@ impl MainWindowUiState {
                 self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
             }
             AppEffect::SeekPlayback(position_ms) => {
+                self.playback_transition = PlaybackTransitionState::Idle;
                 app_log_info!(backend, "gtk seek_to_ms", position_ms);
                 if let Some(backend) = &self.playback_backend {
                     if let Err(err) = backend.borrow().seek(position_ms) {
@@ -6375,7 +6375,9 @@ impl MainWindowUiState {
             MprisAppAction::Dispatch(app_command) => {
                 self.dispatch_store_command_and_apply_local_effects(app_command);
                 match command {
-                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
+                    MprisCommand::Seek { .. }
+                    | MprisCommand::SetPosition { .. }
+                    | MprisCommand::Stop => {
                         self.mpris_events.push(MprisEvent::Seeked(
                             self.store.state().config.playback_position_ms * 1_000,
                         ));
@@ -6384,7 +6386,6 @@ impl MainWindowUiState {
                     | MprisCommand::Previous
                     | MprisCommand::Pause
                     | MprisCommand::PlayPause
-                    | MprisCommand::Stop
                     | MprisCommand::Play => {
                         self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
                     }
@@ -6835,8 +6836,7 @@ impl MainWindowUiState {
         let command = match event {
             PlaybackControlEvent::Play => PlayerCommand::Play,
             PlaybackControlEvent::Pause => PlayerCommand::Pause,
-            PlaybackControlEvent::PauseToggle => PlayerCommand::TogglePause,
-            PlaybackControlEvent::Stop => PlayerCommand::Stop,
+            PlaybackControlEvent::Halt => PlayerCommand::Halt,
             PlaybackControlEvent::Previous => PlayerCommand::PreviousTrack,
             PlaybackControlEvent::Next => PlayerCommand::NextTrack,
         };
@@ -8258,11 +8258,11 @@ impl MainWindowUiState {
                 PanelAction::Changed
             }
             PlaylistFooterButton::Pause => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::TogglePause);
+                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Pause);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Stop => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Stop);
+                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Halt);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Next => {
@@ -9150,11 +9150,11 @@ impl MainWindowUiState {
                 UiAction::None
             }
             MainPushButton::Pause => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::TogglePause);
+                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Pause);
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Stop);
+                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Halt);
                 UiAction::None
             }
             MainPushButton::Previous => {
@@ -9896,27 +9896,18 @@ mod tests {
     }
 
     #[test]
-    fn stop_preference_with_fadeout_ramps_down_then_restores_volume() {
+    fn halt_seeks_to_start_without_fading_or_stopping() {
         let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
             volume: 80,
             stop_with_fadeout: true,
+            playback_position_ms: 42_000,
             ..Config::default()
         }));
         state.store.state_mut().player.mark_playing();
 
         state.activate_push(MainPushButton::Stop);
-        assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::FadingOut {
-                remaining_ms: STOP_FADE_DURATION_MS,
-                start_volume: 80,
-            }
-        );
-
-        assert!(state.update_timer_tick(500));
-        assert_eq!(state.volume(), 40);
-        assert!(state.update_timer_tick(500));
-        assert_eq!(state.store.state().player.state(), PlayerState::Stopped);
+        assert_eq!(state.playback_position_ms(), 0);
+        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
         assert_eq!(state.volume(), 80);
         assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
     }
