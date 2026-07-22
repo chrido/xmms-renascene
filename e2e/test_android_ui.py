@@ -71,6 +71,51 @@ def test_android_checkpoints_background_playback_position(
     assert position_ms < 20_000
 
 
+def test_android_widget_cold_starts_playback_without_activity(
+    android_device: AndroidDevice,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    audio_path = "files/imports/widget-cold-start.wav"
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+
+    audio = BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(8_000)
+        wav.writeframes(bytes([128]) * 8_000 * 20)
+    android_device.write_private_bytes(audio_path, audio.getvalue())
+    android_device.write_private_file(
+        "files/config/xmms-renascene/playlist.m3u",
+        "#EXTM3U\n"
+        "#EXTINF:20,Widget Cold Start\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/widget-cold-start.wav\n",
+    )
+
+    android_device.shell(
+        "am",
+        "start-foreground-service",
+        "-n",
+        f"{ANDROID_PACKAGE}/.XmmsPlaybackService",
+        "-a",
+        "org.xmms.renascene.service.WIDGET_CONTROL",
+        "--ei",
+        "widgetControl",
+        "2",
+    )
+
+    android_device.wait_for_service("XmmsPlaybackService")
+    position_ms = android_device.wait_for_private_file_int_at_least(
+        config_path,
+        "playback_position_ms",
+        500,
+        timeout=15.0,
+    )
+    assert position_ms < 20_000
+
+
 def test_android_shows_playlist_by_default(
     android_device: AndroidDevice,
 ) -> None:

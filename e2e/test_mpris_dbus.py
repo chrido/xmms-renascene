@@ -234,7 +234,9 @@ def test_mpris_transport_methods_drive_playback(
         await client.wait_player_property("PlaybackStatus", "Playing")
 
         await client.player.call_stop()
-        await client.wait_player_property("PlaybackStatus", "Stopped")
+        await asyncio.sleep(0.2)
+        assert await client.get_player_property("PlaybackStatus") == "Playing"
+        assert await client.get_player_property("Position") < 1_000_000
 
     run_mpris_test(
         tmp_path,

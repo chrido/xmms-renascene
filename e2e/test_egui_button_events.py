@@ -57,8 +57,8 @@ MAIN_PUSH_BUTTON_EVENTS = [
     (MainButton.CLOSE, "Close", None),
     (MainButton.PREVIOUS, "Previous", "command Player(PreviousTrack)"),
     (MainButton.PLAY, "Play", "command Player(Play)"),
-    (MainButton.PAUSE, "Pause", "command Player(TogglePause)"),
-    (MainButton.STOP, "Stop", "command Player(Stop)"),
+    (MainButton.PAUSE, "Pause", "command Player(Pause)"),
+    (MainButton.STOP, "Stop", "command Player(Halt)"),
     (MainButton.NEXT, "Next", "command Player(NextTrack)"),
     (MainButton.EJECT, "Eject", "frontend_effect: egui OpenFileDialog(AddAudioFiles)"),
 ]
@@ -92,8 +92,8 @@ PLAYLIST_MENU_EVENTS = [
 PLAYLIST_FOOTER_EVENTS = [
     (PlaylistFooterButton.PREVIOUS, "Previous", "command Player(PreviousTrack)"),
     (PlaylistFooterButton.PLAY, "Play", "command Player(Play)"),
-    (PlaylistFooterButton.PAUSE, "Pause", "command Player(TogglePause)"),
-    (PlaylistFooterButton.STOP, "Stop", "command Player(Stop)"),
+    (PlaylistFooterButton.PAUSE, "Pause", "command Player(Pause)"),
+    (PlaylistFooterButton.STOP, "Stop", "command Player(Halt)"),
     (PlaylistFooterButton.NEXT, "Next", "command Player(NextTrack)"),
     (PlaylistFooterButton.EJECT, "Eject", "frontend_effect: egui OpenFileDialog(AddAudioFiles)"),
     (PlaylistFooterButton.SCROLL_UP, "ScrollUp", None),
