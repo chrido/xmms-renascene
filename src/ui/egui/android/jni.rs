@@ -98,11 +98,8 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnMediaControl
     activity: JObject,
     control: jint,
 ) {
-    let control = match control {
-        1 => AndroidMediaControl::PausePlayback,
-        2 => AndroidMediaControl::ResumePlayback,
-        3 => AndroidMediaControl::NextTrack,
-        _ => return,
+    let Some(control) = AndroidMediaControl::from_activity_jni_code(control) else {
+        return;
     };
     super::handle_activity_media_control(&mut env, &activity, control);
 }
@@ -137,15 +134,8 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeOnMedia
     control: jint,
     value: jlong,
 ) {
-    let control = match control {
-        1 => AndroidMediaControl::PausePlayback,
-        2 => AndroidMediaControl::ResumePlayback,
-        3 => AndroidMediaControl::NextTrack,
-        4 => AndroidMediaControl::PreviousTrack,
-        5 => AndroidMediaControl::SeekToMs(value.max(0)),
-        6 => AndroidMediaControl::HaltPlayback,
-        7 => AndroidMediaControl::PlayMediaItem(value.max(0) as usize),
-        _ => return,
+    let Some(control) = AndroidMediaControl::from_jni_code(control, value) else {
+        return;
     };
     media_session::handle_media_control(env, Some(service), control);
 }

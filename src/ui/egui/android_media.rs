@@ -5,7 +5,7 @@
 //! runtime exits, the service-side copy becomes authoritative until the current
 //! Activity resumes.
 
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, TrackDirection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct AndroidActivityGeneration(pub(crate) u64);
@@ -168,16 +168,12 @@ impl AndroidAuthoritativeMediaPlaylist<'_> {
 
     pub(crate) fn change_track(
         &mut self,
-        next: bool,
+        direction: TrackDirection,
         play_uri: impl FnOnce(&str) -> Result<(), String>,
         seek_start: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), String> {
         let mut updated = self.media.clone();
-        let advanced = if next {
-            updated.playlist.advance()
-        } else {
-            updated.playlist.previous()
-        };
+        let advanced = updated.playlist.move_track(direction);
         if !advanced {
             return seek_start();
         }
@@ -278,7 +274,7 @@ mod tests {
 
             let executed = if let Some(mut authoritative) = state.authoritative_mut() {
                 authoritative
-                    .change_track(true, |_| Ok(()), || Ok(()))
+                    .change_track(TrackDirection::Next, |_| Ok(()), || Ok(()))
                     .unwrap();
                 true
             } else {

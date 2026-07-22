@@ -21,7 +21,7 @@ use jni::JNIEnv;
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{PlaybackEvent, PlayerAction, PlayerTransition};
 use crate::playback::rodio::RodioBackend;
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, TrackDirection};
 use crate::session::{fallback_state_paths, load_saved_state};
 
 use super::super::android_media::{
@@ -443,12 +443,16 @@ fn execute_android_media_control(
                 _ => Ok(()),
             }
         }
-        AndroidMediaControl::NextTrack => {
-            playlist.change_track(true, |uri| backend.play_uri(uri), || backend.seek(0))
-        }
-        AndroidMediaControl::PreviousTrack => {
-            playlist.change_track(false, |uri| backend.play_uri(uri), || backend.seek(0))
-        }
+        AndroidMediaControl::NextTrack => playlist.change_track(
+            TrackDirection::Next,
+            |uri| backend.play_uri(uri),
+            || backend.seek(0),
+        ),
+        AndroidMediaControl::PreviousTrack => playlist.change_track(
+            TrackDirection::Previous,
+            |uri| backend.play_uri(uri),
+            || backend.seek(0),
+        ),
         AndroidMediaControl::SeekToMs(position_ms) => backend.seek(position_ms),
         AndroidMediaControl::PlayMediaItem(index) => {
             playlist.play_media_item(index, |uri| backend.play_uri(uri))

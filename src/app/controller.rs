@@ -11,7 +11,7 @@ use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
 use crate::app::playlist_actions::PlaylistMenuCommand;
 use crate::app_state::AppState;
 use crate::player::{PlaybackEvent, PlayerAction, PlayerTransition};
-use crate::playlist::Playlist;
+use crate::playlist::{Playlist, TrackDirection};
 
 #[derive(Debug, Clone)]
 pub(super) struct AppController {
@@ -54,8 +54,8 @@ impl AppController {
             PlayerCommand::Pause => self.pause(),
             PlayerCommand::Halt => self.halt(),
             PlayerCommand::PlayPause => self.play_pause(),
-            PlayerCommand::PreviousTrack => self.previous_track(),
-            PlayerCommand::NextTrack => self.next_track(),
+            PlayerCommand::PreviousTrack => self.change_track(TrackDirection::Previous),
+            PlayerCommand::NextTrack => self.change_track(TrackDirection::Next),
             PlayerCommand::SeekToMs(position_ms) => self.seek_to(position_ms),
         }
     }
@@ -480,23 +480,9 @@ impl AppController {
         }
     }
 
-    fn previous_track(&mut self) -> Vec<AppEffect> {
+    fn change_track(&mut self, direction: TrackDirection) -> Vec<AppEffect> {
         self.state.config.playback_position_ms = 0;
-        let advanced = self.state.playlist.previous();
-        if advanced {
-            self.start_current_playlist_playback(0)
-        } else {
-            vec![
-                AppEffect::SeekPlayback(0),
-                AppEffect::SaveConfig,
-                AppEffect::QueueRender(RenderTarget::All),
-            ]
-        }
-    }
-
-    fn next_track(&mut self) -> Vec<AppEffect> {
-        self.state.config.playback_position_ms = 0;
-        let advanced = self.state.playlist.advance();
+        let advanced = self.state.playlist.move_track(direction);
         if advanced {
             self.start_current_playlist_playback(0)
         } else {

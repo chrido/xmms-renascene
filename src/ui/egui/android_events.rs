@@ -74,6 +74,30 @@ pub enum AndroidMediaControl {
     PlaylistEof,
 }
 
+impl AndroidMediaControl {
+    pub fn from_jni_code(code: i32, value: i64) -> Option<Self> {
+        match code {
+            1 => Some(Self::PausePlayback),
+            2 => Some(Self::ResumePlayback),
+            3 => Some(Self::NextTrack),
+            4 => Some(Self::PreviousTrack),
+            5 => Some(Self::SeekToMs(value.max(0))),
+            6 => Some(Self::HaltPlayback),
+            7 => Some(Self::PlayMediaItem(value.max(0) as usize)),
+            _ => None,
+        }
+    }
+
+    pub fn from_activity_jni_code(code: i32) -> Option<Self> {
+        Self::from_jni_code(code, 0).filter(|control| {
+            matches!(
+                control,
+                Self::PausePlayback | Self::ResumePlayback | Self::NextTrack
+            )
+        })
+    }
+}
+
 pub const MAX_PLATFORM_EVENTS_PER_FRAME: usize = 256;
 
 #[derive(Default)]
@@ -172,6 +196,33 @@ mod tests {
             control,
             backend_executed: false,
         })
+    }
+
+    #[test]
+    fn media_control_jni_codes_have_one_typed_decoder() {
+        assert_eq!(
+            AndroidMediaControl::from_jni_code(1, 0),
+            Some(AndroidMediaControl::PausePlayback)
+        );
+        assert_eq!(
+            AndroidMediaControl::from_jni_code(5, -42),
+            Some(AndroidMediaControl::SeekToMs(0))
+        );
+        assert_eq!(
+            AndroidMediaControl::from_jni_code(7, 42),
+            Some(AndroidMediaControl::PlayMediaItem(42))
+        );
+        assert_eq!(AndroidMediaControl::from_jni_code(8, 0), None);
+    }
+
+    #[test]
+    fn activity_jni_accepts_only_activity_transport_controls() {
+        assert_eq!(
+            AndroidMediaControl::from_activity_jni_code(2),
+            Some(AndroidMediaControl::ResumePlayback)
+        );
+        assert_eq!(AndroidMediaControl::from_activity_jni_code(4), None);
+        assert_eq!(AndroidMediaControl::from_activity_jni_code(7), None);
     }
 
     #[test]

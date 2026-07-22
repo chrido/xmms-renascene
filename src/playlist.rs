@@ -34,6 +34,12 @@ pub enum PlaylistSortKey {
     Date,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackDirection {
+    Previous,
+    Next,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurationIndexItem {
     pub index: usize,
@@ -431,6 +437,13 @@ impl Playlist {
             true
         } else {
             false
+        }
+    }
+
+    pub fn move_track(&mut self, direction: TrackDirection) -> bool {
+        match direction {
+            TrackDirection::Previous => self.previous(),
+            TrackDirection::Next => self.advance(),
         }
     }
 
@@ -1078,21 +1091,21 @@ mod tests {
         playlist.add_uri("file:///tmp/one.ogg");
         playlist.add_uri("file:///tmp/two.ogg");
 
-        assert!(playlist.advance());
+        assert!(playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(0));
-        assert!(playlist.advance());
+        assert!(playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(1));
-        assert!(!playlist.advance());
+        assert!(!playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(1));
-        assert!(playlist.previous());
+        assert!(playlist.move_track(TrackDirection::Previous));
         assert_eq!(playlist.position(), Some(0));
-        assert!(playlist.previous());
+        assert!(playlist.move_track(TrackDirection::Previous));
         assert_eq!(playlist.position(), Some(0));
 
         playlist.set_repeat(true);
-        assert!(playlist.previous());
+        assert!(playlist.move_track(TrackDirection::Previous));
         assert_eq!(playlist.position(), Some(1));
-        assert!(playlist.advance());
+        assert!(playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(0));
     }
 
