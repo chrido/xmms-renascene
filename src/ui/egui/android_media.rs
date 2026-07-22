@@ -148,8 +148,22 @@ pub(crate) struct AndroidAuthoritativeMediaPlaylist<'a> {
 }
 
 impl AndroidAuthoritativeMediaPlaylist<'_> {
-    pub(crate) fn current_entry(&self) -> Option<(String, String, i64)> {
-        self.media.current_entry()
+    pub(crate) fn start_current(
+        &mut self,
+        play_uri: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut updated = self.media.clone();
+        if updated.playlist.position().is_none() && !updated.playlist.is_empty() {
+            updated.playlist.set_position(0);
+        }
+        let position = updated
+            .playlist
+            .position()
+            .ok_or_else(|| "Android media playlist has no current entry".to_string())?;
+        let uri = updated.playlist.entries()[position].filename.clone();
+        play_uri(&uri)?;
+        *self.media = updated;
+        Ok(())
     }
 
     pub(crate) fn change_track(
@@ -354,5 +368,27 @@ mod tests {
 
         assert_eq!(played, vec!["file:///three.ogg"]);
         assert_eq!(state.media().unwrap().playlist.position(), Some(2));
+    }
+
+    #[test]
+    fn authoritative_start_selects_first_entry_after_cold_process_restore() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///one.ogg");
+        let mut state = AndroidMediaPlaylistState::default();
+        state
+            .initialize_authoritative(AndroidMediaPlaylist::new(playlist, vec!["One".to_string()]));
+        let mut played = Vec::new();
+
+        state
+            .authoritative_mut()
+            .unwrap()
+            .start_current(|uri| {
+                played.push(uri.to_string());
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(played, vec!["file:///one.ogg"]);
+        assert_eq!(state.media().unwrap().playlist.position(), Some(0));
     }
 }

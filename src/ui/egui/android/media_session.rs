@@ -438,11 +438,7 @@ fn execute_android_media_control(
             match backend.state().transition(PlayerAction::Play) {
                 Some(PlayerTransition::Resume) => backend.unpause(),
                 Some(PlayerTransition::Start) => {
-                    let uri = playlist
-                        .current_entry()
-                        .map(|(uri, _, _)| uri)
-                        .ok_or_else(|| "no current playlist entry to resume".to_string())?;
-                    backend.play_uri(&uri)
+                    playlist.start_current(|uri| backend.play_uri(uri))
                 }
                 _ => Ok(()),
             }

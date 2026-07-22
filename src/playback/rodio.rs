@@ -969,6 +969,9 @@ fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDe
             .default_output_device()
             .ok_or_else(|| "rodio/cpal default output device not found".to_string())?,
     };
+    #[cfg(target_os = "android")]
+    let name = "Android audio output".to_string();
+    #[cfg(not(target_os = "android"))]
     let name = device_name(&device).unwrap_or_else(|| device_id.unwrap_or("unknown").to_string());
     let output_device = device_id
         .and_then(rodio_alsa_backend_device)
@@ -985,12 +988,20 @@ fn open_rodio_sink(device_id: Option<&str>) -> Result<(MixerDeviceSink, OutputDe
         log_supported_output_configs(&device, &selected_name);
     }
 
+    #[cfg(target_os = "android")]
+    let mut builder = DeviceSinkBuilder::default().with_device(device);
+    #[cfg(not(target_os = "android"))]
     let mut builder = DeviceSinkBuilder::from_device(device)
         .map_err(|err| format!("failed to configure rodio audio output {selected_name}: {err}"))?;
     if let Some(sample_format) = requested_sample_format()? {
         crate::app_log_info!(backend, "rodio forcing sample format {sample_format:?}");
         builder = builder.with_sample_format(sample_format);
     }
+    #[cfg(target_os = "android")]
+    let mut sink = builder
+        .open_stream()
+        .map_err(|err| format!("failed to open rodio audio output {selected_name}: {err}"))?;
+    #[cfg(not(target_os = "android"))]
     let mut sink = builder
         .open_sink_or_fallback()
         .map_err(|err| format!("failed to open rodio audio output {selected_name}: {err}"))?;
