@@ -9,8 +9,6 @@ import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.database.Cursor;
-import android.media.AudioAttributes;
-import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
@@ -27,8 +25,19 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Android main-thread owner for Activity lifecycle, SAF, geometry, and volume observation.
+ *
+ * <p>Native callbacks from this class are one-way adapters: they validate/convert and enqueue
+ * typed Rust events (or request repaint), but never execute domain or playback mutations.
+ * Activity-dependent methods may fail after teardown; background playback remains owned by
+ * {@link XmmsPlaybackService}.
+ */
 public final class XmmsActivity extends NativeActivity {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
     private static final int READ_FLAGS =
@@ -39,16 +48,15 @@ public final class XmmsActivity extends NativeActivity {
             "org.xmms.renascene.action.RESUME_PLAYBACK";
     static final String ACTION_NEXT_TRACK =
             "org.xmms.renascene.action.NEXT_TRACK";
-    private static final int MEDIA_CONTROL_PAUSE_PLAYBACK = 1;
-    private static final int MEDIA_CONTROL_RESUME_PLAYBACK = 2;
-    private static final int MEDIA_CONTROL_NEXT_TRACK = 3;
-
     static {
         System.loadLibrary("xmms_renascene");
     }
 
     private native void nativeOnDocumentsSelected(
-            int requestCode, String[] paths, String error);
+            int requestCode, long operationId, String[] paths, String error);
+    private native void nativeOnActivityResumed();
+    private native void nativeOnActivityPaused();
+    private native void nativeOnActivityDestroyed();
     private native void nativeOnMediaControl(int control);
     private native void nativeOnMediaVolumeChanged(int volumePercent);
     private native void nativeRequestRepaint();
@@ -105,14 +113,63 @@ public final class XmmsActivity extends NativeActivity {
         }
     }
 
+    private enum MediaControl {
+        PAUSE(1),
+        RESUME(2),
+        NEXT(3);
+
+        final int jniCode;
+
+        MediaControl(int jniCode) {
+            this.jniCode = jniCode;
+        }
+    }
+
+    private static final class MediaControlDispatch {
+        // Main-thread transition table:
+        // IDLE + enqueue -> IDLE; IDLE + take(ready) -> IN_FLIGHT;
+        // IN_FLIGHT + enqueue/take -> IN_FLIGHT; IN_FLIGHT + complete -> IDLE.
+        private enum Phase {
+            IDLE,
+            IN_FLIGHT
+        }
+
+        private final ArrayDeque<MediaControl> queued = new ArrayDeque<>();
+        private Phase phase = Phase.IDLE;
+
+        void enqueue(MediaControl control) {
+            queued.addLast(control);
+        }
+
+        MediaControl take(boolean ready) {
+            if (!ready || phase == Phase.IN_FLIGHT) {
+                return null;
+            }
+            MediaControl control = queued.pollFirst();
+            if (control != null) {
+                phase = Phase.IN_FLIGHT;
+            }
+            return control;
+        }
+
+        boolean complete() {
+            if (phase != Phase.IN_FLIGHT) {
+                return false;
+            }
+            phase = Phase.IDLE;
+            return queued.isEmpty();
+        }
+    }
+
     private AudioManager audioManager;
-    private AudioFocusRequest audioFocusRequest;
-    private boolean mediaControlPending;
+    private final MediaControlDispatch mediaControls = new MediaControlDispatch();
+    private volatile boolean activityResumed;
     private boolean nativeLoopReady;
-    private int pendingMediaControl;
     private boolean mediaVolumeObserverRegistered;
     private int lastReportedMediaVolumePercent = -1;
-    private volatile int pendingAppMediaVolumePercent = -1;
+    // Null when no app-initiated volume change is in flight; non-null holds the clamped
+    // percent value set by setMediaVolumePercent() until the observer confirms it.
+    private final AtomicReference<Integer> pendingAppMediaVolumePercent = new AtomicReference<>();
     private final ContentObserver mediaVolumeObserver = new ContentObserver(MAIN_HANDLER) {
         @Override
         public void onChange(boolean selfChange) {
@@ -128,6 +185,7 @@ public final class XmmsActivity extends NativeActivity {
     private long configGeneration = 1;
     private volatile SafeInsetSnapshot safeInsetSnapshot = SafeInsetSnapshot.EMPTY;
     private byte[] pendingDocumentContents;
+    private final HashMap<Integer, Long> pickerOperationIds = new HashMap<>();
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
@@ -143,14 +201,6 @@ public final class XmmsActivity extends NativeActivity {
         }
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        AudioAttributes attributes = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build();
-        audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(attributes)
-                .setOnAudioFocusChangeListener(focusChange -> {})
-                .build();
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED) {
@@ -167,7 +217,9 @@ public final class XmmsActivity extends NativeActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        activityResumed = true;
         nativeLoopReady = true;
+        nativeOnActivityResumed();
         registerMediaVolumeObserver();
         getWindow().getDecorView().post(this::dispatchPendingMediaControl);
     }
@@ -176,13 +228,15 @@ public final class XmmsActivity extends NativeActivity {
     protected void onPause() {
         unregisterMediaVolumeObserver();
         nativeLoopReady = false;
+        activityResumed = false;
+        nativeOnActivityPaused();
         super.onPause();
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
+        if (hasFocus && activityResumed) {
             nativeLoopReady = true;
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
         }
@@ -207,7 +261,14 @@ public final class XmmsActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        activityResumed = false;
+        nativeLoopReady = false;
+        nativeOnActivityDestroyed();
         super.onDestroy();
+    }
+
+    public boolean isNativeActivityResumed() {
+        return activityResumed;
     }
 
     private void dispatchMediaControl(int control) {
@@ -216,12 +277,11 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     private void dispatchPendingMediaControl() {
-        if (!nativeLoopReady || pendingMediaControl == 0) {
+        MediaControl control = mediaControls.take(nativeLoopReady);
+        if (control == null) {
             return;
         }
-        int control = pendingMediaControl;
-        pendingMediaControl = 0;
-        dispatchMediaControl(control);
+        dispatchMediaControl(control.jniCode);
     }
 
     private boolean handleMediaControlIntent(Intent intent) {
@@ -229,22 +289,19 @@ public final class XmmsActivity extends NativeActivity {
             return false;
         }
         if (ACTION_PAUSE_PLAYBACK.equals(intent.getAction())) {
-            mediaControlPending = true;
-            pendingMediaControl = MEDIA_CONTROL_PAUSE_PLAYBACK;
+            mediaControls.enqueue(MediaControl.PAUSE);
             setIntent(new Intent(this, XmmsActivity.class));
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
             return true;
         }
         if (ACTION_RESUME_PLAYBACK.equals(intent.getAction())) {
-            mediaControlPending = true;
-            pendingMediaControl = MEDIA_CONTROL_RESUME_PLAYBACK;
+            mediaControls.enqueue(MediaControl.RESUME);
             setIntent(new Intent(this, XmmsActivity.class));
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
             return true;
         }
         if (ACTION_NEXT_TRACK.equals(intent.getAction())) {
-            mediaControlPending = true;
-            pendingMediaControl = MEDIA_CONTROL_NEXT_TRACK;
+            mediaControls.enqueue(MediaControl.NEXT);
             setIntent(new Intent(this, XmmsActivity.class));
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
             return true;
@@ -254,10 +311,11 @@ public final class XmmsActivity extends NativeActivity {
 
     public void completeMediaControl() {
         runOnUiThread(() -> {
-            if (mediaControlPending) {
-                mediaControlPending = false;
+            if (mediaControls.complete()) {
                 nativeLoopReady = false;
                 moveTaskToBack(true);
+            } else {
+                dispatchPendingMediaControl();
             }
         });
     }
@@ -299,19 +357,6 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public boolean requestPlaybackAudioFocus() {
-        return audioManager != null
-                && audioFocusRequest != null
-                && audioManager.requestAudioFocus(audioFocusRequest)
-                        == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
-    }
-
-    public void abandonPlaybackAudioFocus() {
-        if (audioManager != null && audioFocusRequest != null) {
-            audioManager.abandonAudioFocusRequest(audioFocusRequest);
-        }
-    }
-
     private void registerMediaVolumeObserver() {
         if (mediaVolumeObserverRegistered) {
             return;
@@ -349,13 +394,12 @@ public final class XmmsActivity extends NativeActivity {
         if (volumePercent < 0 || volumePercent > 100) {
             return;
         }
-        int requestedPercent = pendingAppMediaVolumePercent;
-        pendingAppMediaVolumePercent = -1;
-        if (requestedPercent == volumePercent) {
+        Integer requestedPercent = pendingAppMediaVolumePercent.getAndSet(null);
+        if (requestedPercent != null && requestedPercent == volumePercent) {
             lastReportedMediaVolumePercent = volumePercent;
             return;
         }
-        if (requestedPercent < 0 && volumePercent == lastReportedMediaVolumePercent) {
+        if (requestedPercent == null && volumePercent == lastReportedMediaVolumePercent) {
             return;
         }
         lastReportedMediaVolumePercent = volumePercent;
@@ -373,7 +417,7 @@ public final class XmmsActivity extends NativeActivity {
         int clampedPercent = Math.max(0, Math.min(100, volumePercent));
         int streamVolume = (int) Math.round(maxVolume * (clampedPercent / 100.0));
         audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, streamVolume, 0);
-        pendingAppMediaVolumePercent = clampedPercent;
+        pendingAppMediaVolumePercent.set(clampedPercent);
         reportMediaVolumeIfChanged();
         return true;
     }
@@ -399,8 +443,10 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public void openDocuments(int requestCode, String mimeType, boolean multiple) {
+    public void openDocuments(
+            int requestCode, long operationId, String mimeType, boolean multiple) {
         runOnUiThread(() -> {
+            pickerOperationIds.put(requestCode, operationId);
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType(mimeType);
@@ -410,8 +456,9 @@ public final class XmmsActivity extends NativeActivity {
         });
     }
 
-    public void openDirectory(int requestCode) {
+    public void openDirectory(int requestCode, long operationId) {
         runOnUiThread(() -> {
+            pickerOperationIds.put(requestCode, operationId);
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             intent.addFlags(READ_FLAGS);
             startActivityForResult(intent, requestCode);
@@ -419,8 +466,9 @@ public final class XmmsActivity extends NativeActivity {
     }
 
     public void createDocument(
-            int requestCode, String mimeType, String title, byte[] contents) {
+            int requestCode, long operationId, String mimeType, String title, byte[] contents) {
         runOnUiThread(() -> {
+            pickerOperationIds.put(requestCode, operationId);
             pendingDocumentContents = contents;
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -655,11 +703,15 @@ public final class XmmsActivity extends NativeActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        Long operationId = pickerOperationIds.remove(requestCode);
+        if (operationId == null) {
+            return;
+        }
         if (resultCode != RESULT_OK || data == null) {
             if (requestCode == 105 || requestCode == 106) {
                 pendingDocumentContents = null;
             }
-            nativeOnDocumentsSelected(requestCode, new String[0], null);
+            nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
             return;
         }
         try {
@@ -679,7 +731,7 @@ public final class XmmsActivity extends NativeActivity {
                     }
                     output.write(contents);
                 }
-                nativeOnDocumentsSelected(requestCode, new String[0], null);
+                nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
                 return;
             }
             if (requestCode == 104) {
@@ -691,7 +743,10 @@ public final class XmmsActivity extends NativeActivity {
                         treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 File directory = copyTreeToPrivateStorage(treeUri);
                 nativeOnDocumentsSelected(
-                        requestCode, new String[] {directory.getAbsolutePath()}, null);
+                        requestCode,
+                        operationId,
+                        new String[] {directory.getAbsolutePath()},
+                        null);
                 return;
             }
             ArrayList<Uri> uris = selectedUris(data);
@@ -705,10 +760,14 @@ public final class XmmsActivity extends NativeActivity {
                 }
                 paths.add(copyToPrivateStorage(uri).getAbsolutePath());
             }
-            nativeOnDocumentsSelected(requestCode, paths.toArray(new String[0]), null);
+            nativeOnDocumentsSelected(
+                    requestCode, operationId, paths.toArray(new String[0]), null);
         } catch (Exception error) {
             nativeOnDocumentsSelected(
-                    requestCode, new String[0], "Failed to process selected document: " + error);
+                    requestCode,
+                    operationId,
+                    new String[0],
+                    "Failed to process selected document: " + error);
         }
     }
 

@@ -1,11 +1,11 @@
 #[test]
 fn skin_change_bridge_invalidates_cache_before_refreshing_widgets() {
-    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let rust = include_str!("../src/ui/egui/android/widgets.rs");
     let refresh = rust
         .split("pub fn refresh_player_widgets()")
         .nth(1)
         .expect("Android widget refresh bridge")
-        .split("fn android_context")
+        .split("pub(crate) fn render_player_widget")
         .next()
         .expect("refresh bridge body");
     let invalidate = refresh
@@ -17,7 +17,7 @@ fn skin_change_bridge_invalidates_cache_before_refreshing_widgets() {
 
     assert!(invalidate < java_call);
     assert!(refresh.contains("\"()V\""));
-    assert!(refresh.contains("context.activity.clone()"));
+    assert!(refresh.contains("activity.as_obj()"));
     assert!(!refresh.contains("call_static_method"));
     assert!(!refresh.contains("org/xmms/renascene/XmmsPlayerWidget"));
     assert!(refresh.contains("exception_describe"));
@@ -45,8 +45,9 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
 #[test]
 fn android_output_volume_uses_stream_music_without_backend_scaling() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
-    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let rust = include_str!("../src/ui/egui/android/audio_focus.rs");
     let app = include_str!("../src/ui/egui/app.rs");
+    let executor = include_str!("../src/ui/egui/effect_executor.rs");
     let gtk = include_str!("../src/ui.rs");
     let controller = include_str!("../src/app/controller.rs");
     let store = include_str!("../src/app/store.rs");
@@ -66,52 +67,232 @@ fn android_output_volume_uses_stream_music_without_backend_scaling() {
     assert!(rust.contains("\"(I)Z\""));
     assert!(rust.contains("pub fn media_volume_percent() -> Result<i32, String>"));
     assert!(rust.contains("\"getMediaVolumePercent\""));
-    assert!(app.contains("match super::android_file_picker::media_volume_percent()"));
+    assert!(app.contains("match super::android::media_volume_percent()"));
 
-    let output_effect = app
-        .split("if let AppEffect::SetOutputVolume(volume) = &effect")
+    let output_effect = executor
+        .split("PlatformEffect::SetOutputVolume(volume) =>")
         .nth(1)
         .expect("Android output-volume effect")
-        .split("let clear_visualization")
+        .split("PlatformEffect::SaveConfig")
         .next()
         .expect("Android output-volume effect body");
-    assert!(output_effect.contains("set_media_volume_percent(*volume)"));
-    assert!(!output_effect.contains("backend.set_volume"));
+    assert!(output_effect.contains("set_media_volume_percent(volume)"));
+    assert!(output_effect.contains("#[cfg(target_os = \"android\")]"));
+    assert!(output_effect.contains("#[cfg(not(target_os = \"android\"))]"));
+    assert!(output_effect.contains("playback.set_output_volume(volume)"));
 
     assert!(controller.contains("AppEffect::SetOutputVolume(self.state.player.volume())"));
     assert_eq!(
         gtk.matches("AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume)")
             .count(),
-        2
+        1
     );
     assert!(store.contains("AppEffect::SetBackendVolume(volume)"));
     assert!(store.contains("AppEffect::SetBackendVolume(restore_volume)"));
 }
 
 #[test]
-fn android_track_changes_reuse_existing_playback_audio_focus() {
+fn android_playback_service_is_the_only_audio_focus_owner() {
+    let app = include_str!("../src/ui/egui/app.rs");
+    let rust_focus = include_str!("../src/ui/egui/android/audio_focus.rs");
+    let activity = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
+
+    assert!(!app.contains("request_playback_audio_focus"));
+    assert!(!app.contains("abandon_playback_audio_focus"));
+    assert!(!activity.contains("AudioFocusRequest"));
+    assert!(!activity.contains("requestPlaybackAudioFocus"));
+    assert!(!activity.contains("abandonPlaybackAudioFocus"));
+    assert!(service.contains("private boolean audioFocusHeld;"));
+    assert!(service.contains("if (playing\n                && !audioFocusHeld"));
+    assert!(service.contains("if (audioFocusHeld && audioManager != null"));
+    assert!(rust_focus.contains("Playback audio-focus ownership remains exclusively"));
+    assert!(!rust_focus.contains("AudioFocusRequest"));
+}
+
+#[test]
+fn activity_media_control_state_machine_and_lifecycle_contract_are_explicit() {
+    let activity = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let dispatch = activity
+        .split("private static final class MediaControlDispatch")
+        .nth(1)
+        .expect("activity media-control state machine")
+        .split("private AudioManager audioManager")
+        .next()
+        .expect("activity media-control state machine body");
+
+    assert!(dispatch.contains("enum Phase"));
+    assert!(dispatch.contains("IDLE"));
+    assert!(dispatch.contains("IN_FLIGHT"));
+    assert!(dispatch.contains("IDLE + enqueue -> IDLE"));
+    assert!(dispatch.contains("IDLE + take(ready) -> IN_FLIGHT"));
+    assert!(dispatch.contains("IN_FLIGHT + complete -> IDLE"));
+    assert!(dispatch.contains("queued.addLast(control)"));
+    assert!(dispatch.contains("queued.pollFirst()"));
+    assert!(dispatch.contains("if (!ready || phase == Phase.IN_FLIGHT)"));
+
+    let resume = activity
+        .split("protected void onResume()")
+        .nth(1)
+        .expect("onResume")
+        .split("protected void onPause()")
+        .next()
+        .expect("onResume body");
+    assert!(resume.contains("nativeLoopReady = true"));
+    assert!(resume.contains("activityResumed = true"));
+    assert!(resume.contains("nativeOnActivityResumed();"));
+    assert!(resume.contains("dispatchPendingMediaControl"));
+
+    let pause = activity
+        .split("protected void onPause()")
+        .nth(1)
+        .expect("onPause")
+        .split("public void onWindowFocusChanged")
+        .next()
+        .expect("onPause body");
+    assert!(pause.contains("nativeLoopReady = false"));
+    assert!(pause.contains("activityResumed = false"));
+    assert!(pause.contains("nativeOnActivityPaused();"));
+    assert!(activity.contains("nativeOnActivityDestroyed();"));
+    assert!(activity.contains("public boolean isNativeActivityResumed()"));
+    assert!(activity.contains("if (hasFocus && activityResumed)"));
+}
+
+#[test]
+fn activity_jni_callbacks_do_not_execute_domain_or_backend_mutations() {
+    let jni = include_str!("../src/ui/egui/android/jni.rs");
+    let lifecycle_callbacks = jni
+        .split("Java_org_xmms_renascene_XmmsActivity_nativeOnActivityResumed")
+        .nth(1)
+        .expect("Activity lifecycle callbacks")
+        .split("Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSelected")
+        .next()
+        .expect("Activity lifecycle callback section");
+    assert!(lifecycle_callbacks.contains("super::handle_activity_resumed"));
+    assert!(lifecycle_callbacks.contains("super::handle_activity_paused"));
+    assert!(lifecycle_callbacks.contains("super::handle_activity_destroyed"));
+    assert!(!lifecycle_callbacks.contains("shared_playback_backend"));
+    assert!(!lifecycle_callbacks.contains("AppStore"));
+
+    let activity_callbacks = jni
+        .split("Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSelected")
+        .nth(1)
+        .expect("Activity JNI callbacks")
+        .split("Java_org_xmms_renascene_XmmsPlaybackService_nativeOnMediaControl")
+        .next()
+        .expect("Activity JNI callback section");
+
+    assert!(activity_callbacks.contains("events::push("));
+    assert!(activity_callbacks.contains("request_registered_repaint()"));
+    assert!(!activity_callbacks.contains("handle_media_control"));
+    assert!(!activity_callbacks.contains("execute_android_media_control"));
+    assert!(!activity_callbacks.contains("shared_playback_backend"));
+    assert!(!activity_callbacks.contains("AppStore"));
+
+    let service_callbacks = jni
+        .split("Java_org_xmms_renascene_XmmsPlaybackService_nativeOnMediaControl")
+        .nth(1)
+        .expect("service JNI callbacks");
+    assert!(service_callbacks.contains("media_session::handle_media_control"));
+    assert!(service_callbacks.contains("media_session::poll_playback"));
+}
+
+#[test]
+fn service_and_widget_controls_execute_immediately_only_when_authoritative() {
+    let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
+    let widget = include_str!("../android/java/org/xmms/renascene/XmmsPlayerWidget.java");
+    let media_session = include_str!("../src/ui/egui/android/media_session.rs");
+    let events = include_str!("../src/ui/egui/android/events.rs");
+
+    assert!(widget.contains("context.startForegroundService(serviceIntent)"));
+    assert!(service.contains("nativeOnMediaControl("));
+
+    let handler = media_session
+        .split("pub(crate) fn handle_media_control(")
+        .nth(1)
+        .expect("service media-control handler")
+        .split("fn execute_android_media_control")
+        .next()
+        .expect("service media-control handler body");
+    assert!(handler.contains("AndroidMediaPlaylistAuthority::Mirror(_) => false"));
+    assert!(handler.contains("AndroidMediaPlaylistAuthority::Authoritative"));
+    assert!(handler.contains("execute_android_media_control("));
+    assert!(handler.contains("backend_executed,"));
+    assert!(!handler.contains("ui_runtime_registered"));
+    assert!(!events.contains("fn ui_runtime_registered"));
+}
+
+#[test]
+fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
+    let state = include_str!("../src/ui/egui/android_media.rs");
+    let media_session = include_str!("../src/ui/egui/android/media_session.rs");
+    let android = include_str!("../src/ui/egui/android/mod.rs");
+    let activity = include_str!("../src/ui/egui/android/activity.rs");
+    let events = include_str!("../src/ui/egui/android/events.rs");
     let app = include_str!("../src/ui/egui/app.rs");
 
-    assert!(app.contains("fn android_playback_focus_request_required(state: PlayerState) -> bool"));
-    assert!(app.contains("state != PlayerState::Playing"));
+    assert!(state.contains("enum AndroidMediaPlaylistState"));
+    assert!(state.contains("Mirror {"));
+    assert!(state.contains("Authoritative(AndroidMediaPlaylist)"));
+    assert!(state.contains("fn authoritative_mut"));
+    assert!(
+        media_session.contains("static MEDIA_PLAYLIST: OnceLock<Mutex<AndroidMediaPlaylistState>>")
+    );
+    assert!(!media_session.contains("static MEDIA_PLAYLIST: OnceLock<Mutex<Option<"));
 
-    let start_playback = app
-        .split("#[cfg(target_os = \"android\")]\n        if matches!(effect, AppEffect::StartPlaybackUri { .. })")
+    assert!(android.contains("handle_activity_resumed"));
+    assert!(android.contains("handle_activity_paused"));
+    assert!(android.contains("handle_activity_destroyed"));
+    assert!(android.contains("media_session::activity_paused_or_exited"));
+    assert!(events.contains("struct RegisteredRepaintContext"));
+    assert!(events.contains("activity: AndroidActivityGeneration"));
+    assert!(events.contains("never treated as an"));
+    assert!(activity.contains("static NEXT_GENERATION: AtomicU64"));
+    assert!(activity.contains("stale callbacks and egui exits"));
+    assert!(app.contains("self.android.activity_generation()"));
+    let play_media_item = app
+        .split("AndroidMediaControl::PlayMediaItem(index)")
         .nth(1)
-        .expect("Android StartPlaybackUri focus handling")
-        .split("if let Some(backend) = &self.playback_backend")
+        .expect("PlayMediaItem handler")
+        .split("let command = android_player_command_for_media_control")
         .next()
-        .expect("Android focus handling body");
-    assert!(start_playback.contains("android_playback_focus_request_required(backend.state())"));
-    assert!(start_playback.contains("if request_audio_focus"));
-    assert!(start_playback.contains("request_playback_audio_focus()"));
+        .expect("PlayMediaItem handler body");
+    assert!(play_media_item.contains("PlayerCommand::StartCurrentTrack"));
+    assert!(play_media_item
+        .contains("EffectExecution::after_external_backend_execution(event.backend_executed)"));
+}
+
+#[test]
+fn android_module_boundaries_document_process_and_registry_ownership() {
+    let android = include_str!("../src/ui/egui/android/mod.rs");
+    let events = include_str!("../src/ui/egui/android/events.rs");
+    let persistence = include_str!("../src/ui/egui/android/persistence.rs");
+    let widgets = include_str!("../src/ui/egui/android/widgets.rs");
+    let facade =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/egui/android_file_picker.rs");
+
+    assert!(android.contains("Activity callbacks run on the Android main thread"));
+    assert!(android.contains("at the beginning of each frame"));
+    assert!(android.contains("no `android:process`"));
+    assert!(android.contains("service, and widgets normally share one Linux process"));
+    assert!(events.contains("JNI entry points cannot borrow the lifecycle-owned"));
+    assert!(persistence.contains("not a cross-process lock"));
+    assert!(widgets.contains("may run without an Activity"));
+    assert!(
+        !facade.exists(),
+        "obsolete Android compatibility facade remains"
+    );
 }
 
 #[test]
 fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
-    let bridge = include_str!("../src/ui/egui/android_file_picker.rs");
+    let bridge = include_str!("../src/ui/egui/android/jni.rs");
+    let events = include_str!("../src/ui/egui/android_events.rs");
+    let event_bridge = include_str!("../src/ui/egui/android/events.rs");
+    let android = include_str!("../src/ui/egui/android/mod.rs");
     let app = include_str!("../src/ui/egui/app.rs");
+    let executor = include_str!("../src/ui/egui/effect_executor.rs");
     let store = include_str!("../src/app/store.rs");
 
     assert!(java.contains("new ContentObserver(MAIN_HANDLER)"));
@@ -123,39 +304,47 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
     assert!(java.contains("Looper.myLooper() != Looper.getMainLooper()"));
     assert!(java.contains("private native void nativeOnMediaVolumeChanged(int volumePercent)"));
     assert!(java.contains("volumePercent == lastReportedMediaVolumePercent"));
-    assert!(java.contains("pendingAppMediaVolumePercent = clampedPercent"));
+    assert!(java.contains("pendingAppMediaVolumePercent.set(clampedPercent)"));
     assert!(java.contains("requestedPercent == volumePercent"));
 
-    assert!(bridge.contains("static EXTERNAL_MEDIA_VOLUME_PERCENT: OnceLock<Mutex<Option<i32>>>"));
+    assert!(bridge.contains("AndroidPlatformEvent::ExternalVolumeChanged"));
     assert!(bridge.contains("Java_org_xmms_renascene_XmmsActivity_nativeOnMediaVolumeChanged"));
-    assert!(bridge.contains("Some(volume_percent.clamp(0, 100))"));
-    assert!(bridge.contains("pub fn take_latest_external_media_volume_percent()"));
-    assert!(bridge.contains(".take()"));
+    assert!(events.contains("AndroidPlatformEvent::ExternalVolumeChanged(_) => self"));
+    assert!(events.contains("retain(|queued|"));
+    assert!(bridge.contains("AndroidPlatformEvent::ExternalVolumeChanged("));
     assert!(bridge.contains("request_registered_repaint();"));
-    let initialization = bridge
+    let initialization = android
         .split("pub fn initialize(")
         .nth(1)
         .expect("Android initialization")
-        .split("pub fn persist_app_state")
+        .split("Ok(initialized.generation)")
         .next()
         .expect("Android initialization body");
-    assert!(initialization.contains("EXTERNAL_MEDIA_VOLUME_PERCENT"));
-    assert!(initialization.contains("Mutex::new(None)"));
+    assert!(initialization.contains("events::replace_activity()"));
+    assert!(event_bridge.contains("static EVENTS: OnceLock<Mutex<AndroidEventInbox>>"));
+    assert!(event_bridge.contains("Mutex::new(AndroidEventInbox::default())"));
 
     let external_poll = app
-        .split("fn poll_external_android_media_volume")
+        .split("fn handle_external_android_media_volume")
         .nth(1)
-        .expect("external media-volume poll")
-        .split("fn poll_android_media_controls")
+        .expect("external media-volume handler")
+        .split("fn handle_android_media_control")
         .next()
-        .expect("external media-volume poll body");
-    assert!(external_poll.contains("take_latest_external_media_volume_percent"));
+        .expect("external media-volume handler body");
     assert!(external_poll.contains("sync_external_output_volume(volume)"));
-    assert!(external_poll.contains("sync_frontend_state_from_store()"));
-    assert!(external_poll.contains("persist_android_state()"));
-    assert!(external_poll.contains("ctx.request_repaint()"));
+    assert!(external_poll.contains("process_dispatch_result(result, EffectExecution::LOCAL)"));
     assert!(!external_poll.contains("AudioCommand::SetVolume"));
     assert!(!external_poll.contains("set_media_volume_percent"));
+    let post_dispatch = executor
+        .split("pub(crate) fn apply_android_post_dispatch")
+        .nth(1)
+        .expect("Android post-dispatch policy")
+        .split("pub(crate) fn flush_android_persistence")
+        .next()
+        .expect("Android post-dispatch policy body");
+    assert!(post_dispatch.contains("StateChangeSet::PLAYER"));
+    assert!(post_dispatch.contains("StateChangeSet::CONFIG"));
+    assert!(post_dispatch.contains("android.mark_persistence()"));
 
     let store_sync = store
         .split("pub fn sync_external_output_volume")
@@ -165,9 +354,8 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
         .next()
         .expect("external output-volume store body");
     assert!(store_sync.contains("state.player.set_volume(volume)"));
-    assert!(store_sync.contains("state.config.volume = volume"));
-    assert!(store_sync
-        .contains("StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN"));
+    assert!(!store_sync.contains("state.config.volume = volume"));
+    assert!(store_sync.contains("StateChangeSet::PLAYER | StateChangeSet::RENDER_MAIN"));
     assert!(!store_sync.contains("SetOutputVolume"));
     assert!(!store_sync.contains("SetBackendVolume"));
 }
@@ -211,7 +399,8 @@ fn android_winit_patch_uses_the_reproducible_git_fork() {
 #[test]
 fn activity_exposes_atomic_window_geometry_and_insets_for_rotation_layout() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
-    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let layout = include_str!("../src/ui/egui/android/layout.rs");
+    let jni = include_str!("../src/ui/egui/android/jni.rs");
 
     assert!(java.contains("private volatile SafeInsetSnapshot safeInsetSnapshot"));
     assert!(java.contains("public long[] windowLayoutSnapshot()"));
@@ -224,8 +413,8 @@ fn activity_exposes_atomic_window_geometry_and_insets_for_rotation_layout() {
     assert!(java.contains("fresh ? 1 : 0"));
     assert!(java.contains("nativeRequestRepaint();"));
     assert!(java.contains("LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS"));
-    assert!(rust.contains("pub fn window_layout_snapshot_pixels()"));
-    assert!(rust.contains("nativeRequestRepaint"));
+    assert!(layout.contains("pub fn window_layout_snapshot_pixels()"));
+    assert!(jni.contains("nativeRequestRepaint"));
 }
 
 #[test]
@@ -349,12 +538,12 @@ fn widget_picker_metadata_has_visible_legacy_and_modern_previews() {
 
 #[test]
 fn player_info_widget_uses_shared_skin_and_exact_main_crop() {
-    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
-    let native = rust
-        .split("Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeRenderPlayerInfoWidget")
+    let widgets = include_str!("../src/ui/egui/android/widgets.rs");
+    let native = widgets
+        .split("pub(crate) fn render_player_info_widget")
         .nth(1)
         .expect("info widget native renderer");
-    assert!(native.contains("with_widget_skin(&files_dir, &cache_dir"));
+    assert!(native.contains("with_widget_skin(files_dir, cache_dir"));
     assert!(native.contains("render_player_info_color_image"));
     assert!(native.contains("title_offset_px"));
     assert!(native.contains("player_info_render_state("));
@@ -432,7 +621,7 @@ fn playback_callbacks_refresh_info_for_display_or_transport_changes() {
         .expect("playback callback body");
     assert!(apply.contains("boolean infoChanged"));
     assert!(apply.contains("boolean playbackChanged"));
-    assert!(apply.contains("if (state != 0 && (infoChanged || playbackChanged))"));
+    assert!(apply.contains("if (state != STATE_STOPPED && (infoChanged || playbackChanged))"));
     assert!(apply.contains("XmmsPlayerInfoWidget.updateAll("));
 
     let position = service
@@ -444,7 +633,7 @@ fn playback_callbacks_refresh_info_for_display_or_transport_changes() {
         .expect("position callback body");
     assert!(!position.contains("XmmsPlayerInfoWidget"));
 
-    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let rust = include_str!("../src/ui/egui/android/media_session.rs");
     assert!(rust.contains("PlaybackEvent::StreamInfo(_)"));
     assert!(rust.contains("stream_info.bitrate.unwrap_or_default()"));
     assert!(rust.contains("stream_info.frequency.unwrap_or_default()"));
@@ -462,15 +651,15 @@ fn player_info_widget_marquee_reuses_native_bitmap_title_behavior() {
     assert!(provider.contains("stopMarquee()"));
     assert!(!provider.contains("TextView"));
 
-    let native = include_str!("../src/ui/egui/android_file_picker.rs");
-    let marquee = native
-        .split("Java_org_xmms_renascene_XmmsPlayerInfoWidget_nativeUpdateTitleMarquee")
+    let widgets = include_str!("../src/ui/egui/android/widgets.rs");
+    let marquee = widgets
+        .split("pub(crate) fn update_title_marquee")
         .nth(1)
         .expect("native widget marquee")
-        .split("fn jstring_path")
+        .split("fn with_widget_skin")
         .next()
         .expect("native widget marquee body");
-    assert!(native.contains("WIDGET_TITLE_MARQUEE"));
+    assert!(widgets.contains("WIDGET_TITLE_MARQUEE"));
     assert!(marquee.contains("TitleMarquee::default()"));
     assert!(marquee.contains("crate::render::MAIN_TITLE_TEXT_WIDTH"));
     assert!(marquee.contains("PlayerState::Playing"));
@@ -520,11 +709,11 @@ fn skin_config_is_persisted_before_widget_refresh() {
         .split("pub(crate) fn apply_preferences_config")
         .nth(1)
         .expect("preferences config application")
-        .split("fn persist_android_state")
+        .split("fn flush_android_platform_policies")
         .next()
         .expect("apply_preferences_config body");
     let persist = apply
-        .find("self.persist_android_state();")
+        .find("self.flush_android_platform_policies(true);")
         .expect("Android config persistence");
     let refresh = apply
         .find("refresh_player_widgets()")
@@ -605,17 +794,17 @@ fn pressed_widget_restore_is_timed_and_stale_safe() {
 
 #[test]
 fn native_widget_renderer_maps_controls_to_pressed_sprites() {
-    let rust = include_str!("../src/ui/egui/android_file_picker.rs");
+    let rust = include_str!("../src/ui/egui/android/widgets.rs");
     let render = rust
-        .split("Java_org_xmms_renascene_XmmsPlayerWidget_nativeRenderPlayerWidget")
+        .split("pub(crate) fn render_player_widget")
         .nth(1)
         .expect("native widget renderer");
     for mapping in [
-        "1 => Some(crate::skin::layout::MainPushButton::Pause)",
-        "2 => Some(crate::skin::layout::MainPushButton::Play)",
-        "3 => Some(crate::skin::layout::MainPushButton::Next)",
-        "4 => Some(crate::skin::layout::MainPushButton::Previous)",
-        "6 => Some(crate::skin::layout::MainPushButton::Stop)",
+        "1 => Some(MainPushButton::Pause)",
+        "2 => Some(MainPushButton::Play)",
+        "3 => Some(MainPushButton::Next)",
+        "4 => Some(MainPushButton::Previous)",
+        "6 => Some(MainPushButton::Stop)",
     ] {
         assert!(
             render.contains(mapping),

@@ -34,6 +34,12 @@ pub enum PlaylistSortKey {
     Date,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackDirection {
+    Previous,
+    Next,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DurationIndexItem {
     pub index: usize,
@@ -48,19 +54,39 @@ pub struct DurationIndexResult {
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PlaylistEntryId(u64);
+
+impl PlaylistEntryId {
+    const UNASSIGNED: Self = Self(u64::MAX);
+}
+
+#[derive(Debug, Clone)]
 pub struct PlaylistEntry {
+    id: PlaylistEntryId,
     pub filename: String,
     pub title: String,
     pub length_ms: i64,
     pub selected: bool,
 }
 
+impl PartialEq for PlaylistEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.filename == other.filename
+            && self.title == other.title
+            && self.length_ms == other.length_ms
+            && self.selected == other.selected
+    }
+}
+
+impl Eq for PlaylistEntry {}
+
 impl PlaylistEntry {
     pub fn new_uri(uri: impl Into<String>) -> Self {
         let filename = uri.into();
         let title = format_title(&filename, None);
         Self {
+            id: PlaylistEntryId::UNASSIGNED,
             filename,
             title,
             length_ms: -1,
@@ -69,15 +95,31 @@ impl PlaylistEntry {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone)]
 pub struct Playlist {
     entries: Vec<PlaylistEntry>,
     position: Option<usize>,
+    queue: Vec<PlaylistEntryId>,
+    next_entry_id: u64,
     shuffle_order: Vec<usize>,
     shuffle: bool,
     repeat: bool,
     no_advance: bool,
 }
+
+impl PartialEq for Playlist {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+            && self.position == other.position
+            && self.queued_indices() == other.queued_indices()
+            && self.shuffle_order == other.shuffle_order
+            && self.shuffle == other.shuffle
+            && self.repeat == other.repeat
+            && self.no_advance == other.no_advance
+    }
+}
+
+impl Eq for Playlist {}
 
 impl Playlist {
     pub fn new() -> Self {
@@ -100,9 +142,91 @@ impl Playlist {
         self.entries.is_empty()
     }
 
+    /// Returns current zero-based positions in queue order. The queue stores
+    /// entry identities internally, so structural mutations cannot stale them.
+    pub fn queued_indices(&self) -> Vec<usize> {
+        self.queue
+            .iter()
+            .filter_map(|queued| self.entry_index(*queued))
+            .collect()
+    }
+
+    pub fn queue_position(&self, index: usize) -> Option<usize> {
+        let id = self.entries.get(index)?.id;
+        self.queue.iter().position(|queued| *queued == id)
+    }
+
+    pub fn enqueue(&mut self, index: usize) -> bool {
+        let Some(id) = self.entries.get(index).map(|entry| entry.id) else {
+            return false;
+        };
+        if self.queue.contains(&id) {
+            return false;
+        }
+        self.queue.push(id);
+        self.debug_assert_queue_integrity();
+        true
+    }
+
+    pub fn dequeue(&mut self, index: usize) -> bool {
+        let Some(id) = self.entries.get(index).map(|entry| entry.id) else {
+            return false;
+        };
+        let Some(position) = self.queue.iter().position(|queued| *queued == id) else {
+            return false;
+        };
+        self.queue.remove(position);
+        self.debug_assert_queue_integrity();
+        true
+    }
+
+    pub fn toggle_queue(&mut self, indices: &[usize]) -> bool {
+        let mut targets = Vec::new();
+        for id in indices
+            .iter()
+            .filter_map(|index| self.entries.get(*index).map(|entry| entry.id))
+        {
+            if !targets.contains(&id) {
+                targets.push(id);
+            }
+        }
+        if targets.is_empty() {
+            return false;
+        }
+
+        for id in targets {
+            if let Some(position) = self.queue.iter().position(|queued| *queued == id) {
+                self.queue.remove(position);
+            } else {
+                self.queue.push(id);
+            }
+        }
+        self.debug_assert_queue_integrity();
+        true
+    }
+
+    pub fn clear_queue(&mut self) -> bool {
+        if self.queue.is_empty() {
+            return false;
+        }
+        self.queue.clear();
+        true
+    }
+
     pub fn add_uri(&mut self, uri: impl Into<String>) {
-        self.entries.push(PlaylistEntry::new_uri(uri));
-        self.invalidate_shuffle_order();
+        self.push_entry(PlaylistEntry::new_uri(uri));
+    }
+
+    pub fn insert_uri(&mut self, index: usize, uri: impl Into<String>) -> bool {
+        if index > self.entries.len() {
+            return false;
+        }
+        let current = self.current_entry_id();
+        self.insert_entry(index, PlaylistEntry::new_uri(uri));
+        if current.is_some() {
+            self.position = current.and_then(|id| self.entry_index(id));
+        }
+        true
     }
 
     pub fn add_path(&mut self, path: impl AsRef<Path>) {
@@ -168,13 +292,13 @@ impl Playlist {
         let mut entry = PlaylistEntry::new_uri(uri);
         entry.title = title.into();
         entry.length_ms = duration_ms;
-        self.entries.push(entry);
-        self.invalidate_shuffle_order();
+        self.push_entry(entry);
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
         self.position = None;
+        self.queue.clear();
         self.invalidate_shuffle_order();
     }
 
@@ -192,7 +316,7 @@ impl Playlist {
 
     pub fn remove_selected_or_current(&mut self) -> bool {
         let old_position = self.position;
-        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let has_selected = self.entries.iter().any(|entry| entry.selected);
         let mut removed = false;
         let mut index = 0;
@@ -210,25 +334,27 @@ impl Playlist {
         if !removed {
             return false;
         }
-        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        self.retain_valid_queue_entries();
+        self.update_position_after_reorder_or_remove(current, old_position);
         true
     }
 
     pub fn remove_selected(&mut self) -> bool {
         let old_position = self.position;
-        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let old_len = self.entries.len();
         self.entries.retain(|entry| !entry.selected);
         if self.entries.len() == old_len {
             return false;
         }
-        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        self.retain_valid_queue_entries();
+        self.update_position_after_reorder_or_remove(current, old_position);
         true
     }
 
     pub fn crop_to_selected_or_current(&mut self) -> bool {
         let old_position = self.position;
-        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let old_len = self.entries.len();
         let has_selected = self.entries.iter().any(|entry| entry.selected);
         let mut index = 0;
@@ -245,13 +371,14 @@ impl Playlist {
         if self.entries.len() == old_len {
             return false;
         }
-        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        self.retain_valid_queue_entries();
+        self.update_position_after_reorder_or_remove(current, old_position);
         true
     }
 
     pub fn remove_dead_files(&mut self) -> bool {
         let old_position = self.position;
-        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let old_len = self.entries.len();
         self.entries.retain(|entry| {
             entry_local_path(entry)
@@ -262,7 +389,8 @@ impl Playlist {
         if self.entries.len() == old_len {
             return false;
         }
-        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        self.retain_valid_queue_entries();
+        self.update_position_after_reorder_or_remove(current, old_position);
         true
     }
 
@@ -279,7 +407,7 @@ impl Playlist {
         }
 
         let old_position = self.position;
-        let current = old_position.and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let mut deleted = Vec::with_capacity(selected.len());
         for (index, path) in selected {
             fs::remove_file(&path)?;
@@ -288,7 +416,8 @@ impl Playlist {
         for index in deleted.iter().rev() {
             self.entries.remove(*index);
         }
-        self.update_position_after_reorder_or_remove(current.as_ref(), old_position);
+        self.retain_valid_queue_entries();
+        self.update_position_after_reorder_or_remove(current, old_position);
         Ok(deleted.len())
     }
 
@@ -308,6 +437,13 @@ impl Playlist {
             true
         } else {
             false
+        }
+    }
+
+    pub fn move_track(&mut self, direction: TrackDirection) -> bool {
+        match direction {
+            TrackDirection::Previous => self.previous(),
+            TrackDirection::Next => self.advance(),
         }
     }
 
@@ -346,18 +482,14 @@ impl Playlist {
     }
 
     pub fn sort_by(&mut self, key: PlaylistSortKey) {
-        let current = self
-            .position
-            .and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         self.entries
             .sort_by(|left, right| compare_entries(left, right, key));
-        self.refresh_position(current.as_ref());
+        self.refresh_position(current);
     }
 
     pub fn sort_selected_by(&mut self, key: PlaylistSortKey) {
-        let current = self
-            .position
-            .and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let indices: Vec<usize> = self
             .entries
             .iter()
@@ -373,23 +505,19 @@ impl Playlist {
         for (index, entry) in indices.into_iter().zip(selected) {
             self.entries[index] = entry;
         }
-        self.refresh_position(current.as_ref());
+        self.refresh_position(current);
     }
 
     pub fn reverse(&mut self) {
-        let current = self
-            .position
-            .and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         self.entries.reverse();
-        self.refresh_position(current.as_ref());
+        self.refresh_position(current);
     }
 
     pub fn randomize(&mut self) {
-        let current = self
-            .position
-            .and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         shuffle_slice(&mut self.entries);
-        self.refresh_position(current.as_ref());
+        self.refresh_position(current);
     }
 
     pub fn move_entry(&mut self, from: usize, to: usize) -> bool {
@@ -397,12 +525,10 @@ impl Playlist {
             return false;
         }
 
-        let current = self
-            .position
-            .and_then(|position| self.entries.get(position).cloned());
+        let current = self.current_entry_id();
         let entry = self.entries.remove(from);
         self.entries.insert(to, entry);
-        self.refresh_position(current.as_ref());
+        self.refresh_position(current);
         true
     }
 
@@ -607,20 +733,21 @@ impl Playlist {
         shuffle_slice(&mut self.shuffle_order);
     }
 
-    fn refresh_position(&mut self, current: Option<&PlaylistEntry>) {
+    fn refresh_position(&mut self, current: Option<PlaylistEntryId>) {
         self.invalidate_shuffle_order();
         self.position = if let Some(current) = current {
-            self.entries.iter().position(|entry| entry == current)
+            self.entry_index(current)
         } else if self.entries.is_empty() {
             None
         } else {
             Some(0)
         };
+        self.debug_assert_queue_integrity();
     }
 
     fn update_position_after_reorder_or_remove(
         &mut self,
-        current: Option<&PlaylistEntry>,
+        current: Option<PlaylistEntryId>,
         old_position: Option<usize>,
     ) {
         self.refresh_position(current);
@@ -629,6 +756,58 @@ impl Playlist {
                 .filter(|_| !self.entries.is_empty())
                 .map(|position| position.min(self.entries.len() - 1));
         }
+    }
+
+    fn current_entry_id(&self) -> Option<PlaylistEntryId> {
+        self.position
+            .and_then(|position| self.entries.get(position))
+            .map(|entry| entry.id)
+    }
+
+    fn entry_index(&self, id: PlaylistEntryId) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.id == id)
+    }
+
+    fn allocate_entry_id(&mut self) -> PlaylistEntryId {
+        let id = PlaylistEntryId(self.next_entry_id);
+        self.next_entry_id = self
+            .next_entry_id
+            .checked_add(1)
+            .expect("playlist entry id space exhausted");
+        id
+    }
+
+    fn push_entry(&mut self, mut entry: PlaylistEntry) {
+        entry.id = self.allocate_entry_id();
+        self.entries.push(entry);
+        self.invalidate_shuffle_order();
+        self.debug_assert_queue_integrity();
+    }
+
+    fn insert_entry(&mut self, index: usize, mut entry: PlaylistEntry) {
+        entry.id = self.allocate_entry_id();
+        self.entries.insert(index, entry);
+        self.invalidate_shuffle_order();
+        self.debug_assert_queue_integrity();
+    }
+
+    fn retain_valid_queue_entries(&mut self) {
+        let entries = &self.entries;
+        self.queue
+            .retain(|queued| entries.iter().any(|entry| entry.id == *queued));
+        self.debug_assert_queue_integrity();
+    }
+
+    fn debug_assert_queue_integrity(&self) {
+        debug_assert!(self
+            .queue
+            .iter()
+            .all(|queued| self.entry_index(*queued).is_some()));
+        debug_assert!(self
+            .queue
+            .iter()
+            .enumerate()
+            .all(|(index, queued)| !self.queue[..index].contains(queued)));
     }
 
     pub fn load_m3u_file(path: &Path) -> io::Result<Self> {
@@ -672,7 +851,7 @@ impl Playlist {
             if let Some(title) = pending_title.as_ref().filter(|s| !s.is_empty()) {
                 entry.title = title.clone();
             }
-            playlist.entries.push(entry);
+            playlist.push_entry(entry);
 
             pending_length = -1;
             pending_title = None;
@@ -912,21 +1091,21 @@ mod tests {
         playlist.add_uri("file:///tmp/one.ogg");
         playlist.add_uri("file:///tmp/two.ogg");
 
-        assert!(playlist.advance());
+        assert!(playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(0));
-        assert!(playlist.advance());
+        assert!(playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(1));
-        assert!(!playlist.advance());
+        assert!(!playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(1));
-        assert!(playlist.previous());
+        assert!(playlist.move_track(TrackDirection::Previous));
         assert_eq!(playlist.position(), Some(0));
-        assert!(playlist.previous());
+        assert!(playlist.move_track(TrackDirection::Previous));
         assert_eq!(playlist.position(), Some(0));
 
         playlist.set_repeat(true);
-        assert!(playlist.previous());
+        assert!(playlist.move_track(TrackDirection::Previous));
         assert_eq!(playlist.position(), Some(1));
-        assert!(playlist.advance());
+        assert!(playlist.move_track(TrackDirection::Next));
         assert_eq!(playlist.position(), Some(0));
     }
 
@@ -964,6 +1143,162 @@ mod tests {
         assert_eq!(playlist.position(), Some(1));
         assert!(!playlist.skip_failed_current());
         assert_eq!(playlist.position(), Some(1));
+    }
+
+    #[test]
+    fn queue_operations_are_ordered_idempotent_and_bounds_checked() {
+        let mut playlist = playlist_with_names(&["one", "two", "three", "four"]);
+
+        assert!(playlist.enqueue(1));
+        assert!(playlist.enqueue(3));
+        assert!(!playlist.enqueue(1));
+        assert!(!playlist.enqueue(99));
+        assert_eq!(playlist.queued_indices(), vec![1, 3]);
+        assert_eq!(playlist.queue_position(1), Some(0));
+        assert_eq!(playlist.queue_position(3), Some(1));
+
+        assert!(playlist.toggle_queue(&[1, 2, 2, 99]));
+        assert_eq!(queued_titles(&playlist), vec!["four", "three"]);
+        assert!(playlist.dequeue(3));
+        assert!(!playlist.dequeue(3));
+        assert!(!playlist.dequeue(99));
+        assert_eq!(queued_titles(&playlist), vec!["three"]);
+
+        assert!(playlist.clear_queue());
+        assert!(!playlist.clear_queue());
+        assert!(playlist.queued_indices().is_empty());
+    }
+
+    #[test]
+    fn queue_follows_entries_across_add_insert_and_every_reorder() {
+        let mut playlist = playlist_with_names(&["zulu", "alpha", "echo", "bravo"]);
+        assert!(playlist.enqueue(1));
+        assert!(playlist.enqueue(3));
+        let expected = ["alpha", "bravo"];
+
+        playlist.add_uri("file:///music/charlie.ogg");
+        assert_eq!(queued_titles(&playlist), expected);
+
+        assert!(playlist.insert_uri(0, "file:///music/delta.ogg"));
+        assert_eq!(queued_titles(&playlist), expected);
+
+        let alpha = title_index(&playlist, "alpha");
+        assert!(playlist.move_entry(alpha, playlist.len() - 1));
+        assert_eq!(queued_titles(&playlist), expected);
+
+        playlist.reverse();
+        assert_eq!(queued_titles(&playlist), expected);
+
+        playlist.randomize();
+        assert_eq!(queued_titles(&playlist), expected);
+
+        playlist.set_shuffle(true);
+        assert_eq!(queued_titles(&playlist), expected);
+        playlist.advance();
+        assert_eq!(queued_titles(&playlist), expected);
+        playlist.set_shuffle(false);
+        assert_eq!(queued_titles(&playlist), expected);
+
+        playlist.sort_by(PlaylistSortKey::Filename);
+        assert_eq!(queued_titles(&playlist), expected);
+
+        playlist.select_all(false);
+        for title in ["zulu", "alpha", "bravo"] {
+            let index = title_index(&playlist, title);
+            playlist.entries[index].selected = true;
+        }
+        playlist.sort_selected_by(PlaylistSortKey::Filename);
+        assert_eq!(queued_titles(&playlist), expected);
+    }
+
+    #[test]
+    fn queue_uses_entry_identity_for_duplicate_playlist_rows() {
+        let mut playlist = Playlist::new();
+        playlist.add_uri("file:///music/duplicate.ogg");
+        playlist.add_uri("file:///music/duplicate.ogg");
+        playlist.entries[0].title = "first".to_string();
+        playlist.entries[1].title = "second".to_string();
+        assert!(playlist.enqueue(1));
+
+        assert!(playlist.move_entry(1, 0));
+        assert_eq!(queued_titles(&playlist), vec!["second"]);
+        playlist.entries[1].selected = true;
+        assert!(playlist.remove_selected());
+
+        assert_eq!(playlist.len(), 1);
+        assert_eq!(playlist.entries[0].title, "second");
+        assert_eq!(playlist.queued_indices(), vec![0]);
+    }
+
+    #[test]
+    fn queue_prunes_removed_selected_current_cropped_and_cleared_entries() {
+        let mut selected = playlist_with_names(&["one", "two", "three", "four"]);
+        for index in 0..selected.len() {
+            assert!(selected.enqueue(index));
+        }
+        selected.entries[1].selected = true;
+        selected.entries[3].selected = true;
+        assert!(selected.remove_selected());
+        assert_eq!(queued_titles(&selected), vec!["one", "three"]);
+
+        let mut current = playlist_with_names(&["one", "two", "three", "four"]);
+        for index in 0..current.len() {
+            assert!(current.enqueue(index));
+        }
+        current.set_position(2);
+        assert!(current.remove_selected_or_current());
+        assert_eq!(queued_titles(&current), vec!["one", "two", "four"]);
+
+        let mut cropped = playlist_with_names(&["one", "two", "three", "four"]);
+        for index in 0..cropped.len() {
+            assert!(cropped.enqueue(index));
+        }
+        cropped.entries[1].selected = true;
+        cropped.entries[3].selected = true;
+        assert!(cropped.crop_to_selected_or_current());
+        assert_eq!(queued_titles(&cropped), vec!["two", "four"]);
+
+        cropped.clear();
+        assert!(cropped.is_empty());
+        assert!(cropped.queued_indices().is_empty());
+    }
+
+    #[test]
+    fn queue_prunes_dead_and_physically_deleted_files() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let keep = root.join("keep.ogg");
+        let delete = root.join("delete.ogg");
+        fs::write(&keep, b"keep").unwrap();
+        fs::write(&delete, b"delete").unwrap();
+
+        let mut playlist = Playlist::new();
+        playlist.add_path(&keep);
+        playlist.add_path(root.join("missing.ogg"));
+        playlist.add_path(&delete);
+        for index in 0..playlist.len() {
+            assert!(playlist.enqueue(index));
+        }
+
+        assert!(playlist.remove_dead_files());
+        assert_eq!(playlist.queued_indices(), vec![0, 1]);
+        playlist.entries[1].selected = true;
+        assert_eq!(playlist.physically_delete_selected().unwrap(), 1);
+        assert_eq!(playlist.queued_indices(), vec![0]);
+        assert!(!delete.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loaded_playlist_starts_with_an_empty_queue() {
+        let playlist = Playlist::load_m3u(
+            "#EXTM3U\nfile:///music/one.ogg\nfile:///music/two.ogg\n",
+            Path::new("."),
+        );
+
+        assert_eq!(playlist.len(), 2);
+        assert!(playlist.queued_indices().is_empty());
     }
 
     #[test]
@@ -1244,6 +1579,33 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("xmms-rs-playlist-test-{nanos}"))
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-data")
+            .join(format!("xmms-rs-playlist-test-{nanos}"))
+    }
+
+    fn playlist_with_names(names: &[&str]) -> Playlist {
+        let mut playlist = Playlist::new();
+        for name in names {
+            playlist.add_uri(format!("file:///music/{name}.ogg"));
+        }
+        playlist
+    }
+
+    fn title_index(playlist: &Playlist, title: &str) -> usize {
+        playlist
+            .entries()
+            .iter()
+            .position(|entry| entry.title == title)
+            .unwrap()
+    }
+
+    fn queued_titles(playlist: &Playlist) -> Vec<&str> {
+        playlist
+            .queued_indices()
+            .into_iter()
+            .map(|index| playlist.entries()[index].title.as_str())
+            .collect()
     }
 }

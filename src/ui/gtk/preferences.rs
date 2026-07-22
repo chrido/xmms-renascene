@@ -330,7 +330,7 @@ fn build_preferences_options_page(
 
     let (scale, zoom_text) = {
         let state = main_state.borrow();
-        let scale = state.app_state.config.scale_factor.clamp(1.0, 5.0);
+        let scale = state.store.state().config.scale_factor.clamp(1.0, 5.0);
         (scale, format!("{scale:.1}x"))
     };
     let zoom = gtk::Scale::with_range(gtk::Orientation::Horizontal, 1.0, 5.0, 0.1);
@@ -577,7 +577,7 @@ fn build_preferences_title_page(
     title.set_text(main_state.borrow().preference_title_format());
     let preview = gtk::Label::new(Some(&format!(
         "Preview: {}",
-        title_format_preview(&main_state.borrow().app_state.config)
+        title_format_preview(&main_state.borrow().store.state().config)
     )));
     preview.set_halign(gtk::Align::Start);
     {
@@ -590,7 +590,7 @@ fn build_preferences_title_page(
                 .set_preference_title_format(entry.text().as_str());
             preview.set_label(&format!(
                 "Preview: {}",
-                title_format_preview(&main_state.borrow().app_state.config)
+                title_format_preview(&main_state.borrow().store.state().config)
             ));
             if let Some(on_change) = &on_change {
                 on_change();

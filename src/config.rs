@@ -19,6 +19,8 @@ pub struct Config {
     pub skin: Option<String>,
     pub timer_mode: TimerMode,
     pub output_device: Option<String>,
+    // Persisted startup values. Once AppState is live, Player/Playlist are the
+    // runtime authorities and AppState::persistence_snapshot projects them.
     pub volume: i32,
     pub balance: i32,
     pub no_playlist_advance: bool,
@@ -148,7 +150,23 @@ impl Config {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, self.to_key_file_string())
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("config");
+        let temporary = path.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+        fs::write(&temporary, self.to_key_file_string())?;
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        match fs::rename(&temporary, path) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let _ = fs::remove_file(temporary);
+                Err(err)
+            }
+        }
     }
 
     pub fn from_key_file_str(contents: &str) -> Self {

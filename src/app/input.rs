@@ -58,8 +58,8 @@ impl AppShortcut {
         let command = match self {
             AppShortcut::Previous => PlayerCommand::PreviousTrack.into(),
             AppShortcut::Play => PlayerCommand::Play.into(),
-            AppShortcut::Pause => PlayerCommand::TogglePause.into(),
-            AppShortcut::Stop => PlayerCommand::Stop.into(),
+            AppShortcut::Pause => PlayerCommand::Pause.into(),
+            AppShortcut::Stop => PlayerCommand::Halt.into(),
             AppShortcut::Next => PlayerCommand::NextTrack.into(),
             AppShortcut::ToggleRepeat => PlaylistCommand::ToggleRepeat.into(),
             AppShortcut::ToggleShuffle => PlaylistCommand::ToggleShuffle.into(),

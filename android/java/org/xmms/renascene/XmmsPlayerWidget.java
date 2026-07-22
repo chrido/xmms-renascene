@@ -14,6 +14,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.widget.RemoteViews;
 
+/**
+ * App-widget process boundary for transport controls and synchronous native bitmap rendering.
+ *
+ * <p>The provider may run without an Activity. Control intents are forwarded to
+ * {@link XmmsPlaybackService}; rendering reads atomically replaced persisted state and does not
+ * depend on Activity-owned objects.
+ */
 public final class XmmsPlayerWidget extends AppWidgetProvider {
     private static final int PLAYER_WIDTH = 114;
     private static final int PLAYER_HEIGHT = 18;

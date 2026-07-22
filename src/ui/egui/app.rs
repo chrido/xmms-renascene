@@ -16,17 +16,12 @@ use crate::app::input::AppShortcut;
 use crate::app::playlist_actions::playlist_row_click_commands;
 use crate::app::preferences_model::{clamped_scale_factor, normalize_preferences_config};
 use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
-use crate::app::store::AppStore;
+use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
     volume_to_eq_shaded_position, TitleMarquee,
-};
-#[cfg(target_os = "android")]
-use crate::app::view_model::{
-    formatted_current_title as shared_formatted_current_title,
-    formatted_playlist_entry_title as shared_formatted_playlist_entry_title,
 };
 #[cfg(target_os = "android")]
 use crate::app_log_error;
@@ -43,8 +38,9 @@ use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
 use crate::mpris::{
     app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
+#[cfg(any(target_os = "android", test))]
 use crate::playback::backend::PlaybackBackend;
-#[cfg(not(test))]
+#[cfg(all(not(target_os = "android"), not(test)))]
 use crate::playback::backend::{create_backend, PlaybackBackendKind};
 use crate::playback::model::{EqualizerBackendState, PlaybackEvent, PlayerState};
 use crate::playlist::file_uri_to_path;
@@ -54,9 +50,8 @@ use crate::playlist::Playlist;
 use crate::render::main_window_height;
 use crate::render::{
     docked_panel_size, equalizer_window_height, playlist_window_height, DockedPanelState,
-    EqualizerControl, EqualizerRenderState, EqualizerSlider, MainPushButton, MainSlider,
-    MainToggleButton, MainWindowRenderState, PlaylistMenuRenderKind, PlaylistMenuRenderState,
-    PlaylistRowsRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
+    EqualizerControl, EqualizerRenderState, EqualizerSlider, PlaylistMenuRenderKind,
+    PlaylistMenuRenderState, VisualizationRenderState, EQUALIZER_WINDOW_HEIGHT,
     EQUALIZER_WINDOW_WIDTH, PLAYLIST_DEFAULT_HEIGHT, PLAYLIST_DEFAULT_WIDTH, PLAYLIST_MIN_HEIGHT,
     PLAYLIST_MIN_WIDTH,
 };
@@ -68,68 +63,62 @@ use crate::skin::layout::{
     playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
     PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton,
 };
-use crate::skin::widget::{Visualization, WidgetId};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 use crate::socket_control::{
     start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
 use crate::{app_log_debug, app_log_trace};
 
+#[cfg(target_os = "android")]
+use super::android::playlist_manager::{PlaylistManagerAction, PlaylistManagerOutcome};
+#[cfg(test)]
+use super::android_runtime::{
+    layout_extent_is_stable as android_layout_extent_is_stable,
+    layout_snapshot_is_consistent as android_layout_snapshot_is_consistent,
+    AndroidLayoutOrientation,
+};
+#[cfg(target_os = "android")]
+use super::android_runtime::{
+    AndroidLayoutOrientation, AndroidLayoutRepaint as AndroidLayoutReadiness,
+    AndroidLayoutSnapshot, AndroidLayoutView, AndroidRuntime, AndroidStableLayout,
+};
+use super::effect_executor::{self, EffectExecution, EffectOwner, PlaybackEffect, UiEffect};
 use super::file_info;
+#[cfg(any(target_os = "android", test))]
+use super::interaction::PlaylistTouchGesture;
 use super::menu::{self, EguiPrompt};
-use super::preferences::{self, PreferencesPage, PreferencesViewportState};
+use super::playback_runtime::PlaybackRuntime;
+use super::preferences::{self, PreferencesPage};
+use super::render_cache::RenderCache;
+#[cfg(target_os = "android")]
+use super::runtime::AndroidLayoutRepaint;
 use super::runtime::EguiRuntime;
 use super::skin_texture::{
     pixel_snapped_rect, render_equalizer_color_image, render_playlist_color_image,
     render_playlist_menu_color_image,
 };
+#[cfg(test)]
+use super::ui_state::ActiveOverlay;
+use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
 
-#[cfg(any(test, target_os = "android"))]
-fn android_playback_focus_request_required(state: PlayerState) -> bool {
-    state != PlayerState::Playing
-}
+#[cfg(any(target_os = "android", test))]
+fn android_player_command_for_media_control(
+    control: super::android_events::AndroidMediaControl,
+) -> Option<PlayerCommand> {
+    use super::android_events::AndroidMediaControl;
 
-pub(crate) struct CachedMainTexture {
-    pub generation: u64,
-    pub state: MainWindowRenderState,
-    pub texture: egui::TextureHandle,
-}
-
-pub(crate) struct CachedEqualizerTexture {
-    pub generation: u64,
-    pub state: EqualizerRenderState,
-    pub texture: egui::TextureHandle,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct PlaylistTextureKey {
-    pub generation: u64,
-    pub focused: bool,
-    pub shaded: bool,
-    pub width: i32,
-    pub height: i32,
-    pub shaded_info: String,
-    pub rows: PlaylistRowsRenderState,
-    pub footer_info: String,
-    pub footer_time_minutes: String,
-    pub footer_time_seconds: String,
-    pub render_scale_bits: u64,
-}
-
-pub(crate) struct CachedPlaylistTexture {
-    pub key: PlaylistTextureKey,
-    pub texture: egui::TextureHandle,
-}
-
-#[derive(Default)]
-pub struct EguiTextureCache {
-    pub generation: u64,
-    pub(crate) main: Option<CachedMainTexture>,
-    pub(crate) equalizer: Option<CachedEqualizerTexture>,
-    pub(crate) playlist: Option<CachedPlaylistTexture>,
+    match control {
+        AndroidMediaControl::PausePlayback => Some(PlayerCommand::Pause),
+        AndroidMediaControl::ResumePlayback => Some(PlayerCommand::Play),
+        AndroidMediaControl::NextTrack => Some(PlayerCommand::NextTrack),
+        AndroidMediaControl::PreviousTrack => Some(PlayerCommand::PreviousTrack),
+        AndroidMediaControl::SeekToMs(position_ms) => Some(PlayerCommand::SeekToMs(position_ms)),
+        AndroidMediaControl::HaltPlayback => Some(PlayerCommand::Halt),
+        AndroidMediaControl::PlayMediaItem(_) | AndroidMediaControl::PlaylistEof => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -162,12 +151,25 @@ enum DetachedPanelAction {
     PlaylistScrollRows(i32),
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum DetachedFocus {
+    #[default]
+    None,
+    Equalizer,
+    Playlist,
+}
+
+/// Shared only with deferred viewport callbacks.
+///
+/// `show_viewport_deferred` requires `'static` closures that can run outside
+/// the root viewport callback. The mutex protects transient snapshots and the
+/// action handoff across that callback boundary; it never owns domain state,
+/// and callers release each lock before dispatching commands or rendering.
 #[derive(Debug, Default)]
 struct DetachedViewportState {
     equalizer: Option<DetachedPanelSnapshot>,
     playlist: Option<DetachedPanelSnapshot>,
-    equalizer_focused: bool,
-    playlist_focused: bool,
+    focus: DetachedFocus,
     actions: Vec<DetachedPanelAction>,
     playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
     playlist_last_click: Option<(usize, Instant)>,
@@ -177,74 +179,29 @@ struct DetachedViewportState {
 }
 
 pub struct EguiFrontendState {
-    pub main_menu_open: bool,
-    pub preferences_open: bool,
-    pub skin_browser_open: bool,
-    pub file_info_open: bool,
-    pub file_info_viewport: Arc<Mutex<file_info::FileInfoViewportState>>,
     pub skin_entries: Vec<SkinEntry>,
-    pub prompt_open: Option<EguiPrompt>,
-    pub prompt_text: String,
-    pub selected_preferences_page: PreferencesPage,
-    pub preferences_viewport: Arc<Mutex<PreferencesViewportState>>,
+    pub ui: EguiUiState,
     detached_viewports: Arc<Mutex<DetachedViewportState>>,
-    pub texture_cache: EguiTextureCache,
+    pub render_cache: RenderCache,
     pub last_tick: Instant,
     #[cfg(target_os = "android")]
-    android_last_state_persist: Instant,
-    #[cfg(target_os = "android")]
-    android_layout_orientation: Option<AndroidLayoutOrientation>,
-    #[cfg(target_os = "android")]
-    android_layout_repaint_frames: u8,
-    #[cfg(target_os = "android")]
-    android_stable_portrait_layout: Option<AndroidStableLayout>,
-    #[cfg(target_os = "android")]
-    android_stable_landscape_layout: Option<AndroidStableLayout>,
+    pub(crate) android: AndroidRuntime,
     pub(crate) last_title_marquee_tick: Instant,
     pub(crate) title_marquee: TitleMarquee,
     pub scale_factor: f32,
     pub dock_panels: bool,
     pub runtime: EguiRuntime,
     pub active_skin: DefaultSkin,
-    pub main_pressed_push: Option<MainPushButton>,
-    pub main_pressed_toggle: Option<MainToggleButton>,
-    pub main_pressed_slider: Option<MainSlider>,
-    pub equalizer_pressed_control: Option<EqualizerControl>,
-    pub equalizer_pressed_slider: Option<EqualizerSlider>,
+    pub(crate) main_pressed: MainPressed,
+    pub(crate) equalizer_pressed: EqualizerPressed,
     pub equalizer_keyboard_slider: Option<EqualizerSlider>,
-    pub equalizer_presets_open: bool,
-    pub playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
-    pub playlist_menu_open: Option<PlaylistMenuRenderKind>,
-    pub playlist_sort_menu_open: bool,
-    pub confirm_physical_delete_open: bool,
     pub playlist_scroll_offset: usize,
     pub playlist_width: i32,
     pub playlist_height: i32,
     pub playlist_resize_start: Option<i32>,
     #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_scroll_remainder: f32,
-    #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_drag_delta: egui::Vec2,
-    #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_gesture_delta: egui::Vec2,
-    #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_drag_direction_decided: bool,
-    #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_drag_horizontal: bool,
-    #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_drag_row: Option<usize>,
-    #[cfg(target_os = "android")]
-    pub(crate) playlist_touch_drag_start: Option<(egui::Pos2, Instant)>,
-    #[cfg(target_os = "android")]
-    pub(crate) android_playlist_manager_open: bool,
-    #[cfg(target_os = "android")]
-    pub(crate) android_playlist_import_pending: bool,
-    #[cfg(target_os = "android")]
-    pub(crate) android_playlist_name: String,
-    #[cfg(target_os = "android")]
-    pub(crate) android_saved_playlists: Vec<PathBuf>,
-    visualization: Visualization,
-    visualization_tick_counter: i32,
+    pub(crate) playlist_touch_gesture: PlaylistTouchGesture,
+    playback: PlaybackRuntime,
     #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
     duration_index_sender: Sender<DurationIndexResult>,
     duration_index_receiver: Receiver<DurationIndexResult>,
@@ -252,10 +209,6 @@ pub struct EguiFrontendState {
     #[cfg(feature = "desktop-egui")]
     mpris_service: Option<EguiMprisService>,
     controller: AppStore,
-    playback_backend: Option<Box<dyn PlaybackBackend>>,
-    pending_backend_seek_ms: Option<i64>,
-    #[cfg(target_os = "android")]
-    android_media_playlist_snapshot: Option<Playlist>,
 }
 
 impl EguiFrontendState {
@@ -272,10 +225,9 @@ impl EguiFrontendState {
             app_state.config.playlist_visible = true;
         }
         #[cfg(target_os = "android")]
-        match super::android_file_picker::media_volume_percent() {
+        match super::android::media_volume_percent() {
             Ok(volume) => {
                 app_state.player.set_volume(volume);
-                app_state.config.volume = volume;
             }
             Err(err) => app_log_debug!(frontend, "failed to read Android media volume", err),
         }
@@ -296,11 +248,12 @@ impl EguiFrontendState {
         let active_skin = load_skin_from_config(&app_state)?;
         let skin_entries = discover_runtime_skins();
         let scale_factor = app_state.config.scale_factor as f32;
-        let preferences_viewport = Arc::new(Mutex::new(PreferencesViewportState::new(
-            &app_state.config,
+        let persistence_config = app_state.persistence_snapshot().config;
+        let ui = EguiUiState::new(
+            &persistence_config,
             PreferencesPage::default(),
             options.open_preferences,
-        )));
+        );
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
         let socket_control = options.socket_port.map(start_socket_control).transpose()?;
         #[cfg(feature = "desktop-egui")]
@@ -322,7 +275,7 @@ impl EguiFrontendState {
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         #[cfg(target_os = "android")]
         let (playback_backend, playback_backend_error) =
-            match super::android_file_picker::shared_playback_backend() {
+            match super::android::shared_playback_backend() {
                 Ok(backend) => (Some(Box::new(backend) as Box<dyn PlaybackBackend>), None),
                 Err(err) => (
                     None,
@@ -349,84 +302,35 @@ impl EguiFrontendState {
             runtime.pending_messages.push(error);
         }
         let mut state = Self {
-            main_menu_open: false,
-            preferences_open: options.open_preferences,
-            skin_browser_open: false,
-            file_info_open: false,
-            file_info_viewport: Arc::new(Mutex::new(file_info::FileInfoViewportState::default())),
             skin_entries,
-            prompt_open: None,
-            prompt_text: String::new(),
-            selected_preferences_page: PreferencesPage::default(),
-            preferences_viewport,
+            ui,
             detached_viewports,
-            texture_cache: EguiTextureCache::default(),
+            render_cache: RenderCache::default(),
             last_tick: Instant::now(),
             #[cfg(target_os = "android")]
-            android_last_state_persist: Instant::now(),
-            #[cfg(target_os = "android")]
-            android_layout_orientation: None,
-            #[cfg(target_os = "android")]
-            android_layout_repaint_frames: 0,
-            #[cfg(target_os = "android")]
-            android_stable_portrait_layout: None,
-            #[cfg(target_os = "android")]
-            android_stable_landscape_layout: None,
+            android: AndroidRuntime::new(),
             last_title_marquee_tick: Instant::now(),
             title_marquee: TitleMarquee::default(),
             scale_factor,
             dock_panels: true,
             runtime,
             active_skin,
-            main_pressed_push: None,
-            main_pressed_toggle: None,
-            main_pressed_slider: None,
-            equalizer_pressed_control: None,
-            equalizer_pressed_slider: None,
+            main_pressed: MainPressed::None,
+            equalizer_pressed: EqualizerPressed::None,
             equalizer_keyboard_slider: None,
-            equalizer_presets_open: false,
-            playlist_menu_hover: None,
-            playlist_menu_open: None,
-            playlist_sort_menu_open: false,
-            confirm_physical_delete_open: false,
             playlist_scroll_offset: 0,
             playlist_width: playlist_size.width,
             playlist_height: playlist_size.height,
             playlist_resize_start: None,
             #[cfg(target_os = "android")]
-            playlist_touch_scroll_remainder: 0.0,
-            #[cfg(target_os = "android")]
-            playlist_touch_drag_delta: egui::Vec2::ZERO,
-            #[cfg(target_os = "android")]
-            playlist_touch_gesture_delta: egui::Vec2::ZERO,
-            #[cfg(target_os = "android")]
-            playlist_touch_drag_direction_decided: false,
-            #[cfg(target_os = "android")]
-            playlist_touch_drag_horizontal: false,
-            #[cfg(target_os = "android")]
-            playlist_touch_drag_row: None,
-            #[cfg(target_os = "android")]
-            playlist_touch_drag_start: None,
-            #[cfg(target_os = "android")]
-            android_playlist_manager_open: false,
-            #[cfg(target_os = "android")]
-            android_playlist_import_pending: false,
-            #[cfg(target_os = "android")]
-            android_playlist_name: "playlist".to_string(),
-            #[cfg(target_os = "android")]
-            android_saved_playlists: discover_managed_playlists(),
-            visualization: Visualization::new(WidgetId(6), 24, 43, 76),
-            visualization_tick_counter: 0,
+            playlist_touch_gesture: PlaylistTouchGesture::default(),
+            playback: PlaybackRuntime::new(playback_backend),
             duration_index_sender,
             duration_index_receiver,
             socket_control,
             #[cfg(feature = "desktop-egui")]
             mpris_service,
             controller: AppStore::new(app_state),
-            playback_backend,
-            pending_backend_seek_ms: None,
-            #[cfg(target_os = "android")]
-            android_media_playlist_snapshot: None,
         };
         state.apply_visualization_preferences();
         state.schedule_missing_local_playlist_durations();
@@ -437,7 +341,8 @@ impl EguiFrontendState {
         &self.controller
     }
 
-    pub fn controller_mut(&mut self) -> &mut AppStore {
+    #[cfg(test)]
+    pub(crate) fn controller_mut(&mut self) -> &mut AppStore {
         &mut self.controller
     }
 
@@ -448,10 +353,19 @@ impl EguiFrontendState {
     pub(crate) fn dispatch_all(&mut self, commands: impl IntoIterator<Item = AppCommand>) {
         let commands: Vec<_> = commands.into_iter().collect();
         #[cfg(target_os = "android")]
-        let _media_control_order = commands
+        let _media_control_order = if commands
             .iter()
             .any(|command| matches!(command, AppCommand::Player(_)))
-            .then(super::android_file_picker::begin_local_media_control);
+        {
+            let Some(order) =
+                super::android::begin_local_media_control(self.android.activity_generation())
+            else {
+                return;
+            };
+            Some(order)
+        } else {
+            None
+        };
         for command in commands {
             self.dispatch_one(command);
         }
@@ -467,13 +381,10 @@ impl EguiFrontendState {
             )
         );
         let result = self.controller.dispatch(command);
-        self.sync_frontend_state_from_store();
-        self.apply_effects(result.effects);
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
         if should_index_durations {
             self.schedule_missing_local_playlist_durations();
         }
-        #[cfg(target_os = "android")]
-        self.persist_android_state();
     }
 
     pub(crate) fn apply_preferences_config(&mut self, mut config: crate::config::Config) {
@@ -487,15 +398,14 @@ impl EguiFrontendState {
         if was_playlist_detached && !self.controller.state().config.playlist_detached {
             self.set_playlist_size(crate::render::PLAYLIST_MIN_WIDTH, self.playlist_height);
         }
-        self.sync_frontend_state_from_store();
         self.sync_scale_factor_from_config();
         self.apply_visualization_preferences();
-        self.apply_effects(result.effects);
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
         #[cfg(target_os = "android")]
         {
-            self.persist_android_state();
             if skin_changed {
-                if let Err(err) = super::android_file_picker::refresh_player_widgets() {
+                self.flush_android_platform_policies(true);
+                if let Err(err) = super::android::refresh_player_widgets() {
                     app_log_error!(frontend, "failed to refresh Android player widgets", err);
                     let message = format!("failed to refresh Android player widgets: {err}");
                     if !self.runtime.pending_messages.contains(&message) {
@@ -507,32 +417,36 @@ impl EguiFrontendState {
     }
 
     #[cfg(target_os = "android")]
-    fn persist_android_state(&mut self) {
-        if self.controller.state().player.state() != PlayerState::Stopped {
-            if let Some(position_ms) = self
-                .playback_backend
-                .as_ref()
-                .and_then(|backend| backend.position_ms())
-            {
-                self.controller.state_mut().config.playback_position_ms = position_ms.max(0);
-            }
-        }
-        if let Err(err) = super::android_file_picker::persist_app_state(self.controller.state_mut())
-        {
-            app_log_error!(frontend, "failed to save Android session state", err);
-            let message = format!("failed to save Android session state: {err}");
-            if !self.runtime.pending_messages.contains(&message) {
-                self.runtime.pending_messages.push(message);
-            }
-        }
+    fn flush_android_platform_policies(&mut self, force_persistence: bool) {
+        effect_executor::flush_android_media_projection(
+            &mut self.android,
+            &self.playback,
+            self.controller.state(),
+            &mut self.runtime.pending_messages,
+        );
+        effect_executor::flush_android_persistence(
+            &mut self.android,
+            &self.playback,
+            self.controller.state(),
+            &mut self.runtime.pending_messages,
+            force_persistence,
+        );
     }
 
-    fn sync_frontend_state_from_store(&mut self) {
-        let ui = &self.controller.state().ui;
-        self.preferences_open = ui.preferences_visible;
-        self.main_menu_open = ui.main_menu_visible;
-        self.skin_browser_open = ui.skin_browser_visible;
-        self.file_info_open = ui.file_info_visible;
+    pub(crate) fn preferences_open(&self) -> bool {
+        self.controller.state().ui.preferences_visible
+    }
+
+    pub(crate) fn main_menu_open(&self) -> bool {
+        self.controller.state().ui.main_menu_visible
+    }
+
+    pub(crate) fn skin_browser_open(&self) -> bool {
+        self.controller.state().ui.skin_browser_visible
+    }
+
+    pub(crate) fn file_info_open(&self) -> bool {
+        self.controller.state().ui.file_info_visible
     }
 
     pub(crate) fn sync_scale_factor_from_config(&mut self) {
@@ -543,30 +457,36 @@ impl EguiFrontendState {
     pub(crate) fn visualization_render_state(&self) -> VisualizationRenderState {
         let config = &self.controller.state().config;
         VisualizationRenderState {
-            mode: self.visualization.mode(),
-            analyzer_style: self.visualization.analyzer_style(),
-            analyzer_mode: self.visualization.analyzer_mode(),
-            scope_mode: self.visualization.scope_mode(),
-            peaks_enabled: self.visualization.peaks_enabled(),
+            mode: self.playback.visualization.mode(),
+            analyzer_style: self.playback.visualization.analyzer_style(),
+            analyzer_mode: self.playback.visualization.analyzer_mode(),
+            scope_mode: self.playback.visualization.scope_mode(),
+            peaks_enabled: self.playback.visualization.peaks_enabled(),
             vu_mode: config.vis_vu_mode,
-            data: *self.visualization.data(),
-            peak: *self.visualization.peak(),
-            milkdrop_energy: self.visualization.milkdrop_energy(),
-            milkdrop_phase: self.visualization.milkdrop_phase(),
+            data: *self.playback.visualization.data(),
+            peak: *self.playback.visualization.peak(),
+            milkdrop_energy: self.playback.visualization.milkdrop_energy(),
+            milkdrop_phase: self.playback.visualization.milkdrop_phase(),
         }
     }
 
     pub(crate) fn apply_visualization_preferences(&mut self) {
         let config = &self.controller.state().config;
-        self.visualization.set_mode(config.vis_mode);
-        self.visualization
+        self.playback.visualization.set_mode(config.vis_mode);
+        self.playback
+            .visualization
             .set_analyzer_mode(config.vis_analyzer_mode);
-        self.visualization
+        self.playback
+            .visualization
             .set_analyzer_style(config.vis_analyzer_style);
-        self.visualization.set_scope_mode(config.vis_scope_mode);
-        self.visualization
+        self.playback
+            .visualization
+            .set_scope_mode(config.vis_scope_mode);
+        self.playback
+            .visualization
             .set_peaks_enabled(config.vis_peaks_enabled);
-        self.visualization
+        self.playback
+            .visualization
             .set_falloff(config.vis_analyzer_falloff, config.vis_peaks_falloff);
     }
 
@@ -580,15 +500,15 @@ impl EguiFrontendState {
 
     fn tick_visualization(&mut self) -> bool {
         if self.controller.state().player.state() != PlayerState::Playing {
-            self.visualization_tick_counter = 0;
+            self.playback.visualization_tick_counter = 0;
             return false;
         }
 
-        self.visualization_tick_counter += 1;
-        if self.visualization_tick_counter < self.visualization_refresh_divisor() {
+        self.playback.visualization_tick_counter += 1;
+        if self.playback.visualization_tick_counter < self.visualization_refresh_divisor() {
             return false;
         }
-        self.visualization_tick_counter = 0;
+        self.playback.visualization_tick_counter = 0;
 
         let data = {
             let player = &self.controller.state().player;
@@ -596,7 +516,8 @@ impl EguiFrontendState {
                 .visualization_data_valid()
                 .then(|| *player.visualization_data())
         };
-        self.visualization
+        self.playback
+            .visualization
             .tick(data.as_ref().map(|values| values.as_slice()));
         true
     }
@@ -711,11 +632,16 @@ impl EguiFrontendState {
                             self.controller.state().config.playback_position_ms * 1_000,
                         )]
                     }
+                    MprisCommand::Stop => vec![
+                        MprisEvent::PlaybackStatusChanged,
+                        MprisEvent::Seeked(
+                            self.controller.state().config.playback_position_ms * 1_000,
+                        ),
+                    ],
                     MprisCommand::Next
                     | MprisCommand::Previous
                     | MprisCommand::Pause
                     | MprisCommand::PlayPause
-                    | MprisCommand::Stop
                     | MprisCommand::Play => vec![MprisEvent::PlaybackStatusChanged],
                     MprisCommand::Raise | MprisCommand::Quit | MprisCommand::OpenUri(_) => {
                         Vec::new()
@@ -763,50 +689,43 @@ impl EguiFrontendState {
     }
 
     pub fn poll_playback_backend(&mut self) {
-        if let Some(backend) = &self.playback_backend {
-            #[cfg(target_os = "android")]
-            let mut service_events = super::android_file_picker::drain_service_playback_events();
-            #[cfg(not(target_os = "android"))]
-            let mut service_events = Vec::new();
+        if let Some(backend) = &self.playback.backend {
             match backend.poll_events() {
-                Ok(events) => {
-                    service_events.extend(events);
-                    let mut backend_ready = false;
-                    for event in service_events {
-                        if matches!(
-                            event,
-                            PlaybackEvent::AsyncDone | PlaybackEvent::DurationChanged(_)
-                        ) {
-                            backend_ready = true;
-                        }
-                        let end_of_stream = matches!(event, PlaybackEvent::EndOfStream);
-                        let result = self.controller.handle_playback_event(event);
-                        self.sync_frontend_state_from_store();
-                        self.runtime.apply_effects(result.effects);
-                        if end_of_stream {
-                            let result = self.controller.handle_playlist_eof();
-                            self.sync_frontend_state_from_store();
-                            self.apply_effects(result.effects);
-                        }
-                    }
-                    if backend_ready {
-                        self.apply_pending_backend_seek();
-                    }
-                }
+                Ok(events) => self.handle_playback_events(events),
                 Err(err) => self.runtime.pending_messages.push(err),
             }
 
             let stream_info = self
-                .playback_backend
+                .playback
+                .backend
                 .as_ref()
                 .map(|backend| backend.stream_info());
             if let Some(stream_info) = stream_info {
                 let result = self
                     .controller
                     .handle_playback_event(PlaybackEvent::StreamInfo(stream_info));
-                self.sync_frontend_state_from_store();
-                self.runtime.apply_effects(result.effects);
+                self.process_dispatch_result(result, EffectExecution::LOCAL);
             }
+        }
+    }
+
+    fn handle_playback_events(&mut self, events: impl IntoIterator<Item = PlaybackEvent>) {
+        let mut backend_ready = false;
+        for event in events {
+            backend_ready |= matches!(
+                event,
+                PlaybackEvent::AsyncDone | PlaybackEvent::DurationChanged(_)
+            );
+            let end_of_stream = matches!(event, PlaybackEvent::EndOfStream);
+            let result = self.controller.handle_playback_event(event);
+            self.process_dispatch_result(result, EffectExecution::LOCAL);
+            if end_of_stream {
+                let result = self.controller.handle_playlist_eof();
+                self.process_dispatch_result(result, EffectExecution::LOCAL);
+            }
+        }
+        if backend_ready {
+            self.apply_pending_backend_seek();
         }
     }
 
@@ -815,8 +734,7 @@ impl EguiFrontendState {
         while let Ok(result) = self.duration_index_receiver.try_recv() {
             let dispatch = self.controller.apply_duration_index_result(result);
             changed |= !dispatch.changes.is_empty();
-            self.sync_frontend_state_from_store();
-            self.apply_effects(dispatch.effects);
+            self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
         }
         changed
     }
@@ -914,12 +832,12 @@ impl EguiFrontendState {
 
     fn apply_pending_backend_seek(&mut self) {
         if let (Some(backend), Some(position_ms)) =
-            (&self.playback_backend, self.pending_backend_seek_ms)
+            (&self.playback.backend, self.playback.pending_seek_ms)
         {
             match backend.seek(position_ms) {
                 Ok(()) => {
                     app_log_info!(backend, "egui applied pending start seek", position_ms);
-                    self.pending_backend_seek_ms = None;
+                    self.playback.pending_seek_ms = None;
                 }
                 Err(err) => self.runtime.pending_messages.push(err),
             }
@@ -943,148 +861,117 @@ impl EguiFrontendState {
             return;
         }
         let result = self.controller.tick_playback_position(elapsed_ms);
-        self.sync_frontend_state_from_store();
-        self.apply_effects(result.effects);
-        #[cfg(target_os = "android")]
-        if now.saturating_duration_since(self.android_last_state_persist)
-            >= Duration::from_millis(500)
-        {
-            self.android_last_state_persist = now;
-            self.persist_android_state();
-        }
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
         if visualizer_changed {
             ctx.request_repaint();
         }
     }
 
-    pub(crate) fn apply_effects(&mut self, effects: impl IntoIterator<Item = AppEffect>) {
+    fn apply_effects_with_execution(
+        &mut self,
+        effects: impl IntoIterator<Item = AppEffect>,
+        execution: EffectExecution,
+    ) -> bool {
+        let mut force_persistence = false;
         for effect in effects {
-            self.apply_effect(effect);
+            force_persistence |= self.apply_effect_with_execution(effect, execution);
         }
+        force_persistence
     }
 
     pub(crate) fn apply_effect(&mut self, effect: AppEffect) {
+        let force_persistence = self.apply_effect_with_execution(effect, EffectExecution::LOCAL);
+        #[cfg(target_os = "android")]
+        if force_persistence {
+            self.flush_android_platform_policies(true);
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = force_persistence;
+    }
+
+    fn apply_effect_with_execution(
+        &mut self,
+        effect: AppEffect,
+        execution: EffectExecution,
+    ) -> bool {
         app_log_debug!(frontend_effect, "egui {effect:?}");
-        #[cfg(target_os = "android")]
-        if let AppEffect::SetOutputVolume(volume) = &effect {
-            if let Err(err) = super::android_file_picker::set_media_volume_percent(*volume) {
-                self.runtime.pending_messages.push(err);
-            }
-        }
-        let clear_visualization = matches!(
-            &effect,
-            AppEffect::StopPlayback | AppEffect::BeginStopFade { .. }
-        );
-        #[cfg(not(test))]
-        if matches!(effect, AppEffect::StartPlaybackUri { .. }) && self.playback_backend.is_none() {
-            match create_backend(PlaybackBackendKind::Auto) {
-                Ok(backend) => self.playback_backend = Some(backend),
-                Err(err) => {
-                    self.handle_frontend_playback_error(format!(
-                        "failed to initialize audio output: {err}"
-                    ));
-                    return;
-                }
-            }
-        }
-        #[cfg(target_os = "android")]
-        if matches!(effect, AppEffect::StartPlaybackUri { .. }) {
-            let request_audio_focus = self
-                .playback_backend
-                .as_ref()
-                .is_none_or(|backend| android_playback_focus_request_required(backend.state()));
-            if request_audio_focus {
-                if let Err(err) = super::android_file_picker::request_playback_audio_focus() {
-                    self.handle_frontend_playback_error(err);
-                    return;
-                }
-            }
-        }
-        if let Some(backend) = &self.playback_backend {
-            match &effect {
-                AppEffect::StartPlaybackUri { uri, position_ms } => {
-                    let pending_seek = *position_ms > 0;
-                    app_log_info!(backend, "egui play_uri", uri, position_ms, pending_seek);
-                    if let Err(err) = backend.play_uri(uri) {
-                        self.runtime.pending_messages.push(err);
-                        #[cfg(target_os = "android")]
-                        super::android_file_picker::abandon_playback_audio_focus();
-                    } else if *position_ms > 0 {
-                        self.pending_backend_seek_ms = Some(*position_ms);
-                    } else {
-                        self.pending_backend_seek_ms = None;
-                    }
-                }
-                AppEffect::ResumePlayback => {
-                    if let Err(err) = backend.unpause() {
-                        self.runtime.pending_messages.push(err);
-                    }
-                }
-                AppEffect::PausePlayback => {
-                    if let Err(err) = backend.pause() {
-                        self.runtime.pending_messages.push(err);
-                    }
-                }
-                AppEffect::StopPlayback => {
-                    if let Err(err) = backend.stop() {
-                        self.runtime.pending_messages.push(err);
-                    }
-                    #[cfg(target_os = "android")]
-                    super::android_file_picker::abandon_playback_audio_focus();
-                }
-                AppEffect::BeginStopFade { .. } => {
-                    if let Err(err) = backend.stop() {
-                        self.runtime.pending_messages.push(err);
-                    }
-                    #[cfg(target_os = "android")]
-                    super::android_file_picker::abandon_playback_audio_focus();
-                }
-                AppEffect::SeekPlayback(position_ms) => {
-                    app_log_info!(backend, "egui seek", position_ms);
-                    if let Err(err) = backend.seek(*position_ms) {
-                        self.runtime.pending_messages.push(err);
-                    }
-                }
-                AppEffect::SetBackendVolume(volume) => {
-                    if let Err(err) = backend.set_volume(*volume) {
-                        self.runtime.pending_messages.push(err);
-                    }
-                }
-                #[cfg(not(target_os = "android"))]
-                AppEffect::SetOutputVolume(volume) => {
-                    if let Err(err) = backend.set_volume(*volume) {
-                        self.runtime.pending_messages.push(err);
-                    }
-                }
-                AppEffect::SetBackendBalance(balance) => {
-                    if let Err(err) = backend.set_balance(*balance) {
-                        self.runtime.pending_messages.push(err);
-                    }
-                }
-                AppEffect::SetBackendEqualizer => {
-                    let config = &self.controller.state().config;
-                    if let Err(err) = backend.set_equalizer(EqualizerBackendState {
+        match effect_executor::owner(effect) {
+            EffectOwner::Playback(effect) => {
+                let checkpoint_playback = matches!(effect, PlaybackEffect::Pause);
+                let start_uri = matches!(effect, PlaybackEffect::StartUri { .. });
+                let config = &self.controller.state().config;
+                let errors = self.playback.apply_effect(
+                    &effect,
+                    EqualizerBackendState {
                         active: config.equalizer_active,
                         preamp_position: config.equalizer_preamp_pos,
                         band_positions: config.equalizer_band_pos,
-                    }) {
-                        self.runtime.pending_messages.push(err);
+                    },
+                    execution.playback_backend,
+                );
+                for error in errors {
+                    #[cfg(not(test))]
+                    if start_uri && self.playback.backend.is_none() {
+                        self.handle_frontend_playback_error(error);
+                        return false;
                     }
+                    self.runtime.pending_messages.push(error);
                 }
-                _ => {}
+                checkpoint_playback
+            }
+            EffectOwner::Ui(effect) => {
+                self.execute_ui_effect(effect);
+                false
+            }
+            EffectOwner::Platform(effect) => {
+                effect_executor::execute_platform_effect(
+                    effect,
+                    &mut self.playback,
+                    &mut self.runtime.pending_messages,
+                    #[cfg(target_os = "android")]
+                    &mut self.android,
+                );
+                false
             }
         }
-        if clear_visualization {
-            self.visualization_tick_counter = 0;
-            self.visualization.clear_data();
-        }
+    }
+
+    fn execute_ui_effect(&mut self, effect: UiEffect) {
         match effect {
-            AppEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
-            AppEffect::OpenFileInfoDialog => self.dispatch(UiCommand::SetFileInfoVisible(true)),
-            AppEffect::OpenPreferences => self.dispatch(UiCommand::SetPreferencesVisible(true)),
-            AppEffect::OpenSkinBrowser => self.dispatch(UiCommand::SetSkinBrowserVisible(true)),
-            other => self.runtime.apply_effect(other),
+            UiEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
+            UiEffect::OpenFileInfoDialog => self.dispatch(UiCommand::SetFileInfoVisible(true)),
+            UiEffect::OpenPreferences => self.dispatch(UiCommand::SetPreferencesVisible(true)),
+            UiEffect::OpenSkinBrowser => self.dispatch(UiCommand::SetSkinBrowserVisible(true)),
+            UiEffect::QueueRender(target) => {
+                self.runtime.apply_effect(UiEffect::QueueRender(target));
+            }
+            UiEffect::OpenPath(path) => self.runtime.apply_effect(UiEffect::OpenPath(path)),
+            UiEffect::OpenSkinEditor => self.runtime.apply_effect(UiEffect::OpenSkinEditor),
+            UiEffect::ShowError(message) => {
+                self.runtime.apply_effect(UiEffect::ShowError(message));
+            }
+            UiEffect::ShowMessage(message) => {
+                self.runtime.apply_effect(UiEffect::ShowMessage(message));
+            }
         }
+    }
+
+    fn process_dispatch_result(
+        &mut self,
+        result: DispatchResult,
+        execution: EffectExecution,
+    ) -> StateChangeSet {
+        let changes = result.changes;
+        self.runtime.invalidate_changes(changes);
+        let force_persistence = self.apply_effects_with_execution(result.effects, execution);
+        #[cfg(target_os = "android")]
+        {
+            effect_executor::apply_android_post_dispatch(&mut self.android, changes);
+            self.flush_android_platform_policies(force_persistence);
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = force_persistence;
+        changes
     }
 
     #[cfg(not(test))]
@@ -1092,9 +979,8 @@ impl EguiFrontendState {
         let result = self
             .controller
             .handle_playback_event(PlaybackEvent::Error(error.clone()));
-        self.sync_frontend_state_from_store();
         self.runtime.pending_messages.push(error);
-        self.apply_effects(result.effects);
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
     }
 
     #[cfg(feature = "desktop-egui")]
@@ -1124,6 +1010,11 @@ impl EguiFrontendState {
                 {
                     self.load_playlist_file(&path);
                 }
+            }
+            FileDialogRequest::ImportPlaylist => {
+                self.runtime
+                    .pending_messages
+                    .push("playlist import is Android-only".to_string());
             }
             FileDialogRequest::SavePlaylist => {
                 if let Some(path) = rfd::FileDialog::new()
@@ -1164,19 +1055,19 @@ impl EguiFrontendState {
     #[cfg(target_os = "android")]
     fn handle_file_dialog(&mut self, request: FileDialogRequest) {
         let result = match request {
-            FileDialogRequest::LoadPlaylist if !self.android_playlist_import_pending => {
-                self.open_android_playlist_manager();
+            FileDialogRequest::LoadPlaylist => {
+                self.android.playlist_manager.open();
                 return;
             }
             FileDialogRequest::SavePlaylist => {
-                self.open_android_playlist_manager();
+                self.android.playlist_manager.open();
                 return;
             }
             FileDialogRequest::SaveEqualizerPreset => {
                 let preset = self.current_equalizer_preset("Entry1");
-                super::android_file_picker::save_equalizer_preset(&serialize_winamp_eqf(&preset))
+                super::android::save_equalizer_preset(&serialize_winamp_eqf(&preset))
             }
-            _ => super::android_file_picker::open(request),
+            _ => super::android::open(request),
         };
         if let Err(err) = result {
             self.runtime.pending_messages.push(err);
@@ -1193,13 +1084,7 @@ impl EguiFrontendState {
     fn load_playlist_file(&mut self, path: &Path) -> bool {
         match Playlist::load_m3u_file(path) {
             Ok(playlist) => {
-                let result = self.controller.replace_playlist_for_file_load(playlist);
-                self.playlist_scroll_offset = 0;
-                self.sync_frontend_state_from_store();
-                self.apply_effects(result.effects);
-                self.schedule_missing_local_playlist_durations();
-                #[cfg(target_os = "android")]
-                self.persist_android_state();
+                self.apply_loaded_playlist(playlist);
                 true
             }
             Err(err) => {
@@ -1210,6 +1095,13 @@ impl EguiFrontendState {
                 false
             }
         }
+    }
+
+    fn apply_loaded_playlist(&mut self, playlist: Playlist) {
+        let result = self.controller.replace_playlist_for_file_load(playlist);
+        self.playlist_scroll_offset = 0;
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
+        self.schedule_missing_local_playlist_durations();
     }
 
     #[cfg(feature = "desktop-egui")]
@@ -1274,188 +1166,150 @@ impl EguiFrontendState {
         let result = self
             .controller
             .apply_equalizer_preset_positions(preset.preamp_position(), preset.band_positions());
-        self.sync_frontend_state_from_store();
-        self.apply_effects(result.effects);
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
     }
 
     #[cfg(target_os = "android")]
-    fn poll_android_file_picker_results(&mut self) {
-        for result in super::android_file_picker::drain_results() {
-            if let Some(error) = result.error {
-                self.runtime.pending_messages.push(error);
-                continue;
+    fn handle_android_file_picker_result(&mut self, result: super::android::AndroidPickerResult) {
+        if let Some(error) = result.error {
+            self.runtime.pending_messages.push(error);
+            return;
+        }
+        if result.is_cancelled() {
+            return;
+        }
+        match result.request {
+            FileDialogRequest::AddAudioFiles | FileDialogRequest::AddAudioDirectory => {
+                self.dispatch(PlaylistCommand::AddFiles(result.paths));
             }
-            match result.request {
-                FileDialogRequest::AddAudioFiles => {
-                    self.dispatch(PlaylistCommand::AddFiles(result.paths));
+            FileDialogRequest::LoadPlaylist => {
+                if let Some(path) = result.paths.first() {
+                    self.load_playlist_file(path);
                 }
-                FileDialogRequest::LoadPlaylist => {
-                    let import = std::mem::take(&mut self.android_playlist_import_pending);
-                    if let Some(path) = result.paths.first() {
-                        if import {
-                            self.import_android_playlist(path);
-                        } else {
-                            self.load_playlist_file(path);
-                        }
-                    }
-                }
-                FileDialogRequest::LoadEqualizerPreset => {
-                    if let Some(path) = result.paths.first() {
-                        self.load_equalizer_preset_file(path);
-                    }
-                }
-                FileDialogRequest::ImportSkin => {
-                    if let Some(path) = result.paths.first() {
-                        import_skin_path(self, path);
-                    }
-                }
-                FileDialogRequest::AddAudioDirectory => {
-                    self.dispatch(PlaylistCommand::AddFiles(result.paths));
-                }
-                FileDialogRequest::SavePlaylist
-                | FileDialogRequest::SaveEqualizerPreset
-                | FileDialogRequest::ExportSkin => {}
             }
+            FileDialogRequest::ImportPlaylist => {
+                if let Some(path) = result.paths.first() {
+                    if let Err(err) = self.android.playlist_manager.import(path) {
+                        self.runtime.pending_messages.push(err);
+                    }
+                }
+            }
+            FileDialogRequest::LoadEqualizerPreset => {
+                if let Some(path) = result.paths.first() {
+                    self.load_equalizer_preset_file(path);
+                }
+            }
+            FileDialogRequest::ImportSkin => {
+                if let Some(path) = result.paths.first() {
+                    import_skin_path(self, path);
+                }
+            }
+            FileDialogRequest::SavePlaylist
+            | FileDialogRequest::SaveEqualizerPreset
+            | FileDialogRequest::ExportSkin => {}
         }
     }
 
     #[cfg(target_os = "android")]
-    fn poll_external_android_media_volume(&mut self, ctx: &egui::Context) {
-        let Some(volume) = super::android_file_picker::take_latest_external_media_volume_percent()
-        else {
-            return;
-        };
+    fn handle_external_android_media_volume(&mut self, volume: i32) {
         let result = self.controller.sync_external_output_volume(volume);
         if result.changes.is_empty() {
             return;
         }
-        self.sync_frontend_state_from_store();
-        self.apply_effects(result.effects);
-        self.persist_android_state();
-        ctx.request_repaint();
+        self.process_dispatch_result(result, EffectExecution::LOCAL);
     }
 
     #[cfg(target_os = "android")]
-    fn poll_android_media_controls(&mut self, ctx: &egui::Context) -> bool {
-        super::android_file_picker::register_repaint_context(ctx);
-        let controls = super::android_file_picker::drain_media_controls();
-        let handled = !controls.is_empty();
-        for control in controls {
-            if matches!(
-                control,
-                super::android_file_picker::AndroidMediaControl::PlaylistEof
-            ) {
-                let result = self.controller.handle_playlist_eof();
-                self.sync_frontend_state_from_store();
-                self.apply_effects(result.effects.into_iter().filter(|effect| {
-                    !matches!(
-                        effect,
-                        AppEffect::StartPlaybackUri { .. }
-                            | AppEffect::StopPlayback
-                            | AppEffect::BeginStopFade { .. }
-                    )
-                }));
-                continue;
-            }
-            if let super::android_file_picker::AndroidMediaControl::PlayMediaItem(index) = control {
-                let result = self
-                    .controller
-                    .dispatch(PlaylistCommand::SetPosition(index));
-                self.sync_frontend_state_from_store();
-                self.apply_effects(result.effects);
-                continue;
-            }
-            let command = match control {
-                super::android_file_picker::AndroidMediaControl::PausePlayback => {
-                    PlayerCommand::Pause
-                }
-                super::android_file_picker::AndroidMediaControl::ResumePlayback => {
-                    PlayerCommand::Play
-                }
-                super::android_file_picker::AndroidMediaControl::NextTrack => {
-                    PlayerCommand::NextTrack
-                }
-                super::android_file_picker::AndroidMediaControl::PreviousTrack => {
-                    PlayerCommand::PreviousTrack
-                }
-                super::android_file_picker::AndroidMediaControl::SeekToMs(position_ms) => {
-                    PlayerCommand::SeekToMs(position_ms)
-                }
-                super::android_file_picker::AndroidMediaControl::PlayMediaItem(_) => unreachable!(),
-                super::android_file_picker::AndroidMediaControl::StopPlayback => {
-                    PlayerCommand::Stop
-                }
-                super::android_file_picker::AndroidMediaControl::PlaylistEof => unreachable!(),
-            };
-            let result = self.controller.dispatch(command);
-            self.sync_frontend_state_from_store();
-            self.apply_effects(result.effects.into_iter().filter(|effect| {
-                !matches!(
-                    effect,
-                    AppEffect::StartPlaybackUri { .. }
-                        | AppEffect::ResumePlayback
-                        | AppEffect::PausePlayback
-                        | AppEffect::StopPlayback
-                        | AppEffect::BeginStopFade { .. }
-                        | AppEffect::SeekPlayback(_)
-                )
-            }));
+    fn handle_android_media_control(&mut self, event: super::android::AndroidMediaControlEvent) {
+        let control = event.control;
+        if matches!(control, super::android::AndroidMediaControl::PlaylistEof) {
+            let result = self.controller.handle_playlist_eof();
+            self.process_dispatch_result(
+                result,
+                EffectExecution::after_external_backend_execution(event.backend_executed),
+            );
+            return;
         }
-        handled
+        if let super::android::AndroidMediaControl::PlayMediaItem(index) = control {
+            let result = self
+                .controller
+                .dispatch(PlaylistCommand::SetPosition(index));
+            self.process_dispatch_result(result, EffectExecution::LOCAL);
+            let result = self.controller.dispatch(PlayerCommand::StartCurrentTrack);
+            self.process_dispatch_result(
+                result,
+                EffectExecution::after_external_backend_execution(event.backend_executed),
+            );
+            return;
+        }
+        let command = android_player_command_for_media_control(control)
+            .expect("playlist media controls handled above");
+        let result = self.controller.dispatch(command);
+        self.process_dispatch_result(
+            result,
+            EffectExecution::after_external_backend_execution(event.backend_executed),
+        );
     }
 
     #[cfg(target_os = "android")]
-    fn sync_android_playback_notification(&mut self) {
-        let playlist = &self.controller.state().playlist;
-        if self.android_media_playlist_snapshot.as_ref() != Some(playlist) {
-            let titles = playlist
-                .entries()
-                .iter()
-                .map(|entry| shared_formatted_playlist_entry_title(self.controller.state(), entry))
-                .collect();
-            super::android_file_picker::sync_media_playlist(playlist, titles);
-            self.android_media_playlist_snapshot = Some(playlist.clone());
-        }
-        let state = match self.controller.state().player.state() {
-            PlayerState::Stopped => 0,
-            PlayerState::Playing => 1,
-            PlayerState::Paused => 2,
+    fn poll_android_platform_events(&mut self, ctx: &egui::Context) -> bool {
+        let activity_generation = self.android.activity_generation();
+        let Some(mut events) = super::android::drain_platform_events(activity_generation, ctx)
+        else {
+            return false;
         };
-        let title = shared_formatted_current_title(self.controller.state());
-        let duration_ms = self.controller.state().player.duration_ms().unwrap_or(-1);
-        let position_ms = self
-            .playback_backend
-            .as_ref()
-            .and_then(|backend| backend.position_ms())
-            .unwrap_or(self.controller.state().config.playback_position_ms)
-            .max(0);
-        let has_entries = !self.controller.state().playlist.is_empty();
-        let current_index = self
-            .controller
-            .state()
-            .playlist
-            .position()
-            .map_or(-1, |index| index as i64);
-        let playlist_len = self
-            .controller
-            .state()
-            .playlist
-            .len()
-            .min(i32::MAX as usize) as i32;
-        if let Err(err) = super::android_file_picker::update_playback_notification(
-            state,
-            &title,
-            self.controller.state().player.bitrate(),
-            self.controller.state().player.frequency(),
-            self.controller.state().player.channels(),
-            duration_ms,
-            position_ms,
-            current_index,
-            playlist_len,
-            has_entries,
-            has_entries,
-        ) {
-            self.runtime.pending_messages.push(err);
+        let mut media_control_handled = false;
+        let mut playback_events = Vec::new();
+        for event in &mut events {
+            match event {
+                super::android::AndroidPlatformEvent::Picker(result) => {
+                    self.handle_android_file_picker_result(result);
+                }
+                super::android::AndroidPlatformEvent::MediaControl(control) => {
+                    media_control_handled = true;
+                    self.handle_android_media_control(control);
+                }
+                super::android::AndroidPlatformEvent::Playback(event) => {
+                    playback_events.push(event);
+                }
+                super::android::AndroidPlatformEvent::ExternalVolumeChanged(volume) => {
+                    self.handle_external_android_media_volume(volume);
+                }
+            }
+        }
+        self.handle_playback_events(playback_events);
+        self.poll_playback_backend();
+        media_control_handled
+    }
+
+    #[cfg(target_os = "android")]
+    fn update_android_layout_policy(&mut self) {
+        let snapshot = super::android::window_layout_snapshot_pixels().and_then(|layout| {
+            Some(AndroidLayoutSnapshot {
+                width: layout.width,
+                height: layout.height,
+                orientation: AndroidLayoutOrientation::from_configuration(layout.orientation)?,
+                insets: layout.insets,
+                inset_width: layout.inset_width,
+                inset_height: layout.inset_height,
+                inset_orientation: layout.inset_orientation,
+                config_generation: layout.config_generation,
+                inset_generation: layout.inset_generation,
+                insets_fresh: layout.insets_fresh,
+            })
+        });
+        let update = self.android.observe_layout(snapshot);
+        if update.orientation_changed {
+            self.render_cache.playlist = None;
+        }
+        match update.repaint {
+            AndroidLayoutReadiness::None => {}
+            AndroidLayoutReadiness::AwaitingReadiness => self
+                .runtime
+                .request_android_layout_repaint(AndroidLayoutRepaint::AwaitingReadiness),
+            AndroidLayoutReadiness::Stabilizing => self
+                .runtime
+                .request_android_layout_repaint(AndroidLayoutRepaint::Stabilizing),
         }
     }
 }
@@ -1512,30 +1366,33 @@ impl EguiFrontendState {
 impl eframe::App for EguiFrontendState {
     #[cfg(target_os = "android")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.persist_android_state();
+        let activity_generation = self.android.activity_generation();
+        if super::android::is_foreground_activity(activity_generation) {
+            self.android.mark_persistence();
+            self.flush_android_platform_policies(true);
+        }
+        super::android::runtime_exited(activity_generation);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "android")]
-        let android_media_control_handled = {
-            let handled = self.poll_android_media_controls(ctx);
-            self.poll_external_android_media_volume(ctx);
-            self.poll_android_file_picker_results();
-            handled
-        };
+        let android_media_control_handled = self.poll_android_platform_events(ctx);
+        #[cfg(target_os = "android")]
+        self.update_android_layout_policy();
         self.poll_socket_control(ctx);
         #[cfg(feature = "desktop-egui")]
         self.poll_mpris_requests(ctx);
+        #[cfg(not(target_os = "android"))]
         self.poll_playback_backend();
-        if self.poll_duration_index_results() {
-            ctx.request_repaint();
-        }
+        self.poll_duration_index_results();
         self.tick_playback_position(ctx);
         #[cfg(target_os = "android")]
         {
-            self.sync_android_playback_notification();
+            self.flush_android_platform_policies(false);
             if android_media_control_handled {
-                if let Err(err) = super::android_file_picker::complete_media_control() {
+                if let Err(err) =
+                    super::android::complete_media_control(self.android.activity_generation())
+                {
                     self.runtime.pending_messages.push(err);
                 }
             }
@@ -1580,26 +1437,41 @@ impl eframe::App for EguiFrontendState {
         show_detached_equalizer_popovers(&ctx, self);
         menu::show_main_menu(&ctx, self);
         menu::show_prompts(&ctx, self);
-        if self.preferences_open {
+        if self.preferences_open() {
             preferences::show_preferences(&ctx, self);
         }
         file_info::show_file_info_dialog(&ctx, self);
         #[cfg(target_os = "android")]
-        if self.android_playlist_manager_open {
-            playlist::show_android_playlist_manager(&ctx, self);
+        if self.android.playlist_manager.is_open() {
+            let layout = self.android.ready_layout();
+            let action = playlist::show_android_playlist_manager(
+                &ctx,
+                &mut self.android.playlist_manager,
+                layout,
+            );
+            if let Some(action) = action {
+                self.handle_android_playlist_manager_action(action);
+            }
         }
         #[cfg(target_os = "android")]
-        if self.skin_browser_open {
-            self.selected_preferences_page = PreferencesPage::Skins;
+        if self.skin_browser_open() {
+            self.ui.selected_preferences_page = PreferencesPage::Skins;
             self.dispatch(UiCommand::SetSkinBrowserVisible(false));
             self.dispatch(UiCommand::SetPreferencesVisible(true));
         }
         #[cfg(not(target_os = "android"))]
-        if self.skin_browser_open {
+        if self.skin_browser_open() {
             show_skin_browser_placeholder(&ctx, self);
         }
         menu::show_pending_messages(&ctx, self);
-        self.flush_queued_repaint(&ctx);
+        #[cfg(target_os = "android")]
+        {
+            self.flush_android_platform_policies(false);
+            if let Some(delay) = self.android.persistence_delay() {
+                ctx.request_repaint_after(delay);
+            }
+        }
+        self.flush_repaint_policy(&ctx);
         app_log_trace!(render, "egui update size={:?}", self.desired_window_size());
     }
 }
@@ -1609,98 +1481,27 @@ fn android_main_player_scale(available_width: f32) -> f32 {
     (available_width / crate::render::MAIN_WINDOW_WIDTH as f32).max(f32::EPSILON)
 }
 
-#[cfg(any(target_os = "android", test))]
-fn android_layout_extent_is_stable(width: f32, height: f32) -> bool {
-    const MIN_STABLE_EXTENT: f32 = 32.0;
-    width.is_finite()
-        && height.is_finite()
-        && width >= MIN_STABLE_EXTENT
-        && height >= MIN_STABLE_EXTENT
-}
-
-#[cfg(any(target_os = "android", test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AndroidLayoutOrientation {
-    Portrait,
-    Landscape,
-}
-
-#[cfg(target_os = "android")]
-#[derive(Clone, Copy, Debug)]
-struct AndroidStableLayout {
-    width: i32,
-    height: i32,
-    insets: super::android_file_picker::AndroidSystemInsets,
-    scale_factor: f32,
-    playlist_width: i32,
-    playlist_height: i32,
-}
-
-#[cfg(any(target_os = "android", test))]
-impl AndroidLayoutOrientation {
-    fn from_configuration(orientation: i32) -> Option<Self> {
-        match orientation {
-            1 => Some(Self::Portrait),
-            2 => Some(Self::Landscape),
-            _ => None,
-        }
-    }
-}
-
-#[cfg(any(target_os = "android", test))]
-fn android_layout_snapshot_is_consistent(
-    width: i32,
-    height: i32,
-    orientation: AndroidLayoutOrientation,
-    insets: [i32; 4],
-    inset_width: i32,
-    inset_height: i32,
-    inset_orientation: i32,
-    config_generation: i64,
-    inset_generation: i64,
-    insets_fresh: bool,
-) -> bool {
-    let [left, top, right, bottom] = insets;
-    let orientation_matches_extent = match orientation {
-        AndroidLayoutOrientation::Portrait => height >= width,
-        AndroidLayoutOrientation::Landscape => width > height,
-    };
-    width > 0
-        && height > 0
-        && orientation_matches_extent
-        && config_generation > 0
-        && inset_generation == config_generation
-        && insets_fresh
-        && inset_width == width
-        && inset_height == height
-        && AndroidLayoutOrientation::from_configuration(inset_orientation) == Some(orientation)
-        && [left, top, right, bottom].iter().all(|inset| *inset >= 0)
-        && android_layout_extent_is_stable(
-            (width - left - right) as f32,
-            (height - top - bottom) as f32,
-        )
-}
-
 impl EguiFrontendState {
-    fn flush_queued_repaint(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.runtime.repaint_requested) {
-            self.runtime.dirty_targets.clear();
+    fn flush_repaint_policy(&mut self, ctx: &egui::Context) {
+        let schedule = self.runtime.take_repaint_schedule();
+        if schedule.immediate {
             ctx.request_repaint();
+        }
+        if let Some(delay) = schedule.after {
+            ctx.request_repaint_after(delay);
         }
     }
 
     pub(crate) fn close_player_menus(&mut self) {
-        self.playlist_menu_open = None;
-        self.playlist_menu_hover = None;
-        self.playlist_sort_menu_open = false;
-        if self.main_menu_open {
+        self.ui.dismiss_playlist_overlay();
+        if self.main_menu_open() {
             self.dispatch(UiCommand::SetMainMenuVisible(false));
         }
     }
 
     fn replace_active_skin(&mut self, skin: DefaultSkin) {
         self.active_skin = skin;
-        self.texture_cache.generation = self.texture_cache.generation.wrapping_add(1);
+        self.render_cache.invalidate();
     }
 
     #[cfg(target_os = "android")]
@@ -1713,7 +1514,7 @@ impl EguiFrontendState {
         match DefaultSkin::load_bundled() {
             Ok(skin) => {
                 self.replace_active_skin(skin);
-                let mut config = self.controller().state().config.clone();
+                let mut config = self.controller().state().persistence_snapshot().config;
                 config.skin = None;
                 self.apply_preferences_config(config);
             }
@@ -1744,116 +1545,22 @@ impl EguiFrontendState {
     }
 
     #[cfg(target_os = "android")]
-    pub(crate) fn open_android_playlist_manager(&mut self) {
-        self.android_saved_playlists = discover_managed_playlists();
-        self.android_playlist_manager_open = true;
-    }
-
-    #[cfg(target_os = "android")]
-    pub(crate) fn save_android_playlist(&mut self) {
-        let name = managed_playlist_name(&self.android_playlist_name);
-        if name.is_empty() {
-            self.runtime
-                .pending_messages
-                .push("enter a playlist name".to_string());
-            return;
-        }
-        let directory = managed_playlist_dir();
-        if let Err(err) = fs::create_dir_all(&directory) {
-            self.runtime
-                .pending_messages
-                .push(format!("failed to create playlist storage: {err}"));
-            return;
-        }
-        let path = directory.join(&name);
-        if let Err(err) = self.controller().state().playlist.save_m3u_file(&path) {
-            self.runtime.pending_messages.push(format!(
-                "failed to save playlist '{}': {err}",
-                path.display()
-            ));
-            return;
-        }
-        self.android_playlist_name = name;
-        self.android_saved_playlists = discover_managed_playlists();
-    }
-
-    #[cfg(target_os = "android")]
-    pub(crate) fn begin_android_playlist_import(&mut self) {
-        self.android_playlist_import_pending = true;
-        self.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::LoadPlaylist));
-    }
-
-    #[cfg(target_os = "android")]
-    fn import_android_playlist(&mut self, source: &Path) {
-        let directory = managed_playlist_dir();
-        if let Err(err) = fs::create_dir_all(&directory) {
-            self.runtime
-                .pending_messages
-                .push(format!("failed to create playlist storage: {err}"));
-            return;
-        }
-        let source_name = source
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("imported.m3u8");
-        let name = managed_playlist_name(source_name);
-        let destination = unique_managed_playlist_path(&directory, &name);
-        if let Err(err) = fs::copy(source, &destination) {
-            self.runtime.pending_messages.push(format!(
-                "failed to import playlist '{}': {err}",
-                source.display()
-            ));
-            return;
-        }
-        self.android_saved_playlists = discover_managed_playlists();
-    }
-
-    #[cfg(target_os = "android")]
-    pub(crate) fn load_android_playlist(&mut self, path: &Path) {
-        if is_managed_playlist_path(path) && self.load_playlist_file(path) {
-            self.android_playlist_manager_open = false;
-        }
-    }
-
-    #[cfg(target_os = "android")]
-    pub(crate) fn delete_android_playlist(&mut self, path: &Path) {
-        if !is_managed_playlist_path(path) {
-            return;
-        }
-        if let Err(err) = fs::remove_file(path) {
-            self.runtime.pending_messages.push(format!(
-                "failed to delete playlist '{}': {err}",
-                path.display()
-            ));
-            return;
-        }
-        self.android_saved_playlists = discover_managed_playlists();
-    }
-
-    #[cfg(target_os = "android")]
-    pub(crate) fn export_android_playlist(&mut self, path: &Path) {
-        if !is_managed_playlist_path(path) {
-            return;
-        }
-        let base_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(managed_playlist_name)
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| "playlist".to_string());
-        let name = format!("{base_name}.m3u8");
-        let contents = match fs::read(path) {
-            Ok(contents) => contents,
-            Err(err) => {
-                self.runtime.pending_messages.push(format!(
-                    "failed to read playlist '{}': {err}",
-                    path.display()
-                ));
-                return;
-            }
+    fn handle_android_playlist_manager_action(&mut self, action: PlaylistManagerAction) {
+        let outcome = {
+            let current_playlist = &self.controller.state().playlist;
+            self.android
+                .playlist_manager
+                .handle_action(action, current_playlist)
         };
-        if let Err(err) = super::android_file_picker::save_playlist(&contents, &name) {
-            self.runtime.pending_messages.push(err);
+        match outcome {
+            Ok(PlaylistManagerOutcome::None) => {}
+            Ok(PlaylistManagerOutcome::ImportRequested) => {
+                self.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::ImportPlaylist));
+            }
+            Ok(PlaylistManagerOutcome::PlaylistLoaded(playlist)) => {
+                self.apply_loaded_playlist(playlist);
+            }
+            Err(err) => self.runtime.pending_messages.push(err),
         }
     }
 
@@ -1889,41 +1596,26 @@ impl EguiFrontendState {
 impl EguiFrontendState {
     fn show_android_docked_layout(&mut self, ui: &mut egui::Ui) {
         let pixels_per_point = ui.ctx().pixels_per_point();
-        let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels() else {
-            ui.ctx().request_repaint();
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
-            return;
-        };
-        let Some(orientation) = AndroidLayoutOrientation::from_configuration(layout.orientation)
-        else {
-            ui.ctx().request_repaint();
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
-            return;
-        };
-        let insets = layout.insets;
-        if !android_layout_snapshot_is_consistent(
-            layout.width,
-            layout.height,
-            orientation,
-            [insets.left, insets.top, insets.right, insets.bottom],
-            layout.inset_width,
-            layout.inset_height,
-            layout.inset_orientation,
-            layout.config_generation,
-            layout.inset_generation,
-            layout.insets_fresh,
-        ) {
-            ui.ctx().request_repaint();
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
-            self.show_android_last_stable_layout(
-                ui,
+        let layout = match self.android.layout_view() {
+            AndroidLayoutView::Unavailable => return,
+            AndroidLayoutView::Transitioning {
                 orientation,
-                layout.width,
-                layout.height,
-                pixels_per_point,
-            );
-            return;
-        }
+                width,
+                height,
+            } => {
+                self.show_android_last_stable_layout(
+                    ui,
+                    orientation,
+                    width,
+                    height,
+                    pixels_per_point,
+                );
+                return;
+            }
+            AndroidLayoutView::Ready(layout) => layout,
+        };
+        let orientation = layout.orientation;
+        let insets = layout.insets;
         let left_inset = insets.left as f32 / pixels_per_point;
         let top_inset = insets.top as f32 / pixels_per_point;
         let right_inset = insets.right as f32 / pixels_per_point;
@@ -1937,11 +1629,6 @@ impl EguiFrontendState {
         ui.set_clip_rect(egui::Rect::from_min_size(ui.min_rect().min, window_size));
         let usable_width = window_size.x - left_inset - right_inset;
         let usable_height = window_size.y - top_inset - bottom_inset;
-        if self.android_layout_orientation != Some(orientation) {
-            self.android_layout_orientation = Some(orientation);
-            self.android_layout_repaint_frames = 3;
-            self.texture_cache.playlist = None;
-        }
 
         ui.add_space(top_inset);
         ui.horizontal(|ui| {
@@ -1976,18 +1663,7 @@ impl EguiFrontendState {
             playlist_width: self.playlist_width,
             playlist_height: self.playlist_height,
         };
-        match orientation {
-            AndroidLayoutOrientation::Portrait => {
-                self.android_stable_portrait_layout = Some(stable_layout);
-            }
-            AndroidLayoutOrientation::Landscape => {
-                self.android_stable_landscape_layout = Some(stable_layout);
-            }
-        }
-        if self.android_layout_repaint_frames > 0 {
-            self.android_layout_repaint_frames -= 1;
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
-        }
+        self.android.remember_layout(orientation, stable_layout);
     }
 
     fn show_android_last_stable_layout(
@@ -1998,10 +1674,7 @@ impl EguiFrontendState {
         current_height: i32,
         pixels_per_point: f32,
     ) {
-        let stable = match orientation {
-            AndroidLayoutOrientation::Portrait => self.android_stable_portrait_layout,
-            AndroidLayoutOrientation::Landscape => self.android_stable_landscape_layout,
-        };
+        let stable = self.android.stable_layout(orientation);
         let Some(stable) = stable else {
             return;
         };
@@ -2143,8 +1816,7 @@ fn sync_root_viewport_focus(ctx: &egui::Context, app: &mut EguiFrontendState) {
             .detached_viewports
             .lock()
             .expect("detached viewport state poisoned");
-        state.equalizer_focused = false;
-        state.playlist_focused = false;
+        state.focus = DetachedFocus::None;
     }
 }
 
@@ -2202,18 +1874,15 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
             playlist::dispatch_playlist_footer_button(app, button)
         }
         DetachedPanelAction::PlaylistMenu(menu) => {
-            app.playlist_menu_hover = None;
+            app.ui.playlist_menu_hover = None;
             playlist::dispatch_playlist_menu_button(app, menu)
         }
         DetachedPanelAction::PlaylistMenuItem(menu, index) => {
-            app.playlist_menu_hover = None;
+            app.ui.dismiss_playlist_overlay();
             playlist::dispatch_playlist_menu_item(app, menu, index);
-            app.playlist_menu_open = None;
         }
         DetachedPanelAction::ClosePlaylistMenu => {
-            app.playlist_menu_hover = None;
-            app.playlist_menu_open = None;
-            app.playlist_sort_menu_open = false;
+            app.ui.dismiss_playlist_overlay();
         }
         DetachedPanelAction::PlaylistRowClick {
             index,
@@ -2233,22 +1902,20 @@ fn apply_detached_panel_action(app: &mut EguiFrontendState, action: DetachedPane
 
 fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
     let config = app.controller().state().config.clone();
-    let (equalizer_focused, playlist_focused, playlist_menu_hover) = {
+    let (focus, playlist_menu_hover) = {
         let state = app
             .detached_viewports
             .lock()
             .expect("detached viewport state poisoned");
-        (
-            state.equalizer_focused,
-            state.playlist_focused,
-            state.playlist_menu_hover,
-        )
+        (state.focus, state.playlist_menu_hover)
     };
     let equalizer = (config.equalizer_visible && config.equalizer_detached)
-        .then(|| detached_equalizer_snapshot(app, equalizer_focused))
+        .then(|| detached_equalizer_snapshot(app, focus == DetachedFocus::Equalizer))
         .flatten();
     let playlist = (config.playlist_visible && config.playlist_detached)
-        .then(|| detached_playlist_snapshot(app, playlist_focused, playlist_menu_hover))
+        .then(|| {
+            detached_playlist_snapshot(app, focus == DetachedFocus::Playlist, playlist_menu_hover)
+        })
         .flatten();
     let mut state = app
         .detached_viewports
@@ -2263,13 +1930,14 @@ fn detached_equalizer_snapshot(
     focused: bool,
 ) -> Option<DetachedPanelSnapshot> {
     let view_model = equalizer_view_model(app.controller().state());
+    let (pressed_control, pressed_slider) = app.equalizer_pressed.render_parts();
     let render_state = EqualizerRenderState {
         focused,
         shaded: view_model.shaded,
         active: view_model.active,
         automatic: view_model.auto,
-        pressed_control: app.equalizer_pressed_control,
-        pressed_slider: app.equalizer_pressed_slider,
+        pressed_control,
+        pressed_slider,
         preamp_position: view_model.preamp_position,
         band_positions: view_model.band_positions,
         volume_position: volume_to_eq_shaded_position(app.controller().state().player.volume()),
@@ -2328,7 +1996,7 @@ fn detached_playlist_snapshot(
     )
     .ok()?;
     let playlist_menu_open = (!view_model.shaded)
-        .then_some(app.playlist_menu_open)
+        .then_some(app.ui.active_overlay.playlist_menu())
         .flatten();
     if let Some(kind) = playlist_menu_open {
         let hover =
@@ -2437,19 +2105,18 @@ fn update_detached_panel_viewport_focus(
     focused: bool,
 ) -> bool {
     let mut state = shared.lock().expect("detached viewport state poisoned");
-    let before = (state.equalizer_focused, state.playlist_focused);
-    if equalizer_panel {
-        state.equalizer_focused = focused;
-        if focused {
-            state.playlist_focused = false;
-        }
+    let before = state.focus;
+    let panel = if equalizer_panel {
+        DetachedFocus::Equalizer
     } else {
-        state.playlist_focused = focused;
-        if focused {
-            state.equalizer_focused = false;
-        }
+        DetachedFocus::Playlist
+    };
+    if focused {
+        state.focus = panel;
+    } else if state.focus == panel {
+        state.focus = DetachedFocus::None;
     }
-    before != (state.equalizer_focused, state.playlist_focused)
+    before != state.focus
 }
 
 fn show_detached_panel_viewport(
@@ -3091,19 +2758,16 @@ fn handle_global_shortcuts(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
 fn global_shortcuts_suspended(ctx: &egui::Context, app: &EguiFrontendState) -> bool {
     #[cfg(target_os = "android")]
-    if app.android_playlist_manager_open {
+    if app.android.playlist_manager.is_open() {
         return true;
     }
     ctx.egui_wants_keyboard_input()
-        || app.main_menu_open
-        || app.prompt_open.is_some()
-        || app.preferences_open
-        || app.skin_browser_open
-        || app.file_info_open
-        || app.equalizer_presets_open
-        || app.playlist_menu_open.is_some()
-        || app.playlist_sort_menu_open
-        || app.confirm_physical_delete_open
+        || app.main_menu_open()
+        || app.ui.prompt_open.is_some()
+        || app.preferences_open()
+        || app.skin_browser_open()
+        || app.file_info_open()
+        || app.ui.active_overlay.is_open()
         || !app.runtime.pending_messages.is_empty()
 }
 
@@ -3163,12 +2827,12 @@ fn dispatch_app_shortcut(_ctx: &egui::Context, app: &mut EguiFrontendState, shor
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
         }
         AppShortcut::OpenLocation => {
-            app.prompt_open = Some(EguiPrompt::OpenLocation);
-            app.prompt_text.clear();
+            app.ui.prompt_open = Some(EguiPrompt::OpenLocation);
+            app.ui.prompt_text.clear();
         }
         AppShortcut::JumpTime => {
-            app.prompt_open = Some(EguiPrompt::JumpToTime);
-            app.prompt_text.clear();
+            app.ui.prompt_open = Some(EguiPrompt::JumpToTime);
+            app.ui.prompt_text.clear();
         }
         AppShortcut::OpenDirectory
         | AppShortcut::PresentMain
@@ -3381,11 +3045,13 @@ pub fn run_egui_frontend(options: PreviewOptions) -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-pub fn run_egui_frontend_android(
+pub(crate) fn run_egui_frontend_android(
     options: PreviewOptions,
     android_app: winit::platform::android::activity::AndroidApp,
+    activity_generation: super::android::AndroidActivityGeneration,
 ) -> Result<(), String> {
-    let app = EguiFrontendState::new(options)?;
+    let mut app = EguiFrontendState::new(options)?;
+    app.android.bind_activity(activity_generation);
     eframe::run_native(
         "XMMS Renascene",
         eframe::NativeOptions {
@@ -3400,7 +3066,7 @@ pub fn run_egui_frontend_android(
 
 #[cfg(not(target_os = "android"))]
 fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    let mut open = app.skin_browser_open;
+    let mut open = app.skin_browser_open();
     egui::Window::new("Skin selector")
         .open(&mut open)
         .resizable(true)
@@ -3422,7 +3088,7 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                     match DefaultSkin::load_bundled() {
                         Ok(skin) => {
                             app.replace_active_skin(skin);
-                            let mut config = app.controller().state().config.clone();
+                            let mut config = app.controller().state().persistence_snapshot().config;
                             config.skin = None;
                             app.apply_preferences_config(config);
                         }
@@ -3455,16 +3121,16 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
                     }
                 });
         });
-    app.dispatch(UiCommand::SetSkinBrowserVisible(
-        open && app.skin_browser_open,
-    ));
+    if !open && app.skin_browser_open() {
+        app.dispatch(UiCommand::SetSkinBrowserVisible(false));
+    }
 }
 
 fn select_skin_entry(app: &mut EguiFrontendState, entry: &SkinEntry) {
     match DefaultSkin::load_from_path(&entry.path) {
         Ok(skin) => {
             app.replace_active_skin(skin);
-            let mut config = app.controller().state().config.clone();
+            let mut config = app.controller().state().persistence_snapshot().config;
             config.skin = Some(entry.path.to_string_lossy().into_owned());
             app.apply_preferences_config(config);
         }
@@ -3597,71 +3263,6 @@ fn discover_runtime_skins() -> Vec<SkinEntry> {
     discover_skins_in_dirs(dirs).unwrap_or_default()
 }
 
-#[cfg(target_os = "android")]
-fn managed_playlist_dir() -> PathBuf {
-    default_config_dir().join("playlists")
-}
-
-#[cfg(target_os = "android")]
-pub(crate) fn managed_playlist_name(name: &str) -> String {
-    let mut name: String = name
-        .trim()
-        .chars()
-        .map(|character| {
-            if character.is_alphanumeric() || matches!(character, ' ' | '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let lowercase = name.to_ascii_lowercase();
-    if lowercase.ends_with(".m3u8") {
-        name.truncate(name.len() - 5);
-    } else if lowercase.ends_with(".m3u") {
-        name.truncate(name.len() - 4);
-    }
-    name.trim().to_string()
-}
-
-#[cfg(target_os = "android")]
-fn discover_managed_playlists() -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(managed_playlist_dir()) else {
-        return Vec::new();
-    };
-    let mut playlists: Vec<_> = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .collect();
-    playlists.sort_by_key(|path| {
-        path.file_name()
-            .map(|name| name.to_string_lossy().to_ascii_lowercase())
-            .unwrap_or_default()
-    });
-    playlists
-}
-
-#[cfg(target_os = "android")]
-fn is_managed_playlist_path(path: &Path) -> bool {
-    path.parent() == Some(managed_playlist_dir().as_path())
-}
-
-#[cfg(target_os = "android")]
-fn unique_managed_playlist_path(directory: &Path, name: &str) -> PathBuf {
-    let path = directory.join(name);
-    if !path.exists() {
-        return path;
-    }
-    for suffix in 2.. {
-        let candidate = directory.join(format!("{name}-{suffix}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-    unreachable!()
-}
-
 fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {
     match app_state.config.skin.as_deref() {
         Some(path) => DefaultSkin::load_from_path(Path::new(path))
@@ -3681,14 +3282,55 @@ mod tests {
     use crate::player::PlaybackEvent;
 
     #[test]
-    fn android_audio_focus_is_only_requested_when_backend_is_not_playing() {
-        assert!(!android_playback_focus_request_required(
-            PlayerState::Playing
-        ));
-        assert!(android_playback_focus_request_required(PlayerState::Paused));
-        assert!(android_playback_focus_request_required(
-            PlayerState::Stopped
-        ));
+    fn android_media_controls_translate_to_store_commands() {
+        use super::super::android_events::AndroidMediaControl;
+
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::PausePlayback),
+            Some(PlayerCommand::Pause)
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::ResumePlayback),
+            Some(PlayerCommand::Play)
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::NextTrack),
+            Some(PlayerCommand::NextTrack)
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::PreviousTrack),
+            Some(PlayerCommand::PreviousTrack)
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::SeekToMs(4_200)),
+            Some(PlayerCommand::SeekToMs(4_200))
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::HaltPlayback),
+            Some(PlayerCommand::Halt)
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::PlayMediaItem(2)),
+            None
+        );
+        assert_eq!(
+            android_player_command_for_media_control(AndroidMediaControl::PlaylistEof),
+            None
+        );
+    }
+
+    #[test]
+    fn service_executed_media_controls_disable_local_playback_execution() {
+        assert_eq!(
+            EffectExecution::after_external_backend_execution(true),
+            EffectExecution {
+                playback_backend: false
+            }
+        );
+        assert_eq!(
+            EffectExecution::after_external_backend_execution(false),
+            EffectExecution::LOCAL
+        );
     }
 
     #[derive(Clone)]
@@ -3739,7 +3381,7 @@ mod tests {
     fn desktop_egui_applies_output_volume_to_playback_backend() {
         let volumes = Arc::new(Mutex::new(Vec::new()));
         let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
-        app.playback_backend = Some(Box::new(RecordingVolumeBackend {
+        app.playback.backend = Some(Box::new(RecordingVolumeBackend {
             volumes: Arc::clone(&volumes),
         }));
 
@@ -3760,9 +3402,9 @@ mod tests {
 
         let app = EguiFrontendState::new(options).unwrap();
 
-        assert!(app.preferences_open);
+        assert!(app.preferences_open());
         assert_eq!(
-            app.selected_preferences_page,
+            app.ui.selected_preferences_page,
             PreferencesPage::AudioIoPlugins
         );
     }
@@ -3885,7 +3527,7 @@ mod tests {
         assert_eq!(app.playlist_width, 325);
         let detached_height = app.playlist_height;
 
-        let mut config = app.controller().state().config.clone();
+        let mut config = app.controller().state().persistence_snapshot().config;
         config.playlist_detached = false;
         app.apply_preferences_config(config);
 
@@ -3984,8 +3626,7 @@ mod tests {
                 .expect("detached viewport state poisoned");
             let equalizer = state.equalizer.as_ref().expect("equalizer snapshot");
             let playlist = state.playlist.as_ref().expect("playlist snapshot");
-            assert!(!state.equalizer_focused);
-            assert!(!state.playlist_focused);
+            assert_eq!(state.focus, DetachedFocus::None);
             (equalizer.image.clone(), playlist.image.clone())
         };
 
@@ -4001,8 +3642,7 @@ mod tests {
                 .lock()
                 .expect("detached viewport state poisoned");
             let equalizer = state.equalizer.as_ref().expect("equalizer snapshot");
-            assert!(state.equalizer_focused);
-            assert!(!state.playlist_focused);
+            assert_eq!(state.focus, DetachedFocus::Equalizer);
             assert_ne!(equalizer.image, inactive_equalizer);
         }
 
@@ -4018,10 +3658,52 @@ mod tests {
                 .lock()
                 .expect("detached viewport state poisoned");
             let playlist = state.playlist.as_ref().expect("playlist snapshot");
-            assert!(!state.equalizer_focused);
-            assert!(state.playlist_focused);
+            assert_eq!(state.focus, DetachedFocus::Playlist);
             assert_ne!(playlist.image, inactive_playlist);
         }
+
+        assert!(update_detached_panel_viewport_focus(
+            &app.detached_viewports,
+            false,
+            false
+        ));
+        let state = app
+            .detached_viewports
+            .lock()
+            .expect("detached viewport state poisoned");
+        assert_eq!(state.focus, DetachedFocus::None);
+    }
+
+    #[test]
+    fn detached_focus_transfers_and_clears_under_one_viewport_lock() {
+        let shared = Arc::new(Mutex::new(DetachedViewportState::default()));
+
+        assert!(update_detached_panel_viewport_focus(&shared, true, true));
+        assert_eq!(
+            shared
+                .lock()
+                .expect("detached viewport state poisoned")
+                .focus,
+            DetachedFocus::Equalizer
+        );
+
+        assert!(update_detached_panel_viewport_focus(&shared, false, true));
+        assert_eq!(
+            shared
+                .lock()
+                .expect("detached viewport state poisoned")
+                .focus,
+            DetachedFocus::Playlist
+        );
+
+        assert!(update_detached_panel_viewport_focus(&shared, false, false));
+        assert_eq!(
+            shared
+                .lock()
+                .expect("detached viewport state poisoned")
+                .focus,
+            DetachedFocus::None
+        );
     }
 
     #[test]
@@ -4037,7 +3719,7 @@ mod tests {
             detached_playlist_snapshot(&app, false, None).expect("closed playlist snapshot");
         assert!(closed.playlist_menu_open.is_none());
 
-        app.playlist_menu_open = Some(PlaylistMenuButton::Add);
+        app.ui.active_overlay = ActiveOverlay::PlaylistMenu(PlaylistMenuButton::Add);
         let open = detached_playlist_snapshot(&app, false, None).expect("open playlist snapshot");
 
         assert_eq!(open.playlist_menu_open, Some(PlaylistMenuButton::Add));
@@ -4117,7 +3799,7 @@ mod tests {
         let result = app
             .controller_mut()
             .handle_playback_event(PlaybackEvent::Spectrum(spectrum));
-        app.apply_effects(result.effects);
+        app.process_dispatch_result(result, EffectExecution::LOCAL);
         assert!(app.tick_visualization());
 
         let render_state = app.visualization_render_state();
@@ -4135,7 +3817,7 @@ mod tests {
         let result = app
             .controller_mut()
             .handle_playback_event(PlaybackEvent::Spectrum(spectrum));
-        app.apply_effects(result.effects);
+        app.process_dispatch_result(result, EffectExecution::LOCAL);
         assert!(app.tick_visualization());
         assert!(app.visualization_render_state().data[4] > 0.0);
 
@@ -4152,21 +3834,20 @@ mod tests {
         app.dispatch(PanelCommand::SetPlaylistVisibility(true));
 
         assert!(app.controller().state().config.playlist_visible);
-        assert!(app.runtime.repaint_requested);
+        assert!(app.runtime.repaint_requested());
     }
 
     #[test]
-    fn egui_flushes_queued_render_into_repaint_request() {
+    fn egui_flushes_repaint_policy() {
         let ctx = egui::Context::default();
         let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
-        app.runtime.apply_effect(AppEffect::QueueRender(
-            crate::app::effect::RenderTarget::All,
-        ));
+        app.runtime
+            .apply_effect(UiEffect::QueueRender(crate::app::effect::RenderTarget::All));
 
-        app.flush_queued_repaint(&ctx);
+        app.flush_repaint_policy(&ctx);
 
-        assert!(!app.runtime.repaint_requested);
-        assert!(app.runtime.dirty_targets.is_empty());
+        assert!(!app.runtime.repaint_requested());
+        assert!(app.runtime.dirty_targets().is_empty());
     }
 
     #[test]
@@ -4176,16 +3857,35 @@ mod tests {
 
         assert!(!global_shortcuts_suspended(&ctx, &app));
 
-        app.prompt_open = Some(EguiPrompt::OpenLocation);
+        app.ui.prompt_open = Some(EguiPrompt::OpenLocation);
         assert!(global_shortcuts_suspended(&ctx, &app));
-        app.prompt_open = None;
+        app.ui.prompt_open = None;
 
-        app.playlist_menu_open = Some(PlaylistMenuRenderKind::Misc);
-        assert!(global_shortcuts_suspended(&ctx, &app));
-        app.playlist_menu_open = None;
+        for overlay in [
+            ActiveOverlay::PlaylistMenu(PlaylistMenuRenderKind::Misc),
+            ActiveOverlay::PlaylistSort,
+            ActiveOverlay::EqualizerPresets,
+            ActiveOverlay::ConfirmPhysicalDelete,
+        ] {
+            app.ui.active_overlay = overlay;
+            assert!(global_shortcuts_suspended(&ctx, &app));
+        }
+        app.ui.active_overlay = ActiveOverlay::None;
 
         app.runtime.pending_messages.push("message".to_string());
         assert!(global_shortcuts_suspended(&ctx, &app));
+    }
+
+    #[test]
+    fn closing_player_menus_dismisses_playlist_overlay_and_hover() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        app.ui.active_overlay = ActiveOverlay::PlaylistMenu(PlaylistMenuRenderKind::Select);
+        app.ui.playlist_menu_hover = Some((PlaylistMenuRenderKind::Select, 1));
+
+        app.close_player_menus();
+
+        assert_eq!(app.ui.active_overlay, ActiveOverlay::None);
+        assert_eq!(app.ui.playlist_menu_hover, None);
     }
 
     #[test]
@@ -4270,7 +3970,7 @@ mod tests {
         let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
         app.load_playlist_file(&input);
         assert_eq!(app.controller().state().playlist.len(), 1);
-        assert!(app.runtime.repaint_requested);
+        assert!(app.runtime.repaint_requested());
 
         app.save_playlist_file(&output);
         let saved = std::fs::read_to_string(&output).unwrap();
@@ -4298,8 +3998,22 @@ mod tests {
 
         assert_eq!(app.controller().state().config.equalizer_preamp_pos, 25);
         assert_eq!(app.controller().state().config.equalizer_band_pos[0], 73);
-        assert!(app.runtime.repaint_requested);
+        assert!(app.runtime.repaint_requested());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn playlist_touch_gesture_locks_axis_and_resets_on_release() {
+        let mut gesture = PlaylistTouchGesture::default();
+        gesture.begin(egui::pos2(10.0, 20.0), Some(4));
+        gesture.observe(egui::vec2(2.0, 30.0));
+
+        assert_eq!(gesture.drag(egui::vec2(2.0, 30.0), 10.0), -3);
+
+        let release = gesture.release(Some(egui::pos2(12.0, 50.0))).unwrap();
+        assert_eq!(release.row, Some(4));
+        assert_eq!(release.delta, egui::vec2(2.0, 30.0));
+        assert!(!gesture.is_active());
     }
 }

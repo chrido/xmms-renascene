@@ -61,6 +61,20 @@ pub fn playlist_row_click_commands(
     ]
 }
 
+pub fn playlist_queue_target_indices(playlist: &Playlist) -> Vec<usize> {
+    let selected = playlist
+        .entries()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| entry.selected.then_some(index))
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        playlist.position().into_iter().collect()
+    } else {
+        selected
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlaylistSelectedPlaybackCommands {
     pub selected_index: usize,
@@ -177,6 +191,28 @@ mod tests {
         );
         assert_eq!(playlist_row_click_commands(3, true, false), play);
         assert_eq!(playlist_row_click_commands(3, true, true), play);
+    }
+
+    #[test]
+    fn playlist_queue_targets_use_all_selected_entries_or_current() {
+        let mut playlist = Playlist::new();
+        for index in 0..3 {
+            playlist.add_uri(format!("file:///tmp/{index}.ogg"));
+        }
+        playlist.set_position(1);
+
+        assert_eq!(playlist_queue_target_indices(&playlist), vec![1]);
+
+        playlist.entries_mut()[0].selected = true;
+        playlist.entries_mut()[2].selected = true;
+        assert_eq!(playlist_queue_target_indices(&playlist), vec![0, 2]);
+
+        playlist.select_all(false);
+        assert_eq!(playlist_queue_target_indices(&playlist), vec![1]);
+        let mut empty = Playlist::new();
+        assert!(playlist_queue_target_indices(&empty).is_empty());
+        empty.add_uri("file:///tmp/no-current.ogg");
+        assert!(playlist_queue_target_indices(&empty).is_empty());
     }
 
     #[test]

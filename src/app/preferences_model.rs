@@ -42,6 +42,7 @@ pub fn mirror_live_preferences_fields(target: &mut Config, live: &Config) {
     target.equalizer_shaded = live.equalizer_shaded;
     target.repeat = live.repeat;
     target.shuffle = live.shuffle;
+    target.no_playlist_advance = live.no_playlist_advance;
     target.volume = live.volume;
     target.balance = live.balance;
 }
@@ -92,6 +93,7 @@ mod tests {
             equalizer_shaded: true,
             repeat: true,
             shuffle: true,
+            no_playlist_advance: true,
             volume: 42,
             balance: -12,
             title_format: "%t".to_string(),
@@ -108,6 +110,7 @@ mod tests {
         assert!(target.equalizer_shaded);
         assert!(target.repeat);
         assert!(target.shuffle);
+        assert!(target.no_playlist_advance);
         assert_eq!(target.volume, 42);
         assert_eq!(target.balance, -12);
         assert_ne!(target.title_format, live.title_format);

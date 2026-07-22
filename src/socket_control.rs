@@ -175,9 +175,9 @@ pub fn parse_socket_command(value: &Value) -> Result<SocketCommand, String> {
         "play" => Ok(player(PlayerCommand::Play)),
         "pause" => Ok(player(PlayerCommand::Pause)),
         "togglepause" | "toggle_pause" | "playpause" | "play_pause" => {
-            Ok(player(PlayerCommand::TogglePause))
+            Ok(player(PlayerCommand::PlayPause))
         }
-        "stop" => Ok(player(PlayerCommand::Stop)),
+        "stop" | "halt" => Ok(player(PlayerCommand::Halt)),
         "previous" | "prev" | "previoustrack" | "previous_track" => {
             Ok(player(PlayerCommand::PreviousTrack))
         }

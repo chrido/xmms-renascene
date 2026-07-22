@@ -10,6 +10,8 @@ use crate::app::file_info::{
 };
 use crate::playlist::PlaylistEntry;
 
+#[cfg(target_os = "android")]
+use super::android_runtime::AndroidLayoutSnapshot;
 use super::app::EguiFrontendState;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -48,8 +50,9 @@ pub struct FileInfoViewportState {
 }
 
 pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    if !app.file_info_open {
+    if !app.file_info_open() {
         let mut state = app
+            .ui
             .file_info_viewport
             .lock()
             .expect("file info viewport state poisoned");
@@ -66,6 +69,7 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
     // edits are preserved across frames.
     {
         let mut state = app
+            .ui
             .file_info_viewport
             .lock()
             .expect("file info viewport state poisoned");
@@ -78,16 +82,18 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     #[cfg(target_os = "android")]
     {
+        let layout = app.android.ready_layout();
         let mut state = app
+            .ui
             .file_info_viewport
             .lock()
             .expect("file info viewport state poisoned");
-        show_android_file_info(ctx, &mut state);
+        show_android_file_info(ctx, &mut state, layout);
     }
 
     #[cfg(not(target_os = "android"))]
     {
-        let shared = Arc::clone(&app.file_info_viewport);
+        let shared = Arc::clone(&app.ui.file_info_viewport);
         let builder = egui::ViewportBuilder::default()
             .with_title(file_info_title(details.as_ref()))
             .with_inner_size(egui::vec2(640.0, 340.0))
@@ -124,6 +130,7 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     let (save_requested, remove_requested, close_requested, still_open, values) = {
         let mut state = app
+            .ui
             .file_info_viewport
             .lock()
             .expect("file info viewport state poisoned");
@@ -145,17 +152,23 @@ pub fn show_file_info_dialog(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     if close {
         let mut state = app
+            .ui
             .file_info_viewport
             .lock()
             .expect("file info viewport state poisoned");
         state.open = false;
         state.editor.clear();
+        drop(state);
+        app.dispatch(UiCommand::SetFileInfoVisible(false));
     }
-    app.dispatch(UiCommand::SetFileInfoVisible(!close));
 }
 
 #[cfg(target_os = "android")]
-fn show_android_file_info(ctx: &egui::Context, state: &mut FileInfoViewportState) {
+fn show_android_file_info(
+    ctx: &egui::Context,
+    state: &mut FileInfoViewportState,
+    layout: Option<AndroidLayoutSnapshot>,
+) {
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         state.open = false;
         state.close_requested = true;
@@ -163,10 +176,7 @@ fn show_android_file_info(ctx: &egui::Context, state: &mut FileInfoViewportState
     }
 
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
-    let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels()
-        .filter(|layout| layout.has_current_insets())
-    else {
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    let Some(layout) = layout else {
         return;
     };
     let screen = egui::Rect::from_min_size(

@@ -260,6 +260,7 @@ impl DefaultSkin {
         }
 
         apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
+        apply_loaded_eq_ex_fallback(&mut skin.pixmaps, &loaded);
         skin.vis_colors = load_vis_colors_from_dir(dir)?;
         skin.playlist_colors = load_playlist_colors_from_dir(dir)?;
         skin.region_masks = load_region_masks_from_dir(dir)?;
@@ -305,6 +306,7 @@ impl DefaultSkin {
         }
 
         apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
+        apply_loaded_eq_ex_fallback(&mut skin.pixmaps, &loaded);
         skin.vis_colors = load_vis_colors_from_archive(&entries)?;
         skin.playlist_colors = load_playlist_colors_from_archive(&entries)?;
         skin.region_masks = load_region_masks_from_archive(&entries)?;
@@ -934,6 +936,51 @@ fn apply_loaded_balance_fallback(
     }
 }
 
+fn apply_loaded_eq_ex_fallback(
+    pixmaps: &mut BTreeMap<SkinPixmapKind, XpmImage>,
+    loaded: &BTreeSet<SkinPixmapKind>,
+) {
+    if !loaded.contains(&SkinPixmapKind::EqMain) || loaded.contains(&SkinPixmapKind::EqEx) {
+        return;
+    }
+    let Some(eqmain) = pixmaps.get(&SkinPixmapKind::EqMain) else {
+        return;
+    };
+    let Some(eq_ex) = pixmaps.get(&SkinPixmapKind::EqEx) else {
+        return;
+    };
+    let width = layout::EQUALIZER_WINDOW_WIDTH as usize;
+    let title_height = layout::MAIN_TITLEBAR_HEIGHT as usize;
+    if eqmain.width() < width
+        || eqmain.height() < title_height
+        || eq_ex.width() < width
+        || eq_ex.height() < title_height * 2 + 1
+    {
+        return;
+    }
+
+    let focused_y = if eqmain.height() >= 163 { 134 } else { 0 };
+    let unfocused_y = if eqmain.height() >= 163 {
+        149
+    } else {
+        focused_y
+    };
+    let mut pixels = eq_ex.pixels_argb().to_vec();
+    for (source_y, destination_y) in [(focused_y, 0), (unfocused_y, 15)] {
+        for row in 0..title_height {
+            let source = (source_y + row) * eqmain.width();
+            let destination = (destination_y + row) * eq_ex.width();
+            pixels[destination..destination + width]
+                .copy_from_slice(&eqmain.pixels_argb()[source..source + width]);
+        }
+    }
+    pixmaps.insert(
+        SkinPixmapKind::EqEx,
+        XpmImage::from_argb_pixels(eq_ex.width(), eq_ex.height(), pixels)
+            .expect("equalizer fallback preserves source dimensions"),
+    );
+}
+
 fn text_colors_from_pixmaps(pixmaps: &BTreeMap<SkinPixmapKind, XpmImage>) -> TextColors {
     let Some(text) = pixmaps.get(&SkinPixmapKind::Text) else {
         return TextColors::default();
@@ -1039,6 +1086,29 @@ static char * main_xpm[] = {
         assert!(skin.get(SkinPixmapKind::Balance).is_some());
         assert_eq!(skin.vis_colors()[0], [9, 34, 53]);
         assert_eq!(skin.playlist_colors(), DEFAULT_PLAYLIST_COLORS);
+    }
+
+    #[test]
+    fn partial_skin_uses_selected_equalizer_titlebar_for_shaded_fallback() {
+        let width = layout::EQUALIZER_WINDOW_WIDTH as usize;
+        let mut pixmaps = BTreeMap::from([
+            (
+                SkinPixmapKind::EqMain,
+                XpmImage::from_argb_pixels(width, 116, vec![0xffff0000; width * 116]).unwrap(),
+            ),
+            (
+                SkinPixmapKind::EqEx,
+                XpmImage::from_argb_pixels(width, 82, vec![0xff0000ff; width * 82]).unwrap(),
+            ),
+        ]);
+        let loaded = BTreeSet::from([SkinPixmapKind::EqMain]);
+
+        apply_loaded_eq_ex_fallback(&mut pixmaps, &loaded);
+
+        let fallback = pixmaps.get(&SkinPixmapKind::EqEx).unwrap();
+        assert_eq!(fallback.pixel_argb(0, 0), Some(0xffff0000));
+        assert_eq!(fallback.pixel_argb(0, 15), Some(0xffff0000));
+        assert_eq!(fallback.pixel_argb(0, 30), Some(0xff0000ff));
     }
 
     #[test]

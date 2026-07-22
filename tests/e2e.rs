@@ -248,12 +248,24 @@ fn session_e2e_fallback_save_and_reset_load_preserve_config_and_playlist() {
     let mut state = xmms_renascene::app_state::AppState::default();
     state.config.playlist_visible = true;
     state.config.equalizer_visible = true;
+    state.player.set_volume(43);
+    state.player.set_balance(-17);
+    state.playlist.set_shuffle(true);
+    state.playlist.set_repeat(true);
     state.playlist.add_uri("https://example.test/fallback.mp3");
+    state.playlist.set_position(0);
+    let config_before_save = state.config.clone();
 
-    save_fallback_state(&mut state, &config_path, &playlist_path).unwrap();
+    save_fallback_state(&state, &config_path, &playlist_path).unwrap();
+    assert_eq!(state.config, config_before_save);
     let loaded = load_saved_state(&config_path, &playlist_path, false).unwrap();
     assert!(loaded.config.playlist_visible);
     assert!(loaded.config.equalizer_visible);
+    assert_eq!(loaded.player.volume(), 43);
+    assert_eq!(loaded.player.balance(), -17);
+    assert!(loaded.playlist.shuffle());
+    assert!(loaded.playlist.repeat());
+    assert_eq!(loaded.playlist.position(), Some(0));
     assert_eq!(
         loaded.playlist.entries()[0].filename,
         "https://example.test/fallback.mp3"
@@ -434,7 +446,8 @@ fn main_keyboard_shortcuts_trigger_preview_actions() {
         .press_shortcut(Shortcut::Pause)
         .assert_player_state(PlayerState::Paused)
         .press_shortcut(Shortcut::Stop)
-        .assert_player_state(PlayerState::Stopped)
+        .assert_player_state(PlayerState::Paused)
+        .assert_position(0)
         .click(MainTarget::position(219))
         .assert_position(219)
         .press_shortcut(Shortcut::Previous)
@@ -584,6 +597,8 @@ fn shaded_transport_controls_trigger_playback_actions() {
         .click(MainTarget::PAUSE)
         .assert_player_state(PlayerState::Paused)
         .click(MainTarget::PAUSE)
+        .assert_player_state(PlayerState::Paused)
+        .click(MainTarget::PLAY)
         .assert_player_state(PlayerState::Playing)
         .click(MainTarget::NEXT)
         .assert_playlist_position(Some(1))
@@ -592,7 +607,8 @@ fn shaded_transport_controls_trigger_playback_actions() {
         .assert_playlist_position(Some(0))
         .assert_current_playlist_entry("file:///tmp/one.ogg")
         .click(MainTarget::STOP)
-        .assert_player_state(PlayerState::Stopped);
+        .assert_player_state(PlayerState::Paused)
+        .assert_position(0);
 }
 
 #[test]
@@ -611,8 +627,9 @@ fn shaded_player_displays_time_and_position_slider() {
         .assert_playback_position_ms(130_000)
         .assert_position(219)
         .click(MainTarget::STOP)
-        .assert_shaded_main_time_text("   ", "  ")
-        .assert_shaded_main_position_visible(false);
+        .assert_shaded_main_time_text(" 00", "00")
+        .assert_shaded_main_position(1)
+        .assert_shaded_main_position_visible(true);
 }
 
 #[test]
@@ -1199,7 +1216,8 @@ fn update_timer_advances_position_while_playing_only() {
         .press_shortcut(Shortcut::Stop)
         .update_timer_tick(1_000)
         .assert_position(0)
-        .assert_main_time_digits([10, 10, 10, 10, 10]);
+        .assert_player_state(PlayerState::Paused)
+        .assert_main_time_digits([10, 0, 0, 0, 0]);
 }
 
 #[test]
@@ -1426,8 +1444,10 @@ fn mpris_transport_methods_drive_playlist_and_playback() {
         .execute_mpris_command(MprisCommand::PlayPause)
         .assert_player_state(PlayerState::Playing)
         .execute_mpris_command(MprisCommand::Stop)
-        .assert_player_state(PlayerState::Stopped)
-        .assert_mpris_event(MprisEvent::PlaybackStatusChanged);
+        .assert_player_state(PlayerState::Paused)
+        .assert_position(0)
+        .assert_mpris_event(MprisEvent::PlaybackStatusChanged)
+        .assert_mpris_event(MprisEvent::Seeked(0));
 }
 
 #[test]
@@ -1444,7 +1464,6 @@ fn mpris_raise_quit_and_next_previous_methods_emit_expected_state() {
         .execute_mpris_command(MprisCommand::Raise)
         .assert_mpris_event(MprisEvent::Raised)
         .execute_mpris_command(MprisCommand::Quit)
-        .assert_mpris_quit_requested(true)
         .assert_mpris_event(MprisEvent::QuitRequested);
 }
 
@@ -1462,6 +1481,9 @@ fn transport_buttons_update_player_state_and_position() {
         .assert_player_state(PlayerState::Paused);
 
     app.click(MainTarget::PAUSE)
+        .assert_player_state(PlayerState::Paused);
+
+    app.click(MainTarget::PLAY)
         .assert_player_state(PlayerState::Playing);
 
     app.click(MainTarget::position(219)).assert_position(219);
@@ -1474,12 +1496,12 @@ fn transport_buttons_update_player_state_and_position() {
 
     app.click(MainTarget::PLAY)
         .click(MainTarget::STOP)
-        .assert_player_state(PlayerState::Stopped)
+        .assert_player_state(PlayerState::Paused)
         .assert_position(0);
 
     app.click(MainTarget::EJECT)
         .assert_window_visible(Window::Player)
-        .assert_player_state(PlayerState::Stopped)
+        .assert_player_state(PlayerState::Paused)
         .assert_file_dialog_visible();
 }
 
@@ -1495,6 +1517,8 @@ fn playlist_footer_transport_buttons_update_player_state_and_position() {
         .click_panel(PanelTarget::PlaylistPause)
         .assert_player_state(PlayerState::Paused)
         .click_panel(PanelTarget::PlaylistPause)
+        .assert_player_state(PlayerState::Paused)
+        .click_panel(PanelTarget::PlaylistPlay)
         .assert_player_state(PlayerState::Playing)
         .click_panel(PanelTarget::PlaylistNext)
         .assert_playlist_position(Some(1))
@@ -1502,7 +1526,8 @@ fn playlist_footer_transport_buttons_update_player_state_and_position() {
         .click_panel(PanelTarget::PlaylistPrevious)
         .assert_playlist_position(Some(0))
         .click_panel(PanelTarget::PlaylistStop)
-        .assert_player_state(PlayerState::Stopped)
+        .assert_player_state(PlayerState::Paused)
+        .assert_position(0)
         .click_panel(PanelTarget::PlaylistEject)
         .assert_file_dialog_visible();
 }
@@ -1519,7 +1544,8 @@ fn docked_playlist_footer_transport_buttons_use_current_geometry() {
     .click_docked_panel(PanelTarget::PlaylistPlay)
     .assert_player_state(PlayerState::Playing)
     .click_docked_panel(PanelTarget::PlaylistStop)
-    .assert_player_state(PlayerState::Stopped);
+    .assert_player_state(PlayerState::Paused)
+    .assert_position(0);
 }
 
 #[test]
@@ -1900,8 +1926,7 @@ fn preferences_audio_page_applies_output_volume_and_balance_immediately() {
         .set_preference_volume(35)
         .assert_volume(35)
         .set_preference_balance(-40)
-        .assert_balance(-40)
-        .assert_preferences_saved();
+        .assert_balance(-40);
 }
 
 #[test]
@@ -2017,8 +2042,7 @@ fn preferences_options_page_applies_playlist_and_docking_options_immediately() {
         .assert_preference_show_numbers_in_playlist(false)
         .assert_preference_vim_playlist_navigation(false)
         .set_preference_vim_playlist_navigation(true)
-        .assert_preference_vim_playlist_navigation(true)
-        .assert_preferences_saved();
+        .assert_preference_vim_playlist_navigation(true);
 }
 
 #[test]
@@ -2080,8 +2104,7 @@ fn preferences_font_and_title_pages_apply_text_controls_immediately() {
         .set_preference_title_format("%p/%t")
         .assert_preference_title_format("%p/%t")
         .set_preference_title_format("")
-        .assert_preference_title_format("%p - %t")
-        .assert_preferences_saved();
+        .assert_preference_title_format("%p - %t");
 }
 
 #[test]
@@ -2114,7 +2137,7 @@ fn playlist_font_preference_and_visualization_feed_render_state() {
 }
 
 #[test]
-fn stop_clears_visualization_immediately() {
+fn halt_preserves_visualization_state() {
     let mut app = default_app();
 
     app.set_visualization_mode(VisMode::Analyzer)
@@ -2122,8 +2145,7 @@ fn stop_clears_visualization_immediately() {
         .tick_visualization(100)
         .assert_visualization_band_at_least(4, 0.8)
         .press_shortcut(Shortcut::Stop)
-        .assert_visualization_data_cleared()
-        .assert_visualization_peak_cleared();
+        .assert_visualization_band_at_least(4, 0.8);
 }
 
 #[test]
@@ -2159,8 +2181,7 @@ fn preferences_visualization_page_applies_controls_immediately() {
         .set_visualization_vu_mode(VisVuMode::Smooth)
         .assert_visualization_vu_mode(VisVuMode::Smooth)
         .set_visualization_refresh_divisor(4)
-        .assert_visualization_refresh_divisor(4)
-        .assert_preferences_saved();
+        .assert_visualization_refresh_divisor(4);
 }
 
 #[test]

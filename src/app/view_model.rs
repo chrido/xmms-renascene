@@ -330,6 +330,7 @@ pub fn playlist_rows_render_state(
                     .unwrap_or(-1),
                 selected: row.selected,
                 current: row.current,
+                queue_position: state.playlist.queue_position(row.index),
             })
             .collect(),
         scroll_offset,

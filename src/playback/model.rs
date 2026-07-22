@@ -2,7 +2,7 @@
 
 pub use crate::player::{
     OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlaybackTags,
-    PlayerState, StreamInfo,
+    PlayerAction, PlayerState, PlayerTransition, StreamInfo,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

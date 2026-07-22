@@ -18,6 +18,44 @@ pub enum PlayerState {
     Paused,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerAction {
+    Play,
+    Pause,
+    Halt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerTransition {
+    Start,
+    Resume,
+    Pause,
+    PauseAndSeekToStart,
+    SeekToStart,
+}
+
+impl PlayerState {
+    pub fn transition(self, action: PlayerAction) -> Option<PlayerTransition> {
+        match (self, action) {
+            (Self::Stopped, PlayerAction::Play) => Some(PlayerTransition::Start),
+            (Self::Paused, PlayerAction::Play) => Some(PlayerTransition::Resume),
+            (Self::Playing, PlayerAction::Pause) => Some(PlayerTransition::Pause),
+            (Self::Playing, PlayerAction::Halt) => Some(PlayerTransition::PauseAndSeekToStart),
+            (Self::Stopped | Self::Paused, PlayerAction::Halt) => {
+                Some(PlayerTransition::SeekToStart)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn play_pause_action(self) -> PlayerAction {
+        match self {
+            Self::Playing => PlayerAction::Pause,
+            Self::Stopped | Self::Paused => PlayerAction::Play,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Player {
     state: PlayerState,
@@ -449,7 +487,7 @@ impl Player {
         }
     }
 
-    pub fn stop(&mut self) {
+    pub fn terminate(&mut self) {
         self.state = PlayerState::Stopped;
         self.duration_ms = None;
         self.bitrate = 0;
@@ -537,7 +575,7 @@ impl Player {
                 true
             }
             PlaybackEvent::EndOfStream | PlaybackEvent::Error(_) => {
-                self.stop();
+                self.terminate();
                 true
             }
             PlaybackEvent::DurationChanged(duration) => {
@@ -824,6 +862,27 @@ mod tests {
         player.set_balance(-250);
         assert_eq!(player.volume(), 100);
         assert_eq!(player.balance(), -100);
+    }
+
+    #[test]
+    fn transport_state_machine_rejects_invalid_transitions() {
+        use PlayerAction::{Halt, Pause, Play};
+        use PlayerState::{Paused, Playing, Stopped};
+        use PlayerTransition::{
+            Pause as PausePlayback, PauseAndSeekToStart, Resume, SeekToStart, Start,
+        };
+
+        assert_eq!(Stopped.transition(Play), Some(Start));
+        assert_eq!(Stopped.transition(Pause), None);
+        assert_eq!(Stopped.transition(Halt), Some(SeekToStart));
+
+        assert_eq!(Playing.transition(Play), None);
+        assert_eq!(Playing.transition(Pause), Some(PausePlayback));
+        assert_eq!(Playing.transition(Halt), Some(PauseAndSeekToStart));
+
+        assert_eq!(Paused.transition(Play), Some(Resume));
+        assert_eq!(Paused.transition(Pause), None);
+        assert_eq!(Paused.transition(Halt), Some(SeekToStart));
     }
 
     #[test]

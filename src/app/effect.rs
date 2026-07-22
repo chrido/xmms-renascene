@@ -20,6 +20,7 @@ pub enum FileDialogRequest {
     AddAudioFiles,
     AddAudioDirectory,
     LoadPlaylist,
+    ImportPlaylist,
     SavePlaylist,
     LoadEqualizerPreset,
     SaveEqualizerPreset,

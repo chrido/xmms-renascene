@@ -57,8 +57,8 @@ MAIN_PUSH_BUTTON_EVENTS = [
     (MainButton.CLOSE, "Close", None),
     (MainButton.PREVIOUS, "Previous", "command Player(PreviousTrack)"),
     (MainButton.PLAY, "Play", "command Player(Play)"),
-    (MainButton.PAUSE, "Pause", "command Player(TogglePause)"),
-    (MainButton.STOP, "Stop", "command Player(Stop)"),
+    (MainButton.PAUSE, "Pause", "command Player(Pause)"),
+    (MainButton.STOP, "Stop", "command Player(Halt)"),
     (MainButton.NEXT, "Next", "command Player(NextTrack)"),
     (MainButton.EJECT, "Eject", "frontend_effect: egui OpenFileDialog(AddAudioFiles)"),
 ]
@@ -92,8 +92,8 @@ PLAYLIST_MENU_EVENTS = [
 PLAYLIST_FOOTER_EVENTS = [
     (PlaylistFooterButton.PREVIOUS, "Previous", "command Player(PreviousTrack)"),
     (PlaylistFooterButton.PLAY, "Play", "command Player(Play)"),
-    (PlaylistFooterButton.PAUSE, "Pause", "command Player(TogglePause)"),
-    (PlaylistFooterButton.STOP, "Stop", "command Player(Stop)"),
+    (PlaylistFooterButton.PAUSE, "Pause", "command Player(Pause)"),
+    (PlaylistFooterButton.STOP, "Stop", "command Player(Halt)"),
     (PlaylistFooterButton.NEXT, "Next", "command Player(NextTrack)"),
     (PlaylistFooterButton.EJECT, "Eject", "frontend_effect: egui OpenFileDialog(AddAudioFiles)"),
     (PlaylistFooterButton.SCROLL_UP, "ScrollUp", None),
@@ -195,10 +195,12 @@ def click_detached_skin_rect_without_activation_click(
     # the move and the button press are sent in a single xdotool invocation the
     # press can be processed before the hover position updates, so egui does not
     # attribute the press to the hovered widget and the click is dropped.
-    run_xdotool("mousemove", str(geometry.x + x), str(geometry.y + y))
+    run_xdotool("mousemove", str(geometry.x - 10), str(geometry.y - 10))
     time.sleep(0.1)
+    run_xdotool("mousemove", str(geometry.x + x), str(geometry.y + y))
+    time.sleep(0.2)
     run_xdotool("mousedown", "1")
-    time.sleep(0.05)
+    time.sleep(0.1)
     run_xdotool("mouseup", "1")
 
 
@@ -537,8 +539,10 @@ def test_egui_detached_playlist_menu_button_changes_detached_window_image(
 
     hover_x, hover_y = scaled_skin_point(playlist_window, PLAYLIST_ADD_FIRST_ITEM_RECT)
     geometry = window_geometry(playlist_window)
+    run_xdotool("mousemove", str(geometry.x - 10), str(geometry.y - 10))
+    time.sleep(0.1)
     run_xdotool("mousemove", str(geometry.x + hover_x), str(geometry.y + hover_y))
-    time.sleep(0.3)
+    time.sleep(0.5)
     hover = test_output.screenshot_path()
     screenshot_window(playlist_window, hover)
 

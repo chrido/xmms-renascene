@@ -452,11 +452,11 @@ impl UiE2e {
         Self::start_from_app_state(AppState::from_config(settings.config))
     }
 
-    pub fn start_from_app_state(app_state: AppState) -> Self {
+    pub fn start_from_app_state(initial_state: AppState) -> Self {
         let mut harness = Self {
             main_visible: true,
             main_minimized: false,
-            state: MainWindowUiState::from_app_state(app_state),
+            state: MainWindowUiState::from_state(initial_state),
             playlist_visible: false,
             equalizer_visible: false,
             preferences_visible: false,
@@ -528,8 +528,8 @@ impl UiE2e {
         let (kind, x, y) = target.point(&self.state);
         let mut offset_y = main_window_height(self.state.is_shaded());
         if kind == PanelKind::Playlist
-            && self.state.app_state_mut().config.equalizer_visible
-            && !self.state.app_state_mut().config.equalizer_detached
+            && self.state.is_panel_visible(PanelKind::Equalizer)
+            && !self.state.is_panel_detached(PanelKind::Equalizer)
         {
             offset_y += equalizer_window_height(self.state.is_equalizer_shaded());
         }
@@ -669,8 +669,8 @@ impl UiE2e {
             "expected docked playlist vertical resize to start"
         );
         let main_y = main_window_height(self.state.is_shaded())
-            + if self.state.app_state_mut().config.equalizer_visible
-                && !self.state.app_state_mut().config.equalizer_detached
+            + if self.state.is_panel_visible(PanelKind::Equalizer)
+                && !self.state.is_panel_detached(PanelKind::Equalizer)
             {
                 equalizer_window_height(self.state.is_equalizer_shaded())
             } else {
@@ -1356,11 +1356,6 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_preferences_saved(&mut self) -> &mut Self {
-        assert!(self.state.preferences_saved());
-        self
-    }
-
     pub fn reset_preferences_to_defaults(&mut self) -> &mut Self {
         self.state.reset_preferences_to_defaults();
         self.sync_windows();
@@ -1727,13 +1722,8 @@ impl UiE2e {
         self
     }
 
-    pub fn assert_mpris_quit_requested(&mut self, expected: bool) -> &mut Self {
-        assert_eq!(self.state.mpris_quit_requested(), expected);
-        self
-    }
-
     pub fn add_playlist_uri(&mut self, uri: &str) -> &mut Self {
-        self.state.app_state_mut().playlist.add_uri(uri);
+        self.state.add_playlist_uri(uri);
         self
     }
 
@@ -1834,15 +1824,12 @@ impl UiE2e {
     pub fn feed_visualization_data(&mut self, band: usize, value: f32) -> &mut Self {
         let mut data = [0.0; SPECTRUM_BANDS];
         data[band.min(SPECTRUM_BANDS - 1)] = value;
-        self.state
-            .app_state_mut()
-            .player
-            .set_visualization_data(data);
+        self.state.set_visualization_data_for_e2e(data);
         self
     }
 
     pub fn tick_visualization(&mut self, elapsed_ms: u32) -> &mut Self {
-        self.state.app_state_mut().player.mark_playing();
+        self.state.ensure_playing_for_e2e();
         self.state.update_timer_tick(elapsed_ms);
         self
     }

@@ -5,7 +5,8 @@ use crate::app::effect::{AppEffect, FileDialogRequest};
 #[cfg(target_os = "android")]
 use crate::app::playlist_actions::playlist_play_first_selected_commands;
 use crate::app::playlist_actions::{
-    playlist_row_click_commands, PlaylistSortAction, PLAYLIST_SORT_MENU_ITEMS,
+    playlist_queue_target_indices, playlist_row_click_commands, PlaylistSortAction,
+    PLAYLIST_SORT_MENU_ITEMS,
 };
 use crate::app::view_model::{
     ellipsize_chars, format_duration, formatted_playlist_entry_title,
@@ -23,12 +24,20 @@ use crate::skin::layout::{
     PlaylistMenuButton, SkinRect,
 };
 
-use super::app::{CachedPlaylistTexture, EguiFrontendState, PlaylistTextureKey};
+#[cfg(target_os = "android")]
+use super::android::playlist_manager::{
+    managed_playlist_name, PlaylistManager, PlaylistManagerAction,
+};
+#[cfg(target_os = "android")]
+use super::android_runtime::AndroidLayoutSnapshot;
+use super::app::EguiFrontendState;
 use super::layout::clamp_popup_to_rect;
+use super::render_cache::{CachedPlaylistTexture, PlaylistTextureKey};
 use super::skin_texture::{
     pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
     upload_color_image,
 };
+use super::ui_state::ActiveOverlay;
 
 pub fn playlist_row_count(view_model: &PlaylistViewModel) -> usize {
     view_model.rows.len()
@@ -43,18 +52,18 @@ fn android_saved_playlist_row_size(available_width: f32) -> egui::Vec2 {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiFrontendState) {
+pub(crate) fn show_android_playlist_manager(
+    ctx: &egui::Context,
+    manager: &mut PlaylistManager,
+    layout: Option<AndroidLayoutSnapshot>,
+) -> Option<PlaylistManagerAction> {
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.android_playlist_manager_open = false;
-        return;
+        return Some(PlaylistManagerAction::Close);
     }
 
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
-    let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels()
-        .filter(|layout| layout.has_current_insets())
-    else {
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        return;
+    let Some(layout) = layout else {
+        return None;
     };
     let screen = egui::Rect::from_min_size(
         egui::Pos2::ZERO,
@@ -74,7 +83,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
         (screen.width() - left_inset - right_inset - horizontal_margin * 2.0).max(1.0);
     let content_height =
         (screen.height() - top_inset - bottom_inset - vertical_margin * 2.0).max(1.0);
-    let saved_playlists = app.android_saved_playlists.clone();
+    let saved_playlists = manager.saved_playlists().to_vec();
+    let mut action = None;
 
     egui::Area::new(egui::Id::new("xmms-android-playlist-manager"))
         .order(egui::Order::Foreground)
@@ -95,7 +105,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                             .add_sized([88.0, 48.0], egui::Button::new("Close"))
                             .clicked()
                         {
-                            app.android_playlist_manager_open = false;
+                            action = Some(PlaylistManagerAction::Close);
                         }
                         ui.heading("Playlists");
                     });
@@ -104,13 +114,13 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                     ui.label("Playlist name");
                     ui.add_sized(
                         [ui.available_width(), 48.0],
-                        egui::TextEdit::singleline(&mut app.android_playlist_name),
+                        egui::TextEdit::singleline(manager.name_mut()),
                     );
                     if ui
                         .add_sized([ui.available_width(), 56.0], egui::Button::new("Save"))
                         .clicked()
                     {
-                        app.save_android_playlist();
+                        action = Some(PlaylistManagerAction::Save);
                     }
                     if ui
                         .add_sized(
@@ -119,7 +129,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                         )
                         .clicked()
                     {
-                        app.begin_android_playlist_import();
+                        action = Some(PlaylistManagerAction::Import);
                     }
 
                     ui.separator();
@@ -134,7 +144,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                 let name = path
                                     .file_name()
                                     .and_then(|name| name.to_str())
-                                    .map(super::app::managed_playlist_name)
+                                    .map(managed_playlist_name)
                                     .filter(|name| !name.is_empty())
                                     .unwrap_or_else(|| "Playlist".to_string());
                                 ui.allocate_ui_with_layout(
@@ -148,7 +158,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                             )
                                             .clicked()
                                         {
-                                            app.delete_android_playlist(&path);
+                                            action =
+                                                Some(PlaylistManagerAction::Delete(path.clone()));
                                         }
                                         if ui
                                             .add_sized(
@@ -157,7 +168,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                             )
                                             .clicked()
                                         {
-                                            app.export_android_playlist(&path);
+                                            action =
+                                                Some(PlaylistManagerAction::Export(path.clone()));
                                         }
                                         if ui
                                             .add_sized(
@@ -166,7 +178,8 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                                             )
                                             .clicked()
                                         {
-                                            app.load_android_playlist(&path);
+                                            action =
+                                                Some(PlaylistManagerAction::Load(path.clone()));
                                         }
                                         ui.with_layout(
                                             egui::Layout::left_to_right(egui::Align::Center),
@@ -181,6 +194,7 @@ pub(crate) fn show_android_playlist_manager(ctx: &egui::Context, app: &mut EguiF
                 });
             });
         });
+    action
 }
 
 pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
@@ -201,7 +215,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
     let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
     let texture_key = PlaylistTextureKey {
-        generation: app.texture_cache.generation,
+        generation: app.render_cache.generation,
         focused: true,
         shaded: view_model.shaded,
         width: app.playlist_width,
@@ -214,7 +228,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         render_scale_bits: render_scale.to_bits(),
     };
     if app
-        .texture_cache
+        .render_cache
         .playlist
         .as_ref()
         .is_none_or(|cached| cached.key != texture_key)
@@ -235,18 +249,18 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
             ui.label("failed to render skinned playlist");
             return;
         };
-        if let Some(cached) = &mut app.texture_cache.playlist {
+        if let Some(cached) = &mut app.render_cache.playlist {
             cached.texture.set(image, egui::TextureOptions::NEAREST);
             cached.key = texture_key;
         } else {
-            app.texture_cache.playlist = Some(CachedPlaylistTexture {
+            app.render_cache.playlist = Some(CachedPlaylistTexture {
                 key: texture_key,
                 texture: upload_color_image(ui.ctx(), "xmms-playlist", image),
             });
         }
     }
     let texture_id = app
-        .texture_cache
+        .render_cache
         .playlist
         .as_ref()
         .expect("playlist texture initialized")
@@ -323,13 +337,13 @@ fn add_playlist_hit_regions(
     base_rect: egui::Rect,
     view_model: &PlaylistViewModel,
 ) {
-    app.playlist_menu_hover = None;
+    app.ui.playlist_menu_hover = None;
     add_playlist_title_button_hits(ui, app, base_rect);
     if view_model.shaded {
         return;
     }
 
-    if app.playlist_menu_open.is_none() {
+    if app.ui.active_overlay.playlist_menu().is_none() {
         add_playlist_rows_hit_region(ui, app, base_rect, view_model);
     }
     for menu in [
@@ -536,7 +550,22 @@ fn add_playlist_rows_hit_region(
             ui.close();
         }
         if ui.button("Physically Delete").clicked() {
-            app.confirm_physical_delete_open = true;
+            app.ui.active_overlay = ActiveOverlay::ConfirmPhysicalDelete;
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Toggle Queue").clicked() {
+            toggle_playlist_queue_targets(app);
+            ui.close();
+        }
+        if ui
+            .add_enabled(
+                !app.controller().playlist_queue().is_empty(),
+                egui::Button::new("Clear Queue"),
+            )
+            .clicked()
+        {
+            app.dispatch(PlaylistCommand::ClearQueue);
             ui.close();
         }
         ui.separator();
@@ -573,6 +602,15 @@ fn add_playlist_rows_hit_region(
     }
 }
 
+fn toggle_playlist_queue_targets(app: &mut EguiFrontendState) -> bool {
+    let targets = playlist_queue_target_indices(&app.controller().state().playlist);
+    if targets.is_empty() {
+        return false;
+    }
+    app.dispatch(PlaylistCommand::ToggleQueue(targets));
+    true
+}
+
 #[cfg(target_os = "android")]
 fn handle_playlist_touch_scroll(
     ui: &egui::Ui,
@@ -597,20 +635,15 @@ fn handle_playlist_touch_scroll(
             .flatten()
     });
     if let Some(drag_start) = drag_start {
-        app.playlist_touch_scroll_remainder = 0.0;
-        app.playlist_touch_drag_delta = egui::Vec2::ZERO;
-        app.playlist_touch_gesture_delta = egui::Vec2::ZERO;
-        app.playlist_touch_drag_direction_decided = false;
-        app.playlist_touch_drag_horizontal = false;
-        app.playlist_touch_drag_start = Some((drag_start, std::time::Instant::now()));
-        app.playlist_touch_drag_row = {
+        let row = {
             let row =
                 ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
             let index = app.playlist_scroll_offset.saturating_add(row);
             view_model.rows.get(index).map(|model| model.index)
         };
+        app.playlist_touch_gesture.begin(drag_start, row);
     }
-    if let Some((drag_start, _)) = app.playlist_touch_drag_start {
+    if let Some(drag_start) = app.playlist_touch_gesture.start() {
         let event_delta = ui.ctx().input(|input| {
             input
                 .events
@@ -624,59 +657,36 @@ fn handle_playlist_touch_scroll(
                 .max_by(|left, right| left.length_sq().total_cmp(&right.length_sq()))
         });
         if let Some(event_delta) = event_delta {
-            if event_delta.length_sq() > app.playlist_touch_gesture_delta.length_sq() {
-                app.playlist_touch_gesture_delta = event_delta;
-            }
+            app.playlist_touch_gesture.observe(event_delta);
         }
     }
     if response.dragged() {
-        let frame_drag_delta = response.drag_delta();
-        app.playlist_touch_drag_delta += frame_drag_delta;
-        if !app.playlist_touch_drag_direction_decided
-            && (app.playlist_touch_drag_delta.x.abs() >= 8.0
-                || app.playlist_touch_drag_delta.y.abs() >= 8.0)
-        {
-            app.playlist_touch_drag_direction_decided = true;
-            app.playlist_touch_drag_horizontal =
-                app.playlist_touch_drag_delta.x.abs() > app.playlist_touch_drag_delta.y.abs();
-        }
-        if app.playlist_touch_drag_direction_decided && !app.playlist_touch_drag_horizontal {
-            let row_height = 11.0 * app.scale_factor;
-            app.playlist_touch_scroll_remainder += -frame_drag_delta.y / row_height;
-            let rows = app.playlist_touch_scroll_remainder.trunc() as i32;
-            if rows != 0 {
-                scroll_playlist_rows(app, rows);
-                app.playlist_touch_scroll_remainder -= rows as f32;
-                ui.ctx().request_repaint();
-            }
+        let rows = app.playlist_touch_gesture.drag(
+            response.total_drag_delta().unwrap_or_default(),
+            11.0 * app.scale_factor,
+        );
+        if rows != 0 {
+            scroll_playlist_rows(app, rows);
+            ui.ctx().request_repaint();
         }
     }
     let drag_released = response.drag_stopped()
-        || (app.playlist_touch_drag_start.is_some()
+        || (app.playlist_touch_gesture.is_active()
             && !ui.ctx().input(|input| input.pointer.primary_down()));
     if drag_released {
         let release_pointer = ui
             .ctx()
             .input(|input| input.pointer.latest_pos())
             .or_else(|| response.interact_pointer_pos());
-        let (endpoint_delta, gesture_duration) = app
-            .playlist_touch_drag_start
-            .and_then(|(start, started_at)| {
-                release_pointer.map(|end| (end - start, started_at.elapsed()))
-            })
-            .unwrap_or((app.playlist_touch_drag_delta, std::time::Duration::MAX));
-        let drag_delta = [
-            endpoint_delta,
-            app.playlist_touch_drag_delta,
-            app.playlist_touch_gesture_delta,
-        ]
-        .into_iter()
-        .max_by(|left, right| left.length_sq().total_cmp(&right.length_sq()))
-        .unwrap_or_default();
+        let release = app
+            .playlist_touch_gesture
+            .release(release_pointer)
+            .expect("active playlist gesture");
+        let drag_delta = release.delta;
         gesture_handled = drag_delta.length_sq() >= 8.0_f32.powi(2);
         let release_velocity = ui.ctx().input(|input| input.pointer.velocity());
         if is_playlist_right_swipe(drag_delta) || is_playlist_left_swipe(drag_delta) {
-            let swiped_index = app.playlist_touch_drag_row.or_else(|| {
+            let swiped_index = release.row.or_else(|| {
                 response.interact_pointer_pos().and_then(|pointer| {
                     let drag_start = pointer - drag_delta;
                     let row = ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor()
@@ -693,24 +703,17 @@ fn handle_playlist_touch_scroll(
                 }
             }
         } else {
-            if is_playlist_upward_play_swipe(drag_delta, release_velocity, gesture_duration) {
+            if is_playlist_upward_play_swipe(drag_delta, release_velocity, release.duration) {
                 play_first_selected_playlist_entry(app);
             } else if is_playlist_downward_pause_swipe(
                 drag_delta,
                 release_velocity,
-                gesture_duration,
+                release.duration,
             ) {
                 app.dispatch(PlayerCommand::Pause);
                 app_log_info!(playlist, "swipe playback paused");
             }
         }
-        app.playlist_touch_scroll_remainder = 0.0;
-        app.playlist_touch_drag_delta = egui::Vec2::ZERO;
-        app.playlist_touch_gesture_delta = egui::Vec2::ZERO;
-        app.playlist_touch_drag_direction_decided = false;
-        app.playlist_touch_drag_horizontal = false;
-        app.playlist_touch_drag_row = None;
-        app.playlist_touch_drag_start = None;
     }
     gesture_handled
 }
@@ -812,12 +815,11 @@ fn scroll_playlist_rows(app: &mut EguiFrontendState, rows: i32) {
 pub(crate) fn dispatch_playlist_menu_button(app: &mut EguiFrontendState, menu: PlaylistMenuButton) {
     let menu_name = format!("{menu:?}");
     app_log_info!(playlist, "menu opened", menu_name);
-    app.playlist_sort_menu_open = false;
-    app.playlist_menu_open = Some(menu);
+    app.ui.active_overlay = ActiveOverlay::PlaylistMenu(menu);
 }
 
 fn show_physical_delete_confirmation(ctx: &egui::Context, app: &mut EguiFrontendState) {
-    if !app.confirm_physical_delete_open {
+    if app.ui.active_overlay != ActiveOverlay::ConfirmPhysicalDelete {
         return;
     }
     let selected_count = app
@@ -839,16 +841,16 @@ fn show_physical_delete_confirmation(ctx: &egui::Context, app: &mut EguiFrontend
             ));
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
-                    app.confirm_physical_delete_open = false;
+                    app.ui.active_overlay = ActiveOverlay::None;
                 }
                 if ui.button("Delete").clicked() {
                     app.dispatch(PlaylistCommand::PhysicallyDeleteSelected);
-                    app.confirm_physical_delete_open = false;
+                    app.ui.active_overlay = ActiveOverlay::None;
                 }
             });
         });
     if !open {
-        app.confirm_physical_delete_open = false;
+        app.ui.active_overlay = ActiveOverlay::None;
     }
 }
 
@@ -857,11 +859,11 @@ fn add_playlist_menu_popover(
     app: &mut EguiFrontendState,
     base_rect: egui::Rect,
 ) {
-    let Some(kind) = app.playlist_menu_open else {
+    let Some(kind) = app.ui.active_overlay.playlist_menu() else {
         return;
     };
     if ui.ctx().input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.playlist_menu_open = None;
+        app.ui.active_overlay = ActiveOverlay::None;
         return;
     }
     #[cfg(target_os = "android")]
@@ -872,7 +874,7 @@ fn add_playlist_menu_popover(
     let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
     let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor);
     let item_height = 18.0 * app.scale_factor;
-    app.playlist_menu_hover = None;
+    app.ui.playlist_menu_hover = None;
     let mut clicked_item = None;
     for index in 0..kind.item_count() {
         let item_rect = egui::Rect::from_min_size(
@@ -888,7 +890,7 @@ fn add_playlist_menu_popover(
             egui::Sense::click(),
         );
         if response.hovered() {
-            app.playlist_menu_hover = Some((kind, index));
+            app.ui.playlist_menu_hover = Some((kind, index));
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if response.clicked() {
@@ -949,14 +951,15 @@ fn add_playlist_menu_popover(
                     })
         });
         if let Some(index) = clicked_item {
+            app.ui.active_overlay = ActiveOverlay::None;
             dispatch_playlist_menu_item(app, PlaylistMenuKind::Misc, index);
-            app.playlist_menu_open = None;
         } else if clicked_outside {
-            app.playlist_menu_open = None;
+            app.ui.active_overlay = ActiveOverlay::None;
         }
     }
 
     let hover = app
+        .ui
         .playlist_menu_hover
         .and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
     let render_state = PlaylistMenuRenderState { kind, hover };
@@ -1005,10 +1008,10 @@ fn add_playlist_menu_popover(
     });
 
     if let Some(index) = clicked_item {
+        app.ui.active_overlay = ActiveOverlay::None;
         dispatch_playlist_menu_item(app, kind, index);
-        app.playlist_menu_open = None;
     } else if clicked_outside {
-        app.playlist_menu_open = None;
+        app.ui.active_overlay = ActiveOverlay::None;
     }
 }
 
@@ -1019,8 +1022,8 @@ pub(crate) fn dispatch_playlist_menu_item(
 ) {
     match (kind, index) {
         (PlaylistMenuKind::Add, 0) => {
-            app.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);
-            app.prompt_text.clear();
+            app.ui.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);
+            app.ui.prompt_text.clear();
         }
         (PlaylistMenuKind::Add, 1) => app.apply_effect(AppEffect::OpenFileDialog(
             FileDialogRequest::AddAudioDirectory,
@@ -1028,7 +1031,9 @@ pub(crate) fn dispatch_playlist_menu_item(
         (PlaylistMenuKind::Add, 2) => {
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
         }
-        (PlaylistMenuKind::Misc, 0) => app.playlist_sort_menu_open = true,
+        (PlaylistMenuKind::Misc, 0) => {
+            app.ui.active_overlay = ActiveOverlay::PlaylistSort;
+        }
         _ => app.dispatch(PlaylistCommand::ExecuteMenu { kind, index }),
     }
 }
@@ -1038,11 +1043,11 @@ fn show_playlist_sort_popover(
     app: &mut EguiFrontendState,
     playlist_rect: egui::Rect,
 ) {
-    if !app.playlist_sort_menu_open {
+    if app.ui.active_overlay != ActiveOverlay::PlaylistSort {
         return;
     }
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.playlist_sort_menu_open = false;
+        app.ui.active_overlay = ActiveOverlay::None;
         return;
     }
 
@@ -1116,7 +1121,7 @@ fn show_playlist_sort_popover(
                 })
     });
     if close_after_click || clicked_outside {
-        app.playlist_sort_menu_open = false;
+        app.ui.active_overlay = ActiveOverlay::None;
     }
 }
 
@@ -1146,8 +1151,8 @@ pub(crate) fn dispatch_playlist_footer_button(
     match button {
         PlaylistFooterButton::Previous => app.dispatch(PlayerCommand::PreviousTrack),
         PlaylistFooterButton::Play => app.dispatch(PlayerCommand::Play),
-        PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::TogglePause),
-        PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Stop),
+        PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::Pause),
+        PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Halt),
         PlaylistFooterButton::Next => app.dispatch(PlayerCommand::NextTrack),
         PlaylistFooterButton::Eject => {
             app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles))
@@ -1250,18 +1255,55 @@ mod tests {
             "Song",
             12_000,
         );
-        app.playlist_sort_menu_open = true;
+        app.ui.active_overlay = ActiveOverlay::PlaylistSort;
         dispatch_playlist_menu_button(&mut app, PlaylistMenuKind::Select);
-        assert_eq!(app.playlist_menu_open, Some(PlaylistMenuKind::Select));
-        assert!(!app.playlist_sort_menu_open);
+        assert_eq!(
+            app.ui.active_overlay,
+            ActiveOverlay::PlaylistMenu(PlaylistMenuKind::Select)
+        );
         dispatch_playlist_menu_item(&mut app, PlaylistMenuKind::Select, 2);
         assert!(app.controller().state().playlist.entries()[0].selected);
+
+        dispatch_playlist_menu_item(&mut app, PlaylistMenuKind::Misc, 0);
+        assert_eq!(app.ui.active_overlay, ActiveOverlay::PlaylistSort);
 
         dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::Play);
         assert_eq!(
             app.controller().state().player.state(),
             crate::player::PlayerState::Playing
         );
+    }
+
+    #[test]
+    fn egui_queue_controls_and_rows_use_the_shared_store_queue() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .add_uri("file:///tmp/one.ogg");
+        app.controller_mut()
+            .state_mut()
+            .playlist
+            .add_uri("file:///tmp/two.ogg");
+        app.dispatch(PlaylistCommand::SetPosition(1));
+
+        assert!(toggle_playlist_queue_targets(&mut app));
+        assert_eq!(app.controller().playlist_queue(), vec![1]);
+
+        let rows = shared_playlist_rows_render_state(
+            app.controller().state(),
+            0,
+            false,
+            None,
+            app.playlist_width,
+            app.playlist_height,
+        );
+        assert_eq!(rows.entries[0].queue_position, None);
+        assert_eq!(rows.entries[1].queue_position, Some(0));
+
+        app.dispatch(PlaylistCommand::ClearQueue);
+        assert!(app.controller().playlist_queue().is_empty());
     }
 
     #[test]

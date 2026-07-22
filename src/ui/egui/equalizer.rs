@@ -18,9 +18,11 @@ use crate::skin::layout::{
     equalizer_control_rect, panel_title_button_rect, LayoutPanelKind, PanelTitleButton, SkinRect,
 };
 
-use super::app::{CachedEqualizerTexture, EguiFrontendState};
+use super::app::EguiFrontendState;
 use super::layout::clamp_popup_to_rect;
+use super::render_cache::CachedEqualizerTexture;
 use super::skin_texture::{pixel_snapped_rect, render_equalizer_color_image, upload_color_image};
+use super::ui_state::{ActiveOverlay, EqualizerPressed};
 
 pub fn equalizer_band_count(view_model: &EqualizerViewModel) -> usize {
     view_model.band_positions.len()
@@ -32,28 +34,28 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         return;
     }
     let render_state = equalizer_render_state(app, &view_model);
-    let needs_texture_update = app.texture_cache.equalizer.as_ref().is_none_or(|cached| {
-        cached.generation != app.texture_cache.generation || cached.state != render_state
+    let needs_texture_update = app.render_cache.equalizer.as_ref().is_none_or(|cached| {
+        cached.generation != app.render_cache.generation || cached.state != render_state
     });
     if needs_texture_update {
         let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
             ui.label("failed to render skinned equalizer");
             return;
         };
-        if let Some(cached) = &mut app.texture_cache.equalizer {
+        if let Some(cached) = &mut app.render_cache.equalizer {
             cached.texture.set(image, egui::TextureOptions::NEAREST);
-            cached.generation = app.texture_cache.generation;
+            cached.generation = app.render_cache.generation;
             cached.state = render_state;
         } else {
-            app.texture_cache.equalizer = Some(CachedEqualizerTexture {
-                generation: app.texture_cache.generation,
+            app.render_cache.equalizer = Some(CachedEqualizerTexture {
+                generation: app.render_cache.generation,
                 state: render_state,
                 texture: upload_color_image(ui.ctx(), "xmms-equalizer", image),
             });
         }
     }
     let texture_id = app
-        .texture_cache
+        .render_cache
         .equalizer
         .as_ref()
         .expect("equalizer texture initialized")
@@ -87,13 +89,14 @@ fn equalizer_render_state(
     app: &EguiFrontendState,
     view_model: &EqualizerViewModel,
 ) -> EqualizerRenderState {
+    let (pressed_control, pressed_slider) = app.equalizer_pressed.render_parts();
     EqualizerRenderState {
         focused: true,
         shaded: view_model.shaded,
         active: view_model.active,
         automatic: view_model.auto,
-        pressed_control: app.equalizer_pressed_control,
-        pressed_slider: app.equalizer_pressed_slider,
+        pressed_control,
+        pressed_slider,
         preamp_position: view_model.preamp_position,
         band_positions: view_model.band_positions,
         volume_position: volume_to_eq_shaded_position(app.controller().state().player.volume()),
@@ -107,8 +110,7 @@ fn add_equalizer_hit_regions(
     base_rect: egui::Rect,
     view_model: &EqualizerViewModel,
 ) {
-    app.equalizer_pressed_control = None;
-    app.equalizer_pressed_slider = None;
+    app.equalizer_pressed = EqualizerPressed::None;
     add_equalizer_title_button_hits(ui, app, base_rect);
     if view_model.shaded {
         add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::ShadedVolume);
@@ -128,7 +130,7 @@ fn add_equalizer_hit_regions(
             egui::Sense::click(),
         );
         if response.is_pointer_button_down_on() {
-            app.equalizer_pressed_control = Some(control);
+            app.equalizer_pressed = EqualizerPressed::Control(control);
             ui.ctx().request_repaint();
         }
         if response.clicked() {
@@ -236,7 +238,7 @@ fn add_equalizer_slider_hit(
     );
     let pointer_down = response.is_pointer_button_down_on();
     if pointer_down || response.dragged() {
-        app.equalizer_pressed_slider = Some(slider);
+        app.equalizer_pressed = EqualizerPressed::Slider(slider);
         ui.ctx().request_repaint();
     }
     if (response.clicked() || response.dragged() || pointer_down)
@@ -253,7 +255,9 @@ pub(crate) fn dispatch_equalizer_control(app: &mut EguiFrontendState, control: E
     match control {
         EqualizerControl::On => app.dispatch(EqualizerCommand::ToggleActive),
         EqualizerControl::Auto => app.dispatch(EqualizerCommand::ToggleAuto),
-        EqualizerControl::Presets => app.equalizer_presets_open = true,
+        EqualizerControl::Presets => {
+            app.ui.active_overlay = ActiveOverlay::EqualizerPresets;
+        }
     }
 }
 
@@ -262,11 +266,11 @@ pub(crate) fn show_equalizer_presets_popover(
     app: &mut EguiFrontendState,
     equalizer_rect: egui::Rect,
 ) {
-    if !app.equalizer_presets_open {
+    if app.ui.active_overlay != ActiveOverlay::EqualizerPresets {
         return;
     }
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        app.equalizer_presets_open = false;
+        app.ui.active_overlay = ActiveOverlay::None;
         return;
     }
 
@@ -340,7 +344,7 @@ pub(crate) fn show_equalizer_presets_popover(
                 })
     });
     if close_after_click || clicked_outside {
-        app.equalizer_presets_open = false;
+        app.ui.active_overlay = ActiveOverlay::None;
     }
 }
 

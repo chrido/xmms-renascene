@@ -13,6 +13,8 @@ use crate::skin::widget::{
 };
 use crate::skin::SkinEntry;
 
+#[cfg(target_os = "android")]
+use super::android_runtime::AndroidLayoutSnapshot;
 use super::app::EguiFrontendState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -75,10 +77,10 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
     #[cfg(target_os = "android")]
     {
         let skin_entries = app.skin_entries.clone();
-        let state = Arc::clone(&app.preferences_viewport);
+        let state = Arc::clone(&app.ui.preferences_viewport);
         let mut state = state.lock().expect("preferences viewport state poisoned");
         let before = state.config.clone();
-        show_android_preferences(ctx, &mut state, &skin_entries);
+        show_android_preferences(ctx, &mut state, &skin_entries, app.android.ready_layout());
         let changed = state.config != before;
         if changed {
             state.changed = true;
@@ -92,7 +94,7 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
     #[cfg(not(target_os = "android"))]
     {
-        let state = Arc::clone(&app.preferences_viewport);
+        let state = Arc::clone(&app.ui.preferences_viewport);
         let builder = egui::ViewportBuilder::default()
             .with_title("Preferences")
             .with_inner_size(egui::vec2(560.0, 460.0))
@@ -131,23 +133,22 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
 
 fn sync_viewport_state_from_app(app: &mut EguiFrontendState) {
     let mut state = app
+        .ui
         .preferences_viewport
         .lock()
         .expect("preferences viewport state poisoned");
-    if !state.open && app.preferences_open {
-        *state = PreferencesViewportState::new(
-            &app.controller().state().config,
-            app.selected_preferences_page,
-            true,
-        );
-    } else if !app.preferences_open {
+    if !state.open && app.preferences_open() {
+        let config = app.controller().state().persistence_snapshot().config;
+        *state = PreferencesViewportState::new(&config, app.ui.selected_preferences_page, true);
+    } else if !app.preferences_open() {
         state.open = false;
     } else {
         // While Preferences stays open, panel visibility/detach/shade and
         // volume/balance can change from the main window, menus, shortcuts, or
         // by closing a window. Mirror those live so the checkboxes/sliders don't
         // show a stale value (the snapshot is only re-seeded when opening).
-        mirror_live_preferences_fields(&mut state.config, &app.controller().state().config);
+        let live = app.controller().state().persistence_snapshot().config;
+        mirror_live_preferences_fields(&mut state.config, &live);
         #[cfg(target_os = "android")]
         {
             state.config.skin = app.controller().state().config.skin.clone();
@@ -161,7 +162,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     let mut open_skin_browser = false;
     #[cfg(target_os = "android")]
     let mut open_playlist_manager = false;
-    let mut next_open = app.preferences_open;
+    let mut next_open = app.preferences_open();
     let next_page;
     let mut next_config = None;
     #[cfg(target_os = "android")]
@@ -169,6 +170,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
 
     {
         let mut state = app
+            .ui
             .preferences_viewport
             .lock()
             .expect("preferences viewport state poisoned");
@@ -197,8 +199,10 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
         }
     }
 
-    app.dispatch(UiCommand::SetPreferencesVisible(next_open));
-    app.selected_preferences_page = next_page;
+    if next_open != app.preferences_open() {
+        app.dispatch(UiCommand::SetPreferencesVisible(next_open));
+    }
+    app.ui.selected_preferences_page = next_page;
     if let Some(config) = next_config {
         app.apply_preferences_config(config);
     }
@@ -207,7 +211,7 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
     }
     #[cfg(target_os = "android")]
     if open_playlist_manager {
-        app.open_android_playlist_manager();
+        app.android.playlist_manager.open();
     }
     #[cfg(target_os = "android")]
     if let Some(action) = android_skin_action {
@@ -219,14 +223,12 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
         }
     }
     if save_config {
-        app.runtime
-            .apply_effect(crate::app::effect::AppEffect::SaveConfig);
+        app.apply_effect(crate::app::effect::AppEffect::SaveConfig);
     }
     if queue_render {
-        app.runtime
-            .apply_effect(crate::app::effect::AppEffect::QueueRender(
-                crate::app::effect::RenderTarget::All,
-            ));
+        app.apply_effect(crate::app::effect::AppEffect::QueueRender(
+            crate::app::effect::RenderTarget::All,
+        ));
     }
 }
 
@@ -250,13 +252,11 @@ fn show_android_preferences(
     ctx: &egui::Context,
     state: &mut PreferencesViewportState,
     skin_entries: &[SkinEntry],
+    layout: Option<AndroidLayoutSnapshot>,
 ) {
     update_android_swipe_start(ctx, state);
     let pixels_per_point = ctx.pixels_per_point().max(f32::EPSILON);
-    let Some(layout) = super::android_file_picker::window_layout_snapshot_pixels()
-        .filter(|layout| layout.has_current_insets())
-    else {
-        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    let Some(layout) = layout else {
         return;
     };
     let screen = egui::Rect::from_min_size(

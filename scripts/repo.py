@@ -1381,7 +1381,7 @@ class RepoTool:
     def _pye2e_xvfb_server_args(self) -> str:
         return os.environ.get(
             "XMMS_E2E_XVFB_SERVER_ARGS",
-            os.environ.get("XMMS_XVFB_SERVER_ARGS", "-screen 0 1024x768x24"),
+            os.environ.get("XMMS_XVFB_SERVER_ARGS", "-noreset -screen 0 1024x768x24"),
         )
 
     def _pye2e_command(self, python: Path, args: tuple[str, ...]) -> list[str]:
