@@ -627,13 +627,17 @@ impl EguiFrontendState {
             MprisAppAction::Dispatch(app_command) => {
                 self.dispatch(app_command);
                 match command {
-                    MprisCommand::Seek { .. }
-                    | MprisCommand::SetPosition { .. }
-                    | MprisCommand::Stop => {
+                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
                         vec![MprisEvent::Seeked(
                             self.controller.state().config.playback_position_ms * 1_000,
                         )]
                     }
+                    MprisCommand::Stop => vec![
+                        MprisEvent::PlaybackStatusChanged,
+                        MprisEvent::Seeked(
+                            self.controller.state().config.playback_position_ms * 1_000,
+                        ),
+                    ],
                     MprisCommand::Next
                     | MprisCommand::Previous
                     | MprisCommand::Pause

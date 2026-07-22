@@ -607,7 +607,7 @@ fn shaded_transport_controls_trigger_playback_actions() {
         .assert_playlist_position(Some(0))
         .assert_current_playlist_entry("file:///tmp/one.ogg")
         .click(MainTarget::STOP)
-        .assert_player_state(PlayerState::Playing)
+        .assert_player_state(PlayerState::Paused)
         .assert_position(0);
 }
 
@@ -1444,8 +1444,9 @@ fn mpris_transport_methods_drive_playlist_and_playback() {
         .execute_mpris_command(MprisCommand::PlayPause)
         .assert_player_state(PlayerState::Playing)
         .execute_mpris_command(MprisCommand::Stop)
-        .assert_player_state(PlayerState::Playing)
+        .assert_player_state(PlayerState::Paused)
         .assert_position(0)
+        .assert_mpris_event(MprisEvent::PlaybackStatusChanged)
         .assert_mpris_event(MprisEvent::Seeked(0));
 }
 
@@ -1495,12 +1496,12 @@ fn transport_buttons_update_player_state_and_position() {
 
     app.click(MainTarget::PLAY)
         .click(MainTarget::STOP)
-        .assert_player_state(PlayerState::Playing)
+        .assert_player_state(PlayerState::Paused)
         .assert_position(0);
 
     app.click(MainTarget::EJECT)
         .assert_window_visible(Window::Player)
-        .assert_player_state(PlayerState::Playing)
+        .assert_player_state(PlayerState::Paused)
         .assert_file_dialog_visible();
 }
 
@@ -1525,7 +1526,7 @@ fn playlist_footer_transport_buttons_update_player_state_and_position() {
         .click_panel(PanelTarget::PlaylistPrevious)
         .assert_playlist_position(Some(0))
         .click_panel(PanelTarget::PlaylistStop)
-        .assert_player_state(PlayerState::Playing)
+        .assert_player_state(PlayerState::Paused)
         .assert_position(0)
         .click_panel(PanelTarget::PlaylistEject)
         .assert_file_dialog_visible();
@@ -1543,7 +1544,7 @@ fn docked_playlist_footer_transport_buttons_use_current_geometry() {
     .click_docked_panel(PanelTarget::PlaylistPlay)
     .assert_player_state(PlayerState::Playing)
     .click_docked_panel(PanelTarget::PlaylistStop)
-    .assert_player_state(PlayerState::Playing)
+    .assert_player_state(PlayerState::Paused)
     .assert_position(0);
 }
 

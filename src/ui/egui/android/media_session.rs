@@ -457,7 +457,14 @@ fn execute_android_media_control(
         AndroidMediaControl::PlayMediaItem(index) => {
             playlist.play_media_item(index, |uri| backend.play_uri(uri))
         }
-        AndroidMediaControl::HaltPlayback => backend.seek(0),
+        AndroidMediaControl::HaltPlayback => match backend.state().transition(PlayerAction::Halt) {
+            Some(PlayerTransition::PauseAndSeekToStart) => {
+                backend.pause()?;
+                backend.seek(0)
+            }
+            Some(PlayerTransition::SeekToStart) => backend.seek(0),
+            _ => Ok(()),
+        },
         AndroidMediaControl::PlaylistEof => {
             playlist.advance_after_end_of_stream(|uri| backend.play_uri(uri), || backend.stop())
         }

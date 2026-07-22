@@ -6375,9 +6375,13 @@ impl MainWindowUiState {
             MprisAppAction::Dispatch(app_command) => {
                 self.dispatch_store_command_and_apply_local_effects(app_command);
                 match command {
-                    MprisCommand::Seek { .. }
-                    | MprisCommand::SetPosition { .. }
-                    | MprisCommand::Stop => {
+                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
+                        self.mpris_events.push(MprisEvent::Seeked(
+                            self.store.state().config.playback_position_ms * 1_000,
+                        ));
+                    }
+                    MprisCommand::Stop => {
+                        self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
                         self.mpris_events.push(MprisEvent::Seeked(
                             self.store.state().config.playback_position_ms * 1_000,
                         ));
@@ -9896,7 +9900,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_seeks_to_start_without_fading_or_stopping() {
+    fn halt_pauses_and_seeks_to_start_without_fading_or_stopping() {
         let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
             volume: 80,
             stop_with_fadeout: true,
@@ -9907,7 +9911,7 @@ mod tests {
 
         state.activate_push(MainPushButton::Stop);
         assert_eq!(state.playback_position_ms(), 0);
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(state.store.state().player.state(), PlayerState::Paused);
         assert_eq!(state.volume(), 80);
         assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
     }

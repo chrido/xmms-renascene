@@ -30,6 +30,7 @@ pub enum PlayerTransition {
     Start,
     Resume,
     Pause,
+    PauseAndSeekToStart,
     SeekToStart,
 }
 
@@ -39,7 +40,10 @@ impl PlayerState {
             (Self::Stopped, PlayerAction::Play) => Some(PlayerTransition::Start),
             (Self::Paused, PlayerAction::Play) => Some(PlayerTransition::Resume),
             (Self::Playing, PlayerAction::Pause) => Some(PlayerTransition::Pause),
-            (_, PlayerAction::Halt) => Some(PlayerTransition::SeekToStart),
+            (Self::Playing, PlayerAction::Halt) => Some(PlayerTransition::PauseAndSeekToStart),
+            (Self::Stopped | Self::Paused, PlayerAction::Halt) => {
+                Some(PlayerTransition::SeekToStart)
+            }
             _ => None,
         }
     }
@@ -864,7 +868,9 @@ mod tests {
     fn transport_state_machine_rejects_invalid_transitions() {
         use PlayerAction::{Halt, Pause, Play};
         use PlayerState::{Paused, Playing, Stopped};
-        use PlayerTransition::{Pause as PausePlayback, Resume, SeekToStart, Start};
+        use PlayerTransition::{
+            Pause as PausePlayback, PauseAndSeekToStart, Resume, SeekToStart, Start,
+        };
 
         assert_eq!(Stopped.transition(Play), Some(Start));
         assert_eq!(Stopped.transition(Pause), None);
@@ -872,7 +878,7 @@ mod tests {
 
         assert_eq!(Playing.transition(Play), None);
         assert_eq!(Playing.transition(Pause), Some(PausePlayback));
-        assert_eq!(Playing.transition(Halt), Some(SeekToStart));
+        assert_eq!(Playing.transition(Halt), Some(PauseAndSeekToStart));
 
         assert_eq!(Paused.transition(Play), Some(Resume));
         assert_eq!(Paused.transition(Pause), None);
