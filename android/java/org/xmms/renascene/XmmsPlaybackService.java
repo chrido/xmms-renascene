@@ -174,32 +174,32 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         mediaSession.setCallback(new MediaSession.Callback() {
             @Override
             public void onPlay() {
-                nativeOnMediaControl(CONTROL_PLAY, 0);
+                dispatchMediaControl(CONTROL_PLAY, 0);
             }
 
             @Override
             public void onPause() {
-                nativeOnMediaControl(CONTROL_PAUSE, 0);
+                dispatchMediaControl(CONTROL_PAUSE, 0);
             }
 
             @Override
             public void onSkipToNext() {
-                nativeOnMediaControl(CONTROL_NEXT, 0);
+                dispatchMediaControl(CONTROL_NEXT, 0);
             }
 
             @Override
             public void onSkipToPrevious() {
-                nativeOnMediaControl(CONTROL_PREVIOUS, 0);
+                dispatchMediaControl(CONTROL_PREVIOUS, 0);
             }
 
             @Override
             public void onSeekTo(long positionMs) {
-                nativeOnMediaControl(CONTROL_SEEK, positionMs);
+                dispatchMediaControl(CONTROL_SEEK, positionMs);
             }
 
             @Override
             public void onStop() {
-                nativeOnMediaControl(CONTROL_STOP, 0);
+                dispatchMediaControl(CONTROL_STOP, 0);
             }
 
             @Override
@@ -228,8 +228,11 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             if (Build.VERSION.SDK_INT >= 26) {
                 startForeground(NOTIFICATION_ID, buildNotification(false));
             }
-            nativeOnMediaControl(
-                    intent.getIntExtra(EXTRA_WIDGET_CONTROL, CONTROL_PLAY), 0);
+            int control = intent.getIntExtra(EXTRA_WIDGET_CONTROL, CONTROL_PLAY);
+            if (!dispatchMediaControl(control, 0)) {
+                stopPlaybackService();
+                return START_NOT_STICKY;
+            }
             playbackHandler.postDelayed(() -> {
                 if (playbackState == STATE_STOPPED) {
                     stopPlaybackService();
@@ -290,6 +293,14 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         playlistSize = Math.max(0, mediaItemCount);
         hasPrevious = previous;
         hasNext = next;
+        boolean playing = state == STATE_PLAYING;
+        if (playing && !requestPlaybackAudioFocus()) {
+            Log.w(TAG, "Pausing playback because audio focus was denied");
+            playbackState = STATE_PAUSED;
+            nativeOnMediaControl(CONTROL_PAUSE, 0);
+            stopPlaybackService();
+            return;
+        }
         XmmsPlayerWidget.updateAll(
                 this,
                 hasPrevious,
@@ -310,9 +321,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             stopPlaybackService();
             return;
         }
-        boolean playing = state == STATE_PLAYING;
         updateWakeLock(playing);
-        updateAudioFocus(playing);
         updateMediaSession(playing);
         Notification notification = buildNotification(playing);
         if (Build.VERSION.SDK_INT >= 29) {
@@ -505,7 +514,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         if (index < 0 || index >= nativeMediaItemCount()) {
             return;
         }
-        nativeOnMediaControl(CONTROL_PLAY_MEDIA_ITEM, index);
+        dispatchMediaControl(CONTROL_PLAY_MEDIA_ITEM, index);
     }
 
     private long findMediaItem(String query) {
@@ -562,24 +571,44 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
-    private void updateAudioFocus(boolean playing) {
-        if (playing
-                && !audioFocusHeld
-                && audioManager != null
-                && audioFocusRequest != null) {
-            audioFocusHeld =
-                    audioManager.requestAudioFocus(audioFocusRequest)
-                            == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+    private boolean requestPlaybackAudioFocus() {
+        if (audioFocusHeld) {
+            return true;
         }
+        if (audioManager == null || audioFocusRequest == null) {
+            return false;
+        }
+        audioFocusHeld =
+                audioManager.requestAudioFocus(audioFocusRequest)
+                        == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        return audioFocusHeld;
+    }
+
+    private boolean dispatchMediaControl(int control, long value) {
+        boolean startsPlayback =
+                control == CONTROL_PLAY
+                        || control == CONTROL_NEXT
+                        || control == CONTROL_PREVIOUS
+                        || control == CONTROL_PLAY_MEDIA_ITEM;
+        if (startsPlayback && !requestPlaybackAudioFocus()) {
+            Log.w(TAG, "Rejecting playback control because audio focus was denied");
+            return false;
+        }
+        nativeOnMediaControl(control, value);
+        return true;
     }
 
     private void handleAudioFocusChange(int focusChange) {
         if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
+            audioFocusHeld = true;
             if (resumeAfterFocusGain) {
                 resumeAfterFocusGain = false;
-                nativeOnMediaControl(CONTROL_PLAY, 0);
+                dispatchMediaControl(CONTROL_PLAY, 0);
             }
             return;
+        }
+        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+            audioFocusHeld = false;
         }
         if (playbackState != STATE_PLAYING) {
             return;
@@ -587,7 +616,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         resumeAfterFocusGain =
                 focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
                         || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK;
-        nativeOnMediaControl(CONTROL_PAUSE, 0);
+        dispatchMediaControl(CONTROL_PAUSE, 0);
     }
 
     private void abandonAudioFocus() {

@@ -164,8 +164,33 @@ fn android_playback_service_is_the_only_audio_focus_owner() {
     assert!(!activity.contains("requestPlaybackAudioFocus"));
     assert!(!activity.contains("abandonPlaybackAudioFocus"));
     assert!(service.contains("private boolean audioFocusHeld;"));
-    assert!(service.contains("if (playing\n                && !audioFocusHeld"));
+    assert!(service.contains("private boolean requestPlaybackAudioFocus()"));
+    assert!(service.contains("if (startsPlayback && !requestPlaybackAudioFocus())"));
+    assert!(service.contains("return false;"));
+    assert!(service.contains("audioFocusHeld = false;"));
     assert!(service.contains("if (audioFocusHeld && audioManager != null"));
+    assert!(service.contains(
+        "public void onPlay() {\n                dispatchMediaControl(CONTROL_PLAY, 0);"
+    ));
+    assert!(service.contains("if (!dispatchMediaControl(control, 0))"));
+    assert!(service.contains("dispatchMediaControl(CONTROL_PLAY_MEDIA_ITEM, index);"));
+
+    let apply_state = service
+        .split("public void applyNativePlaybackState(")
+        .nth(1)
+        .expect("native playback-state projection")
+        .split("private void updateWakeLock(")
+        .next()
+        .expect("native playback-state projection body");
+    let focus_gate = apply_state
+        .find("if (playing && !requestPlaybackAudioFocus())")
+        .expect("playing state must require audio focus");
+    let wake_lock = apply_state
+        .find("updateWakeLock(playing);")
+        .expect("playing state wake-lock update");
+    assert!(focus_gate < wake_lock);
+    assert!(apply_state[focus_gate..wake_lock].contains("nativeOnMediaControl(CONTROL_PAUSE, 0);"));
+    assert!(apply_state[focus_gate..wake_lock].contains("stopPlaybackService();"));
     assert!(rust_focus.contains("Playback audio-focus ownership remains exclusively"));
     assert!(!rust_focus.contains("AudioFocusRequest"));
 }
