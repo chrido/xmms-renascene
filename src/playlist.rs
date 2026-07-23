@@ -1001,7 +1001,7 @@ fn shuffle_slice<T>(items: &mut [T]) {
     }
 }
 
-fn is_media_file(path: &Path) -> bool {
+pub(crate) fn is_media_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| MEDIA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))

@@ -28,6 +28,8 @@ import java.io.OutputStream;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -40,6 +42,8 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public final class XmmsActivity extends NativeActivity {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+    private static final ExecutorService DOCUMENT_EXECUTOR =
+            Executors.newSingleThreadExecutor();
     private static final int READ_FLAGS =
             Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
     static final String ACTION_PAUSE_PLAYBACK =
@@ -714,22 +718,32 @@ public final class XmmsActivity extends NativeActivity {
             nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
             return;
         }
+        byte[] documentContents = null;
+        if (requestCode == 105 || requestCode == 106) {
+            documentContents = pendingDocumentContents;
+            pendingDocumentContents = null;
+        }
+        byte[] contents = documentContents;
+        DOCUMENT_EXECUTOR.execute(
+                () -> processActivityResult(requestCode, operationId, data, contents));
+    }
+
+    private void processActivityResult(
+            int requestCode, long operationId, Intent data, byte[] documentContents) {
         try {
             if (requestCode == 105 || requestCode == 106) {
                 Uri uri = data.getData();
                 if (uri == null) {
                     throw new IllegalStateException("document provider returned no output URI");
                 }
-                byte[] contents = pendingDocumentContents;
-                pendingDocumentContents = null;
-                if (contents == null) {
+                if (documentContents == null) {
                     throw new IllegalStateException("equalizer preset contents are unavailable");
                 }
                 try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
                     if (output == null) {
                         throw new IllegalStateException("could not open output document");
                     }
-                    output.write(contents);
+                    output.write(documentContents);
                 }
                 nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
                 return;
@@ -741,11 +755,11 @@ public final class XmmsActivity extends NativeActivity {
                 }
                 getContentResolver().takePersistableUriPermission(
                         treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                File directory = copyTreeToPrivateStorage(treeUri);
+                ArrayList<String> paths = copyTreeToPrivateStorage(treeUri);
                 nativeOnDocumentsSelected(
                         requestCode,
                         operationId,
-                        new String[] {directory.getAbsolutePath()},
+                        paths.toArray(new String[0]),
                         null);
                 return;
             }
@@ -805,7 +819,7 @@ public final class XmmsActivity extends NativeActivity {
         return output;
     }
 
-    private File copyTreeToPrivateStorage(Uri treeUri) throws Exception {
+    private ArrayList<String> copyTreeToPrivateStorage(Uri treeUri) throws Exception {
         File importDir = new File(getFilesDir(), "imports");
         if (!importDir.isDirectory() && !importDir.mkdirs()) {
             throw new IllegalStateException("cannot create " + importDir);
@@ -817,11 +831,16 @@ public final class XmmsActivity extends NativeActivity {
         if (!output.mkdirs()) {
             throw new IllegalStateException("cannot create " + output);
         }
-        copyDocumentChildren(treeUri, rootId, output);
-        return output;
+        ArrayList<String> copiedPaths = new ArrayList<>();
+        copyDocumentChildren(treeUri, rootId, output, copiedPaths);
+        return copiedPaths;
     }
 
-    private void copyDocumentChildren(Uri treeUri, String parentId, File outputDir)
+    private void copyDocumentChildren(
+            Uri treeUri,
+            String parentId,
+            File outputDir,
+            ArrayList<String> copiedPaths)
             throws Exception {
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
         String[] columns = {
@@ -847,9 +866,11 @@ public final class XmmsActivity extends NativeActivity {
                     if (!childDir.mkdirs()) {
                         throw new IllegalStateException("cannot create " + childDir);
                     }
-                    copyDocumentChildren(treeUri, documentId, childDir);
+                    copyDocumentChildren(treeUri, documentId, childDir, copiedPaths);
                 } else {
-                    copyDocumentToFile(documentUri, uniqueFile(outputDir, name));
+                    File output = uniqueFile(outputDir, name);
+                    copyDocumentToFile(documentUri, output);
+                    copiedPaths.add(output.getAbsolutePath());
                 }
             }
         }

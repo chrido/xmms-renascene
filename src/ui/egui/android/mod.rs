@@ -140,6 +140,10 @@ pub fn runtime_exited(activity_generation: AndroidActivityGeneration) {
     activity::clear_generation(activity_generation);
 }
 
+pub(crate) fn request_background_repaint() {
+    events::request_registered_repaint();
+}
+
 pub(crate) fn handle_activity_resumed(env: &mut JNIEnv<'_>, activity_object: &JObject<'_>) {
     let _order = events::lock_media_control_order();
     let Some(activity_generation) = activity::set_resumed(env, activity_object, true) else {

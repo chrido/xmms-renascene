@@ -43,6 +43,55 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
 }
 
 #[test]
+fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let app = include_str!("../src/ui/egui/app.rs");
+
+    assert!(java.contains("Executors.newSingleThreadExecutor()"));
+    let activity_result = java
+        .split("protected void onActivityResult(")
+        .nth(1)
+        .expect("Android Activity result")
+        .split("private void processActivityResult(")
+        .next()
+        .expect("Activity result body");
+    assert!(activity_result.contains("DOCUMENT_EXECUTOR.execute("));
+    assert!(!activity_result.contains("copyToPrivateStorage("));
+    assert!(!activity_result.contains("copyTreeToPrivateStorage("));
+    assert!(!activity_result.contains("openOutputStream("));
+
+    let background_processing = java
+        .split("private void processActivityResult(")
+        .nth(1)
+        .expect("background document processing")
+        .split("private ArrayList<Uri> selectedUris")
+        .next()
+        .expect("background document processing body");
+    assert!(background_processing.contains("copyToPrivateStorage("));
+    assert!(background_processing.contains("copyTreeToPrivateStorage("));
+    assert!(background_processing.contains("openOutputStream("));
+    assert!(java.contains("copiedPaths.add(output.getAbsolutePath())"));
+    assert!(app.contains(".filter(|path| crate::playlist::is_media_file(path))"));
+
+    let duration_index = app
+        .split("fn schedule_missing_local_playlist_durations")
+        .nth(1)
+        .expect("duration indexing scheduler")
+        .split("fn poll_duration_index_results")
+        .next()
+        .expect("duration indexing scheduler body");
+    assert!(duration_index.contains("thread::spawn(move ||"));
+    assert!(duration_index.contains("probe.probe(&item)"));
+    assert!(duration_index.contains("sender.send(results)"));
+    assert!(duration_index.contains("request_background_repaint()"));
+    let duration_preflight = duration_index
+        .split("thread::spawn(move ||")
+        .next()
+        .expect("duration preflight");
+    assert!(!duration_preflight.contains("path.exists()"));
+}
+
+#[test]
 fn android_output_volume_uses_stream_music_without_backend_scaling() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
     let rust = include_str!("../src/ui/egui/android/audio_focus.rs");

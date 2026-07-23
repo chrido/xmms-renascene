@@ -43,6 +43,7 @@ use crate::playback::backend::PlaybackBackend;
 #[cfg(all(not(target_os = "android"), not(test)))]
 use crate::playback::backend::{create_backend, PlaybackBackendKind};
 use crate::playback::model::{EqualizerBackendState, PlaybackEvent, PlayerState};
+#[cfg(all(not(feature = "rodio-backend"), feature = "gstreamer-backend"))]
 use crate::playlist::file_uri_to_path;
 use crate::playlist::DurationIndexResult;
 use crate::playlist::Playlist;
@@ -205,8 +206,8 @@ pub struct EguiFrontendState {
     pub(crate) playlist_touch_gesture: PlaylistTouchGesture,
     playback: PlaybackRuntime,
     #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
-    duration_index_sender: Sender<DurationIndexResult>,
-    duration_index_receiver: Receiver<DurationIndexResult>,
+    duration_index_sender: Sender<Vec<DurationIndexResult>>,
+    duration_index_receiver: Receiver<Vec<DurationIndexResult>>,
     socket_control: Option<SocketControl>,
     #[cfg(feature = "desktop-egui")]
     mpris_service: Option<EguiMprisService>,
@@ -733,8 +734,8 @@ impl EguiFrontendState {
 
     fn poll_duration_index_results(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(result) = self.duration_index_receiver.try_recv() {
-            let dispatch = self.controller.apply_duration_index_result(result);
+        while let Ok(results) = self.duration_index_receiver.try_recv() {
+            let dispatch = self.controller.apply_duration_index_results(results);
             changed |= !dispatch.changes.is_empty();
             self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
         }
@@ -748,7 +749,6 @@ impl EguiFrontendState {
             .playlist
             .missing_duration_items()
             .into_iter()
-            .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
             .collect::<Vec<_>>();
         if items.is_empty() {
             return;
@@ -757,6 +757,7 @@ impl EguiFrontendState {
         #[allow(unused_variables)]
         let sender = self.duration_index_sender.clone();
         thread::spawn(move || {
+            let mut results = Vec::new();
             #[cfg(feature = "rodio-backend")]
             {
                 use crate::playback::backend::AudioMetadataProbe as _;
@@ -764,11 +765,7 @@ impl EguiFrontendState {
                 let probe = crate::playback::rodio::RodioMetadataProbe;
                 for item in items {
                     match probe.probe(&item) {
-                        Ok(Some(result)) => {
-                            if sender.send(result).is_err() {
-                                return;
-                            }
-                        }
+                        Ok(Some(result)) => results.push(result),
                         Ok(None) => {}
                         Err(err) => eprintln!(
                             "xmms-rs: failed to probe playlist item {} with rodio: {err}",
@@ -816,18 +813,17 @@ impl EguiFrontendState {
                         .duration()
                         .map(|duration| duration.mseconds() as i64)
                         .unwrap_or(-1);
-                    if sender
-                        .send(DurationIndexResult {
-                            index: item.index,
-                            uri: item.uri,
-                            length_ms,
-                            title: None,
-                        })
-                        .is_err()
-                    {
-                        return;
-                    }
+                    results.push(DurationIndexResult {
+                        index: item.index,
+                        uri: item.uri,
+                        length_ms,
+                        title: None,
+                    });
                 }
+            }
+            if !results.is_empty() && sender.send(results).is_ok() {
+                #[cfg(target_os = "android")]
+                super::android::request_background_repaint();
             }
         });
     }
@@ -1182,8 +1178,16 @@ impl EguiFrontendState {
             return;
         }
         match result.request {
-            FileDialogRequest::AddAudioFiles | FileDialogRequest::AddAudioDirectory => {
+            FileDialogRequest::AddAudioFiles => {
                 self.dispatch(PlaylistCommand::AddFiles(result.paths));
+            }
+            FileDialogRequest::AddAudioDirectory => {
+                let paths = result
+                    .paths
+                    .into_iter()
+                    .filter(|path| crate::playlist::is_media_file(path))
+                    .collect();
+                self.dispatch(PlaylistCommand::AddFiles(paths));
             }
             FileDialogRequest::LoadPlaylist => {
                 if let Some(path) = result.paths.first() {
@@ -3775,12 +3779,12 @@ mod tests {
         );
 
         app.duration_index_sender
-            .send(DurationIndexResult {
+            .send(vec![DurationIndexResult {
                 index: 0,
                 uri: "file:///tmp/song.ogg".to_string(),
                 length_ms: 42_000,
                 title: None,
-            })
+            }])
             .unwrap();
 
         assert!(app.poll_duration_index_results());

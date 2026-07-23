@@ -848,6 +848,14 @@ impl AudioMetadataProbe for RodioMetadataProbe {
                 source.path.display()
             )
         })?;
+        let title = {
+            use id3::TagLike as _;
+
+            id3::no_tag_ok(id3::v1v2::read_from_path(&source.path))
+                .ok()
+                .flatten()
+                .and_then(|tag| tag.title().map(str::to_string))
+        };
         Ok(Some(DurationIndexResult {
             index: item.index,
             uri: item.uri.clone(),
@@ -855,7 +863,7 @@ impl AudioMetadataProbe for RodioMetadataProbe {
                 .total_duration()
                 .map(duration_to_millis)
                 .unwrap_or(-1),
-            title: None,
+            title,
         }))
     }
 }
