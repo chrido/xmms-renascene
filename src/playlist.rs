@@ -861,7 +861,7 @@ impl Playlist {
     }
 
     pub fn save_m3u_file(&self, path: &Path) -> io::Result<()> {
-        fs::write(path, self.to_m3u())
+        crate::atomic_file::write(path, self.to_m3u().as_bytes())
     }
 
     pub fn to_m3u(&self) -> String {
