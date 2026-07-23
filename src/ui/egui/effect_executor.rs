@@ -167,7 +167,7 @@ pub(crate) fn flush_android_persistence(
     pending_messages: &mut Vec<String>,
     force: bool,
 ) {
-    if !super::android::is_foreground_activity(android.activity_generation()) {
+    if !force && !super::android::is_foreground_activity(android.activity_generation()) {
         return;
     }
     if !android.take_persistence_due(force) {

@@ -159,6 +159,45 @@ fn activity_media_control_state_machine_and_lifecycle_contract_are_explicit() {
 }
 
 #[test]
+fn android_persists_explicit_saves_and_exit_without_foreground_delay() {
+    let app = include_str!("../src/ui/egui/app.rs");
+    let executor = include_str!("../src/ui/egui/effect_executor.rs");
+
+    let platform_effect = app
+        .split("EffectOwner::Platform(effect) =>")
+        .nth(1)
+        .expect("platform effect execution")
+        .split("fn execute_ui_effect")
+        .next()
+        .expect("platform effect body");
+    assert!(platform_effect
+        .contains("let force_persistence = matches!(effect, PlatformEffect::SaveConfig);"));
+    assert!(platform_effect.contains("force_persistence"));
+
+    let persistence = executor
+        .split("pub(crate) fn flush_android_persistence(")
+        .nth(1)
+        .expect("Android persistence flush")
+        .split("pub(crate) fn flush_android_media_projection")
+        .next()
+        .expect("Android persistence body");
+    assert!(persistence.contains(
+        "if !force && !super::android::is_foreground_activity(android.activity_generation())"
+    ));
+
+    let exit = app
+        .split("fn on_exit(&mut self")
+        .nth(1)
+        .expect("Android app exit")
+        .split("fn logic(&mut self")
+        .next()
+        .expect("Android app exit body");
+    assert!(exit.contains("self.android.mark_persistence();"));
+    assert!(exit.contains("self.flush_android_platform_policies(true);"));
+    assert!(!exit.contains("is_foreground_activity"));
+}
+
+#[test]
 fn activity_jni_callbacks_do_not_execute_domain_or_backend_mutations() {
     let jni = include_str!("../src/ui/egui/android/jni.rs");
     let lifecycle_callbacks = jni

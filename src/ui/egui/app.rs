@@ -82,7 +82,9 @@ use super::android_runtime::{
     AndroidLayoutOrientation, AndroidLayoutRepaint as AndroidLayoutReadiness,
     AndroidLayoutSnapshot, AndroidLayoutView, AndroidRuntime, AndroidStableLayout,
 };
-use super::effect_executor::{self, EffectExecution, EffectOwner, PlaybackEffect, UiEffect};
+use super::effect_executor::{
+    self, EffectExecution, EffectOwner, PlatformEffect, PlaybackEffect, UiEffect,
+};
 use super::file_info;
 #[cfg(any(target_os = "android", test))]
 use super::interaction::PlaylistTouchGesture;
@@ -924,6 +926,7 @@ impl EguiFrontendState {
                 false
             }
             EffectOwner::Platform(effect) => {
+                let force_persistence = matches!(effect, PlatformEffect::SaveConfig);
                 effect_executor::execute_platform_effect(
                     effect,
                     &mut self.playback,
@@ -931,7 +934,7 @@ impl EguiFrontendState {
                     #[cfg(target_os = "android")]
                     &mut self.android,
                 );
-                false
+                force_persistence
             }
         }
     }
@@ -1367,10 +1370,8 @@ impl eframe::App for EguiFrontendState {
     #[cfg(target_os = "android")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let activity_generation = self.android.activity_generation();
-        if super::android::is_foreground_activity(activity_generation) {
-            self.android.mark_persistence();
-            self.flush_android_platform_policies(true);
-        }
+        self.android.mark_persistence();
+        self.flush_android_platform_policies(true);
         super::android::runtime_exited(activity_generation);
     }
 
