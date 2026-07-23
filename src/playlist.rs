@@ -861,7 +861,7 @@ impl Playlist {
     }
 
     pub fn save_m3u_file(&self, path: &Path) -> io::Result<()> {
-        fs::write(path, self.to_m3u())
+        crate::atomic_file::write(path, self.to_m3u().as_bytes())
     }
 
     pub fn to_m3u(&self) -> String {
@@ -1001,7 +1001,7 @@ fn shuffle_slice<T>(items: &mut [T]) {
     }
 }
 
-fn is_media_file(path: &Path) -> bool {
+pub(crate) fn is_media_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| MEDIA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))

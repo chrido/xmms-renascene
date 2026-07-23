@@ -23,6 +23,7 @@ pub struct AndroidPickerResult {
     pub request: FileDialogRequest,
     pub paths: Vec<PathBuf>,
     pub error: Option<String>,
+    pub complete: bool,
 }
 
 impl AndroidPickerResult {
@@ -178,6 +179,10 @@ impl PickerOperationRegistry {
         }
     }
 
+    pub fn is_active(&self, request_code: i32, operation_id: u64) -> bool {
+        self.active.get(&request_code) == Some(&operation_id)
+    }
+
     pub fn complete(&mut self, request_code: i32, operation_id: u64) -> bool {
         if self.active.get(&request_code) != Some(&operation_id) {
             return false;
@@ -304,6 +309,7 @@ mod tests {
             request: FileDialogRequest::ImportSkin,
             paths: Vec::new(),
             error: None,
+            complete: true,
         }));
         inbox.push(AndroidPlatformEvent::ExternalVolumeChanged(42));
         inbox.push(AndroidPlatformEvent::Playback(PlaybackEvent::AsyncDone));
@@ -341,6 +347,17 @@ mod tests {
         assert!(!operations.complete(100, stale));
         assert!(operations.complete(100, current));
         assert!(!operations.complete(100, current));
+    }
+
+    #[test]
+    fn picker_progress_keeps_operation_active_until_completion() {
+        let mut operations = PickerOperationRegistry::default();
+        let operation = operations.begin(100).unwrap();
+
+        assert!(operations.is_active(100, operation));
+        assert!(operations.is_active(100, operation));
+        assert!(operations.complete(100, operation));
+        assert!(!operations.is_active(100, operation));
     }
 
     #[test]
@@ -422,6 +439,7 @@ mod tests {
             request: FileDialogRequest::ImportSkin,
             paths: Vec::new(),
             error: None,
+            complete: true,
         };
 
         assert!(result.is_cancelled());

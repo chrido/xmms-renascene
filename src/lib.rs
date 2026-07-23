@@ -1,5 +1,6 @@
 pub mod app;
 pub mod app_state;
+mod atomic_file;
 pub mod audio_model;
 pub mod config;
 #[cfg(feature = "gtk-ui")]

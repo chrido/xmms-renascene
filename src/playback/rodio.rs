@@ -19,7 +19,8 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player as RodioPlayer, Source};
 
 use crate::audio_model::{
-    equalizer_position_to_db, EqualizerBandPositions, SpectrumData, EQUALIZER_BANDS, SPECTRUM_BANDS,
+    equalizer_position_to_db, EqualizerBandPositions, SpectrumData, SpectrumLayout,
+    EQUALIZER_BANDS, SPECTRUM_BANDS,
 };
 use crate::playback::backend::{AudioMetadataProbe, PlaybackBackend};
 use crate::playback::model::{
@@ -46,6 +47,8 @@ struct RodioBackendInner {
     dsp_settings: SharedDspSettings,
     visualization: SharedVisualization,
     visualization_generation: u64,
+    spectrum_layout: SpectrumLayout,
+    emitted_spectrum_layout: SpectrumLayout,
     output_device: OutputDevice,
     last_debug_log: Option<Instant>,
 }
@@ -264,23 +267,49 @@ const EQ_Q: f32 = 1.0;
 type SharedDspSettings = Arc<Mutex<RodioDspSettings>>;
 type SharedVisualization = Arc<Mutex<RodioVisualization>>;
 
-const SPECTRUM_WINDOW_FRAMES: usize = 1_024;
+const SPECTRUM_WINDOW_FRAMES: usize = 512;
+const XMMS_ANALYZER_BARS: usize = 19;
+const XMMS_FREQUENCY_BINS: usize = 184;
+
+#[derive(Clone, Copy)]
+struct RodioSpectrumFrame {
+    lines: SpectrumData,
+    bars: [f32; XMMS_ANALYZER_BARS],
+}
+
+impl RodioSpectrumFrame {
+    const SILENT: Self = Self {
+        lines: [0.0; SPECTRUM_BANDS],
+        bars: [0.0; XMMS_ANALYZER_BARS],
+    };
+
+    fn data(self, layout: SpectrumLayout) -> SpectrumData {
+        match layout {
+            SpectrumLayout::Lines => self.lines,
+            SpectrumLayout::XmmsBars => {
+                let mut data = [0.0; SPECTRUM_BANDS];
+                data[..XMMS_ANALYZER_BARS].copy_from_slice(&self.bars);
+                data
+            }
+        }
+    }
+}
 
 struct RodioVisualization {
-    data: SpectrumData,
+    frame: RodioSpectrumFrame,
     generation: u64,
 }
 
 impl RodioVisualization {
     fn new() -> Self {
         Self {
-            data: [0.0; SPECTRUM_BANDS],
+            frame: RodioSpectrumFrame::SILENT,
             generation: 0,
         }
     }
 
-    fn publish(&mut self, data: SpectrumData) {
-        self.data = data;
+    fn publish(&mut self, frame: RodioSpectrumFrame) {
+        self.frame = frame;
         self.generation = self.generation.wrapping_add(1);
     }
 }
@@ -308,12 +337,12 @@ impl RodioSpectrumCapture {
             .spawn(move || {
                 while let Ok(mut window) = receiver.recv() {
                     let generation = window.generation;
-                    let data = analyze_spectrum_window(sample_rate, &window.samples);
+                    let frame = analyze_spectrum_window(sample_rate, &window.samples);
                     if generation == worker_generation.load(Ordering::Acquire) {
                         shared
                             .lock()
                             .unwrap_or_else(|poison| poison.into_inner())
-                            .publish(data);
+                            .publish(frame);
                     }
                     window.samples.clear();
                     let _ = recycle_sender.try_send(window.samples);
@@ -362,41 +391,100 @@ impl RodioSpectrumCapture {
     }
 }
 
-fn spectrum_band_frequency(sample_rate: f32, band: usize) -> f32 {
-    let band_width = (sample_rate * 0.5) / SPECTRUM_BANDS as f32;
-    (band.min(SPECTRUM_BANDS - 1) as f32 + 0.5) * band_width
+fn analyze_spectrum_window(_sample_rate: f32, samples: &[f32]) -> RodioSpectrumFrame {
+    if samples.is_empty() {
+        return RodioSpectrumFrame::SILENT;
+    }
+    let mut real = [0.0; SPECTRUM_WINDOW_FRAMES];
+    let mut imaginary = [0.0; SPECTRUM_WINDOW_FRAMES];
+    for (target, sample) in real.iter_mut().zip(samples.iter().copied()) {
+        *target = sample;
+    }
+    fft_in_place(&mut real, &mut imaginary);
+
+    let frequency_bins: [f32; XMMS_FREQUENCY_BINS] = std::array::from_fn(|index| {
+        let fft_bin = index + 1;
+        let amplitude =
+            2.0 * real[fft_bin].hypot(imaginary[fft_bin]) / SPECTRUM_WINDOW_FRAMES as f32;
+        xmms_spectrum_level(amplitude)
+    });
+    const LINE_TAIL: [usize; 17] = [
+        61, 66, 71, 76, 81, 87, 93, 100, 107, 114, 122, 131, 140, 150, 161, 172, 184,
+    ];
+    let line_boundary = |index: usize| {
+        if index <= 58 {
+            index
+        } else {
+            LINE_TAIL[index - 59]
+        }
+    };
+    let lines = std::array::from_fn(|band| {
+        frequency_bins[line_boundary(band)..line_boundary(band + 1)]
+            .iter()
+            .copied()
+            .fold(0.0, f32::max)
+    });
+    const BAR_BOUNDARIES: [usize; 20] = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 11, 15, 20, 27, 36, 47, 62, 82, 107, 141, 184,
+    ];
+    let bars = std::array::from_fn(|bar| {
+        frequency_bins[BAR_BOUNDARIES[bar]..BAR_BOUNDARIES[bar + 1]]
+            .iter()
+            .copied()
+            .fold(0.0, f32::max)
+    });
+    RodioSpectrumFrame { lines, bars }
 }
 
-fn analyze_spectrum_window(sample_rate: f32, samples: &[f32]) -> SpectrumData {
-    if samples.is_empty() {
-        return [0.0; SPECTRUM_BANDS];
-    }
-    let coefficients: SpectrumData = std::array::from_fn(|band| {
-        let frequency = spectrum_band_frequency(sample_rate, band);
-        2.0 * (2.0 * std::f32::consts::PI * frequency / sample_rate).cos()
-    });
-    let mut q1 = [0.0; SPECTRUM_BANDS];
-    let mut q2 = [0.0; SPECTRUM_BANDS];
-    for (frame, sample) in samples.iter().enumerate() {
-        let window = 0.5
-            - 0.5
-                * (2.0 * std::f32::consts::PI * frame as f32
-                    / samples.len().saturating_sub(1).max(1) as f32)
-                    .cos();
-        let sample = sample * window;
-        for band in 0..SPECTRUM_BANDS {
-            let q0 = sample + coefficients[band] * q1[band] - q2[band];
-            q2[band] = q1[band];
-            q1[band] = q0;
+fn fft_in_place(
+    real: &mut [f32; SPECTRUM_WINDOW_FRAMES],
+    imaginary: &mut [f32; SPECTRUM_WINDOW_FRAMES],
+) {
+    let mut j = 0;
+    for i in 1..SPECTRUM_WINDOW_FRAMES {
+        let mut bit = SPECTRUM_WINDOW_FRAMES >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            real.swap(i, j);
+            imaginary.swap(i, j);
         }
     }
-    std::array::from_fn(|band| {
-        let power =
-            q1[band] * q1[band] + q2[band] * q2[band] - coefficients[band] * q1[band] * q2[band];
-        let amplitude = power.max(0.0).sqrt() * 4.0 / samples.len() as f32;
-        let decibels = 20.0 * amplitude.max(0.0001).log10();
-        ((decibels + 80.0) / 80.0).clamp(0.0, 1.0)
-    })
+
+    let mut length = 2;
+    while length <= SPECTRUM_WINDOW_FRAMES {
+        let angle = -std::f32::consts::TAU / length as f32;
+        let (step_imaginary, step_real) = angle.sin_cos();
+        for start in (0..SPECTRUM_WINDOW_FRAMES).step_by(length) {
+            let mut twiddle_real = 1.0;
+            let mut twiddle_imaginary = 0.0;
+            for offset in 0..length / 2 {
+                let even = start + offset;
+                let odd = even + length / 2;
+                let odd_real = real[odd] * twiddle_real - imaginary[odd] * twiddle_imaginary;
+                let odd_imaginary = real[odd] * twiddle_imaginary + imaginary[odd] * twiddle_real;
+                real[odd] = real[even] - odd_real;
+                imaginary[odd] = imaginary[even] - odd_imaginary;
+                real[even] += odd_real;
+                imaginary[even] += odd_imaginary;
+                let next_real = twiddle_real * step_real - twiddle_imaginary * step_imaginary;
+                twiddle_imaginary = twiddle_real * step_imaginary + twiddle_imaginary * step_real;
+                twiddle_real = next_real;
+            }
+        }
+        length <<= 1;
+    }
+}
+
+fn xmms_spectrum_level(amplitude: f32) -> f32 {
+    let scaled = (amplitude.max(0.0) * 256.0).floor();
+    if scaled < 1.0 {
+        return 0.0;
+    }
+    ((scaled.ln() * (20.0 / 256.0_f32.ln())).floor().min(15.0) / 16.0).max(0.0)
 }
 
 #[derive(Debug, Clone)]
@@ -489,6 +577,8 @@ impl RodioBackend {
                 dsp_settings: Arc::new(Mutex::new(RodioDspSettings::new(equalizer, 0))),
                 visualization,
                 visualization_generation: 0,
+                spectrum_layout: SpectrumLayout::XmmsBars,
+                emitted_spectrum_layout: SpectrumLayout::XmmsBars,
                 output_device,
                 last_debug_log: None,
             })),
@@ -729,6 +819,10 @@ impl PlaybackBackend for RodioBackend {
         Ok(())
     }
 
+    fn set_spectrum_layout(&self, layout: SpectrumLayout) {
+        self.lock_inner().spectrum_layout = layout;
+    }
+
     fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
         let mut inner = self.lock_inner();
         if rodio_debug_enabled()
@@ -767,11 +861,16 @@ impl PlaybackBackend for RodioBackend {
         let visualization = visualization
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let visualization_update = (visualization.generation != inner.visualization_generation)
-            .then_some((visualization.generation, visualization.data));
+        let visualization_update = (visualization.generation != inner.visualization_generation
+            || inner.spectrum_layout != inner.emitted_spectrum_layout)
+            .then_some((
+                visualization.generation,
+                visualization.frame.data(inner.spectrum_layout),
+            ));
         drop(visualization);
         if let Some((generation, data)) = visualization_update {
             inner.visualization_generation = generation;
+            inner.emitted_spectrum_layout = inner.spectrum_layout;
             inner.pending_events.push(PlaybackEvent::Spectrum(data));
         }
         Ok(std::mem::take(&mut inner.pending_events))
@@ -848,6 +947,14 @@ impl AudioMetadataProbe for RodioMetadataProbe {
                 source.path.display()
             )
         })?;
+        let title = {
+            use id3::TagLike as _;
+
+            id3::no_tag_ok(id3::v1v2::read_from_path(&source.path))
+                .ok()
+                .flatten()
+                .and_then(|tag| tag.title().map(str::to_string))
+        };
         Ok(Some(DurationIndexResult {
             index: item.index,
             uri: item.uri.clone(),
@@ -855,7 +962,7 @@ impl AudioMetadataProbe for RodioMetadataProbe {
                 .total_duration()
                 .map(duration_to_millis)
                 .unwrap_or(-1),
-            title: None,
+            title,
         }))
     }
 }
@@ -1285,8 +1392,36 @@ mod tests {
         assert_backend_trait::<RodioBackend>();
     }
 
+    fn exact_fft_bin_tone(bin: usize) -> Vec<f32> {
+        (0..SPECTRUM_WINDOW_FRAMES)
+            .map(|frame| {
+                (std::f32::consts::TAU * bin as f32 * frame as f32 / SPECTRUM_WINDOW_FRAMES as f32)
+                    .sin()
+                    * 0.8
+            })
+            .collect()
+    }
+
+    fn strongest_level(levels: &[f32]) -> usize {
+        levels
+            .iter()
+            .enumerate()
+            .max_by(|(_, left), (_, right)| left.total_cmp(right))
+            .map(|(index, _)| index)
+            .unwrap()
+    }
+
     #[test]
-    fn rodio_spectrum_analyzer_places_audio_in_linear_frequency_bands() {
+    fn rodio_xmms_spectrum_keeps_first_three_bars_independent() {
+        for expected_bar in 0..3 {
+            let frame = analyze_spectrum_window(44_100.0, &exact_fft_bin_tone(expected_bar + 1));
+            assert_eq!(strongest_level(&frame.bars), expected_bar);
+            assert!(frame.bars[expected_bar] > 0.8);
+        }
+    }
+
+    #[test]
+    fn rodio_xmms_spectrum_places_one_khz_in_bar_nine() {
         let sample_rate = 44_100.0;
         let tone_frequency = 1_000.0;
         let samples = (0..SPECTRUM_WINDOW_FRAMES)
@@ -1296,17 +1431,42 @@ mod tests {
                 phase.sin() * 0.8
             })
             .collect::<Vec<_>>();
-        let spectrum = analyze_spectrum_window(sample_rate, &samples);
-        let strongest_band = spectrum
+        let frame = analyze_spectrum_window(sample_rate, &samples);
+        assert_eq!(strongest_level(&frame.bars), 9);
+        assert!(frame.bars[9] > 0.8);
+    }
+
+    #[test]
+    fn rodio_xmms_spectrum_places_high_tone_in_right_side_bar() {
+        let frame = analyze_spectrum_window(44_100.0, &exact_fft_bin_tone(100));
+        assert_eq!(strongest_level(&frame.bars), 16);
+        assert!(frame.bars[16] > 0.8);
+    }
+
+    #[test]
+    fn rodio_spectrum_layout_change_emits_existing_frame_in_new_layout() {
+        let backend = RodioBackend::new_detached_for_tests();
+        let mut lines = [0.0; SPECTRUM_BANDS];
+        lines[30] = 0.4;
+        let mut bars = [0.0; XMMS_ANALYZER_BARS];
+        bars[2] = 0.9;
+        let visualization = Arc::clone(&backend.lock_inner().visualization);
+        visualization
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .publish(RodioSpectrumFrame { lines, bars });
+
+        backend.set_spectrum_layout(SpectrumLayout::Lines);
+        let line_events = backend.poll_events().unwrap();
+        assert!(line_events
             .iter()
-            .enumerate()
-            .max_by(|(_, left), (_, right)| left.total_cmp(right))
-            .map(|(band, _)| band)
-            .unwrap();
-        let expected_band =
-            (tone_frequency / (sample_rate * 0.5) * SPECTRUM_BANDS as f32).floor() as usize;
-        assert!(spectrum[strongest_band] > 0.9);
-        assert!(strongest_band.abs_diff(expected_band) <= 1);
+            .any(|event| matches!(event, PlaybackEvent::Spectrum(data) if data[30] == 0.4)));
+
+        backend.set_spectrum_layout(SpectrumLayout::XmmsBars);
+        let bar_events = backend.poll_events().unwrap();
+        assert!(bar_events.iter().any(
+            |event| matches!(event, PlaybackEvent::Spectrum(data) if data[2] == 0.9 && data[30] == 0.0)
+        ));
     }
 
     #[test]

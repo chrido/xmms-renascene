@@ -36,6 +36,8 @@ ANDROID_SDK = Path(
     os.environ.get("ANDROID_HOME", str(Path.home() / ".local" / "share" / "android-sdk"))
 )
 ANDROID_NDK_VERSION = "27.2.12479018"
+ANDROID_API_LEVEL = os.environ.get("ANDROID_API_LEVEL", "36")
+ANDROID_BUILD_TOOLS = os.environ.get("ANDROID_BUILD_TOOLS", "36.0.0")
 ANDROID_TARGET = "aarch64-linux-android"
 ANDROID_EMULATOR_TARGET = "x86_64-linux-android"
 ANDROID_AVD = "xmms_api35"
@@ -443,8 +445,8 @@ class RepoTool:
         self, env: dict[str, str], *, release: bool = False
     ) -> None:
         sdk = Path(env["ANDROID_HOME"])
-        build_tools = sdk / "build-tools" / "35.0.0"
-        android_jar = sdk / "platforms" / "android-35" / "android.jar"
+        build_tools = sdk / "build-tools" / ANDROID_BUILD_TOOLS
+        android_jar = sdk / "platforms" / f"android-{ANDROID_API_LEVEL}" / "android.jar"
         java_source_dir = (
             REPO_DIR
             / "android"
@@ -535,7 +537,7 @@ class RepoTool:
     package="{ANDROID_PACKAGE}"
     android:versionCode="16777472"
     android:versionName="0.1.0">
-    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="{ANDROID_API_LEVEL}" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />

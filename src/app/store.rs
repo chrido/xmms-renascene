@@ -575,6 +575,42 @@ impl AppStore {
         )
     }
 
+    /// Applies one background metadata batch with a single render/save transition.
+    pub fn apply_duration_index_results(
+        &mut self,
+        results: Vec<DurationIndexResult>,
+    ) -> DispatchResult {
+        let result_count = results.len();
+        let mut changed = 0;
+        for result in results {
+            if self
+                .controller
+                .state_mut()
+                .playlist
+                .apply_duration_index_result(result)
+            {
+                changed += 1;
+            }
+        }
+        self.finish_dispatch_logged(
+            ConsoleLogLevel::Trace,
+            format!("duration-index-results count={result_count} changed={changed}"),
+            if changed > 0 {
+                StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST
+            } else {
+                StateChangeSet::empty()
+            },
+            if changed > 0 {
+                vec![
+                    AppEffect::SaveConfig,
+                    AppEffect::QueueRender(RenderTarget::Playlist),
+                ]
+            } else {
+                Vec::new()
+            },
+        )
+    }
+
     /// Applies a completed playlist-file-load app event.
     pub fn replace_playlist_for_file_load(
         &mut self,
@@ -882,6 +918,44 @@ mod tests {
         let unchanged = store.apply_duration_index_result(result);
         assert!(unchanged.changes.is_empty());
         assert_eq!(unchanged.revision, 1);
+    }
+
+    #[test]
+    fn duration_index_batches_emit_one_save_and_render_transition() {
+        let mut store = AppStore::default();
+        store.state_mut().playlist.add_uri("file:///one.ogg");
+        store.state_mut().playlist.add_uri("file:///two.ogg");
+
+        let changed = store.apply_duration_index_results(vec![
+            DurationIndexResult {
+                index: 0,
+                uri: "file:///one.ogg".to_string(),
+                length_ms: 10_000,
+                title: Some("One".to_string()),
+            },
+            DurationIndexResult {
+                index: 1,
+                uri: "file:///two.ogg".to_string(),
+                length_ms: 20_000,
+                title: Some("Two".to_string()),
+            },
+        ]);
+
+        assert_eq!(
+            changed.changes,
+            StateChangeSet::PLAYLIST | StateChangeSet::RENDER_PLAYLIST
+        );
+        assert_eq!(changed.effects.len(), 2);
+        assert_eq!(
+            changed
+                .effects
+                .iter()
+                .filter(|effect| **effect == AppEffect::SaveConfig)
+                .count(),
+            1
+        );
+        assert_eq!(store.state().playlist.entries()[0].length_ms, 10_000);
+        assert_eq!(store.state().playlist.entries()[1].length_ms, 20_000);
     }
 
     #[test]

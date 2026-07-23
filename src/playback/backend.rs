@@ -1,5 +1,6 @@
 //! Playback backend abstraction for desktop and mobile implementations.
 
+use crate::audio_model::SpectrumLayout;
 use crate::playback::model::{
     EqualizerBackendState, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
     PlayerState, StreamInfo,
@@ -31,6 +32,8 @@ pub trait PlaybackBackend {
     fn set_volume(&self, volume: i32) -> Result<(), String>;
     fn set_balance(&self, balance: i32) -> Result<(), String>;
     fn set_equalizer(&self, state: EqualizerBackendState) -> Result<(), String>;
+
+    fn set_spectrum_layout(&self, _layout: SpectrumLayout) {}
 
     fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
         Ok(Vec::new())

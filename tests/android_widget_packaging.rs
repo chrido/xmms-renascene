@@ -43,6 +43,66 @@ fn activity_widget_refresh_bridge_posts_to_main_looper() {
 }
 
 #[test]
+fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let app = include_str!("../src/ui/egui/app.rs");
+
+    assert!(java.contains("Executors.newSingleThreadExecutor()"));
+    let activity_result = java
+        .split("protected void onActivityResult(")
+        .nth(1)
+        .expect("Android Activity result")
+        .split("private void processActivityResult(")
+        .next()
+        .expect("Activity result body");
+    assert!(activity_result.contains("DOCUMENT_EXECUTOR.execute("));
+    assert!(!activity_result.contains("copyToPrivateStorage("));
+    assert!(!activity_result.contains("copyTreeToPrivateStorage("));
+    assert!(!activity_result.contains("openOutputStream("));
+
+    let background_processing = java
+        .split("private void processActivityResult(")
+        .nth(1)
+        .expect("background document processing")
+        .split("private ArrayList<Uri> selectedUris")
+        .next()
+        .expect("background document processing body");
+    assert!(background_processing.contains("copyToPrivateStorage("));
+    assert!(background_processing.contains("copyTreeToPrivateStorage("));
+    assert!(background_processing.contains("openOutputStream("));
+    assert!(java.contains("nativeOnDocumentImportProgress("));
+    assert!(java.contains("nativeRequestRepaint();"));
+    assert!(app.contains(".filter(|path| crate::playlist::is_media_file(path))"));
+    let progress_bridge = include_str!("../src/ui/egui/android/jni.rs")
+        .split("nativeOnDocumentImportProgress")
+        .nth(1)
+        .expect("document import progress JNI")
+        .split("nativeOnMediaControl")
+        .next()
+        .expect("document import progress JNI body");
+    assert!(progress_bridge.contains("operation_is_active"));
+    assert!(!progress_bridge.contains("complete_operation"));
+    assert!(progress_bridge.contains("complete: false"));
+
+    let duration_index = app
+        .split("fn schedule_missing_local_playlist_durations")
+        .nth(1)
+        .expect("duration indexing scheduler")
+        .split("fn poll_duration_index_results")
+        .next()
+        .expect("duration indexing scheduler body");
+    assert!(duration_index.contains("thread::spawn(move ||"));
+    assert!(duration_index.contains("probe.probe(&item)"));
+    assert!(duration_index.contains("send_duration_index_batch(&sender, &mut results)"));
+    assert!(app.contains("const DURATION_INDEX_BATCH_SIZE: usize = 16;"));
+    let duration_preflight = duration_index
+        .split("thread::spawn(move ||")
+        .next()
+        .expect("duration preflight");
+    assert!(!duration_preflight.contains("path.exists()"));
+}
+
+#[test]
 fn android_output_volume_uses_stream_music_without_backend_scaling() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
     let rust = include_str!("../src/ui/egui/android/audio_focus.rs");
@@ -104,8 +164,33 @@ fn android_playback_service_is_the_only_audio_focus_owner() {
     assert!(!activity.contains("requestPlaybackAudioFocus"));
     assert!(!activity.contains("abandonPlaybackAudioFocus"));
     assert!(service.contains("private boolean audioFocusHeld;"));
-    assert!(service.contains("if (playing\n                && !audioFocusHeld"));
+    assert!(service.contains("private boolean requestPlaybackAudioFocus()"));
+    assert!(service.contains("if (startsPlayback && !requestPlaybackAudioFocus())"));
+    assert!(service.contains("return false;"));
+    assert!(service.contains("audioFocusHeld = false;"));
     assert!(service.contains("if (audioFocusHeld && audioManager != null"));
+    assert!(service.contains(
+        "public void onPlay() {\n                dispatchMediaControl(CONTROL_PLAY, 0);"
+    ));
+    assert!(service.contains("if (!dispatchMediaControl(control, 0))"));
+    assert!(service.contains("dispatchMediaControl(CONTROL_PLAY_MEDIA_ITEM, index);"));
+
+    let apply_state = service
+        .split("public void applyNativePlaybackState(")
+        .nth(1)
+        .expect("native playback-state projection")
+        .split("private void updateWakeLock(")
+        .next()
+        .expect("native playback-state projection body");
+    let focus_gate = apply_state
+        .find("if (playing && !requestPlaybackAudioFocus())")
+        .expect("playing state must require audio focus");
+    let wake_lock = apply_state
+        .find("updateWakeLock(playing);")
+        .expect("playing state wake-lock update");
+    assert!(focus_gate < wake_lock);
+    assert!(apply_state[focus_gate..wake_lock].contains("nativeOnMediaControl(CONTROL_PAUSE, 0);"));
+    assert!(apply_state[focus_gate..wake_lock].contains("stopPlaybackService();"));
     assert!(rust_focus.contains("Playback audio-focus ownership remains exclusively"));
     assert!(!rust_focus.contains("AudioFocusRequest"));
 }
@@ -156,6 +241,45 @@ fn activity_media_control_state_machine_and_lifecycle_contract_are_explicit() {
     assert!(activity.contains("nativeOnActivityDestroyed();"));
     assert!(activity.contains("public boolean isNativeActivityResumed()"));
     assert!(activity.contains("if (hasFocus && activityResumed)"));
+}
+
+#[test]
+fn android_persists_explicit_saves_and_exit_without_foreground_delay() {
+    let app = include_str!("../src/ui/egui/app.rs");
+    let executor = include_str!("../src/ui/egui/effect_executor.rs");
+
+    let platform_effect = app
+        .split("EffectOwner::Platform(effect) =>")
+        .nth(1)
+        .expect("platform effect execution")
+        .split("fn execute_ui_effect")
+        .next()
+        .expect("platform effect body");
+    assert!(platform_effect
+        .contains("let force_persistence = matches!(effect, PlatformEffect::SaveConfig);"));
+    assert!(platform_effect.contains("force_persistence"));
+
+    let persistence = executor
+        .split("pub(crate) fn flush_android_persistence(")
+        .nth(1)
+        .expect("Android persistence flush")
+        .split("pub(crate) fn flush_android_media_projection")
+        .next()
+        .expect("Android persistence body");
+    assert!(persistence.contains(
+        "if !force && !super::android::is_foreground_activity(android.activity_generation())"
+    ));
+
+    let exit = app
+        .split("fn on_exit(&mut self")
+        .nth(1)
+        .expect("Android app exit")
+        .split("fn logic(&mut self")
+        .next()
+        .expect("Android app exit body");
+    assert!(exit.contains("self.android.mark_persistence();"));
+    assert!(exit.contains("self.flush_android_platform_policies(true);"));
+    assert!(!exit.contains("is_foreground_activity"));
 }
 
 #[test]
@@ -245,8 +369,28 @@ fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
     assert!(android.contains("handle_activity_destroyed"));
     assert!(android.contains("media_session::activity_paused_or_exited"));
     assert!(events.contains("struct RegisteredRepaintContext"));
+    assert!(events.contains("static REPAINT_PENDING: AtomicBool"));
+    assert!(events.contains("REPAINT_PENDING.swap(false, Ordering::AcqRel)"));
+    assert!(events.contains("REPAINT_PENDING.store(true, Ordering::Release)"));
     assert!(events.contains("activity: AndroidActivityGeneration"));
+    assert!(events.contains("retained while that Activity is paused"));
     assert!(events.contains("never treated as an"));
+    let paused = android
+        .split("pub(crate) fn handle_activity_paused")
+        .nth(1)
+        .expect("Activity pause handler")
+        .split("pub(crate) fn handle_activity_destroyed")
+        .next()
+        .expect("Activity pause handler body");
+    assert!(!paused.contains("unregister_repaint_context"));
+    let destroyed = android
+        .split("pub(crate) fn handle_activity_destroyed")
+        .nth(1)
+        .expect("Activity destroy handler")
+        .split("pub(crate) fn handle_activity_media_control")
+        .next()
+        .expect("Activity destroy handler body");
+    assert!(destroyed.contains("unregister_repaint_context"));
     assert!(activity.contains("static NEXT_GENERATION: AtomicU64"));
     assert!(activity.contains("stale callbacks and egui exits"));
     assert!(app.contains("self.android.activity_generation()"));
@@ -370,6 +514,24 @@ fn android_activity_uses_sensor_rotation_and_handles_configuration_changes() {
     assert!(packaging.contains("android:screenOrientation=\"sensor\""));
     assert!(cargo.contains(&format!("config_changes = \"{changes}\"")));
     assert!(packaging.contains(&format!("android:configChanges=\"{changes}\"")));
+}
+
+#[test]
+fn android_build_targets_api_36() {
+    let cargo = include_str!("../Cargo.toml");
+    let packaging = include_str!("../scripts/repo.py");
+    let workflow = include_str!("../.github/workflows/unit-tests.yml");
+    let release_workflow = include_str!("../.github/workflows/flatpak-release.yml");
+
+    assert!(cargo.contains("target_sdk_version = 36"));
+    assert!(packaging.contains("ANDROID_API_LEVEL = os.environ.get(\"ANDROID_API_LEVEL\", \"36\")"));
+    assert!(packaging
+        .contains("ANDROID_BUILD_TOOLS = os.environ.get(\"ANDROID_BUILD_TOOLS\", \"36.0.0\")"));
+    assert!(packaging.contains("android:targetSdkVersion=\"{ANDROID_API_LEVEL}\""));
+    assert!(workflow.contains("ANDROID_API_LEVEL: \"36\""));
+    assert!(workflow.contains("ANDROID_BUILD_TOOLS: \"36.0.0\""));
+    assert!(release_workflow.contains("ANDROID_API_LEVEL: \"36\""));
+    assert!(release_workflow.contains("ANDROID_BUILD_TOOLS: \"36.0.0\""));
 }
 
 #[test]

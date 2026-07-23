@@ -27,6 +27,7 @@ use crate::app::view_model::{
 use crate::app_log_error;
 use crate::app_log_info;
 use crate::app_state::AppState;
+use crate::audio_model::SpectrumLayout;
 #[cfg(feature = "desktop-egui")]
 use crate::equalizer::save_winamp_eqf;
 #[cfg(target_os = "android")]
@@ -43,6 +44,7 @@ use crate::playback::backend::PlaybackBackend;
 #[cfg(all(not(target_os = "android"), not(test)))]
 use crate::playback::backend::{create_backend, PlaybackBackendKind};
 use crate::playback::model::{EqualizerBackendState, PlaybackEvent, PlayerState};
+#[cfg(all(not(feature = "rodio-backend"), feature = "gstreamer-backend"))]
 use crate::playlist::file_uri_to_path;
 use crate::playlist::DurationIndexResult;
 use crate::playlist::Playlist;
@@ -63,6 +65,7 @@ use crate::skin::layout::{
     playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
     PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton,
 };
+use crate::skin::widget::{VisAnalyzerStyle, VisMode};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 use crate::socket_control::{
     start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
@@ -82,7 +85,9 @@ use super::android_runtime::{
     AndroidLayoutOrientation, AndroidLayoutRepaint as AndroidLayoutReadiness,
     AndroidLayoutSnapshot, AndroidLayoutView, AndroidRuntime, AndroidStableLayout,
 };
-use super::effect_executor::{self, EffectExecution, EffectOwner, PlaybackEffect, UiEffect};
+use super::effect_executor::{
+    self, EffectExecution, EffectOwner, PlatformEffect, PlaybackEffect, UiEffect,
+};
 use super::file_info;
 #[cfg(any(target_os = "android", test))]
 use super::interaction::PlaylistTouchGesture;
@@ -103,6 +108,7 @@ use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
+const DURATION_INDEX_BATCH_SIZE: usize = 16;
 
 #[cfg(any(target_os = "android", test))]
 fn android_player_command_for_media_control(
@@ -203,8 +209,8 @@ pub struct EguiFrontendState {
     pub(crate) playlist_touch_gesture: PlaylistTouchGesture,
     playback: PlaybackRuntime,
     #[cfg_attr(not(feature = "gstreamer-backend"), allow(dead_code))]
-    duration_index_sender: Sender<DurationIndexResult>,
-    duration_index_receiver: Receiver<DurationIndexResult>,
+    duration_index_sender: Sender<Vec<DurationIndexResult>>,
+    duration_index_receiver: Receiver<Vec<DurationIndexResult>>,
     socket_control: Option<SocketControl>,
     #[cfg(feature = "desktop-egui")]
     mpris_service: Option<EguiMprisService>,
@@ -690,6 +696,14 @@ impl EguiFrontendState {
 
     pub fn poll_playback_backend(&mut self) {
         if let Some(backend) = &self.playback.backend {
+            let spectrum_layout = if self.playback.visualization.mode() == VisMode::Analyzer
+                && self.playback.visualization.analyzer_style() == VisAnalyzerStyle::Bars
+            {
+                SpectrumLayout::XmmsBars
+            } else {
+                SpectrumLayout::Lines
+            };
+            backend.set_spectrum_layout(spectrum_layout);
             match backend.poll_events() {
                 Ok(events) => self.handle_playback_events(events),
                 Err(err) => self.runtime.pending_messages.push(err),
@@ -731,8 +745,8 @@ impl EguiFrontendState {
 
     fn poll_duration_index_results(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(result) = self.duration_index_receiver.try_recv() {
-            let dispatch = self.controller.apply_duration_index_result(result);
+        while let Ok(results) = self.duration_index_receiver.try_recv() {
+            let dispatch = self.controller.apply_duration_index_results(results);
             changed |= !dispatch.changes.is_empty();
             self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
         }
@@ -746,7 +760,6 @@ impl EguiFrontendState {
             .playlist
             .missing_duration_items()
             .into_iter()
-            .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
             .collect::<Vec<_>>();
         if items.is_empty() {
             return;
@@ -755,6 +768,7 @@ impl EguiFrontendState {
         #[allow(unused_variables)]
         let sender = self.duration_index_sender.clone();
         thread::spawn(move || {
+            let mut results = Vec::with_capacity(DURATION_INDEX_BATCH_SIZE);
             #[cfg(feature = "rodio-backend")]
             {
                 use crate::playback::backend::AudioMetadataProbe as _;
@@ -763,7 +777,10 @@ impl EguiFrontendState {
                 for item in items {
                     match probe.probe(&item) {
                         Ok(Some(result)) => {
-                            if sender.send(result).is_err() {
+                            results.push(result);
+                            if results.len() >= DURATION_INDEX_BATCH_SIZE
+                                && !send_duration_index_batch(&sender, &mut results)
+                            {
                                 return;
                             }
                         }
@@ -814,19 +831,20 @@ impl EguiFrontendState {
                         .duration()
                         .map(|duration| duration.mseconds() as i64)
                         .unwrap_or(-1);
-                    if sender
-                        .send(DurationIndexResult {
-                            index: item.index,
-                            uri: item.uri,
-                            length_ms,
-                            title: None,
-                        })
-                        .is_err()
+                    results.push(DurationIndexResult {
+                        index: item.index,
+                        uri: item.uri,
+                        length_ms,
+                        title: None,
+                    });
+                    if results.len() >= DURATION_INDEX_BATCH_SIZE
+                        && !send_duration_index_batch(&sender, &mut results)
                     {
                         return;
                     }
                 }
             }
+            send_duration_index_batch(&sender, &mut results);
         });
     }
 
@@ -924,6 +942,7 @@ impl EguiFrontendState {
                 false
             }
             EffectOwner::Platform(effect) => {
+                let force_persistence = matches!(effect, PlatformEffect::SaveConfig);
                 effect_executor::execute_platform_effect(
                     effect,
                     &mut self.playback,
@@ -931,7 +950,7 @@ impl EguiFrontendState {
                     #[cfg(target_os = "android")]
                     &mut self.android,
                 );
-                false
+                force_persistence
             }
         }
     }
@@ -1175,12 +1194,32 @@ impl EguiFrontendState {
             self.runtime.pending_messages.push(error);
             return;
         }
+        let audio_import = matches!(
+            result.request,
+            FileDialogRequest::AddAudioFiles | FileDialogRequest::AddAudioDirectory
+        );
+        if audio_import && result.complete && result.paths.is_empty() {
+            self.schedule_missing_local_playlist_durations();
+            return;
+        }
         if result.is_cancelled() {
             return;
         }
         match result.request {
-            FileDialogRequest::AddAudioFiles | FileDialogRequest::AddAudioDirectory => {
-                self.dispatch(PlaylistCommand::AddFiles(result.paths));
+            FileDialogRequest::AddAudioFiles => {
+                let dispatch = self
+                    .controller
+                    .dispatch(PlaylistCommand::AddFiles(result.paths));
+                self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
+            }
+            FileDialogRequest::AddAudioDirectory => {
+                let paths = result
+                    .paths
+                    .into_iter()
+                    .filter(|path| crate::playlist::is_media_file(path))
+                    .collect();
+                let dispatch = self.controller.dispatch(PlaylistCommand::AddFiles(paths));
+                self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
             }
             FileDialogRequest::LoadPlaylist => {
                 if let Some(path) = result.paths.first() {
@@ -1367,10 +1406,8 @@ impl eframe::App for EguiFrontendState {
     #[cfg(target_os = "android")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let activity_generation = self.android.activity_generation();
-        if super::android::is_foreground_activity(activity_generation) {
-            self.android.mark_persistence();
-            self.flush_android_platform_policies(true);
-        }
+        self.android.mark_persistence();
+        self.flush_android_platform_policies(true);
         super::android::runtime_exited(activity_generation);
     }
 
@@ -3246,6 +3283,22 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> 
     Ok(())
 }
 
+fn send_duration_index_batch(
+    sender: &Sender<Vec<DurationIndexResult>>,
+    results: &mut Vec<DurationIndexResult>,
+) -> bool {
+    if results.is_empty() {
+        return true;
+    }
+    let batch = std::mem::replace(results, Vec::with_capacity(DURATION_INDEX_BATCH_SIZE));
+    if sender.send(batch).is_err() {
+        return false;
+    }
+    #[cfg(target_os = "android")]
+    super::android::request_background_repaint();
+    true
+}
+
 fn discover_runtime_skins() -> Vec<SkinEntry> {
     let home_dir = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -3774,12 +3827,12 @@ mod tests {
         );
 
         app.duration_index_sender
-            .send(DurationIndexResult {
+            .send(vec![DurationIndexResult {
                 index: 0,
                 uri: "file:///tmp/song.ogg".to_string(),
                 length_ms: 42_000,
                 title: None,
-            })
+            }])
             .unwrap();
 
         assert!(app.poll_duration_index_results());
