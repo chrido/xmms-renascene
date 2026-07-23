@@ -3,10 +3,11 @@
 //! JNI entry points cannot borrow the lifecycle-owned [`AndroidRuntime`], so the
 //! inbox, ordering lock, and current repaint handle remain process registries.
 //! Repaint registration is tagged with the owning Activity generation and is
-//! cleared on pause/replacement/exit; its presence is never treated as an
-//! Activity-liveness signal. Ordered media controls are serialized with local
-//! player commands; replaceable volume and spectrum samples are coalesced by
-//! [`AndroidEventInbox`].
+//! retained while that Activity is paused so its resume callback can wake the
+//! suspended event loop. It is cleared on replacement/destruction/exit, and its
+//! presence is never treated as an Activity-liveness signal. Ordered media
+//! controls are serialized with local player commands; replaceable volume and
+//! spectrum samples are coalesced by [`AndroidEventInbox`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};

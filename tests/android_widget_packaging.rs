@@ -373,7 +373,24 @@ fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
     assert!(events.contains("REPAINT_PENDING.swap(false, Ordering::AcqRel)"));
     assert!(events.contains("REPAINT_PENDING.store(true, Ordering::Release)"));
     assert!(events.contains("activity: AndroidActivityGeneration"));
+    assert!(events.contains("retained while that Activity is paused"));
     assert!(events.contains("never treated as an"));
+    let paused = android
+        .split("pub(crate) fn handle_activity_paused")
+        .nth(1)
+        .expect("Activity pause handler")
+        .split("pub(crate) fn handle_activity_destroyed")
+        .next()
+        .expect("Activity pause handler body");
+    assert!(!paused.contains("unregister_repaint_context"));
+    let destroyed = android
+        .split("pub(crate) fn handle_activity_destroyed")
+        .nth(1)
+        .expect("Activity destroy handler")
+        .split("pub(crate) fn handle_activity_media_control")
+        .next()
+        .expect("Activity destroy handler body");
+    assert!(destroyed.contains("unregister_repaint_context"));
     assert!(activity.contains("static NEXT_GENERATION: AtomicU64"));
     assert!(activity.contains("stale callbacks and egui exits"));
     assert!(app.contains("self.android.activity_generation()"));

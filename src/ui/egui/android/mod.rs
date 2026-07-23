@@ -158,7 +158,6 @@ pub(crate) fn handle_activity_paused(env: &mut JNIEnv<'_>, activity_object: &JOb
         return;
     };
     media_session::activity_paused_or_exited(activity_generation);
-    events::unregister_repaint_context(activity_generation);
 }
 
 pub(crate) fn handle_activity_destroyed(env: &mut JNIEnv<'_>, activity_object: &JObject<'_>) {

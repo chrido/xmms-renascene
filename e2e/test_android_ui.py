@@ -116,6 +116,43 @@ def test_android_widget_cold_starts_playback_without_activity(
     assert position_ms < 20_000
 
 
+def test_android_redraws_after_background_playback_resume(
+    android_device: AndroidDevice,
+) -> None:
+    audio_path = "files/imports/background-resume.wav"
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+
+    audio = BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(8_000)
+        wav.writeframes(bytes([128]) * 8_000 * 60)
+    android_device.write_private_bytes(audio_path, audio.getvalue())
+    android_device.write_private_file(
+        "files/config/xmms-renascene/playlist.m3u",
+        "#EXTM3U\n"
+        "#EXTINF:60,Background Resume\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/background-resume.wav\n",
+    )
+
+    android_device.start_activity()
+    player_bounds = android_device.main_player_bounds()
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY], player_bounds)
+    android_device.wait_for_service("XmmsPlaybackService")
+    original_pid = android_device.app_pid()
+    android_device.go_home()
+    assert android_device.app_pid() == original_pid
+    time.sleep(1.0)
+
+    android_device.start_activity()
+
+    assert android_device.app_pid() == original_pid
+    android_device.main_player_bounds()
+
+
 def test_android_shows_playlist_by_default(
     android_device: AndroidDevice,
 ) -> None:
