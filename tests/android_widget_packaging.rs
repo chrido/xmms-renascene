@@ -373,6 +373,24 @@ fn android_activity_uses_sensor_rotation_and_handles_configuration_changes() {
 }
 
 #[test]
+fn android_build_targets_api_36() {
+    let cargo = include_str!("../Cargo.toml");
+    let packaging = include_str!("../scripts/repo.py");
+    let workflow = include_str!("../.github/workflows/unit-tests.yml");
+    let release_workflow = include_str!("../.github/workflows/flatpak-release.yml");
+
+    assert!(cargo.contains("target_sdk_version = 36"));
+    assert!(packaging.contains("ANDROID_API_LEVEL = os.environ.get(\"ANDROID_API_LEVEL\", \"36\")"));
+    assert!(packaging
+        .contains("ANDROID_BUILD_TOOLS = os.environ.get(\"ANDROID_BUILD_TOOLS\", \"36.0.0\")"));
+    assert!(packaging.contains("android:targetSdkVersion=\"{ANDROID_API_LEVEL}\""));
+    assert!(workflow.contains("ANDROID_API_LEVEL: \"36\""));
+    assert!(workflow.contains("ANDROID_BUILD_TOOLS: \"36.0.0\""));
+    assert!(release_workflow.contains("ANDROID_API_LEVEL: \"36\""));
+    assert!(release_workflow.contains("ANDROID_BUILD_TOOLS: \"36.0.0\""));
+}
+
+#[test]
 fn android_winit_patch_uses_the_reproducible_git_fork() {
     let cargo = include_str!("../Cargo.toml");
     let lock = include_str!("../Cargo.lock");

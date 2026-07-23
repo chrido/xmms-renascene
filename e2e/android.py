@@ -124,7 +124,7 @@ class AndroidDevice:
             raise RuntimeError(f"Could not install existing Android APK: {detail}")
 
     def apk_xmltree(self, resource: str) -> str:
-        build_tools = os.environ.get("ANDROID_BUILD_TOOLS", "35.0.0")
+        build_tools = os.environ.get("ANDROID_BUILD_TOOLS", "36.0.0")
         aapt = self.adb.parents[1] / "build-tools" / build_tools / "aapt"
         apk = Path(__file__).resolve().parents[1] / "target/debug/apk/xmms-renascene.apk"
         if not aapt.is_file():
