@@ -49,6 +49,14 @@ pub(crate) fn complete_operation(request_code: jint, operation_id: u64) -> bool 
         .complete(request_code, operation_id)
 }
 
+pub(crate) fn operation_is_active(request_code: jint, operation_id: u64) -> bool {
+    PICKER_OPERATIONS
+        .get_or_init(|| Mutex::new(PickerOperationRegistry::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .is_active(request_code, operation_id)
+}
+
 pub fn open(request: FileDialogRequest) -> Result<(), String> {
     if request == FileDialogRequest::AddAudioDirectory {
         let request_code = 104;

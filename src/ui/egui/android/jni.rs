@@ -88,6 +88,39 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentsSel
         request,
         paths: selected_paths,
         error,
+        complete: true,
+    }));
+    events::request_registered_repaint();
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsActivity_nativeOnDocumentImportProgress(
+    mut env: JNIEnv,
+    activity: JObject,
+    request_code: jint,
+    operation_id: jlong,
+    path: JString,
+) {
+    if !super::activity_callback_is_current(&mut env, &activity) {
+        return;
+    }
+    let Ok(operation_id) = u64::try_from(operation_id) else {
+        return;
+    };
+    if !picker::operation_is_active(request_code, operation_id) {
+        return;
+    }
+    let Some(request) = picker::request_from_code(request_code) else {
+        return;
+    };
+    let Ok(path) = env.get_string(&path) else {
+        return;
+    };
+    events::push(AndroidPlatformEvent::Picker(AndroidPickerResult {
+        request,
+        paths: vec![PathBuf::from(path.to_string_lossy().into_owned())],
+        error: None,
+        complete: false,
     }));
     events::request_registered_repaint();
 }

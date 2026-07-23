@@ -106,6 +106,7 @@ use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
+const DURATION_INDEX_BATCH_SIZE: usize = 16;
 
 #[cfg(any(target_os = "android", test))]
 fn android_player_command_for_media_control(
@@ -757,7 +758,7 @@ impl EguiFrontendState {
         #[allow(unused_variables)]
         let sender = self.duration_index_sender.clone();
         thread::spawn(move || {
-            let mut results = Vec::new();
+            let mut results = Vec::with_capacity(DURATION_INDEX_BATCH_SIZE);
             #[cfg(feature = "rodio-backend")]
             {
                 use crate::playback::backend::AudioMetadataProbe as _;
@@ -765,7 +766,14 @@ impl EguiFrontendState {
                 let probe = crate::playback::rodio::RodioMetadataProbe;
                 for item in items {
                     match probe.probe(&item) {
-                        Ok(Some(result)) => results.push(result),
+                        Ok(Some(result)) => {
+                            results.push(result);
+                            if results.len() >= DURATION_INDEX_BATCH_SIZE
+                                && !send_duration_index_batch(&sender, &mut results)
+                            {
+                                return;
+                            }
+                        }
                         Ok(None) => {}
                         Err(err) => eprintln!(
                             "xmms-rs: failed to probe playlist item {} with rodio: {err}",
@@ -819,12 +827,14 @@ impl EguiFrontendState {
                         length_ms,
                         title: None,
                     });
+                    if results.len() >= DURATION_INDEX_BATCH_SIZE
+                        && !send_duration_index_batch(&sender, &mut results)
+                    {
+                        return;
+                    }
                 }
             }
-            if !results.is_empty() && sender.send(results).is_ok() {
-                #[cfg(target_os = "android")]
-                super::android::request_background_repaint();
-            }
+            send_duration_index_batch(&sender, &mut results);
         });
     }
 
@@ -1174,12 +1184,23 @@ impl EguiFrontendState {
             self.runtime.pending_messages.push(error);
             return;
         }
+        let audio_import = matches!(
+            result.request,
+            FileDialogRequest::AddAudioFiles | FileDialogRequest::AddAudioDirectory
+        );
+        if audio_import && result.complete && result.paths.is_empty() {
+            self.schedule_missing_local_playlist_durations();
+            return;
+        }
         if result.is_cancelled() {
             return;
         }
         match result.request {
             FileDialogRequest::AddAudioFiles => {
-                self.dispatch(PlaylistCommand::AddFiles(result.paths));
+                let dispatch = self
+                    .controller
+                    .dispatch(PlaylistCommand::AddFiles(result.paths));
+                self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
             }
             FileDialogRequest::AddAudioDirectory => {
                 let paths = result
@@ -1187,7 +1208,8 @@ impl EguiFrontendState {
                     .into_iter()
                     .filter(|path| crate::playlist::is_media_file(path))
                     .collect();
-                self.dispatch(PlaylistCommand::AddFiles(paths));
+                let dispatch = self.controller.dispatch(PlaylistCommand::AddFiles(paths));
+                self.process_dispatch_result(dispatch, EffectExecution::LOCAL);
             }
             FileDialogRequest::LoadPlaylist => {
                 if let Some(path) = result.paths.first() {
@@ -3249,6 +3271,22 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> 
         }
     }
     Ok(())
+}
+
+fn send_duration_index_batch(
+    sender: &Sender<Vec<DurationIndexResult>>,
+    results: &mut Vec<DurationIndexResult>,
+) -> bool {
+    if results.is_empty() {
+        return true;
+    }
+    let batch = std::mem::replace(results, Vec::with_capacity(DURATION_INDEX_BATCH_SIZE));
+    if sender.send(batch).is_err() {
+        return false;
+    }
+    #[cfg(target_os = "android")]
+    super::android::request_background_repaint();
+    true
 }
 
 fn discover_runtime_skins() -> Vec<SkinEntry> {

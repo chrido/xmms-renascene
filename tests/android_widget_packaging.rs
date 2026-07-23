@@ -70,8 +70,19 @@ fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
     assert!(background_processing.contains("copyToPrivateStorage("));
     assert!(background_processing.contains("copyTreeToPrivateStorage("));
     assert!(background_processing.contains("openOutputStream("));
-    assert!(java.contains("copiedPaths.add(output.getAbsolutePath())"));
+    assert!(java.contains("nativeOnDocumentImportProgress("));
+    assert!(java.contains("nativeRequestRepaint();"));
     assert!(app.contains(".filter(|path| crate::playlist::is_media_file(path))"));
+    let progress_bridge = include_str!("../src/ui/egui/android/jni.rs")
+        .split("nativeOnDocumentImportProgress")
+        .nth(1)
+        .expect("document import progress JNI")
+        .split("nativeOnMediaControl")
+        .next()
+        .expect("document import progress JNI body");
+    assert!(progress_bridge.contains("operation_is_active"));
+    assert!(!progress_bridge.contains("complete_operation"));
+    assert!(progress_bridge.contains("complete: false"));
 
     let duration_index = app
         .split("fn schedule_missing_local_playlist_durations")
@@ -82,8 +93,8 @@ fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
         .expect("duration indexing scheduler body");
     assert!(duration_index.contains("thread::spawn(move ||"));
     assert!(duration_index.contains("probe.probe(&item)"));
-    assert!(duration_index.contains("sender.send(results)"));
-    assert!(duration_index.contains("request_background_repaint()"));
+    assert!(duration_index.contains("send_duration_index_batch(&sender, &mut results)"));
+    assert!(app.contains("const DURATION_INDEX_BATCH_SIZE: usize = 16;"));
     let duration_preflight = duration_index
         .split("thread::spawn(move ||")
         .next()
@@ -333,6 +344,9 @@ fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
     assert!(android.contains("handle_activity_destroyed"));
     assert!(android.contains("media_session::activity_paused_or_exited"));
     assert!(events.contains("struct RegisteredRepaintContext"));
+    assert!(events.contains("static REPAINT_PENDING: AtomicBool"));
+    assert!(events.contains("REPAINT_PENDING.swap(false, Ordering::AcqRel)"));
+    assert!(events.contains("REPAINT_PENDING.store(true, Ordering::Release)"));
     assert!(events.contains("activity: AndroidActivityGeneration"));
     assert!(events.contains("never treated as an"));
     assert!(activity.contains("static NEXT_GENERATION: AtomicU64"));

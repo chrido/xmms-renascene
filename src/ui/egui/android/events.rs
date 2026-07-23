@@ -8,6 +8,7 @@
 //! player commands; replaceable volume and spectrum samples are coalesced by
 //! [`AndroidEventInbox`].
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 pub use super::super::android_events::{
@@ -19,6 +20,7 @@ use super::super::android_media::AndroidActivityGeneration;
 static EVENTS: OnceLock<Mutex<AndroidEventInbox>> = OnceLock::new();
 static MEDIA_CONTROL_ORDER: OnceLock<Mutex<()>> = OnceLock::new();
 static REPAINT_CONTEXT: OnceLock<Mutex<Option<RegisteredRepaintContext>>> = OnceLock::new();
+static REPAINT_PENDING: AtomicBool = AtomicBool::new(false);
 
 struct RegisteredRepaintContext {
     activity: AndroidActivityGeneration,
@@ -30,6 +32,7 @@ pub(crate) fn replace_activity() {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
+    REPAINT_PENDING.store(false, Ordering::Release);
     EVENTS
         .get_or_init(|| Mutex::new(AndroidEventInbox::default()))
         .lock()
@@ -79,6 +82,9 @@ pub(crate) fn register_repaint_context(
         activity,
         context: context.clone(),
     });
+    if REPAINT_PENDING.swap(false, Ordering::AcqRel) {
+        context.request_repaint();
+    }
 }
 
 pub(crate) fn unregister_repaint_context(activity: AndroidActivityGeneration) {
@@ -110,12 +116,14 @@ pub(crate) fn lock_media_control_order() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) fn request_registered_repaint() {
+    REPAINT_PENDING.store(true, Ordering::Release);
     if let Some(context) = REPAINT_CONTEXT
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .as_ref()
     {
+        REPAINT_PENDING.store(false, Ordering::Release);
         context.context.request_repaint();
     }
 }

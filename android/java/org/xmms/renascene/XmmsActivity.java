@@ -58,6 +58,8 @@ public final class XmmsActivity extends NativeActivity {
 
     private native void nativeOnDocumentsSelected(
             int requestCode, long operationId, String[] paths, String error);
+    private native void nativeOnDocumentImportProgress(
+            int requestCode, long operationId, String path);
     private native void nativeOnActivityResumed();
     private native void nativeOnActivityPaused();
     private native void nativeOnActivityDestroyed();
@@ -224,6 +226,7 @@ public final class XmmsActivity extends NativeActivity {
         activityResumed = true;
         nativeLoopReady = true;
         nativeOnActivityResumed();
+        nativeRequestRepaint();
         registerMediaVolumeObserver();
         getWindow().getDecorView().post(this::dispatchPendingMediaControl);
     }
@@ -755,16 +758,11 @@ public final class XmmsActivity extends NativeActivity {
                 }
                 getContentResolver().takePersistableUriPermission(
                         treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                ArrayList<String> paths = copyTreeToPrivateStorage(treeUri);
-                nativeOnDocumentsSelected(
-                        requestCode,
-                        operationId,
-                        paths.toArray(new String[0]),
-                        null);
+                copyTreeToPrivateStorage(treeUri, requestCode, operationId);
+                nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
                 return;
             }
             ArrayList<Uri> uris = selectedUris(data);
-            ArrayList<String> paths = new ArrayList<>(uris.size());
             for (Uri uri : uris) {
                 try {
                     getContentResolver().takePersistableUriPermission(
@@ -772,10 +770,11 @@ public final class XmmsActivity extends NativeActivity {
                 } catch (SecurityException ignored) {
                     // Some providers grant only a temporary read permission.
                 }
-                paths.add(copyToPrivateStorage(uri).getAbsolutePath());
+                File output = copyToPrivateStorage(uri);
+                nativeOnDocumentImportProgress(
+                        requestCode, operationId, output.getAbsolutePath());
             }
-            nativeOnDocumentsSelected(
-                    requestCode, operationId, paths.toArray(new String[0]), null);
+            nativeOnDocumentsSelected(requestCode, operationId, new String[0], null);
         } catch (Exception error) {
             nativeOnDocumentsSelected(
                     requestCode,
@@ -819,7 +818,8 @@ public final class XmmsActivity extends NativeActivity {
         return output;
     }
 
-    private ArrayList<String> copyTreeToPrivateStorage(Uri treeUri) throws Exception {
+    private void copyTreeToPrivateStorage(
+            Uri treeUri, int requestCode, long operationId) throws Exception {
         File importDir = new File(getFilesDir(), "imports");
         if (!importDir.isDirectory() && !importDir.mkdirs()) {
             throw new IllegalStateException("cannot create " + importDir);
@@ -831,16 +831,15 @@ public final class XmmsActivity extends NativeActivity {
         if (!output.mkdirs()) {
             throw new IllegalStateException("cannot create " + output);
         }
-        ArrayList<String> copiedPaths = new ArrayList<>();
-        copyDocumentChildren(treeUri, rootId, output, copiedPaths);
-        return copiedPaths;
+        copyDocumentChildren(treeUri, rootId, output, requestCode, operationId);
     }
 
     private void copyDocumentChildren(
             Uri treeUri,
             String parentId,
             File outputDir,
-            ArrayList<String> copiedPaths)
+            int requestCode,
+            long operationId)
             throws Exception {
         Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
         String[] columns = {
@@ -866,11 +865,13 @@ public final class XmmsActivity extends NativeActivity {
                     if (!childDir.mkdirs()) {
                         throw new IllegalStateException("cannot create " + childDir);
                     }
-                    copyDocumentChildren(treeUri, documentId, childDir, copiedPaths);
+                    copyDocumentChildren(
+                            treeUri, documentId, childDir, requestCode, operationId);
                 } else {
                     File output = uniqueFile(outputDir, name);
                     copyDocumentToFile(documentUri, output);
-                    copiedPaths.add(output.getAbsolutePath());
+                    nativeOnDocumentImportProgress(
+                            requestCode, operationId, output.getAbsolutePath());
                 }
             }
         }
