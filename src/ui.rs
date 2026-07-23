@@ -42,7 +42,7 @@ use crate::app::view_model::{
     TitleMarquee,
 };
 use crate::app_state::AppState;
-use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb};
+use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, SpectrumLayout};
 use crate::config::{Config, TimerMode};
 use crate::equalizer::{
     built_in_equalizer_presets, default_equalizer_presets, find_preset, load_preset_store,
@@ -8810,8 +8810,19 @@ impl MainWindowUiState {
         let Some(backend) = self.playback_backend.as_ref().map(Rc::clone) else {
             return;
         };
+        let spectrum_layout = if self.visualization.mode() == VisMode::Analyzer
+            && self.visualization.analyzer_style() == VisAnalyzerStyle::Bars
+        {
+            SpectrumLayout::XmmsBars
+        } else {
+            SpectrumLayout::Lines
+        };
         let mut applied_pending_seek = false;
-        match backend.borrow().poll_events() {
+        let backend_ref = backend.borrow();
+        backend_ref.set_spectrum_layout(spectrum_layout);
+        let events = backend_ref.poll_events();
+        drop(backend_ref);
+        match events {
             Ok(events) => {
                 let mut end_of_stream = false;
                 let mut backend_ready = false;

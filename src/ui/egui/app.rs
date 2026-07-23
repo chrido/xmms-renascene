@@ -27,6 +27,7 @@ use crate::app::view_model::{
 use crate::app_log_error;
 use crate::app_log_info;
 use crate::app_state::AppState;
+use crate::audio_model::SpectrumLayout;
 #[cfg(feature = "desktop-egui")]
 use crate::equalizer::save_winamp_eqf;
 #[cfg(target_os = "android")]
@@ -64,6 +65,7 @@ use crate::skin::layout::{
     playlist_menu_button_rect, playlist_menu_popup_rect, snap_playlist_size, LayoutPanelKind,
     PanelTitleButton, PlaylistFooterButton, PlaylistMenuButton,
 };
+use crate::skin::widget::{VisAnalyzerStyle, VisMode};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 use crate::socket_control::{
     start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
@@ -694,6 +696,14 @@ impl EguiFrontendState {
 
     pub fn poll_playback_backend(&mut self) {
         if let Some(backend) = &self.playback.backend {
+            let spectrum_layout = if self.playback.visualization.mode() == VisMode::Analyzer
+                && self.playback.visualization.analyzer_style() == VisAnalyzerStyle::Bars
+            {
+                SpectrumLayout::XmmsBars
+            } else {
+                SpectrumLayout::Lines
+            };
+            backend.set_spectrum_layout(spectrum_layout);
             match backend.poll_events() {
                 Ok(events) => self.handle_playback_events(events),
                 Err(err) => self.runtime.pending_messages.push(err),
