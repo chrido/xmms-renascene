@@ -691,15 +691,16 @@ fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {
             &mut config.vis_vu_mode,
             &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
         );
-        android_slider(
+        android_combo(
             ui,
-            "Refresh divisor",
-            egui::Slider::new(&mut config.vis_refresh_divisor, 1..=4),
-        );
-        android_slider(
-            ui,
-            "Sensitivity / falloff",
-            egui::Slider::new(&mut config.vis_falloff, 0.001..=0.25),
+            "Refresh rate",
+            &mut config.vis_refresh_divisor,
+            &[
+                (1, "Full (~50 fps)"),
+                (2, "Half (~25 fps)"),
+                (4, "Quarter (~13 fps)"),
+                (8, "Eighth (~6 fps)"),
+            ],
         );
         return;
     }
@@ -763,9 +764,16 @@ fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {
             &mut config.vis_vu_mode,
             &[(VisVuMode::Normal, "Normal"), (VisVuMode::Smooth, "Smooth")],
         );
-        ui.add(egui::Slider::new(&mut config.vis_refresh_divisor, 1..=4).text("Refresh divisor"));
-        ui.add(
-            egui::Slider::new(&mut config.vis_falloff, 0.001..=0.25).text("Sensitivity/falloff"),
+        combo(
+            ui,
+            "Refresh rate",
+            &mut config.vis_refresh_divisor,
+            &[
+                (1, "Full (~50 fps)"),
+                (2, "Half (~25 fps)"),
+                (4, "Quarter (~13 fps)"),
+                (8, "Eighth (~6 fps)"),
+            ],
         );
     }
 }
