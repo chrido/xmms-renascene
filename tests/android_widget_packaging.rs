@@ -342,8 +342,33 @@ fn service_and_widget_controls_execute_immediately_only_when_authoritative() {
     assert!(handler.contains("AndroidMediaPlaylistAuthority::Authoritative"));
     assert!(handler.contains("execute_android_media_control("));
     assert!(handler.contains("backend_executed,"));
+    assert!(handler.contains("complete_activity_control: false"));
     assert!(!handler.contains("ui_runtime_registered"));
     assert!(!events.contains("fn ui_runtime_registered"));
+}
+
+#[test]
+fn service_media_controls_do_not_complete_activity_controls() {
+    let activity = include_str!("../src/ui/egui/android/mod.rs");
+    let service = include_str!("../src/ui/egui/android/media_session.rs");
+    let app = include_str!("../src/ui/egui/app.rs");
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+
+    assert!(activity.contains("complete_activity_control: true"));
+    assert!(service.contains("complete_activity_control: false"));
+    assert!(app.contains(
+        "activity_media_control_handled |= control.complete_activity_control"
+    ));
+    assert!(java.contains("if (activityResumed && hasWindowFocus())"));
+}
+
+#[test]
+fn activity_exposes_an_explicit_finish_transition_for_lifecycle_e2e() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+
+    assert!(java.contains("ACTION_FINISH_ACTIVITY"));
+    assert!(java.contains("ACTION_FINISH_ACTIVITY.equals(intent.getAction())"));
+    assert!(java.contains("finish();"));
 }
 
 #[test]
@@ -535,19 +560,18 @@ fn android_build_targets_api_36() {
 }
 
 #[test]
-fn android_winit_patch_uses_the_reproducible_git_fork() {
+fn android_winit_patch_pins_lifecycle_fixes() {
     let cargo = include_str!("../Cargo.toml");
     let lock = include_str!("../Cargo.lock");
     let fork = "https://github.com/chrido/winit";
-    let branch = "fix-window-configchanged-android";
+    let revision = "90f1b4446f9bb0adea8990c773482a6e9d96d755";
 
     assert!(cargo
         .contains("winit = { version = \"0.30.13\", optional = true, default-features = false"));
     assert!(cargo.contains("\"android-native-activity\""));
     assert!(cargo.contains(&format!(
-        "winit = {{ git = \"{fork}\", branch = \"{branch}\" }}"
+        "winit = {{ git = \"{fork}\", rev = \"{revision}\" }}"
     )));
-    assert!(!cargo.contains("vendor/winit"));
 
     let winit_packages: Vec<_> = lock
         .split("[[package]]")
@@ -555,7 +579,9 @@ fn android_winit_patch_uses_the_reproducible_git_fork() {
         .collect();
     assert_eq!(winit_packages.len(), 1);
     assert!(winit_packages[0].contains("version = \"0.30.13\""));
-    assert!(winit_packages[0].contains(&format!("source = \"git+{fork}?branch={branch}#")));
+    assert!(winit_packages[0].contains(&format!(
+        "source = \"git+{fork}?rev={revision}#{revision}\""
+    )));
 }
 
 #[test]

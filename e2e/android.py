@@ -23,6 +23,8 @@ ANDROID_ACTIVITY = f"{ANDROID_PACKAGE}/org.xmms.renascene.XmmsActivity"
 ANDROID_AUTO_PROBE_ACTIVITY = (
     f"{ANDROID_PACKAGE}/org.xmms.renascene.XmmsAutoProbeActivity"
 )
+ANDROID_AUTO_WIDGET_CONTROL_ACTION = "org.xmms.renascene.e2e.WIDGET_CONTROL"
+ANDROID_FINISH_ACTIVITY_ACTION = "org.xmms.renascene.action.FINISH_ACTIVITY"
 ANDROID_HOME_PACKAGE = "com.google.android.apps.nexuslauncher"
 MAIN_PLAYER_BASE_HEIGHT = 116
 _ROTATION_ACCELERATION_VECTORS = {
@@ -148,19 +150,62 @@ class AndroidDevice:
     def force_stop(self) -> None:
         self.shell("am", "force-stop", ANDROID_PACKAGE, check=False)
 
+    def start_widget_control(self, control: int = 2) -> None:
+        self.shell(
+            "am",
+            "start",
+            "-W",
+            "-n",
+            ANDROID_AUTO_PROBE_ACTIVITY,
+            "-a",
+            ANDROID_AUTO_WIDGET_CONTROL_ACTION,
+            "--ei",
+            "control",
+            str(control),
+        )
+
     def app_pid(self) -> str:
         return self.shell("pidof", ANDROID_PACKAGE, check=False).stdout.strip()
+
+    def kill_background_process(self, timeout: float = 5.0) -> str:
+        pid = self.app_pid()
+        if not pid:
+            raise AssertionError("Android app process is not running")
+        self.shell("am", "kill", "--user", "current", ANDROID_PACKAGE)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.app_pid() != pid:
+                return pid
+            time.sleep(0.1)
+        raise TimeoutError(f"Android background process was not killed: {pid}")
 
     def close_activity(self) -> str:
         pid = self.app_pid()
         if not pid:
             raise AssertionError("Android app process is not running")
-        self.shell("input", "keyevent", "4")
-        time.sleep(1.0)
+        self.shell(
+            "am",
+            "start",
+            "-W",
+            "--activity-single-top",
+            "-n",
+            ANDROID_ACTIVITY,
+            "-a",
+            ANDROID_FINISH_ACTIVITY_ACTION,
+        )
+        self.wait_for_focus(ANDROID_HOME_PACKAGE)
         return pid
 
     def go_home(self) -> None:
-        self.shell("input", "keyevent", "3")
+        self.shell(
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.HOME",
+        )
         self.wait_for_focus(ANDROID_HOME_PACKAGE)
 
     def start_activity(self) -> None:
@@ -171,7 +216,17 @@ class AndroidDevice:
             "com.google.android.documentsui",
             check=False,
         )
-        self.shell("am", "start", "-W", "-n", ANDROID_ACTIVITY)
+        self.shell(
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "-n",
+            ANDROID_ACTIVITY,
+        )
         self.wait_for_app()
 
     def restart_app(self, *, reset_data: bool = False) -> None:
@@ -235,6 +290,32 @@ class AndroidDevice:
                 return
             time.sleep(0.2)
         raise TimeoutError(f"Android service did not stop: {service_name}")
+
+    def wait_for_media_session_position_at_least(
+        self,
+        minimum: int,
+        timeout: float = 5.0,
+    ) -> int:
+        deadline = time.monotonic() + timeout
+        sessions = ""
+        while time.monotonic() < deadline:
+            sessions = self.shell(
+                "dumpsys",
+                "media_session",
+                check=False,
+            ).stdout
+            match = re.search(
+                rf"package={re.escape(ANDROID_PACKAGE)}"
+                rf"[\s\S]*?state=PlaybackState \{{state=[^,\n]+, position=(\d+)",
+                sessions,
+            )
+            if match is not None and int(match.group(1)) >= minimum:
+                return int(match.group(1))
+            time.sleep(0.2)
+        raise AssertionError(
+            f"Android media session did not reach position>={minimum}:\n"
+            + sessions[-12000:]
+        )
 
     def wait_for_focus(self, package: str, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout
@@ -482,6 +563,20 @@ class AndroidDevice:
             geometry,
         ) == _rendered_screen_pixels(second, geometry)
 
+    def assert_player_rendered(
+        self,
+        screenshot: bytes | Path,
+        *,
+        minimum_bright_fraction: float = 0.05,
+    ) -> None:
+        rendered = _rendered_screen_pixels(screenshot, self.display_geometry())
+        bright_fraction = _bright_pixel_fraction(rendered)
+        if bright_fraction < minimum_bright_fraction:
+            raise AssertionError(
+                "Android player remained black after launch "
+                f"(bright pixel fraction {bright_fraction:.3f})"
+            )
+
     def main_player_bounds(self) -> tuple[int, int, int, int]:
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
@@ -603,6 +698,18 @@ class AndroidDevice:
             + "\n".join(f"- {needle}" for needle in missing)
             + f"\n\nRecent logcat:\n{log[-12000:]}"
         )
+
+    def assert_no_app_crash(self) -> None:
+        log = self.command("logcat", "-d", check=False).stdout
+        crash_patterns = (
+            rf"FATAL EXCEPTION[\s\S]{{0,2000}}Process: {re.escape(ANDROID_PACKAGE)}",
+            rf">>> {re.escape(ANDROID_PACKAGE)} <<<",
+            rf"ANR in {re.escape(ANDROID_PACKAGE)}",
+        )
+        if any(re.search(pattern, log) for pattern in crash_patterns):
+            raise AssertionError(
+                "Android app crashed or stopped responding:\n" + log[-12000:]
+            )
 
     def wait_for_private_file_contains(
         self,
@@ -841,3 +948,15 @@ def _changed_pixel_fraction(
     )
     sample_count = (len(first_pixels) + sample_stride - 1) // sample_stride
     return changed / sample_count
+
+
+def _bright_pixel_fraction(rendered: tuple[tuple[int, int], bytes]) -> float:
+    pixels = rendered[1]
+    sample_stride = 3 * 16
+    sampled_offsets = range(0, len(pixels), sample_stride)
+    bright = sum(
+        max(pixels[offset : offset + 3], default=0) >= 18
+        for offset in sampled_offsets
+    )
+    sample_count = (len(pixels) + sample_stride - 1) // sample_stride
+    return bright / sample_count if sample_count else 0.0

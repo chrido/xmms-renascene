@@ -95,7 +95,10 @@ in the same process, including playlist contents, playlist/equalizer visibility,
 equalizer activation, shuffle, and repeat. The suite also connects a real
 `MediaBrowser` client to the Android Auto service, including cold-start loading
 of a persisted playlist, and checks that portrait content stays inside the
-reported top and bottom safe area. Numbered emulator screenshots and videos are
+reported top and bottom safe area. Widget playback lifecycle coverage crosses
+stopped, foreground, background, and closed Activity states before both an
+initial and repeated widget play, then verifies playback progress and a rendered
+player after every app launch. Numbered emulator screenshots and videos are
 written to `testoutput`.
 
 ```bash

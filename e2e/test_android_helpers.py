@@ -5,6 +5,7 @@ from subprocess import CompletedProcess
 from unittest.mock import call, patch
 
 import pytest
+from PIL import Image
 
 from android import AndroidDevice, DisplayGeometry
 
@@ -78,3 +79,51 @@ def test_rotation_rejects_invalid_value_before_running_adb() -> None:
             device._set_rotation(4)
 
     command.assert_not_called()
+
+
+def test_media_session_position_uses_playback_position_not_buffered_position() -> None:
+    device = AndroidDevice(Path("adb"), "emulator-5554")
+    sessions = """
+Sessions Stack - have 1 sessions:
+  XMMS Renascene org.xmms.renascene/XMMS Renascene/1 (userId=0)
+    package=org.xmms.renascene
+    state=PlaybackState {state=PLAYING(3), position=9600, buffered position=0}
+"""
+
+    with patch.object(
+        AndroidDevice,
+        "shell",
+        return_value=CompletedProcess([], 0, sessions, ""),
+    ):
+        position = device.wait_for_media_session_position_at_least(500)
+
+    assert position == 9600
+
+
+def test_player_render_assertion_rejects_black_activity(
+    tmp_path: Path,
+) -> None:
+    screenshot = tmp_path / "black.png"
+    Image.new("RGB", (100, 100), "black").save(screenshot)
+    device = AndroidDevice(Path("adb"), "emulator-5554")
+    geometry = DisplayGeometry(100, 100, 0, 0, 0, 0)
+
+    with patch.object(AndroidDevice, "display_geometry", return_value=geometry):
+        with pytest.raises(AssertionError, match="remained black"):
+            device.assert_player_rendered(screenshot)
+
+
+def test_player_render_assertion_accepts_visible_player(
+    tmp_path: Path,
+) -> None:
+    screenshot = tmp_path / "visible.png"
+    image = Image.new("RGB", (100, 100), "black")
+    for x in range(25, 75):
+        for y in range(25, 75):
+            image.putpixel((x, y), (80, 80, 80))
+    image.save(screenshot)
+    device = AndroidDevice(Path("adb"), "emulator-5554")
+    geometry = DisplayGeometry(100, 100, 0, 0, 0, 0)
+
+    with patch.object(AndroidDevice, "display_geometry", return_value=geometry):
+        device.assert_player_rendered(screenshot)

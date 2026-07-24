@@ -43,6 +43,7 @@ pub enum AndroidPlatformEvent {
 pub struct AndroidMediaControlEvent {
     pub control: AndroidMediaControl,
     pub backend_executed: bool,
+    pub complete_activity_control: bool,
 }
 
 #[repr(i32)]
@@ -200,6 +201,7 @@ mod tests {
         AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
             control,
             backend_executed: false,
+            complete_activity_control: false,
         })
     }
 
@@ -281,6 +283,7 @@ mod tests {
             AndroidMediaControlEvent {
                 control: AndroidMediaControl::PlayMediaItem(2),
                 backend_executed: true,
+                complete_activity_control: false,
             },
         ));
         inbox.push(AndroidPlatformEvent::ExternalVolumeChanged(42));
@@ -296,6 +299,7 @@ mod tests {
                 AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
                     control: AndroidMediaControl::PlayMediaItem(2),
                     backend_executed: true,
+                    complete_activity_control: false,
                 }),
                 AndroidPlatformEvent::ExternalVolumeChanged(42)
             ]
@@ -317,6 +321,7 @@ mod tests {
             AndroidMediaControlEvent {
                 control: AndroidMediaControl::NextTrack,
                 backend_executed: true,
+                complete_activity_control: false,
             },
         ));
 
@@ -331,6 +336,7 @@ mod tests {
                 AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
                     control: AndroidMediaControl::NextTrack,
                     backend_executed: true,
+                    complete_activity_control: false,
                 })
             ]
         ));
