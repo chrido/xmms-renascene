@@ -107,7 +107,7 @@ use super::ui_state::ActiveOverlay;
 use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
-const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(50);
+const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(20);
 const DURATION_INDEX_BATCH_SIZE: usize = 16;
 
 #[cfg(any(target_os = "android", test))]
@@ -522,9 +522,10 @@ impl EguiFrontendState {
                 .visualization_data_valid()
                 .then(|| *player.visualization_data())
         };
-        self.playback
-            .visualization
-            .tick(data.as_ref().map(|values| values.as_slice()));
+        self.playback.visualization.tick_with_steps(
+            data.as_ref().map(|values| values.as_slice()),
+            self.visualization_refresh_divisor() as usize,
+        );
         true
     }
 
@@ -699,7 +700,7 @@ impl EguiFrontendState {
             let spectrum_layout = if self.playback.visualization.mode() == VisMode::Analyzer
                 && self.playback.visualization.analyzer_style() == VisAnalyzerStyle::Bars
             {
-                SpectrumLayout::XmmsBars
+                SpectrumLayout::AnalyzerBars
             } else {
                 SpectrumLayout::Lines
             };

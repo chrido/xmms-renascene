@@ -3,6 +3,7 @@
 //! This adapter intentionally delegates to the existing `crate::player` backend
 //! while the UI separation proceeds incrementally.
 
+use crate::audio_model::SpectrumLayout;
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{
     EqualizerBackendState, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
@@ -48,6 +49,10 @@ impl PlaybackBackend for GStreamerBackend {
             state.band_positions,
         );
         Ok(())
+    }
+
+    fn set_spectrum_layout(&self, layout: SpectrumLayout) {
+        GStreamerBackend::set_spectrum_layout(self, layout);
     }
 
     fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {

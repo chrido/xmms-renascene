@@ -7,7 +7,9 @@ use std::cell::{Cell, RefCell};
 
 #[cfg(feature = "gstreamer-backend")]
 use crate::audio_model::{
-    equalizer_position_to_db, EqualizerBandDb, EqualizerBandPositions, EQUALIZER_BANDS,
+    analyzer_spectrum_from_bins, analyzer_spectrum_level, equalizer_position_to_db,
+    spectrum_data_for_layout, EqualizerBandDb, EqualizerBandPositions, SpectrumLayout,
+    ANALYZER_FFT_FRAMES, ANALYZER_FREQUENCY_BIN_COUNT, EQUALIZER_BANDS,
 };
 use crate::audio_model::{SpectrumData, SPECTRUM_BANDS};
 
@@ -79,6 +81,7 @@ pub struct GStreamerBackend {
     equalizer: gst::Element,
     requested_state: Cell<PlayerState>,
     requested_uri: RefCell<Option<String>>,
+    spectrum_layout: Cell<SpectrumLayout>,
 }
 
 #[cfg(feature = "gstreamer-backend")]
@@ -170,6 +173,7 @@ impl GStreamerBackend {
             equalizer: audio_sink.equalizer,
             requested_state: Cell::new(PlayerState::Stopped),
             requested_uri: RefCell::new(None),
+            spectrum_layout: Cell::new(SpectrumLayout::AnalyzerBars),
         })
     }
 
@@ -204,6 +208,10 @@ impl GStreamerBackend {
             }
         }
         Ok(events)
+    }
+
+    pub fn set_spectrum_layout(&self, layout: SpectrumLayout) {
+        self.spectrum_layout.set(layout);
     }
 
     pub fn play_uri(&self, uri: &str) -> Result<(), String> {
@@ -361,7 +369,11 @@ impl GStreamerBackend {
     }
 
     fn event_from_message(&self, message: &gst::Message) -> Option<PlaybackEvent> {
-        event_from_message(message, || query_duration_ms(&self.pipeline))
+        event_from_message_with_layout(
+            message,
+            || query_duration_ms(&self.pipeline),
+            self.spectrum_layout.get(),
+        )
     }
 
     fn set_state(&self, state: gst::State) -> Result<(), String> {
@@ -611,10 +623,10 @@ fn build_audio_sink_bin(sink_factory: &str, device: Option<&str>) -> Result<Audi
         sink.set_property("device", device);
     }
 
-    spectrum.set_property("bands", SPECTRUM_BANDS as u32);
+    spectrum.set_property("bands", (ANALYZER_FFT_FRAMES / 2 + 1) as u32);
     spectrum.set_property("threshold", -80i32);
     spectrum.set_property("post-messages", true);
-    spectrum.set_property("interval", 50_000_000u64);
+    spectrum.set_property("interval", 20_000_000u64);
     spectrum.set_property("message-magnitude", true);
 
     bin.add(&convert)
@@ -710,6 +722,15 @@ fn event_from_message(
     message: &gst::Message,
     duration_query: impl FnOnce() -> Option<i64>,
 ) -> Option<PlaybackEvent> {
+    event_from_message_with_layout(message, duration_query, SpectrumLayout::Lines)
+}
+
+#[cfg(feature = "gstreamer-backend")]
+fn event_from_message_with_layout(
+    message: &gst::Message,
+    duration_query: impl FnOnce() -> Option<i64>,
+    spectrum_layout: SpectrumLayout,
+) -> Option<PlaybackEvent> {
     match message.view() {
         gst::MessageView::Eos(_) => Some(PlaybackEvent::EndOfStream),
         gst::MessageView::Error(error) => Some(PlaybackEvent::Error(error.error().to_string())),
@@ -720,7 +741,7 @@ fn event_from_message(
         gst::MessageView::Tag(tag) => Some(PlaybackEvent::Tags(tags_from_tag_list(&tag.tags()))),
         gst::MessageView::Element(element) => element
             .structure()
-            .and_then(spectrum_from_structure)
+            .and_then(|structure| spectrum_from_structure(structure, spectrum_layout))
             .map(PlaybackEvent::Spectrum),
         _ => None,
     }
@@ -776,32 +797,48 @@ where
 }
 
 #[cfg(feature = "gstreamer-backend")]
-fn spectrum_from_structure(structure: &gst::StructureRef) -> Option<SpectrumData> {
+fn spectrum_from_structure(
+    structure: &gst::StructureRef,
+    layout: SpectrumLayout,
+) -> Option<SpectrumData> {
     if structure.name() != "spectrum" {
         return None;
     }
 
     if let Ok(magnitudes) = structure.get::<gst::Array>("magnitude") {
-        return spectrum_from_values(magnitudes.as_slice());
+        return spectrum_from_values(magnitudes.as_slice(), layout);
     }
     if let Ok(magnitudes) = structure.get::<gst::List>("magnitude") {
-        return spectrum_from_values(magnitudes.as_slice());
+        return spectrum_from_values(magnitudes.as_slice(), layout);
     }
     None
 }
 
 #[cfg(feature = "gstreamer-backend")]
-fn spectrum_from_values(values: &[gst::glib::SendValue]) -> Option<SpectrumData> {
-    let mut bands = [0.0; SPECTRUM_BANDS];
-    for (index, value) in values.iter().take(SPECTRUM_BANDS).enumerate() {
+fn spectrum_from_values(
+    values: &[gst::glib::SendValue],
+    layout: SpectrumLayout,
+) -> Option<SpectrumData> {
+    let mut frequency_bins = [0.0; ANALYZER_FREQUENCY_BIN_COUNT];
+    for (index, value) in values
+        .iter()
+        .skip(1)
+        .take(ANALYZER_FREQUENCY_BIN_COUNT)
+        .enumerate()
+    {
         let magnitude = value
             .get::<f64>()
             .map(|value| value as f32)
             .or_else(|_| value.get::<f32>())
             .ok()?;
-        bands[index] = ((magnitude + 80.0) / 80.0).clamp(0.0, 1.0);
+        // GStreamer's spectrum uses a Hamming window and reports one-sided
+        // DFT magnitude, so restore the original signal amplitude first.
+        const HAMMING_COHERENT_GAIN: f32 = 0.54;
+        let amplitude = 2.0 * 10.0_f32.powf(magnitude / 20.0) / HAMMING_COHERENT_GAIN;
+        frequency_bins[index] = analyzer_spectrum_level(amplitude);
     }
-    Some(bands)
+    let (lines, bars) = analyzer_spectrum_from_bins(&frequency_bins);
+    Some(spectrum_data_for_layout(lines, bars, layout))
 }
 
 #[cfg(all(test, feature = "gstreamer-backend"))]
@@ -1191,7 +1228,7 @@ mod tests {
     fn gstreamer_bus_spectrum_messages_extract_visualizer_bands() {
         let _guard = gst_test_guard();
         gst::init().expect("GStreamer should initialize");
-        let magnitudes = gst::Array::new([-80.0f64, -40.0, 0.0]);
+        let magnitudes = gst::Array::new([-80.0f64, -80.0, -40.0, 0.0]);
         let structure = gst::Structure::builder("spectrum")
             .field("magnitude", magnitudes)
             .build();
@@ -1203,8 +1240,8 @@ mod tests {
         };
 
         assert_eq!(bands[0], 0.0);
-        assert_eq!(bands[1], 0.5);
-        assert_eq!(bands[2], 1.0);
+        assert_eq!(bands[1], 7.0 / 16.0);
+        assert_eq!(bands[2], 15.0 / 16.0);
         assert_eq!(bands[3], 0.0);
     }
 
@@ -1212,7 +1249,7 @@ mod tests {
     fn gstreamer_bus_spectrum_list_messages_extract_visualizer_bands() {
         let _guard = gst_test_guard();
         gst::init().expect("GStreamer should initialize");
-        let magnitudes = gst::List::new([-80.0f32, -20.0, 0.0]);
+        let magnitudes = gst::List::new([-80.0f32, -80.0, -40.0, 0.0]);
         let structure = gst::Structure::builder("spectrum")
             .field("magnitude", magnitudes)
             .build();
@@ -1224,8 +1261,32 @@ mod tests {
         };
 
         assert_eq!(bands[0], 0.0);
-        assert_eq!(bands[1], 0.75);
-        assert_eq!(bands[2], 1.0);
+        assert_eq!(bands[1], 7.0 / 16.0);
+        assert_eq!(bands[2], 15.0 / 16.0);
         assert_eq!(bands[3], 0.0);
+    }
+
+    #[test]
+    fn gstreamer_spectrum_uses_reference_bar_buckets() {
+        let _guard = gst_test_guard();
+        gst::init().expect("GStreamer should initialize");
+        let mut magnitudes = vec![-80.0f64; ANALYZER_FFT_FRAMES / 2 + 1];
+        magnitudes[3] = 0.0;
+        let structure = gst::Structure::builder("spectrum")
+            .field("magnitude", gst::Array::new(magnitudes))
+            .build();
+
+        let event = event_from_message_with_layout(
+            &gst::message::Element::new(structure),
+            || None,
+            SpectrumLayout::AnalyzerBars,
+        )
+        .expect("spectrum structure should produce a visualizer event");
+        let PlaybackEvent::Spectrum(bars) = event else {
+            panic!("expected spectrum event");
+        };
+        assert_eq!(bars[2], 15.0 / 16.0);
+        assert_eq!(bars[0], 0.0);
+        assert_eq!(bars[3], 0.0);
     }
 }
