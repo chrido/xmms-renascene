@@ -701,7 +701,7 @@ fn build_preview_window(
         let main_state = Rc::clone(&main_state);
         let mpris_service = Rc::clone(&mpris_service);
         let socket_control = Rc::clone(&socket_control);
-        gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
+        gtk::glib::timeout_add_local(Duration::from_millis(20), move || {
             let socket_redraw = poll_socket_control_gtk(
                 &socket_control,
                 &app,
@@ -720,7 +720,7 @@ fn build_preview_window(
             }
             let (redraw, mpris_events, mpris_properties) = {
                 let mut state = main_state.borrow_mut();
-                let redraw = state.update_timer_tick(100);
+                let redraw = state.update_timer_tick(20);
                 let events = state.take_mpris_events();
                 let properties = state.mpris_player_properties();
                 (redraw, events, properties)
@@ -8760,8 +8760,10 @@ impl MainWindowUiState {
                 .player
                 .visualization_data_valid()
                 .then(|| *self.store.state().player.visualization_data());
-            self.visualization
-                .tick(data.as_ref().map(|data| data.as_slice()));
+            self.visualization.tick_with_steps(
+                data.as_ref().map(|data| data.as_slice()),
+                self.visualization_refresh_divisor() as usize,
+            );
         }
         true
     }
@@ -8813,7 +8815,7 @@ impl MainWindowUiState {
         let spectrum_layout = if self.visualization.mode() == VisMode::Analyzer
             && self.visualization.analyzer_style() == VisAnalyzerStyle::Bars
         {
-            SpectrumLayout::XmmsBars
+            SpectrumLayout::AnalyzerBars
         } else {
             SpectrumLayout::Lines
         };
