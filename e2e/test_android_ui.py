@@ -30,6 +30,48 @@ pytest: Any = import_module("pytest")
 
 pytestmark = pytest.mark.android
 
+ANDROID_ACTIVITY_STATES = ("stopped", "foreground", "background", "closed")
+
+
+def _prepare_widget_lifecycle_track(android_device: AndroidDevice) -> None:
+    audio = BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(8_000)
+        wav.writeframes(bytes([128]) * 8_000 * 180)
+    android_device.write_private_bytes(
+        "files/imports/widget-lifecycle.wav",
+        audio.getvalue(),
+    )
+    android_device.write_private_file(
+        "files/config/xmms-renascene/playlist.m3u",
+        "#EXTM3U\n"
+        "#EXTINF:180,Widget Lifecycle\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/widget-lifecycle.wav\n",
+    )
+
+
+def _enter_android_activity_state(
+    android_device: AndroidDevice,
+    state: str,
+) -> None:
+    if state == "stopped":
+        android_device.force_stop()
+    elif state == "foreground":
+        android_device.start_activity()
+        android_device.main_player_bounds()
+    elif state == "background":
+        android_device.start_activity()
+        android_device.main_player_bounds()
+        android_device.go_home()
+    elif state == "closed":
+        android_device.start_activity()
+        android_device.main_player_bounds()
+        android_device.close_activity()
+    else:
+        raise ValueError(f"Unknown Android activity state: {state}")
+
 
 def test_android_checkpoints_background_playback_position(
     android_device: AndroidDevice,
@@ -94,17 +136,7 @@ def test_android_widget_cold_starts_playback_without_activity(
         "file:///data/user/0/org.xmms.renascene/files/imports/widget-cold-start.wav\n",
     )
 
-    android_device.shell(
-        "am",
-        "start-foreground-service",
-        "-n",
-        f"{ANDROID_PACKAGE}/.XmmsPlaybackService",
-        "-a",
-        "org.xmms.renascene.service.WIDGET_CONTROL",
-        "--ei",
-        "widgetControl",
-        "2",
-    )
+    android_device.start_widget_control()
 
     android_device.wait_for_service("XmmsPlaybackService")
     position_ms = android_device.wait_for_private_file_int_at_least(
@@ -114,6 +146,94 @@ def test_android_widget_cold_starts_playback_without_activity(
         timeout=15.0,
     )
     assert position_ms < 20_000
+
+
+def test_android_widget_launch_renders_after_idle_process_reclamation(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    _prepare_widget_lifecycle_track(android_device)
+
+    android_device.start_activity()
+    android_device.main_player_bounds()
+    android_device.go_home()
+    android_device.kill_background_process()
+
+    android_device.clear_logcat()
+    android_device.start_widget_control()
+    android_device.start_activity()
+    android_device.wait_for_service("XmmsPlaybackService")
+    android_device.wait_for_media_session_position_at_least(500, timeout=10.0)
+    android_device.main_player_bounds()
+    screenshot = android_device.screenshot(test_output.screenshot_path())
+    android_device.assert_player_rendered(screenshot)
+    android_device.assert_no_app_crash()
+
+
+@pytest.mark.parametrize(
+    "initial_activity_state",
+    ANDROID_ACTIVITY_STATES,
+    ids=lambda state: f"initial-{state}",
+)
+@pytest.mark.parametrize(
+    "repeated_activity_state",
+    ANDROID_ACTIVITY_STATES,
+    ids=lambda state: f"repeat-{state}",
+)
+def test_android_widget_playback_survives_activity_lifecycle_matrix(
+    android_device: AndroidDevice,
+    test_output: Any,
+    initial_activity_state: str,
+    repeated_activity_state: str,
+) -> None:
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+    _prepare_widget_lifecycle_track(android_device)
+
+    _enter_android_activity_state(android_device, initial_activity_state)
+    android_device.clear_logcat()
+    android_device.start_widget_control()
+    android_device.start_activity()
+    android_device.wait_for_service("XmmsPlaybackService")
+    android_device.wait_for_media_session_position_at_least(
+        500,
+        timeout=10.0,
+    )
+    android_device.assert_no_app_crash()
+
+    android_device.main_player_bounds()
+    initial_screenshot = android_device.screenshot(test_output.screenshot_path())
+    android_device.assert_player_rendered(initial_screenshot)
+    android_device.assert_no_app_crash()
+
+    baseline_position = android_device.wait_for_media_session_position_at_least(500)
+    _enter_android_activity_state(android_device, repeated_activity_state)
+    android_device.clear_logcat()
+    android_device.start_widget_control()
+    android_device.start_activity()
+    android_device.wait_for_service("XmmsPlaybackService")
+    minimum_position = (
+        500
+        if repeated_activity_state == "stopped"
+        else baseline_position + 500
+    )
+    repeated_position = android_device.wait_for_media_session_position_at_least(
+        minimum_position,
+        timeout=10.0,
+    )
+    android_device.assert_no_app_crash()
+
+    android_device.main_player_bounds()
+    repeated_screenshot = android_device.screenshot(test_output.screenshot_path())
+    android_device.assert_player_rendered(repeated_screenshot)
+    android_device.assert_no_app_crash()
+    assert repeated_position < 180_000
 
 
 def test_android_redraws_after_background_playback_resume(

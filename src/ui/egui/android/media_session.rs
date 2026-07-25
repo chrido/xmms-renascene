@@ -356,6 +356,7 @@ pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
             AndroidMediaControlEvent {
                 control: AndroidMediaControl::PlaylistEof,
                 backend_executed,
+                complete_activity_control: false,
             },
         ));
         backend_executed
@@ -412,6 +413,7 @@ pub(crate) fn handle_media_control(
         AndroidMediaControlEvent {
             control,
             backend_executed,
+            complete_activity_control: false,
         },
     ));
     if backend_executed {

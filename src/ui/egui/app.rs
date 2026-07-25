@@ -1297,7 +1297,7 @@ impl EguiFrontendState {
         else {
             return false;
         };
-        let mut media_control_handled = false;
+        let mut activity_media_control_handled = false;
         let mut playback_events = Vec::new();
         for event in &mut events {
             match event {
@@ -1305,7 +1305,7 @@ impl EguiFrontendState {
                     self.handle_android_file_picker_result(result);
                 }
                 super::android::AndroidPlatformEvent::MediaControl(control) => {
-                    media_control_handled = true;
+                    activity_media_control_handled |= control.complete_activity_control;
                     self.handle_android_media_control(control);
                 }
                 super::android::AndroidPlatformEvent::Playback(event) => {
@@ -1318,7 +1318,7 @@ impl EguiFrontendState {
         }
         self.handle_playback_events(playback_events);
         self.poll_playback_backend();
-        media_control_handled
+        activity_media_control_handled
     }
 
     #[cfg(target_os = "android")]
@@ -1413,7 +1413,7 @@ impl eframe::App for EguiFrontendState {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "android")]
-        let android_media_control_handled = self.poll_android_platform_events(ctx);
+        let android_activity_media_control_handled = self.poll_android_platform_events(ctx);
         #[cfg(target_os = "android")]
         self.update_android_layout_policy();
         self.poll_socket_control(ctx);
@@ -1426,7 +1426,7 @@ impl eframe::App for EguiFrontendState {
         #[cfg(target_os = "android")]
         {
             self.flush_android_platform_policies(false);
-            if android_media_control_handled {
+            if android_activity_media_control_handled {
                 if let Err(err) =
                     super::android::complete_media_control(self.android.activity_generation())
                 {

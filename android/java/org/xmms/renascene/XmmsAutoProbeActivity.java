@@ -2,6 +2,7 @@ package org.xmms.renascene;
 
 import android.app.Activity;
 import android.content.ComponentName;
+import android.content.Intent;
 import android.media.browse.MediaBrowser;
 import android.os.Bundle;
 import android.util.Log;
@@ -10,12 +11,23 @@ import java.util.List;
 
 public final class XmmsAutoProbeActivity extends Activity {
     private static final String TAG = "XMMS_AUTO_PROBE";
+    private static final String ACTION_WIDGET_CONTROL =
+            "org.xmms.renascene.e2e.WIDGET_CONTROL";
 
     private MediaBrowser browser;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (ACTION_WIDGET_CONTROL.equals(getIntent().getAction())) {
+            int control = getIntent().getIntExtra("control", XmmsPlaybackService.CONTROL_PLAY);
+            sendBroadcast(
+                    new Intent(this, XmmsPlayerWidget.class)
+                            .setAction("org.xmms.renascene.widget.CONTROL")
+                            .putExtra("control", control));
+            finish();
+            return;
+        }
         browser = new MediaBrowser(
                 this,
                 new ComponentName(this, XmmsPlaybackService.class),

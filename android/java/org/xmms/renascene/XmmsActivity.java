@@ -52,6 +52,8 @@ public final class XmmsActivity extends NativeActivity {
             "org.xmms.renascene.action.RESUME_PLAYBACK";
     static final String ACTION_NEXT_TRACK =
             "org.xmms.renascene.action.NEXT_TRACK";
+    static final String ACTION_FINISH_ACTIVITY =
+            "org.xmms.renascene.action.FINISH_ACTIVITY";
     static {
         System.loadLibrary("xmms_renascene");
     }
@@ -295,6 +297,11 @@ public final class XmmsActivity extends NativeActivity {
         if (intent == null) {
             return false;
         }
+        if (ACTION_FINISH_ACTIVITY.equals(intent.getAction())) {
+            setIntent(new Intent(this, XmmsActivity.class));
+            finish();
+            return true;
+        }
         if (ACTION_PAUSE_PLAYBACK.equals(intent.getAction())) {
             mediaControls.enqueue(MediaControl.PAUSE);
             setIntent(new Intent(this, XmmsActivity.class));
@@ -320,7 +327,9 @@ public final class XmmsActivity extends NativeActivity {
         runOnUiThread(() -> {
             if (mediaControls.complete()) {
                 nativeLoopReady = false;
-                moveTaskToBack(true);
+                if (activityResumed && hasWindowFocus()) {
+                    moveTaskToBack(true);
+                }
             } else {
                 dispatchPendingMediaControl();
             }

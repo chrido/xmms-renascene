@@ -187,6 +187,7 @@ pub(crate) fn handle_activity_media_control(
         AndroidMediaControlEvent {
             control,
             backend_executed: false,
+            complete_activity_control: true,
         },
     ));
     events::request_registered_repaint();
