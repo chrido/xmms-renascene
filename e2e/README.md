@@ -98,8 +98,11 @@ of a persisted playlist, and checks that portrait content stays inside the
 reported top and bottom safe area. Widget playback lifecycle coverage crosses
 stopped, foreground, background, and closed Activity states before both an
 initial and repeated widget play, then verifies playback progress and a rendered
-player after every app launch. Numbered emulator screenshots and videos are
-written to `testoutput`.
+player after every app launch. Separate process-reclamation cases move an idle
+player into Android's cached state and cover widget playback with the process
+alive, widget playback after the cached process is killed, and normal app launch
+after the cached process is killed. Numbered emulator screenshots and videos
+are written to `testoutput`.
 
 ```bash
 ./repo pye2e -m android

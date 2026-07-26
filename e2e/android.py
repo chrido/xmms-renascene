@@ -167,6 +167,27 @@ class AndroidDevice:
     def app_pid(self) -> str:
         return self.shell("pidof", ANDROID_PACKAGE, check=False).stdout.strip()
 
+    def cache_process(self, timeout: float = 5.0) -> str:
+        pid = self.app_pid()
+        if not pid:
+            raise AssertionError("Android app process is not running")
+        self.go_home()
+        self.shell("am", "start", "-W", "-a", "android.settings.SETTINGS")
+        self.go_home()
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            processes = self.shell(
+                "dumpsys",
+                "activity",
+                "processes",
+                ANDROID_PACKAGE,
+                check=False,
+            ).stdout
+            if self.app_pid() == pid and "cached=true" in processes:
+                return pid
+            time.sleep(0.1)
+        raise TimeoutError(f"Android app process did not become cached: {pid}")
+
     def kill_background_process(self, timeout: float = 5.0) -> str:
         pid = self.app_pid()
         if not pid:

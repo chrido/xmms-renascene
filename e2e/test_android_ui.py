@@ -148,9 +148,19 @@ def test_android_widget_cold_starts_playback_without_activity(
     assert position_ms < 20_000
 
 
-def test_android_widget_launch_renders_after_idle_process_reclamation(
+@pytest.mark.parametrize(
+    ("process_fate", "resume_trigger"),
+    [
+        pytest.param("alive", "widget", id="cached-widget-play"),
+        pytest.param("killed", "widget", id="killed-widget-play"),
+        pytest.param("killed", "app", id="killed-app-open"),
+    ],
+)
+def test_android_resumes_cached_idle_process(
     android_device: AndroidDevice,
     test_output: Any,
+    process_fate: str,
+    resume_trigger: str,
 ) -> None:
     android_device.set_portrait()
     android_device.force_stop()
@@ -160,14 +170,22 @@ def test_android_widget_launch_renders_after_idle_process_reclamation(
 
     android_device.start_activity()
     android_device.main_player_bounds()
-    android_device.go_home()
-    android_device.kill_background_process()
+    cached_pid = android_device.cache_process()
+    if process_fate == "killed":
+        android_device.kill_background_process()
 
     android_device.clear_logcat()
-    android_device.start_widget_control()
+    if resume_trigger == "widget":
+        android_device.start_widget_control()
     android_device.start_activity()
-    android_device.wait_for_service("XmmsPlaybackService")
-    android_device.wait_for_media_session_position_at_least(500, timeout=10.0)
+    resumed_pid = android_device.app_pid()
+    if process_fate == "alive":
+        assert resumed_pid == cached_pid
+    else:
+        assert resumed_pid and resumed_pid != cached_pid
+    if resume_trigger == "widget":
+        android_device.wait_for_service("XmmsPlaybackService")
+        android_device.wait_for_media_session_position_at_least(500, timeout=10.0)
     android_device.main_player_bounds()
     screenshot = android_device.screenshot(test_output.screenshot_path())
     android_device.assert_player_rendered(screenshot)
