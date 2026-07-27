@@ -6947,7 +6947,9 @@ impl MainWindowUiState {
         if self.store.state().playlist.is_empty() {
             self.add_timed_entry("file:///xmms-renascene-e2e.ogg", "E2E", -1);
         }
-        self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+        if self.store.state().player.state() != PlayerState::Playing {
+            self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+        }
     }
 
     pub(crate) fn save_runtime_snapshot_for_e2e(

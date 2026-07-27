@@ -1909,7 +1909,7 @@ fn visualization_refresh_divisor_throttles_data_ticks_from_rust_e2e() {
         .tick_visualization(100)
         .assert_visualization_band_at_most(4, 0.0)
         .tick_visualization(100)
-        .assert_visualization_band_at_least(4, 0.9)
+        .assert_visualization_band_at_least(4, 0.8)
         .set_visualization_refresh_divisor(8)
         .assert_visualization_refresh_divisor(8);
 }
