@@ -298,11 +298,17 @@ def test_mpris_seek_and_properties_signals(
         relative_seek_position = await wait_seeked(seeked)
         assert relative_seek_position >= before_seek_position + 1_000_000
         assert relative_seek_position <= before_seek_position + 1_750_000
-        assert await client.get_player_property("Position") >= relative_seek_position
+        await client.wait_player_property_predicate(
+            "Position",
+            lambda position: position >= relative_seek_position,
+        )
 
         await client.player.call_set_position("/org/xmms/Track/0", 2_000_000)
         assert await wait_seeked(seeked, 2_000_000) == 2_000_000
-        assert await client.get_player_property("Position") >= 2_000_000
+        await client.wait_player_property_predicate(
+            "Position",
+            lambda position: position >= 2_000_000,
+        )
 
     run_mpris_test(
         tmp_path,
