@@ -436,6 +436,7 @@ def android_device(tmp_path_factory: Any) -> Iterator[AndroidDevice]:
     startup_output = tmp_path_factory.mktemp("android-startup") / "initial.png"
     if os.environ.get("XMMS_E2E_ANDROID_SKIP_BUILD") == "1":
         device.require_running_emulator()
+        device.wait_for_boot_ready()
         device.install_existing_apk()
     else:
         startup_env = os.environ.copy()
@@ -453,6 +454,7 @@ def android_device(tmp_path_factory: Any) -> Iterator[AndroidDevice]:
             check=True,
         )
         device = AndroidDevice.from_environment()
+        device.wait_for_boot_ready()
     device.grant_runtime_permissions()
     device.set_portrait()
     device.restart_app(reset_data=True)

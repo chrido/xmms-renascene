@@ -778,7 +778,6 @@ def _run_playlist_swipe_until_log(
         android_device.wait_for_app()
         android_device.shell(
             "input",
-            "touchscreen",
             "swipe",
             str(start_x),
             str(start_y),
@@ -834,7 +833,7 @@ def _swipe_playlist_up(
         start_y=start_y,
         end_x=start_x,
         end_y=start_y - round(120 * scale),
-        duration_ms=100,
+        duration_ms=300,
         expected_log=f"playlist: swipe playback started, selected_index={selected_index}",
     )
 
@@ -850,8 +849,8 @@ def _swipe_playlist_down(
         start_x=start_x,
         start_y=start_y,
         end_x=start_x,
-        end_y=start_y + round(120 * scale),
-        duration_ms=100,
+        end_y=start_y + round(360 * scale),
+        duration_ms=900,
         expected_log="playlist: swipe playback paused",
     )
 
@@ -879,7 +878,7 @@ def _prepare_android_swipe_playlist(android_device: AndroidDevice) -> None:
             wav.setnchannels(1)
             wav.setsampwidth(1)
             wav.setframerate(8_000)
-            wav.writeframes(bytes([128]) * 8_000 * 20)
+            wav.writeframes(bytes([128]) * 8_000 * 180)
         android_device.write_private_bytes(
             f"files/imports/{name}.wav",
             audio.getvalue(),
@@ -887,11 +886,11 @@ def _prepare_android_swipe_playlist(android_device: AndroidDevice) -> None:
     android_device.write_private_file(
         playlist_path,
         "#EXTM3U\n"
-        "#EXTINF:20,Swipe First\n"
+        "#EXTINF:180,Swipe First\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/first.wav\n"
-        "#EXTINF:20,Swipe Second\n"
+        "#EXTINF:180,Swipe Second\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/second.wav\n"
-        "#EXTINF:20,Swipe Third\n"
+        "#EXTINF:180,Swipe Third\n"
         "file:///data/user/0/org.xmms.renascene/files/imports/third.wav\n",
     )
     android_device.restart_app()

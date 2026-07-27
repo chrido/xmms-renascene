@@ -712,7 +712,7 @@ impl Visualization {
             analyzer_mode: VisAnalyzerMode::Normal,
             scope_mode: VisScopeMode::Line,
             peaks_enabled: true,
-            analyzer_falloff: VisFalloffSpeed::Medium,
+            analyzer_falloff: VisFalloffSpeed::Fast,
             peaks_falloff: VisFalloffSpeed::Slow,
             data: [0.0; SPECTRUM_BANDS],
             peak: [0.0; SPECTRUM_BANDS],
@@ -764,7 +764,7 @@ impl Visualization {
 
     pub fn set_data(&mut self, data: &[f32]) {
         for (index, value) in data.iter().take(SPECTRUM_BANDS).enumerate() {
-            let value = value.clamp(0.0, 1.0);
+            let value = value.clamp(0.0, 15.0 / 16.0);
             if value > self.data[index] {
                 self.data[index] = value;
             }
@@ -785,10 +785,20 @@ impl Visualization {
     }
 
     pub fn tick(&mut self, data: Option<&[f32]>) {
-        if let Some(data) = data {
-            self.set_data(data);
+        self.tick_with_steps(data, 1);
+    }
+
+    pub fn tick_with_steps(&mut self, data: Option<&[f32]>, steps: usize) {
+        if self.mode == VisMode::Analyzer {
+            self.tick_analyzer(data);
+            for _ in 1..steps.max(1) {
+                self.tick_analyzer(None);
+            }
+        } else if let Some(data) = data {
+            for (target, value) in self.data.iter_mut().zip(data.iter().copied()) {
+                *target = value.clamp(0.0, 1.0);
+            }
         }
-        self.decay();
         let energy = self.data.iter().take(32).sum::<f32>() / 32.0;
         self.milkdrop_energy = self.milkdrop_energy * 0.88 + energy * 0.12;
         self.milkdrop_phase =
@@ -818,9 +828,6 @@ impl Visualization {
 
     pub fn set_peaks_enabled(&mut self, enabled: bool) {
         self.peaks_enabled = enabled;
-        if !enabled {
-            self.peak = [0.0; SPECTRUM_BANDS];
-        }
         self.widget.queue_draw();
     }
 
@@ -834,22 +841,47 @@ impl Visualization {
         (value * 16.0 + 0.5).clamp(0.0, 16.0) as i32
     }
 
-    fn decay(&mut self) {
+    fn tick_analyzer(&mut self, new_data: Option<&[f32]>) {
         let analyzer_falloff = self.analyzer_falloff as usize;
         let peaks_falloff = self.peaks_falloff as usize;
         for index in 0..SPECTRUM_BANDS {
-            if self.data[index] > 0.0 {
+            let incoming = new_data
+                .and_then(|data| data.get(index))
+                .copied()
+                .unwrap_or(0.0)
+                .clamp(0.0, 15.0 / 16.0);
+            if incoming > self.data[index] {
+                self.data[index] = incoming;
+                if self.data[index] > self.peak[index] {
+                    self.peak[index] = self.data[index];
+                    self.peak_speed[index] = 0.01 / 16.0;
+                } else {
+                    Self::decay_peak(
+                        &mut self.peak[index],
+                        &mut self.peak_speed[index],
+                        self.data[index],
+                        peaks_falloff,
+                    );
+                }
+            } else {
                 self.data[index] =
                     (self.data[index] - Self::ANALYZER_FALLOFF_SPEEDS[analyzer_falloff]).max(0.0);
-            }
-            if self.peak[index] > 0.0 {
-                self.peak[index] = (self.peak[index] - self.peak_speed[index]).max(0.0);
-                self.peak_speed[index] *= Self::PEAK_FALLOFF_SPEEDS[peaks_falloff];
-                if self.peak[index] < self.data[index] {
-                    self.peak[index] = self.data[index];
-                }
+                Self::decay_peak(
+                    &mut self.peak[index],
+                    &mut self.peak_speed[index],
+                    self.data[index],
+                    peaks_falloff,
+                );
             }
         }
+    }
+
+    fn decay_peak(peak: &mut f32, speed: &mut f32, level: f32, falloff: usize) {
+        if *peak <= 0.0 {
+            return;
+        }
+        *peak = (*peak - *speed).max(level).max(0.0);
+        *speed *= Self::PEAK_FALLOFF_SPEEDS[falloff];
     }
 }
 
@@ -1515,25 +1547,42 @@ mod tests {
         vis.set_data(&[-1.0, 0.5, 2.0]);
         assert_eq!(vis.data()[0], 0.0);
         assert_eq!(vis.data()[1], 0.5);
-        assert_eq!(vis.data()[2], 1.0);
+        assert_eq!(vis.data()[2], 15.0 / 16.0);
         assert_eq!(vis.peak()[1], 0.5);
-        assert_eq!(vis.peak()[2], 1.0);
+        assert_eq!(vis.peak()[2], 15.0 / 16.0);
 
         vis.set_peaks_enabled(false);
         assert!(!vis.peaks_enabled());
-        assert_eq!(vis.peak()[2], 0.0);
+        assert_eq!(vis.peak()[2], 15.0 / 16.0);
     }
 
     #[test]
-    fn visualization_tick_decays_and_advances_milkdrop_state() {
+    fn visualization_tick_holds_new_data_then_decays_like_reference() {
         let mut vis = Visualization::new(WidgetId(6), 0, 0, 75);
         vis.tick(Some(&[1.0; 32]));
-        assert!(vis.data()[0] < 1.0);
+        assert_eq!(vis.data()[0], 15.0 / 16.0);
+        assert_eq!(vis.peak()[0], 15.0 / 16.0);
+        vis.tick(None);
+        assert!((vis.data()[0] - 13.7 / 16.0).abs() < 0.0001);
+        assert!(vis.peak()[0] < 15.0 / 16.0);
         assert!(vis.milkdrop_energy() > 0.0);
         assert!(vis.milkdrop_phase() > 0.0);
         assert!(vis.widget().needs_redraw());
         assert_eq!(Visualization::level(0.5), 8);
         assert_eq!(Visualization::level(2.0), 16);
+    }
+
+    #[test]
+    fn visualization_refresh_steps_preserve_reference_falloff_rate() {
+        let mut full = Visualization::new(WidgetId(6), 0, 0, 75);
+        let mut quarter = full.clone();
+        full.tick(Some(&[0.8]));
+        for _ in 0..3 {
+            full.tick(None);
+        }
+        quarter.tick_with_steps(Some(&[0.8]), 4);
+        assert!((full.data()[0] - quarter.data()[0]).abs() < f32::EPSILON);
+        assert!((full.peak()[0] - quarter.peak()[0]).abs() < f32::EPSILON);
     }
 
     #[test]

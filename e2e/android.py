@@ -116,6 +116,27 @@ class AndroidDevice:
                 "to let ./repo start the managed emulator"
             )
 
+    def wait_for_boot_ready(self, timeout: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            boot_completed = self.shell(
+                "getprop",
+                "sys.boot_completed",
+                check=False,
+            ).stdout.strip()
+            boot_animation = self.shell(
+                "getprop",
+                "init.svc.bootanim",
+                check=False,
+            ).stdout.strip()
+            if boot_completed == "1" and boot_animation == "stopped":
+                self.shell("input", "keyevent", "WAKEUP", check=False)
+                self.shell("wm", "dismiss-keyguard", check=False)
+                self.shell("cmd", "statusbar", "collapse", check=False)
+                return
+            time.sleep(0.5)
+        raise TimeoutError("Android emulator did not finish booting")
+
     def install_existing_apk(self) -> None:
         apk = Path(__file__).resolve().parents[1] / "target/debug/apk/xmms-renascene.apk"
         if not apk.is_file():
@@ -237,18 +258,28 @@ class AndroidDevice:
             "com.google.android.documentsui",
             check=False,
         )
-        self.shell(
-            "am",
-            "start",
-            "-W",
-            "-a",
-            "android.intent.action.MAIN",
-            "-c",
-            "android.intent.category.LAUNCHER",
-            "-n",
-            ANDROID_ACTIVITY,
-        )
-        self.wait_for_app()
+        for attempt in range(2):
+            self.shell("input", "keyevent", "WAKEUP", check=False)
+            self.shell("wm", "dismiss-keyguard", check=False)
+            self.shell("cmd", "statusbar", "collapse", check=False)
+            self.shell(
+                "am",
+                "start",
+                "-W",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "-n",
+                ANDROID_ACTIVITY,
+            )
+            try:
+                self.wait_for_app()
+                return
+            except TimeoutError:
+                if attempt == 0:
+                    self.force_stop()
+        raise TimeoutError("Android app did not become active after relaunch")
 
     def restart_app(self, *, reset_data: bool = False) -> None:
         self.force_stop()
@@ -265,6 +296,8 @@ class AndroidDevice:
 
     def wait_for_app(self, timeout: float = 15.0) -> None:
         deadline = time.monotonic() + timeout
+        pid = ""
+        focus = ""
         while time.monotonic() < deadline:
             pid = self.shell("pidof", ANDROID_PACKAGE, check=False).stdout.strip()
             window_dump = self.shell("dumpsys", "window", check=False).stdout
@@ -280,7 +313,10 @@ class AndroidDevice:
                 time.sleep(0.5)
                 return
             time.sleep(0.2)
-        raise TimeoutError("Android app did not become active")
+        raise TimeoutError(
+            "Android app did not become active"
+            f"; pid={pid or '<none>'}; focus={focus or '<none>'}"
+        )
 
     def wait_for_service(self, service_name: str, timeout: float = 5.0) -> None:
         deadline = time.monotonic() + timeout

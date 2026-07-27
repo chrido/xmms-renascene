@@ -628,20 +628,18 @@ fn render_analyzer_visualization(
         } else {
             levels[x as usize]
         }
-        .clamp(0, 16);
+        .clamp(0, 15);
 
-        if h <= 0 {
-            continue;
-        }
-
-        for y in 16 - h..16 {
-            draw_vis_pixel(
-                cr,
-                colors,
-                SkinRect::new(xdest, ydest, width, 16),
-                (x, y),
-                analyzer_color(state.analyzer_mode, y, h),
-            )?;
+        if h > 0 {
+            for y in 16 - h..16 {
+                draw_vis_pixel(
+                    cr,
+                    colors,
+                    SkinRect::new(xdest, ydest, width, 16),
+                    (x, y),
+                    analyzer_color(state.analyzer_mode, y, h),
+                )?;
+            }
         }
 
         if state.peaks_enabled {
@@ -650,7 +648,7 @@ fn render_analyzer_visualization(
             } else {
                 x as usize
             };
-            let peak_y = 16 - visualization_level(state.peak[peak_index]);
+            let peak_y = 16 - visualization_level(state.peak[peak_index]).clamp(0, 15);
             if (0..16).contains(&peak_y) {
                 draw_vis_pixel(
                     cr,
@@ -751,7 +749,7 @@ fn visualization_level(value: f32) -> i32 {
 
 fn analyzer_color(mode: VisAnalyzerMode, row: i32, height: i32) -> usize {
     match mode {
-        VisAnalyzerMode::Fire => (16 - height + row + 2).clamp(0, 23) as usize,
+        VisAnalyzerMode::Fire => (row + height - 14).clamp(0, 23) as usize,
         VisAnalyzerMode::VerticalLines => (18 - height).clamp(0, 23) as usize,
         VisAnalyzerMode::Normal => (row + 2).clamp(0, 23) as usize,
     }
@@ -806,4 +804,25 @@ fn render_mono_stereo(
         (xdest + 27, ydest),
     )?;
     Ok(rendered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn analyzer_colors_match_reference_modes() {
+        let fire = (8..16)
+            .map(|row| analyzer_color(VisAnalyzerMode::Fire, row, 8))
+            .collect::<Vec<_>>();
+        let normal = (8..16)
+            .map(|row| analyzer_color(VisAnalyzerMode::Normal, row, 8))
+            .collect::<Vec<_>>();
+        let vertical = (8..16)
+            .map(|row| analyzer_color(VisAnalyzerMode::VerticalLines, row, 8))
+            .collect::<Vec<_>>();
+        assert_eq!(fire, (2..10).collect::<Vec<_>>());
+        assert_eq!(normal, (10..18).collect::<Vec<_>>());
+        assert_eq!(vertical, vec![10; 8]);
+    }
 }

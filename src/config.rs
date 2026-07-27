@@ -132,7 +132,7 @@ impl Default for Config {
             vis_scope_mode: VisScopeMode::Line,
             vis_peaks_enabled: true,
             vis_falloff: 0.04,
-            vis_analyzer_falloff: VisFalloffSpeed::Medium,
+            vis_analyzer_falloff: VisFalloffSpeed::Fast,
             vis_peaks_falloff: VisFalloffSpeed::Slow,
             vis_vu_mode: VisVuMode::Normal,
             vis_refresh_divisor: 1,
