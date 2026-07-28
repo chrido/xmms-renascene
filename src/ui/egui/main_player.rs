@@ -18,8 +18,13 @@ use crate::skin::layout::{
 use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 
 use super::app::EguiFrontendState;
-use super::render_cache::CachedMainTexture;
-use super::skin_texture::{pixel_snapped_rect, render_main_player_color_image, upload_color_image};
+use super::render_cache::{CachedMainStaticTexture, CachedMainTexture};
+#[cfg(test)]
+use super::skin_texture::render_main_player_color_image;
+use super::skin_texture::{
+    pixel_snapped_rect, render_main_player_dynamic_color_image,
+    render_main_player_static_color_image, upload_color_image,
+};
 use super::ui_state::MainPressed;
 
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
@@ -57,11 +62,40 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         app.visualization_render_state(),
     );
     render_state.title_offset_px = app.title_marquee.offset_px();
+    let needs_static_update = app.render_cache.main_static.as_ref().is_none_or(|cached| {
+        cached.generation != app.render_cache.generation
+            || cached.focused != render_state.focused
+            || cached.shaded != render_state.shaded
+    });
+    if needs_static_update {
+        let Ok(image) = render_main_player_static_color_image(
+            &app.active_skin,
+            render_state.focused,
+            render_state.shaded,
+        ) else {
+            ui.label("failed to render skinned main player");
+            return;
+        };
+        if let Some(cached) = &mut app.render_cache.main_static {
+            cached.texture.set(image, egui::TextureOptions::NEAREST);
+            cached.generation = app.render_cache.generation;
+            cached.focused = render_state.focused;
+            cached.shaded = render_state.shaded;
+        } else {
+            app.render_cache.main_static = Some(CachedMainStaticTexture {
+                generation: app.render_cache.generation,
+                focused: render_state.focused,
+                shaded: render_state.shaded,
+                texture: upload_color_image(ui.ctx(), "xmms-main-player-static", image),
+            });
+        }
+    }
     let needs_texture_update = app.render_cache.main.as_ref().is_none_or(|cached| {
         cached.generation != app.render_cache.generation || cached.state != render_state
     });
     if needs_texture_update {
-        let Ok(image) = render_main_player_color_image(&app.active_skin, &render_state) else {
+        let Ok(image) = render_main_player_dynamic_color_image(&app.active_skin, &render_state)
+        else {
             ui.label("failed to render skinned main player");
             return;
         };
@@ -73,11 +107,18 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
             app.render_cache.main = Some(CachedMainTexture {
                 generation: app.render_cache.generation,
                 state: render_state.clone(),
-                texture: upload_color_image(ui.ctx(), "xmms-main-player", image),
+                texture: upload_color_image(ui.ctx(), "xmms-main-player-dynamic", image),
             });
         }
     }
-    let texture_id = app
+    let static_texture_id = app
+        .render_cache
+        .main_static
+        .as_ref()
+        .expect("main static texture initialized")
+        .texture
+        .id();
+    let dynamic_texture_id = app
         .render_cache
         .main
         .as_ref()
@@ -95,7 +136,13 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
-        texture_id,
+        static_texture_id,
+        pixel_snapped_rect(ui.ctx(), rect),
+        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+    );
+    ui.painter().image(
+        dynamic_texture_id,
         pixel_snapped_rect(ui.ctx(), rect),
         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
         egui::Color32::WHITE,
@@ -715,6 +762,26 @@ mod tests {
             .count();
 
         assert!(changed_visualizer_pixels > 0);
+    }
+
+    #[test]
+    fn visualizer_updates_leave_static_main_layer_unchanged() {
+        let skin = crate::skin::DefaultSkin::load_bundled().unwrap();
+        let blank_state = MainWindowRenderState::default();
+        let mut active_state = blank_state.clone();
+        active_state.visualization.data[5] = 1.0;
+
+        let static_before =
+            render_main_player_static_color_image(&skin, blank_state.focused, blank_state.shaded)
+                .unwrap();
+        let static_after =
+            render_main_player_static_color_image(&skin, active_state.focused, active_state.shaded)
+                .unwrap();
+        let dynamic_before = render_main_player_dynamic_color_image(&skin, &blank_state).unwrap();
+        let dynamic_after = render_main_player_dynamic_color_image(&skin, &active_state).unwrap();
+
+        assert_eq!(static_before, static_after);
+        assert_ne!(dynamic_before, dynamic_after);
     }
 
     #[test]

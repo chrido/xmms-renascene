@@ -25,6 +25,13 @@ pub(crate) struct CachedMainTexture {
     pub texture: egui::TextureHandle,
 }
 
+pub(crate) struct CachedMainStaticTexture {
+    pub generation: u64,
+    pub focused: bool,
+    pub shaded: bool,
+    pub texture: egui::TextureHandle,
+}
+
 pub(crate) struct CachedEqualizerTexture {
     pub generation: u64,
     pub state: EqualizerRenderState,
@@ -45,6 +52,7 @@ pub(crate) struct CachedPlaylistProjection {
 pub struct RenderCache {
     pub generation: u64,
     pub(crate) main: Option<CachedMainTexture>,
+    pub(crate) main_static: Option<CachedMainStaticTexture>,
     pub(crate) equalizer: Option<CachedEqualizerTexture>,
     pub(crate) playlist: Option<CachedPlaylistTexture>,
     pub(crate) playlist_projection: Option<CachedPlaylistProjection>,

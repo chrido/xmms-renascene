@@ -187,7 +187,16 @@ pub fn render_main_player_state(
     state: &MainWindowRenderState,
 ) -> Result<bool, RenderError> {
     let mut rendered = render_main_player(cr, skin, state.focused, state.shaded)?;
+    rendered |= render_main_player_dynamic_state(cr, skin, state)?;
+    Ok(rendered)
+}
 
+pub fn render_main_player_dynamic_state(
+    cr: &Context,
+    skin: &DefaultSkin,
+    state: &MainWindowRenderState,
+) -> Result<bool, RenderError> {
+    let mut rendered = false;
     for button in [
         MainPushButton::Menu,
         MainPushButton::Minimize,

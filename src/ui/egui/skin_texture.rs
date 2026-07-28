@@ -1,11 +1,12 @@
 //! Pure Rust image to egui texture helpers.
 
 use crate::render::{
-    equalizer_window_height, playlist_window_height, render_equalizer_state,
-    render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
-    render_scaled, render_transport_buttons, Context, EqualizerRenderState, Format, ImageSurface,
-    MainWindowRenderState, PlaylistMenuRenderState, PlaylistRowsRenderState, RenderError,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    equalizer_window_height, playlist_window_height, render_equalizer_state, render_main_player,
+    render_main_player_dynamic_state, render_main_player_state, render_playlist_frame,
+    render_playlist_menu, render_playlist_rows, render_scaled, render_transport_buttons, Context,
+    EqualizerRenderState, Format, ImageSurface, MainWindowRenderState, PlaylistMenuRenderState,
+    PlaylistRowsRenderState, RenderError, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
+    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::layout::MainPushButton;
 use crate::skin::DefaultSkin;
@@ -80,6 +81,39 @@ pub fn render_main_player_color_image(
     let mut surface = ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, height)?;
     let cr = Context::new(&surface)?;
     render_main_player_state(&cr, skin, state)?;
+    drop(cr);
+    surface_to_color_image(&mut surface)
+}
+
+pub fn render_main_player_static_color_image(
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+) -> Result<egui::ColorImage, RenderError> {
+    let height = if shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        MAIN_WINDOW_HEIGHT
+    };
+    let mut surface = ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, height)?;
+    let cr = Context::new(&surface)?;
+    render_main_player(&cr, skin, focused, shaded)?;
+    drop(cr);
+    surface_to_color_image(&mut surface)
+}
+
+pub fn render_main_player_dynamic_color_image(
+    skin: &DefaultSkin,
+    state: &MainWindowRenderState,
+) -> Result<egui::ColorImage, RenderError> {
+    let height = if state.shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        MAIN_WINDOW_HEIGHT
+    };
+    let mut surface = ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, height)?;
+    let cr = Context::new(&surface)?;
+    render_main_player_dynamic_state(&cr, skin, state)?;
     drop(cr);
     surface_to_color_image(&mut surface)
 }
