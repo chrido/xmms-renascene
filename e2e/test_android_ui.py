@@ -1139,22 +1139,49 @@ def test_android_clear_list_stops_playback_and_resets_playlist(
     left, _top, right, bottom = android_device.main_player_bounds()
     scale = (right - left) / 275
     list_x = round(left + 240.5 * scale)
-    android_device.shell(
-        "input",
-        "tap",
-        str(list_x),
-        str(round(bottom - 20 * scale)),
-    )
-    time.sleep(0.4)
-    android_device.shell(
-        "input",
-        "tap",
-        str(list_x),
-        str(round(bottom - 57 * scale)),
-    )
+    android_device.clear_logcat()
+    menu_error: AssertionError | None = None
+    for _attempt in range(6):
+        android_device.shell(
+            "input",
+            "tap",
+            str(list_x),
+            str(round(bottom - 20 * scale)),
+        )
+        try:
+            android_device.assert_log_contains(
+                "playlist: menu opened, menu_name=List",
+                timeout=2.0,
+            )
+            break
+        except AssertionError as error:
+            menu_error = error
+    else:
+        assert menu_error is not None
+        raise menu_error
+
+    clear_error: AssertionError | None = None
+    for _attempt in range(6):
+        android_device.shell(
+            "input",
+            "tap",
+            str(list_x),
+            str(round(bottom - 57 * scale)),
+        )
+        try:
+            android_device.wait_for_private_file_not_contains(
+                playlist_path,
+                "Clear Track",
+                timeout=2.0,
+            )
+            break
+        except AssertionError as error:
+            clear_error = error
+    else:
+        assert clear_error is not None
+        raise clear_error
 
     android_device.wait_for_service_absent("XmmsPlaybackService")
-    android_device.wait_for_private_file_not_contains(playlist_path, "Clear Track")
     android_device.wait_for_private_file_contains(config_path, "playback_position_ms=0")
 
 
