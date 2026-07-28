@@ -28,7 +28,7 @@ pub(crate) struct AndroidRuntime {
     pub playlist_manager: PlaylistManager,
     #[cfg(target_os = "android")]
     activity_generation: Option<AndroidActivityGeneration>,
-    media_playlist_snapshot: Option<Playlist>,
+    media_playlist_content_revision: Option<u64>,
     media_projection_pending: bool,
 }
 
@@ -59,7 +59,7 @@ impl AndroidRuntime {
             playlist_manager: PlaylistManager::new(),
             #[cfg(target_os = "android")]
             activity_generation: None,
-            media_playlist_snapshot: None,
+            media_playlist_content_revision: None,
             media_projection_pending: true,
         }
     }
@@ -123,7 +123,7 @@ impl AndroidRuntime {
     }
 
     pub fn playlist_changed(&self, playlist: &Playlist) -> bool {
-        self.media_playlist_snapshot.as_ref() != Some(playlist)
+        self.media_playlist_content_revision != Some(playlist.revisions().content)
     }
 
     pub fn mark_media_projection(&mut self) {
@@ -134,8 +134,8 @@ impl AndroidRuntime {
         std::mem::take(&mut self.media_projection_pending)
     }
 
-    pub fn remember_playlist(&mut self, playlist: Playlist) {
-        self.media_playlist_snapshot = Some(playlist);
+    pub fn remember_playlist(&mut self, playlist: &Playlist) {
+        self.media_playlist_content_revision = Some(playlist.revisions().content);
     }
 
     pub fn observe_layout(
@@ -434,6 +434,22 @@ mod tests {
             runtime.take_persistence_due(true),
             Some(AndroidPersistenceDue::Position)
         );
+    }
+
+    #[test]
+    fn media_queue_version_ignores_non_content_playlist_changes() {
+        let mut runtime = AndroidRuntime::new();
+        let mut playlist = Playlist::new();
+        playlist.add_uri("one.mp3");
+        assert!(runtime.playlist_changed(&playlist));
+
+        runtime.remember_playlist(&playlist);
+        playlist.select_all(true);
+        playlist.set_position(0);
+        assert!(!runtime.playlist_changed(&playlist));
+
+        playlist.add_uri("two.mp3");
+        assert!(runtime.playlist_changed(&playlist));
     }
 
     #[test]

@@ -305,6 +305,15 @@ pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeMediaIt
 }
 
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeMediaQueueSnapshot(
+    env: JNIEnv,
+    _service: JObject,
+) -> jstring {
+    env.new_string(media_session::media_queue_snapshot_json())
+        .map_or(std::ptr::null_mut(), JString::into_raw)
+}
+
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_org_xmms_renascene_XmmsPlaybackService_nativeCurrentMediaItemIndex(
     _env: JNIEnv,
     _service: JObject,

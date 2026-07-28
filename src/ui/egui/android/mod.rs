@@ -58,7 +58,7 @@ pub use events::{
 pub use layout::window_layout_snapshot_pixels;
 pub use media_session::{
     complete_media_control, shared_playback_backend, sync_media_playlist,
-    update_playback_notification,
+    sync_media_playlist_position, update_playback_notification,
 };
 pub use persistence::{
     flush_persistence_writer, persist_app_state, persist_playback_position, take_persistence_error,

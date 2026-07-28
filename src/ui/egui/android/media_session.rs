@@ -44,6 +44,7 @@ struct AndroidMediaNotification {
     duration_ms: i64,
     current_index: i64,
     playlist_len: i32,
+    queue_version: u64,
     has_previous: bool,
     has_next: bool,
 }
@@ -127,6 +128,17 @@ pub fn sync_media_playlist(
         )
 }
 
+pub fn sync_media_playlist_position(
+    activity: AndroidActivityGeneration,
+    position: Option<usize>,
+) -> bool {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .sync_mirror_position(activity, position)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn update_playback_notification(
     activity: AndroidActivityGeneration,
@@ -139,6 +151,7 @@ pub fn update_playback_notification(
     position_ms: i64,
     current_index: i64,
     playlist_len: i32,
+    queue_version: u64,
     has_previous: bool,
     has_next: bool,
 ) -> Result<bool, String> {
@@ -160,6 +173,7 @@ pub fn update_playback_notification(
         duration_ms,
         current_index,
         playlist_len,
+        queue_version,
         has_previous,
         has_next,
     };
@@ -310,6 +324,33 @@ pub(crate) fn current_media_item_index() -> Option<usize> {
         .unwrap_or_else(|poison| poison.into_inner())
         .media()
         .and_then(|shared| shared.playlist.position())
+}
+
+pub(crate) fn media_queue_snapshot_json() -> String {
+    let state = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(media) = state.media() else {
+        return r#"{"version":0,"items":[]}"#.to_string();
+    };
+    let items = media
+        .playlist
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            serde_json::json!({
+                "title": media.titles.get(index).unwrap_or(&entry.title),
+                "durationMs": entry.length_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "version": media.playlist.revisions().content,
+        "items": items,
+    })
+    .to_string()
 }
 
 pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {

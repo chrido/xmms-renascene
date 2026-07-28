@@ -26,6 +26,10 @@ import android.os.PowerManager;
 import android.service.media.MediaBrowserService;
 import android.util.Log;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -89,6 +93,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private native String nativeMediaItemTitle(int index);
     private native long nativeMediaItemDurationMs(int index);
     private native long nativeCurrentMediaItemIndex();
+    private native String nativeMediaQueueSnapshot();
 
     private PowerManager.WakeLock playbackWakeLock;
     private NotificationManager notificationManager;
@@ -128,6 +133,7 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private long playbackPositionMs;
     private long currentMediaItemIndex = -1;
     private int playlistSize;
+    private long mediaQueueVersion = Long.MIN_VALUE;
     private boolean hasPrevious;
     private boolean hasNext;
 
@@ -315,7 +321,6 @@ public final class XmmsPlaybackService extends MediaBrowserService {
                     playbackChannels);
         }
         refreshMediaQueue();
-        notifyChildrenChanged(PLAYLIST_ID);
 
         if (state == STATE_STOPPED) {
             stopPlaybackService();
@@ -456,14 +461,34 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         if (mediaSession == null) {
             return;
         }
-        int count = nativeMediaItemCount();
-        playlistSize = count;
-        List<MediaSession.QueueItem> queue = new ArrayList<>(count);
-        for (int index = 0; index < count; index++) {
-            queue.add(new MediaSession.QueueItem(mediaDescription(index), index));
+        String snapshot = nativeMediaQueueSnapshot();
+        if (snapshot == null || snapshot.isEmpty()) {
+            return;
         }
-        mediaSession.setQueue(queue);
-        mediaSession.setQueueTitle("Current playlist");
+        try {
+            JSONObject root = new JSONObject(snapshot);
+            long version = root.optLong("version", 0);
+            if (version == mediaQueueVersion) {
+                return;
+            }
+            JSONArray items = root.optJSONArray("items");
+            int count = items == null ? 0 : items.length();
+            List<MediaSession.QueueItem> queue = new ArrayList<>(count);
+            for (int index = 0; index < count; index++) {
+                JSONObject item = items.optJSONObject(index);
+                String title = item == null ? "" : item.optString("title", "");
+                long durationMs = item == null ? -1 : item.optLong("durationMs", -1);
+                queue.add(new MediaSession.QueueItem(
+                        mediaDescription(index, title, durationMs), index));
+            }
+            playlistSize = count;
+            mediaSession.setQueue(queue);
+            mediaSession.setQueueTitle("Current playlist");
+            mediaQueueVersion = version;
+            notifyChildrenChanged(PLAYLIST_ID);
+        } catch (JSONException error) {
+            Log.e(TAG, "Failed to parse native media queue snapshot", error);
+        }
         long nativeIndex = nativeCurrentMediaItemIndex();
         if (nativeIndex >= 0) {
             currentMediaItemIndex = nativeIndex;
@@ -482,11 +507,15 @@ public final class XmmsPlaybackService extends MediaBrowserService {
 
     private MediaDescription mediaDescription(int index) {
         String title = nativeMediaItemTitle(index);
+        long durationMs = nativeMediaItemDurationMs(index);
+        return mediaDescription(index, title, durationMs);
+    }
+
+    private MediaDescription mediaDescription(int index, String title, long durationMs) {
         if (title == null || title.isEmpty()) {
             title = "Track " + (index + 1);
         }
         Bundle extras = new Bundle();
-        long durationMs = nativeMediaItemDurationMs(index);
         if (durationMs >= 0) {
             extras.putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs);
         }

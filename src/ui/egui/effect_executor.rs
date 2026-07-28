@@ -263,7 +263,12 @@ pub(crate) fn flush_android_media_projection(
             android.mark_media_projection();
             return;
         }
-        android.remember_playlist(state.playlist.clone());
+        android.remember_playlist(&state.playlist);
+    }
+    if !super::android::sync_media_playlist_position(activity_generation, state.playlist.position())
+    {
+        android.mark_media_projection();
+        return;
     }
     let playback_state = super::android::AndroidPlaybackState::from(state.player.state());
     let position_ms = playback
@@ -284,6 +289,7 @@ pub(crate) fn flush_android_media_projection(
         position_ms,
         current_index,
         playlist_len,
+        state.playlist.revisions().content,
         has_entries,
         has_entries,
     ) {
