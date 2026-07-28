@@ -204,50 +204,44 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     if !app.controller().state().config.playlist_visible {
         return;
     }
-    let projection = app.playlist_projection();
-    let rows = playlist_rows_render_state_from_projection(
+    let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
+    let texture_key = PlaylistTextureKey::from_state(
         app.controller().state(),
-        &projection,
+        app.render_cache.generation,
         app.playlist_scroll_offset,
-        false,
-        None,
         app.playlist_width,
         app.playlist_height,
+        render_scale,
     );
-    let shaded_info = shaded_playlist_info(app);
-    let footer_info = projection.footer_info.clone();
-    let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
-    let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
-    let texture_key = PlaylistTextureKey {
-        generation: app.render_cache.generation,
-        focused: true,
-        shaded: app.controller().state().config.playlist_shaded,
-        width: app.playlist_width,
-        height: app.playlist_height,
-        shaded_info,
-        rows,
-        footer_info,
-        footer_time_minutes,
-        footer_time_seconds,
-        render_scale_bits: render_scale.to_bits(),
-    };
     if app
         .render_cache
         .playlist
         .as_ref()
         .is_none_or(|cached| cached.key != texture_key)
     {
+        let projection = app.playlist_projection();
+        let rows = playlist_rows_render_state_from_projection(
+            app.controller().state(),
+            &projection,
+            texture_key.scroll_offset,
+            false,
+            None,
+            texture_key.width,
+            texture_key.height,
+        );
+        let shaded_info = shaded_playlist_info(app);
+        let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
         let Ok(image) = render_playlist_color_image_buffered(
             &app.active_skin,
             texture_key.focused,
             texture_key.shaded,
             texture_key.width,
             texture_key.height,
-            Some(&texture_key.shaded_info),
-            &texture_key.rows,
-            Some(&texture_key.footer_info),
-            Some(&texture_key.footer_time_minutes),
-            Some(&texture_key.footer_time_seconds),
+            Some(&shaded_info),
+            &rows,
+            Some(&projection.footer_info),
+            Some(&footer_time_minutes),
+            Some(&footer_time_seconds),
             render_scale,
             &mut app.render_cache.playlist_staging,
         ) else {
@@ -264,6 +258,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
             });
         }
     }
+    let projection = app.playlist_projection();
     let texture_id = app
         .render_cache
         .playlist
