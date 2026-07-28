@@ -123,6 +123,11 @@ use style::{
 type SharedPlaybackBackend = Rc<RefCell<Box<dyn PlaybackBackend>>>;
 
 const DEFAULT_SCALE: i32 = 2;
+const GTK_TRANSITION_TICK: Duration = Duration::from_millis(20);
+const GTK_MARQUEE_TICK: Duration = Duration::from_millis(84);
+const GTK_PLAYBACK_TICK: Duration = Duration::from_millis(250);
+const GTK_PAUSED_TICK: Duration = Duration::from_millis(500);
+const GTK_IDLE_TICK: Duration = Duration::from_secs(1);
 const STOP_FADE_DURATION_MS: i64 = 1_000;
 type PreferencesChanged = Rc<dyn Fn()>;
 const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
@@ -694,51 +699,20 @@ fn build_preview_window(
         });
     }
 
-    {
-        let app = app.clone();
-        let drawing_area = drawing_area.clone();
-        let window = window.clone();
-        let panel_windows = Rc::clone(&panel_windows);
-        let menu_popover = Rc::clone(&menu_popover);
-        let main_state = Rc::clone(&main_state);
-        let mpris_service = Rc::clone(&mpris_service);
-        let socket_control = Rc::clone(&socket_control);
-        gtk::glib::timeout_add_local(Duration::from_millis(20), move || {
-            let socket_redraw = poll_socket_control_gtk(
-                &socket_control,
-                &app,
-                &window,
-                &drawing_area,
-                &panel_windows,
-                &menu_popover,
-                &main_state,
-            );
-            if socket_redraw {
-                drawing_area.queue_draw();
-                panel_windows.playlist_area.queue_draw();
-                panel_windows.equalizer_area.queue_draw();
-                sync_panel_windows(&panel_windows, &main_state.borrow());
-                resize_main_window(&window, &drawing_area, &main_state.borrow());
-            }
-            let (redraw, mpris_events, mpris_properties) = {
-                let mut state = main_state.borrow_mut();
-                let redraw = state.update_timer_tick(20);
-                let events = state.take_mpris_events();
-                let properties = state.mpris_player_properties();
-                (redraw, events, properties)
-            };
-            mpris_service.emit_events(&mpris_events, &mpris_properties);
-            if handle_mpris_quit_request(&mpris_events, || app.quit()) {
-                return gtk::glib::ControlFlow::Break;
-            }
-            if redraw {
-                drawing_area.queue_draw();
-                panel_windows.playlist_area.queue_draw();
-                panel_windows.equalizer_area.queue_draw();
-            }
-            gtk::glib::ControlFlow::Continue
-        });
-    }
+    schedule_gtk_runtime_tick(
+        GtkRuntimeTickContext {
+            app: app.clone(),
+            window: window.clone(),
+            drawing_area: drawing_area.clone(),
+            panel_windows: Rc::clone(&panel_windows),
+            menu_popover: Rc::clone(&menu_popover),
+            main_state: Rc::clone(&main_state),
+            mpris_service: Rc::clone(&mpris_service),
+            socket_control: Rc::clone(&socket_control),
+            last_tick: Rc::new(Cell::new(Instant::now())),
+        },
+        GTK_TRANSITION_TICK,
+    );
 
     window.set_child(Some(&drawing_area));
     window.present();
@@ -761,6 +735,69 @@ fn handle_mpris_quit_request(events: &[MprisEvent], quit: impl FnOnce()) -> bool
     } else {
         false
     }
+}
+
+#[derive(Clone)]
+struct GtkRuntimeTickContext {
+    app: gtk::Application,
+    window: gtk::ApplicationWindow,
+    drawing_area: gtk::DrawingArea,
+    panel_windows: Rc<PanelWindows>,
+    menu_popover: Rc<gtk::Popover>,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    mpris_service: Rc<MprisService>,
+    socket_control: Rc<Option<SocketControl>>,
+    last_tick: Rc<Cell<Instant>>,
+}
+
+fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
+    gtk::glib::timeout_add_local_once(delay, move || {
+        let now = Instant::now();
+        let elapsed_ms = now
+            .saturating_duration_since(context.last_tick.replace(now))
+            .as_millis()
+            .clamp(1, u128::from(u32::MAX)) as u32;
+        let socket_redraw = poll_socket_control_gtk(
+            &context.socket_control,
+            &context.app,
+            &context.window,
+            &context.drawing_area,
+            &context.panel_windows,
+            &context.menu_popover,
+            &context.main_state,
+        );
+        if socket_redraw {
+            context.drawing_area.queue_draw();
+            context.panel_windows.playlist_area.queue_draw();
+            context.panel_windows.equalizer_area.queue_draw();
+            sync_panel_windows(&context.panel_windows, &context.main_state.borrow());
+            resize_main_window(
+                &context.window,
+                &context.drawing_area,
+                &context.main_state.borrow(),
+            );
+        }
+        let (redraw, next_delay, mpris_events, mpris_properties) = {
+            let mut state = context.main_state.borrow_mut();
+            let redraw = state.update_timer_tick(elapsed_ms);
+            let next_delay = state.runtime_tick_interval();
+            let events = state.take_mpris_events();
+            let properties = state.mpris_player_properties();
+            (redraw, next_delay, events, properties)
+        };
+        context
+            .mpris_service
+            .emit_events(&mpris_events, &mpris_properties);
+        if handle_mpris_quit_request(&mpris_events, || context.app.quit()) {
+            return;
+        }
+        if redraw {
+            context.drawing_area.queue_draw();
+            context.panel_windows.playlist_area.queue_draw();
+            context.panel_windows.equalizer_area.queue_draw();
+        }
+        schedule_gtk_runtime_tick(context, next_delay);
+    });
 }
 
 fn poll_socket_control_gtk(
@@ -8767,6 +8804,35 @@ impl MainWindowUiState {
         true
     }
 
+    fn runtime_tick_interval(&self) -> Duration {
+        if self.playback_transition.fadeout().is_some()
+            || self.playback_transition.eof_pause_remaining_ms().is_some()
+            || self.playback_transition.pending_backend_seek_ms().is_some()
+            || self
+                .playback_transition
+                .awaiting_backend_seek_ms()
+                .is_some()
+        {
+            return GTK_TRANSITION_TICK;
+        }
+
+        match self.store.state().player.state() {
+            PlayerState::Playing if self.visualization.mode() != VisMode::Off => {
+                GTK_TRANSITION_TICK
+            }
+            PlayerState::Playing
+                if self
+                    .title_marquee
+                    .is_scrolling(self.store.state().player.state(), !self.is_shaded()) =>
+            {
+                GTK_MARQUEE_TICK
+            }
+            PlayerState::Playing => GTK_PLAYBACK_TICK,
+            PlayerState::Paused => GTK_PAUSED_TICK,
+            PlayerState::Stopped => GTK_IDLE_TICK,
+        }
+    }
+
     fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
         let Some((next_transition, volume)) = self.playback_transition.tick_fadeout(elapsed_ms)
         else {
@@ -9799,6 +9865,29 @@ mod tests {
         state.toggle_playlist_shaded();
         assert!(state.playlist_scroll(1.0));
         assert_eq!(state.playlist_scroll_offset(), 3);
+    }
+
+    #[test]
+    fn gtk_runtime_tick_cadence_tracks_visible_work() {
+        let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
+            vis_mode: VisMode::Off,
+            ..Config::default()
+        }));
+        assert_eq!(state.runtime_tick_interval(), GTK_IDLE_TICK);
+
+        state.store.state_mut().player.mark_playing();
+        assert_eq!(state.runtime_tick_interval(), GTK_PLAYBACK_TICK);
+
+        state.set_visualization_mode(VisMode::Analyzer);
+        state.set_visualization_refresh_divisor(3);
+        assert_eq!(state.runtime_tick_interval(), GTK_TRANSITION_TICK);
+
+        state.playback_transition = PlaybackTransitionState::start_fadeout(100);
+        assert_eq!(state.runtime_tick_interval(), GTK_TRANSITION_TICK);
+
+        state.playback_transition = PlaybackTransitionState::Idle;
+        state.store.state_mut().player.pause();
+        assert_eq!(state.runtime_tick_interval(), GTK_PAUSED_TICK);
     }
 
     #[test]
