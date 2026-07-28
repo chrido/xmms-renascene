@@ -937,6 +937,7 @@ impl EguiFrontendState {
                 let config = &self.controller.state().config;
                 let errors = self.playback.apply_effect(
                     &effect,
+                    config.balance,
                     EqualizerBackendState {
                         active: config.equalizer_active,
                         preamp_position: config.equalizer_preamp_pos,
