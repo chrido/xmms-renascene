@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from scripts.performance import (
     PerformanceRunner,
@@ -67,6 +68,24 @@ class PerformanceTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "different platform"):
                 PerformanceRunner(root).compare(before, after)
+
+    def test_android_build_uses_configured_emulator_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            result = repo / "result"
+            result.mkdir()
+            runner = PerformanceRunner(repo)
+            with mock.patch.dict(
+                "os.environ",
+                {"XMMS_ANDROID_PERF_TARGET": "x86_64-linux-android"},
+                clear=False,
+            ):
+                runner._build("android", result, dry_run=True)
+
+            self.assertIn(
+                "--target x86_64-linux-android",
+                (result / "build.log").read_text(),
+            )
 
 
 if __name__ == "__main__":

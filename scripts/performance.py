@@ -414,10 +414,15 @@ class PerformanceRunner:
 
     def _build(self, platform: str, result_dir: Path, *, dry_run: bool) -> dict[str, Any]:
         if platform == "android":
+            android_target = os.environ.get(
+                "XMMS_ANDROID_PERF_TARGET", "aarch64-linux-android"
+            )
             command = [
                 "cargo",
                 "apk",
                 "build",
+                "--target",
+                android_target,
                 "--profile",
                 "profiling",
                 "--no-default-features",
@@ -444,6 +449,22 @@ class PerformanceRunner:
         status = self._run_logged(command, log, dry_run=dry_run)
         if status != 0:
             raise RuntimeError(f"profiling build failed; see {log}")
+        if platform == "android" and not dry_run:
+            if not shutil.which("adb"):
+                raise RuntimeError("adb is required to install the Android profiling APK")
+            install = subprocess.run(
+                ["adb", "install", "-r", str(binary)],
+                cwd=self.repo_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            with log.open("a") as output:
+                output.write("\n$ adb install -r " + str(binary) + "\n")
+                output.write(install.stdout)
+                output.write(install.stderr)
+            if install.returncode != 0:
+                raise RuntimeError(f"profiling APK installation failed; see {log}")
         artifacts = result_dir / "artifacts"
         artifacts.mkdir()
         copied = ""
