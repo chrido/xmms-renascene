@@ -369,7 +369,7 @@ impl AppStore {
             } else {
                 StateChangeSet::empty()
             },
-            vec![AppEffect::QueueRender(RenderTarget::All)],
+            vec![AppEffect::QueueRender(RenderTarget::Main)],
         )
     }
 
@@ -399,7 +399,7 @@ impl AppStore {
                 StateChangeSet::empty()
             },
             if changed {
-                vec![AppEffect::QueueRender(RenderTarget::All)]
+                vec![AppEffect::QueueRender(RenderTarget::Main)]
             } else {
                 Vec::new()
             },
@@ -845,6 +845,10 @@ mod tests {
             result.changes,
             StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
         );
+        assert_eq!(
+            result.effects,
+            vec![AppEffect::QueueRender(RenderTarget::Main)]
+        );
         assert_eq!(result.revision, 1);
         assert_eq!(store.state().config.playback_position_ms, 250);
     }
@@ -859,6 +863,10 @@ mod tests {
         assert_eq!(
             changed.changes,
             StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
+        );
+        assert_eq!(
+            changed.effects,
+            vec![AppEffect::QueueRender(RenderTarget::Main)]
         );
 
         let unchanged = store.update_playback_position_from_runtime(1_500);
