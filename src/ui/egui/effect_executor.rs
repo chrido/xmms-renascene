@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
-#[cfg(target_os = "android")]
+#[cfg(any(test, target_os = "android"))]
 use crate::app::store::StateChangeSet;
 #[cfg(target_os = "android")]
 use crate::app::view_model::{formatted_current_title, formatted_playlist_entry_title};
@@ -145,22 +145,43 @@ pub(crate) fn execute_platform_effect(
 
 #[cfg(target_os = "android")]
 pub(crate) fn apply_android_post_dispatch(android: &mut AndroidRuntime, changes: StateChangeSet) {
+    match android_persistence_impact(changes) {
+        AndroidPersistenceImpact::None => {}
+        AndroidPersistenceImpact::Position => android.mark_position_persistence(),
+        AndroidPersistenceImpact::Snapshot => android.mark_persistence(),
+    }
+    if changes.intersects(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST) {
+        android.mark_media_projection();
+    }
+}
+
+#[cfg(any(test, target_os = "android"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AndroidPersistenceImpact {
+    None,
+    Position,
+    Snapshot,
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn android_persistence_impact(changes: StateChangeSet) -> AndroidPersistenceImpact {
     let position_only =
         StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN;
     if changes == position_only {
-        android.mark_position_persistence();
+        return AndroidPersistenceImpact::Position;
     }
     let persistent_changes = StateChangeSet::PLAYLIST
         | StateChangeSet::EQUALIZER
         | StateChangeSet::PANELS
         | StateChangeSet::SKIN
         | StateChangeSet::CONFIG;
-    if changes != position_only && changes.intersects(persistent_changes) {
-        android.mark_persistence();
+    if changes.intersects(persistent_changes) {
+        return AndroidPersistenceImpact::Snapshot;
     }
-    if changes.intersects(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST) {
-        android.mark_media_projection();
+    if changes.intersects(StateChangeSet::PLAYER) {
+        return AndroidPersistenceImpact::Position;
     }
+    AndroidPersistenceImpact::None
 }
 
 #[cfg(target_os = "android")]
@@ -317,5 +338,27 @@ mod tests {
             owner(AppEffect::SaveConfig),
             EffectOwner::Platform(PlatformEffect::SaveConfig)
         ));
+    }
+
+    #[test]
+    fn android_player_transitions_checkpoint_without_full_snapshots() {
+        assert_eq!(
+            android_persistence_impact(StateChangeSet::PLAYER | StateChangeSet::RENDER_MAIN),
+            AndroidPersistenceImpact::Position
+        );
+        assert_eq!(
+            android_persistence_impact(
+                StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
+            ),
+            AndroidPersistenceImpact::Position
+        );
+        assert_eq!(
+            android_persistence_impact(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST),
+            AndroidPersistenceImpact::Snapshot
+        );
+        assert_eq!(
+            android_persistence_impact(StateChangeSet::RENDER_MAIN),
+            AndroidPersistenceImpact::None
+        );
     }
 }
