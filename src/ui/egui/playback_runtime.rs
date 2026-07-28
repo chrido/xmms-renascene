@@ -2,7 +2,7 @@
 
 use crate::app_log_info;
 use crate::playback::backend::PlaybackBackend;
-#[cfg(not(test))]
+#[cfg(all(not(test), not(target_os = "android")))]
 use crate::playback::backend::{create_backend, PlaybackBackendKind};
 use crate::playback::model::EqualizerBackendState;
 use crate::skin::widget::{Visualization, WidgetId};
@@ -42,7 +42,14 @@ impl PlaybackRuntime {
             }
             return Vec::new();
         }
-        #[cfg(not(test))]
+        #[cfg(all(not(test), target_os = "android"))]
+        if matches!(effect, PlaybackEffect::StartUri { .. }) && self.backend.is_none() {
+            match super::android::shared_playback_backend() {
+                Ok(backend) => self.backend = Some(Box::new(backend)),
+                Err(err) => return vec![format!("failed to initialize audio output: {err}")],
+            }
+        }
+        #[cfg(all(not(test), not(target_os = "android")))]
         if matches!(effect, PlaybackEffect::StartUri { .. }) && self.backend.is_none() {
             match create_backend(PlaybackBackendKind::Auto) {
                 Ok(backend) => self.backend = Some(backend),

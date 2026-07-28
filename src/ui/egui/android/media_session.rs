@@ -72,6 +72,14 @@ pub fn shared_playback_backend() -> Result<RodioBackend, String> {
     Ok(created)
 }
 
+fn existing_playback_backend() -> Option<RodioBackend> {
+    PLAYBACK_BACKEND
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
+}
+
 pub(crate) fn replace_activity(activity: AndroidActivityGeneration, resumed: bool) {
     MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
@@ -305,7 +313,7 @@ pub(crate) fn current_media_item_index() -> Option<usize> {
 }
 
 pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
-    let Ok(backend) = shared_playback_backend() else {
+    let Some(backend) = existing_playback_backend() else {
         return;
     };
     let order = events::lock_media_control_order();
@@ -510,7 +518,7 @@ fn update_service_position_from_backend(
 }
 
 fn update_service_from_backend(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
-    let Ok(backend) = shared_playback_backend() else {
+    let Some(backend) = existing_playback_backend() else {
         return;
     };
     let state = AndroidPlaybackState::from(backend.state());

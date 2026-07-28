@@ -41,7 +41,7 @@ use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
 use crate::mpris::{
     app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 use crate::playback::backend::PlaybackBackend;
 #[cfg(all(not(target_os = "android"), not(test)))]
 use crate::playback::backend::{create_backend, PlaybackBackendKind};
@@ -279,16 +279,7 @@ impl EguiFrontendState {
             .unwrap_or_else(|| snap_playlist_size(PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT));
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         #[cfg(target_os = "android")]
-        let (playback_backend, playback_backend_error) =
-            match super::android::shared_playback_backend() {
-                Ok(backend) => (Some(Box::new(backend) as Box<dyn PlaybackBackend>), None),
-                Err(err) => (
-                    None,
-                    Some(format!(
-                        "audio output is not ready; playback will retry: {err}"
-                    )),
-                ),
-            };
+        let (playback_backend, playback_backend_error) = (None, None);
         #[cfg(all(not(target_os = "android"), not(test)))]
         let (playback_backend, playback_backend_error) =
             match create_backend(PlaybackBackendKind::Auto) {
