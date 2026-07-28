@@ -39,6 +39,10 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
     private static final Handler MARQUEE_HANDLER = new Handler(Looper.getMainLooper());
     private static Context marqueeContext;
     private static long marqueeLastTickMs;
+    private static WidgetState cachedBitmapState;
+    private static int cachedBitmapTitleOffset = Integer.MIN_VALUE;
+    private static Bitmap cachedBitmap;
+    private static ResourceIds cachedResourceIds;
     private static final Runnable MARQUEE_TICK = new Runnable() {
         @Override
         public void run() {
@@ -118,6 +122,7 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
     @Override
     public void onDisabled(Context context) {
         stopMarquee();
+        clearBitmapCache();
     }
 
     static void updateAll(
@@ -160,6 +165,7 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
             stopMarquee();
             return;
         }
+        clearBitmapCache();
         updateWidgetsAndSchedule(
                 applicationContext, manager, widgetIds, loadState(applicationContext));
     }
@@ -199,20 +205,35 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
             WidgetState state,
             int titleOffsetPx) {
         String packageName = context.getPackageName();
-        int layout = resourceId(context, "layout", "widget_player_info");
-        int content = resourceId(context, "id", "widget_player_info_content");
-        int image = resourceId(context, "id", "widget_player_info_image");
-        int open = resourceId(context, "id", "widget_player_info_open");
-        RemoteViews views = new RemoteViews(packageName, layout);
+        ResourceIds resources = resourceIds(context);
+        RemoteViews views = new RemoteViews(packageName, resources.layout);
         XmmsWidgetSupport.WidgetPadding padding =
                 XmmsWidgetSupport.proportionalPadding(
                         context, options, FRAME_WIDTH, FRAME_HEIGHT);
         views.setViewPadding(
-                content,
+                resources.content,
                 padding.left,
                 padding.top,
                 padding.right,
                 padding.bottom);
+        Bitmap bitmap = playerInfoBitmap(context, state, titleOffsetPx);
+        if (bitmap != null) {
+            views.setImageViewBitmap(resources.image, bitmap);
+        }
+        views.setOnClickPendingIntent(resources.open, openPlayerPendingIntent(context));
+        manager.updateAppWidget(widgetId, views);
+    }
+
+    private static synchronized Bitmap playerInfoBitmap(
+            Context context,
+            WidgetState state,
+            int titleOffsetPx) {
+        if (cachedBitmap != null
+                && cachedBitmapTitleOffset == titleOffsetPx
+                && cachedBitmapState != null
+                && cachedBitmapState.sameAs(state)) {
+            return cachedBitmap;
+        }
         int[] pixels = nativeRenderPlayerInfoWidget(
                 context.getFilesDir().getAbsolutePath(),
                 context.getCacheDir().getAbsolutePath(),
@@ -221,17 +242,23 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
                 state.frequency,
                 state.channels,
                 titleOffsetPx);
-        if (pixels != null && pixels.length == INFO_WIDTH * INFO_HEIGHT) {
-            views.setImageViewBitmap(
-                    image,
-                    Bitmap.createBitmap(
-                            pixels,
-                            INFO_WIDTH,
-                            INFO_HEIGHT,
-                            Bitmap.Config.ARGB_8888));
+        if (pixels == null || pixels.length != INFO_WIDTH * INFO_HEIGHT) {
+            return null;
         }
-        views.setOnClickPendingIntent(open, openPlayerPendingIntent(context));
-        manager.updateAppWidget(widgetId, views);
+        cachedBitmap = Bitmap.createBitmap(
+                pixels,
+                INFO_WIDTH,
+                INFO_HEIGHT,
+                Bitmap.Config.ARGB_8888);
+        cachedBitmapState = state;
+        cachedBitmapTitleOffset = titleOffsetPx;
+        return cachedBitmap;
+    }
+
+    private static synchronized void clearBitmapCache() {
+        cachedBitmap = null;
+        cachedBitmapState = null;
+        cachedBitmapTitleOffset = Integer.MIN_VALUE;
     }
 
     private static PendingIntent openPlayerPendingIntent(Context context) {
@@ -283,8 +310,30 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
         return (int) (marquee >>> MARQUEE_OFFSET_SHIFT);
     }
 
-    private static int resourceId(Context context, String type, String name) {
-        return context.getResources().getIdentifier(name, type, context.getPackageName());
+    private static synchronized ResourceIds resourceIds(Context context) {
+        if (cachedResourceIds == null) {
+            cachedResourceIds = new ResourceIds(context);
+        }
+        return cachedResourceIds;
+    }
+
+    private static final class ResourceIds {
+        final int layout;
+        final int content;
+        final int image;
+        final int open;
+
+        ResourceIds(Context context) {
+            String packageName = context.getPackageName();
+            layout = context.getResources().getIdentifier(
+                    "widget_player_info", "layout", packageName);
+            content = context.getResources().getIdentifier(
+                    "widget_player_info_content", "id", packageName);
+            image = context.getResources().getIdentifier(
+                    "widget_player_info_image", "id", packageName);
+            open = context.getResources().getIdentifier(
+                    "widget_player_info_open", "id", packageName);
+        }
     }
 
     private static final class WidgetState {
@@ -305,6 +354,14 @@ public final class XmmsPlayerInfoWidget extends AppWidgetProvider {
             this.bitrate = Math.max(0, bitrate);
             this.frequency = Math.max(0, frequency);
             this.channels = Math.max(0, channels);
+        }
+
+        boolean sameAs(WidgetState other) {
+            return playbackState == other.playbackState
+                    && title.equals(other.title)
+                    && bitrate == other.bitrate
+                    && frequency == other.frequency
+                    && channels == other.channels;
         }
     }
 }

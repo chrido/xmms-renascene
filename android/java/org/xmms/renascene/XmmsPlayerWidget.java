@@ -37,6 +37,9 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
     private static long pressedGeneration;
     private static int pressedControl = NO_PRESSED_CONTROL;
     private static Runnable restorePressedRunnable;
+    private static int cachedBitmapPressedControl = Integer.MIN_VALUE;
+    private static Bitmap cachedBitmap;
+    private static ResourceIds cachedResourceIds;
 
     static {
         System.loadLibrary("xmms_renascene");
@@ -104,6 +107,8 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         synchronized (PRESSED_LOCK) {
             pressedGeneration++;
             pressedControl = NO_PRESSED_CONTROL;
+            cachedBitmap = null;
+            cachedBitmapPressedControl = Integer.MIN_VALUE;
             if (restorePressedRunnable != null) {
                 PRESSED_HANDLER.removeCallbacks(restorePressedRunnable);
                 restorePressedRunnable = null;
@@ -145,6 +150,8 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
         }
         WidgetState state = loadState(applicationContext);
         synchronized (PRESSED_LOCK) {
+            cachedBitmap = null;
+            cachedBitmapPressedControl = Integer.MIN_VALUE;
             updateWidgets(applicationContext, manager, widgetIds, state, pressedControl);
         }
     }
@@ -220,54 +227,58 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
             WidgetState state,
             int activePressedControl) {
         String packageName = context.getPackageName();
-        int layout = resourceId(context, "layout", "widget_player");
-        int playerContainer = resourceId(context, "id", "widget_player_container");
-        int playerImage = resourceId(context, "id", "widget_player_image");
-        int previous = resourceId(context, "id", "widget_previous");
-        int play = resourceId(context, "id", "widget_play");
-        int pause = resourceId(context, "id", "widget_pause");
-        int stop = resourceId(context, "id", "widget_stop");
-        int next = resourceId(context, "id", "widget_next");
-        RemoteViews views = new RemoteViews(packageName, layout);
+        ResourceIds resources = resourceIds(context);
+        RemoteViews views = new RemoteViews(packageName, resources.layout);
         WidgetPadding padding = widgetPadding(context, options);
         views.setViewPadding(
-                playerContainer,
+                resources.playerContainer,
                 padding.left,
                 padding.top,
                 padding.right,
                 padding.bottom);
+        Bitmap bitmap = playerBitmap(context, activePressedControl);
+        if (bitmap != null) {
+            views.setImageViewBitmap(resources.playerImage, bitmap);
+        }
+        views.setBoolean(resources.previous, "setEnabled", state.hasPrevious);
+        views.setBoolean(resources.next, "setEnabled", state.hasNext);
+        views.setOnClickPendingIntent(
+                resources.previous,
+                controlPendingIntent(
+                        context, XmmsPlaybackService.CONTROL_PREVIOUS));
+        views.setOnClickPendingIntent(
+                resources.play,
+                controlPendingIntent(context, XmmsPlaybackService.CONTROL_PLAY));
+        views.setOnClickPendingIntent(
+                resources.pause,
+                controlPendingIntent(context, XmmsPlaybackService.CONTROL_PAUSE));
+        views.setOnClickPendingIntent(
+                resources.stop,
+                controlPendingIntent(context, XmmsPlaybackService.CONTROL_STOP));
+        views.setOnClickPendingIntent(
+                resources.next,
+                controlPendingIntent(context, XmmsPlaybackService.CONTROL_NEXT));
+        return views;
+    }
+
+    private static Bitmap playerBitmap(Context context, int activePressedControl) {
+        if (cachedBitmap != null && cachedBitmapPressedControl == activePressedControl) {
+            return cachedBitmap;
+        }
         int[] pixels = nativeRenderPlayerWidget(
                 context.getFilesDir().getAbsolutePath(),
                 context.getCacheDir().getAbsolutePath(),
                 activePressedControl);
-        if (pixels != null && pixels.length == PLAYER_WIDTH * PLAYER_HEIGHT) {
-            views.setImageViewBitmap(
-                    playerImage,
-                    Bitmap.createBitmap(
-                            pixels,
-                            PLAYER_WIDTH,
-                            PLAYER_HEIGHT,
-                            Bitmap.Config.ARGB_8888));
+        if (pixels == null || pixels.length != PLAYER_WIDTH * PLAYER_HEIGHT) {
+            return null;
         }
-        views.setBoolean(previous, "setEnabled", state.hasPrevious);
-        views.setBoolean(next, "setEnabled", state.hasNext);
-        views.setOnClickPendingIntent(
-                previous,
-                controlPendingIntent(
-                        context, XmmsPlaybackService.CONTROL_PREVIOUS));
-        views.setOnClickPendingIntent(
-                play,
-                controlPendingIntent(context, XmmsPlaybackService.CONTROL_PLAY));
-        views.setOnClickPendingIntent(
-                pause,
-                controlPendingIntent(context, XmmsPlaybackService.CONTROL_PAUSE));
-        views.setOnClickPendingIntent(
-                stop,
-                controlPendingIntent(context, XmmsPlaybackService.CONTROL_STOP));
-        views.setOnClickPendingIntent(
-                next,
-                controlPendingIntent(context, XmmsPlaybackService.CONTROL_NEXT));
-        return views;
+        cachedBitmap = Bitmap.createBitmap(
+                pixels,
+                PLAYER_WIDTH,
+                PLAYER_HEIGHT,
+                Bitmap.Config.ARGB_8888);
+        cachedBitmapPressedControl = activePressedControl;
+        return cachedBitmap;
     }
 
     private static WidgetPadding widgetPadding(Context context, Bundle options) {
@@ -297,8 +308,36 @@ public final class XmmsPlayerWidget extends AppWidgetProvider {
                 preferences.getBoolean(KEY_HAS_NEXT, false));
     }
 
-    private static int resourceId(Context context, String type, String name) {
-        return context.getResources().getIdentifier(name, type, context.getPackageName());
+    private static synchronized ResourceIds resourceIds(Context context) {
+        if (cachedResourceIds == null) {
+            cachedResourceIds = new ResourceIds(context);
+        }
+        return cachedResourceIds;
+    }
+
+    private static final class ResourceIds {
+        final int layout;
+        final int playerContainer;
+        final int playerImage;
+        final int previous;
+        final int play;
+        final int pause;
+        final int stop;
+        final int next;
+
+        ResourceIds(Context context) {
+            String packageName = context.getPackageName();
+            layout = context.getResources().getIdentifier("widget_player", "layout", packageName);
+            playerContainer = context.getResources().getIdentifier(
+                    "widget_player_container", "id", packageName);
+            playerImage = context.getResources().getIdentifier(
+                    "widget_player_image", "id", packageName);
+            previous = context.getResources().getIdentifier("widget_previous", "id", packageName);
+            play = context.getResources().getIdentifier("widget_play", "id", packageName);
+            pause = context.getResources().getIdentifier("widget_pause", "id", packageName);
+            stop = context.getResources().getIdentifier("widget_stop", "id", packageName);
+            next = context.getResources().getIdentifier("widget_next", "id", packageName);
+        }
     }
 
     private static final class WidgetState {

@@ -124,18 +124,15 @@ fn with_widget_skin<T>(
 ) -> Result<T, String> {
     std::env::set_var("XMMS_RS_CONFIG_DIR", files_dir.join("config"));
     std::env::set_var("XMMS_RS_CACHE_DIR", cache_dir);
-    let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
-    let app_state =
-        load_saved_state(&config_path, &playlist_path, false).map_err(|err| err.to_string())?;
-    let skin_key = app_state.config.skin.clone();
     let mut cached_skin = WIDGET_SKIN
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
-    if cached_skin
-        .as_ref()
-        .is_none_or(|(cached_key, _)| cached_key != &skin_key)
-    {
+    if cached_skin.is_none() {
+        let (config_path, playlist_path) = fallback_state_paths(&files_dir.join("config"));
+        let app_state =
+            load_saved_state(&config_path, &playlist_path, false).map_err(|err| err.to_string())?;
+        let skin_key = app_state.config.skin.clone();
         let skin = match skin_key.as_deref() {
             Some(path) => DefaultSkin::load_from_path(Path::new(path))
                 .map_err(|err| format!("failed to load widget skin '{path}': {err}"))?,

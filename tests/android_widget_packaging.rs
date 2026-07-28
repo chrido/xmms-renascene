@@ -617,7 +617,9 @@ fn player_info_widget_is_packaged_and_opens_player() {
     assert!(provider.contains("PendingIntent.getActivity("));
     assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE,"));
     assert!(provider.contains("PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE"));
-    assert!(provider.contains("views.setOnClickPendingIntent(open"));
+    assert!(provider.contains("views.setOnClickPendingIntent(resources.open"));
+    assert!(provider.contains("cachedBitmapState"));
+    assert!(provider.contains("cachedResourceIds"));
     assert!(provider.contains("widget_player_info_content"));
     assert!(provider.contains("widgetIds.length == 0"));
     assert!(provider.contains("nativeRenderPlayerInfoWidget("));
