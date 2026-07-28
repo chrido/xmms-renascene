@@ -4,6 +4,8 @@ use crate::app::view_model::{playlist_projection, PlaylistProjection, PlaylistPr
 use crate::app_state::AppState;
 use crate::render::{EqualizerRenderState, MainWindowRenderState, PlaylistRowsRenderState};
 
+use super::skin_texture::ImageRenderBuffer;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PlaylistTextureKey {
     pub generation: u64,
@@ -56,6 +58,10 @@ pub struct RenderCache {
     pub(crate) equalizer: Option<CachedEqualizerTexture>,
     pub(crate) playlist: Option<CachedPlaylistTexture>,
     pub(crate) playlist_projection: Option<CachedPlaylistProjection>,
+    pub(crate) main_staging: ImageRenderBuffer,
+    pub(crate) main_static_staging: ImageRenderBuffer,
+    pub(crate) equalizer_staging: ImageRenderBuffer,
+    pub(crate) playlist_staging: ImageRenderBuffer,
 }
 
 impl RenderCache {

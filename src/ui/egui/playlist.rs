@@ -37,7 +37,7 @@ use super::app::EguiFrontendState;
 use super::layout::clamp_popup_to_rect;
 use super::render_cache::{CachedPlaylistTexture, PlaylistTextureKey};
 use super::skin_texture::{
-    pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
+    pixel_snapped_rect, render_playlist_color_image_buffered, render_playlist_menu_color_image,
     upload_color_image,
 };
 use super::ui_state::ActiveOverlay;
@@ -237,7 +237,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         .as_ref()
         .is_none_or(|cached| cached.key != texture_key)
     {
-        let Ok(image) = render_playlist_color_image(
+        let Ok(image) = render_playlist_color_image_buffered(
             &app.active_skin,
             texture_key.focused,
             texture_key.shaded,
@@ -249,6 +249,7 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
             Some(&texture_key.footer_time_minutes),
             Some(&texture_key.footer_time_seconds),
             render_scale,
+            &mut app.render_cache.playlist_staging,
         ) else {
             ui.label("failed to render skinned playlist");
             return;

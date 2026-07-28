@@ -21,7 +21,9 @@ use crate::skin::layout::{
 use super::app::EguiFrontendState;
 use super::layout::clamp_popup_to_rect;
 use super::render_cache::CachedEqualizerTexture;
-use super::skin_texture::{pixel_snapped_rect, render_equalizer_color_image, upload_color_image};
+use super::skin_texture::{
+    pixel_snapped_rect, render_equalizer_color_image_buffered, upload_color_image,
+};
 use super::ui_state::{ActiveOverlay, EqualizerPressed};
 
 pub fn equalizer_band_count(view_model: &EqualizerViewModel) -> usize {
@@ -38,7 +40,11 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         cached.generation != app.render_cache.generation || cached.state != render_state
     });
     if needs_texture_update {
-        let Ok(image) = render_equalizer_color_image(&app.active_skin, &render_state) else {
+        let Ok(image) = render_equalizer_color_image_buffered(
+            &app.active_skin,
+            &render_state,
+            &mut app.render_cache.equalizer_staging,
+        ) else {
             ui.label("failed to render skinned equalizer");
             return;
         };

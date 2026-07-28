@@ -19,11 +19,14 @@ use crate::skin::widget::{NumberDisplay, PlayStatusValue};
 
 use super::app::EguiFrontendState;
 use super::render_cache::{CachedMainStaticTexture, CachedMainTexture};
-#[cfg(test)]
-use super::skin_texture::render_main_player_color_image;
 use super::skin_texture::{
-    pixel_snapped_rect, render_main_player_dynamic_color_image,
-    render_main_player_static_color_image, upload_color_image,
+    pixel_snapped_rect, render_main_player_dynamic_color_image_buffered,
+    render_main_player_static_color_image_buffered, upload_color_image,
+};
+#[cfg(test)]
+use super::skin_texture::{
+    render_main_player_color_image, render_main_player_dynamic_color_image,
+    render_main_player_static_color_image,
 };
 use super::ui_state::MainPressed;
 
@@ -69,10 +72,11 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
             || cached.shaded != render_state.shaded
     });
     if needs_static_update {
-        let Ok(image) = render_main_player_static_color_image(
+        let Ok(image) = render_main_player_static_color_image_buffered(
             &app.active_skin,
             render_state.focused,
             render_state.shaded,
+            &mut app.render_cache.main_static_staging,
         ) else {
             ui.label("failed to render skinned main player");
             return;
@@ -95,8 +99,11 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         cached.generation != app.render_cache.generation || cached.state != render_state
     });
     if needs_texture_update {
-        let Ok(image) = render_main_player_dynamic_color_image(&app.active_skin, &render_state)
-        else {
+        let Ok(image) = render_main_player_dynamic_color_image_buffered(
+            &app.active_skin,
+            &render_state,
+            &mut app.render_cache.main_staging,
+        ) else {
             ui.label("failed to render skinned main player");
             return;
         };

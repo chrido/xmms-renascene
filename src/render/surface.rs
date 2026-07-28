@@ -199,6 +199,10 @@ impl ImageSurface {
             .map_err(|err| BorrowError(err.to_string()))
     }
 
+    pub fn clear(&self) {
+        self.inner.data.borrow_mut().fill(0);
+    }
+
     pub fn set_pixel_argb(&self, x: i32, y: i32, argb: u32) {
         if x < 0 || y < 0 || x >= self.width() || y >= self.height() {
             return;
