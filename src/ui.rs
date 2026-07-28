@@ -217,6 +217,7 @@ fn build_preview_window(
     options: PreviewOptions,
     persist_session: bool,
 ) -> Result<(), String> {
+    let _startup_span = crate::perf_span!("gtk_startup");
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     let app_state = if persist_session {
         load_saved_state(&config_path, &playlist_path, options.reset)
@@ -231,10 +232,6 @@ fn build_preview_window(
     if let Some(config_dir) = config_path.parent() {
         state.set_equalizer_preset_dir(config_dir.to_path_buf());
     }
-    match create_backend(PlaybackBackendKind::Auto) {
-        Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
-        Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
-    }
     let (initial_width, initial_height) = state.docked_panel_size();
     let initial_scale = state.scale_factor();
     let initial_device_width = scale_dim(initial_width, initial_scale);
@@ -242,6 +239,7 @@ fn build_preview_window(
     let main_state = Rc::new(RefCell::new(state));
     refresh_xmms_skin_css(main_state.borrow().active_skin());
 
+    let _window_span = crate::perf_span!("gtk_window_build");
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Renascene Rust Preview")
@@ -730,6 +728,18 @@ fn build_preview_window(
 
     window.set_child(Some(&drawing_area));
     window.present();
+    if persist_session {
+        let main_state = Rc::clone(&main_state);
+        gtk::glib::idle_add_local_once(move || {
+            let _backend_span = crate::perf_span!("gtk_backend_init");
+            match create_backend(PlaybackBackendKind::Auto) {
+                Ok(backend) => main_state
+                    .borrow_mut()
+                    .set_playback_backend(Rc::new(RefCell::new(backend))),
+                Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
+            }
+        });
+    }
     present_visible_panel_windows(&panel_windows, &main_state.borrow());
     if open_preferences {
         main_state.borrow_mut().set_preferences_visible(true);
