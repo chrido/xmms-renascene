@@ -166,14 +166,11 @@ where
     }
 
     fn refresh_filters_if_needed(&mut self) {
-        let settings = self
-            .settings
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clone();
-        if settings.version == self.seen_version {
+        if self.settings.version() == self.seen_version {
             return;
         }
+        let _perf_span = crate::perf_span!("rodio_dsp_refresh");
+        let settings = self.settings.snapshot();
         self.seen_version = settings.version;
         self.preamp_gain = settings.preamp_gain();
         (self.left_gain, self.right_gain) = settings.channel_gains();
@@ -266,8 +263,68 @@ const EQ_FREQUENCIES_HZ: [f32; EQUALIZER_BANDS] = [
 ];
 const EQ_Q: f32 = 1.0;
 
-type SharedDspSettings = Arc<Mutex<RodioDspSettings>>;
+type SharedDspSettings = Arc<SharedDspState>;
 type SharedVisualization = Arc<Mutex<RodioVisualization>>;
+
+struct SharedDspState {
+    version: AtomicU64,
+    settings: Mutex<RodioDspSettings>,
+    #[cfg(test)]
+    lock_count: AtomicU64,
+}
+
+impl SharedDspState {
+    fn new(settings: RodioDspSettings) -> Self {
+        Self {
+            version: AtomicU64::new(settings.version),
+            settings: Mutex::new(settings),
+            #[cfg(test)]
+            lock_count: AtomicU64::new(0),
+        }
+    }
+
+    fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+
+    fn snapshot(&self) -> RodioDspSettings {
+        #[cfg(test)]
+        self.lock_count.fetch_add(1, Ordering::Relaxed);
+        self.settings
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone()
+    }
+
+    fn update(&self, state: EqualizerBackendState) {
+        let version = {
+            let mut settings = self
+                .settings
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            settings.update(state);
+            settings.version
+        };
+        self.version.store(version, Ordering::Release);
+    }
+
+    fn update_balance(&self, balance: i32) {
+        let version = {
+            let mut settings = self
+                .settings
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            settings.update_balance(balance);
+            settings.version
+        };
+        self.version.store(version, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn lock_count(&self) -> u64 {
+        self.lock_count.load(Ordering::Relaxed)
+    }
+}
 
 const SPECTRUM_WINDOW_FRAMES: usize = ANALYZER_FFT_FRAMES;
 
@@ -535,7 +592,7 @@ impl RodioBackend {
                 volume: 100,
                 balance: 0,
                 equalizer,
-                dsp_settings: Arc::new(Mutex::new(RodioDspSettings::new(equalizer, 0))),
+                dsp_settings: Arc::new(SharedDspState::new(RodioDspSettings::new(equalizer, 0))),
                 visualization,
                 visualization_generation: 0,
                 spectrum_layout: SpectrumLayout::AnalyzerBars,
@@ -754,22 +811,14 @@ impl PlaybackBackend for RodioBackend {
     fn set_balance(&self, balance: i32) -> Result<(), String> {
         let mut inner = self.lock_inner();
         inner.balance = balance.clamp(-100, 100);
-        inner
-            .dsp_settings
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .update_balance(inner.balance);
+        inner.dsp_settings.update_balance(inner.balance);
         Ok(())
     }
 
     fn set_equalizer(&self, state: EqualizerBackendState) -> Result<(), String> {
         let mut inner = self.lock_inner();
         inner.equalizer = state;
-        inner
-            .dsp_settings
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .update(state);
+        inner.dsp_settings.update(state);
         let preamp_db = if state.active {
             equalizer_position_to_db(state.preamp_position)
         } else {
@@ -1606,7 +1655,7 @@ mod tests {
         assert_eq!(backend.balance(), -100);
         assert_eq!(backend.equalizer(), equalizer);
         let settings = backend.lock_inner().dsp_settings.clone();
-        let settings = settings.lock().unwrap();
+        let settings = settings.snapshot();
         assert_eq!(settings.balance, -100);
         assert!(settings.active);
         assert_eq!(settings.preamp_position, 42);
@@ -1620,7 +1669,7 @@ mod tests {
             preamp_position: 25,
             band_positions: [50; EQUALIZER_BANDS],
         };
-        let settings = Arc::new(Mutex::new(RodioDspSettings::new(state, 0)));
+        let settings = Arc::new(SharedDspState::new(RodioDspSettings::new(state, 0)));
         let source = rodio::buffer::SamplesBuffer::new(
             std::num::NonZero::new(1).unwrap(),
             std::num::NonZero::new(44_100).unwrap(),
@@ -1638,8 +1687,37 @@ mod tests {
     }
 
     #[test]
+    fn rodio_dsp_source_does_not_lock_settings_per_sample() {
+        let settings = Arc::new(SharedDspState::new(RodioDspSettings::new(
+            EqualizerBackendState {
+                active: false,
+                preamp_position: 50,
+                band_positions: [50; EQUALIZER_BANDS],
+            },
+            0,
+        )));
+        let source = rodio::buffer::SamplesBuffer::new(
+            std::num::NonZero::new(1).unwrap(),
+            std::num::NonZero::new(44_100).unwrap(),
+            vec![0.1; 256],
+        );
+        let visualization = Arc::new(Mutex::new(RodioVisualization::new()));
+        let mut source = RodioDspSource::new(source, Arc::clone(&settings), visualization);
+        let initial_locks = settings.lock_count();
+
+        for _ in 0..128 {
+            source.next().unwrap();
+        }
+        assert_eq!(settings.lock_count(), initial_locks);
+
+        settings.update_balance(25);
+        source.next().unwrap();
+        assert_eq!(settings.lock_count(), initial_locks + 1);
+    }
+
+    #[test]
     fn rodio_dsp_source_applies_stereo_balance() {
-        let settings = Arc::new(Mutex::new(RodioDspSettings::new(
+        let settings = Arc::new(SharedDspState::new(RodioDspSettings::new(
             EqualizerBackendState {
                 active: false,
                 preamp_position: 50,
@@ -1680,7 +1758,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let make_source = |state| {
-            let settings = Arc::new(Mutex::new(RodioDspSettings::new(state, 0)));
+            let settings = Arc::new(SharedDspState::new(RodioDspSettings::new(state, 0)));
             let source = rodio::buffer::SamplesBuffer::new(
                 std::num::NonZero::new(1).unwrap(),
                 std::num::NonZero::new(44_100).unwrap(),
