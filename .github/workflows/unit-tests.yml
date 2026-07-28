@@ -121,6 +121,46 @@ jobs:
           path: testoutput
           if-no-files-found: ignore
 
+  perf-reference:
+    name: Directional performance reference
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install performance dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            build-essential \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer1.0-dev \
+            libgtk-4-dev \
+            linux-tools-common \
+            pkg-config \
+            xvfb
+
+      - name: Capture directional performance scenarios
+        run: |
+          ./repo perf --scenario=coldstart --platform=gtk --iterations=3 --warmup=1 --duration=2 --diagnostics=false
+          ./repo perf --scenario=load100playlist --platform=egui --iterations=3 --warmup=1 --duration=2 --diagnostics=false
+
+      - name: Upload directional performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-reference-${{ github.sha }}
+          path: target/perf
+          retention-days: 30
+          if-no-files-found: error
+
   android-pye2e:
     name: Android UI E2E
     runs-on: ubuntu-latest

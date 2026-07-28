@@ -37,6 +37,12 @@ mobile-ui = [
   "dep:jni",
   "dep:winit",
 ]
+perf-tracing = [
+  "dep:tracing",
+  "dep:tracing-chrome",
+  "dep:tracing-flame",
+  "dep:tracing-subscriber",
+]
 
 [dependencies]
 bzip2 = "0.6.1"
@@ -72,12 +78,23 @@ rodio = { version = "0.22.2", optional = true, default-features = false, feature
   "wav",
 ] }
 serde_json = "1"
+tracing = { version = "0.1", optional = true }
+tracing-chrome = { version = "0.7", optional = true }
+tracing-flame = { version = "0.2", optional = true }
+tracing-subscriber = { version = "0.3", optional = true, features = ["registry"] }
 zbus = { version = "5.16", optional = true }
 tar = "0.4.46"
 winit = { version = "0.30.13", optional = true, default-features = false, features = [
   "android-native-activity",
 ] }
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[profile.profiling]
+inherits = "release"
+debug = 2
+strip = "none"
+lto = "thin"
+codegen-units = 1
 
 [patch.crates-io]
 winit = { git = "https://github.com/chrido/winit", rev = "90f1b4446f9bb0adea8990c773482a6e9d96d755" }

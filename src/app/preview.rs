@@ -4,6 +4,7 @@
 
 use crate::app::screenshot_scenarios::ScreenshotScenario;
 use crate::config::Config;
+use crate::skin::widget::VisMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FrontendKind {
@@ -42,6 +43,7 @@ pub struct PreviewOptions {
     pub screenshot_scenario: Option<ScreenshotScenario>,
     pub scale_factor: Option<String>,
     pub socket_port: Option<u16>,
+    pub visualization_enabled: Option<bool>,
     pub positional_paths: Vec<String>,
     pub frontend: FrontendKind,
 }
@@ -80,6 +82,13 @@ pub fn apply_preview_options_to_config(
             .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
             .clamp(1.0, 5.0);
         config.doublesize = config.scale_factor > 1.0;
+    }
+    if let Some(enabled) = options.visualization_enabled {
+        config.vis_mode = if enabled {
+            VisMode::Analyzer
+        } else {
+            VisMode::Off
+        };
     }
     Ok(())
 }

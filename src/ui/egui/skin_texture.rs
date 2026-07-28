@@ -71,6 +71,7 @@ pub fn render_main_player_color_image(
     skin: &DefaultSkin,
     state: &MainWindowRenderState,
 ) -> Result<egui::ColorImage, RenderError> {
+    let _perf_span = crate::perf_span!("main_player_render");
     let height = if state.shaded {
         MAIN_TITLEBAR_HEIGHT
     } else {
@@ -244,6 +245,7 @@ pub fn upload_color_image(
     name: impl Into<String>,
     image: egui::ColorImage,
 ) -> egui::TextureHandle {
+    let _perf_span = crate::perf_span!("texture_upload");
     ctx.load_texture(name, image, egui::TextureOptions::NEAREST)
 }
 

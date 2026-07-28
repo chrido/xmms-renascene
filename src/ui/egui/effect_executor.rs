@@ -167,6 +167,7 @@ pub(crate) fn flush_android_persistence(
     pending_messages: &mut Vec<String>,
     force: bool,
 ) {
+    let _perf_span = crate::perf_span!("persistence_flush");
     if !force && !super::android::is_foreground_activity(android.activity_generation()) {
         return;
     }

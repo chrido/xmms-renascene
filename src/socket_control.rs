@@ -221,6 +221,12 @@ pub fn parse_socket_command(value: &Value) -> Result<SocketCommand, String> {
             width: required_i32(value, "width")?,
             height: required_i32(value, "height")?,
         })),
+        "playlistposition" | "playlist_position" | "playlist_scroll" => {
+            Ok(playlist(PlaylistCommand::SetPosition(required_usize_any(
+                value,
+                &["position", "offset", "index"],
+            )?)))
+        }
         "equalizershow" | "equalizer_show" | "showequalizer" | "show_equalizer" | "eqshow" => {
             Ok(panel(PanelCommand::SetEqualizerVisibility(true)))
         }
@@ -303,6 +309,18 @@ fn required_i32(value: &Value, key: &str) -> Result<i32, String> {
     i32::try_from(number).map_err(|_| format!("field '{key}' is out of range"))
 }
 
+fn required_usize_any(value: &Value, keys: &[&str]) -> Result<usize, String> {
+    keys.iter()
+        .find_map(|key| value.get(key).and_then(Value::as_u64))
+        .and_then(|number| usize::try_from(number).ok())
+        .ok_or_else(|| {
+            format!(
+                "missing non-negative integer field '{}'",
+                keys.join("' or '")
+            )
+        })
+}
+
 fn required_i32_any(value: &Value, keys: &[&str]) -> Result<i32, String> {
     for key in keys {
         if value.get(key).is_some() {
@@ -348,6 +366,15 @@ mod tests {
         assert_eq!(
             parse_socket_command(&value).unwrap(),
             SocketCommand::App(AppCommand::Audio(AudioCommand::SetVolume(42)))
+        );
+    }
+
+    #[test]
+    fn parses_playlist_scroll_as_position_command() {
+        let value = json!({ "command": "playlist_scroll", "offset": 250 });
+        assert_eq!(
+            parse_socket_command(&value).unwrap(),
+            SocketCommand::App(AppCommand::Playlist(PlaylistCommand::SetPosition(250)))
         );
     }
 }

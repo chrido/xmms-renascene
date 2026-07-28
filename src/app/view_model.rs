@@ -190,6 +190,7 @@ pub fn formatted_current_title(state: &AppState) -> String {
 }
 
 pub fn playlist_view_model(state: &AppState) -> PlaylistViewModel {
+    let _perf_span = crate::perf_span!("playlist_view_model_build");
     let current_index = state.playlist.position();
     let rows = state
         .playlist
@@ -315,6 +316,7 @@ pub fn playlist_rows_render_state(
     width: i32,
     height: i32,
 ) -> PlaylistRowsRenderState {
+    let _perf_span = crate::perf_span!("playlist_rows_render_state");
     let view_model = playlist_view_model(state);
     PlaylistRowsRenderState {
         entries: view_model
@@ -344,6 +346,7 @@ pub fn playlist_rows_render_state(
 }
 
 pub fn playlist_footer_info(state: &AppState) -> String {
+    let _perf_span = crate::perf_span!("playlist_footer_aggregation");
     let mut selected_ms = 0_i64;
     let mut total_ms = 0_i64;
     let mut selected_more = false;

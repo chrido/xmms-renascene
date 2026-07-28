@@ -6,6 +6,9 @@ use xmms_renascene::egui_frontend;
 use xmms_renascene::ui;
 
 fn main() {
+    if let Err(err) = xmms_renascene::perf::initialize() {
+        eprintln!("xmms-rs: {err}");
+    }
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_help();
@@ -184,8 +187,18 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             };
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
+        } else if let Some(value) = arg.strip_prefix("--visualization=") {
+            options.visualization_enabled = Some(parse_enabled(value, "--visualization")?);
         } else if !arg.starts_with('-') {
             options.positional_paths.push(arg.to_string());
+        }
+
+        fn parse_enabled(value: &str, option: &str) -> Result<bool, String> {
+            match value {
+                "on" | "true" | "1" => Ok(true),
+                "off" | "false" | "0" => Ok(false),
+                _ => Err(format!("{option} requires on or off")),
+            }
         }
     }
     Ok(options)
@@ -286,6 +299,13 @@ mod tests {
     fn parses_socket_preview_option() {
         let options = parse_preview_options(&args(&["--socket", "48155"])).unwrap();
         assert_eq!(options.socket_port, Some(48155));
+    }
+
+    #[test]
+    fn parses_disabled_visualization_for_performance_scenarios() {
+        let options = parse_preview_options(&args(&["--visualization=off"])).unwrap();
+        assert_eq!(options.visualization_enabled, Some(false));
+        assert!(parse_preview_options(&args(&["--visualization=maybe"])).is_err());
     }
 
     #[test]
