@@ -15,7 +15,7 @@ use super::android_media::AndroidActivityGeneration;
 
 const SNAPSHOT_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 const POSITION_PERSIST_INTERVAL: Duration = Duration::from_secs(10);
-const POST_ROTATION_REPAINT_FRAMES: u8 = 3;
+const POST_ROTATION_REPAINT_FRAMES: u8 = 1;
 
 pub(crate) struct AndroidRuntime {
     snapshot_dirty: bool,
@@ -457,9 +457,9 @@ mod tests {
         let mut state = LayoutState::default();
 
         assert!(state.accept(AndroidLayoutOrientation::Portrait));
-        assert!(state.accept(AndroidLayoutOrientation::Portrait));
-        assert!(state.accept(AndroidLayoutOrientation::Portrait));
-        assert!(state.accept(AndroidLayoutOrientation::Portrait));
+        for _ in 0..POST_ROTATION_REPAINT_FRAMES {
+            assert!(state.accept(AndroidLayoutOrientation::Portrait));
+        }
         assert!(!state.accept(AndroidLayoutOrientation::Portrait));
         assert_eq!(
             state.orientation(),
@@ -470,9 +470,9 @@ mod tests {
             orientation: AndroidLayoutOrientation::Landscape,
         };
         assert!(state.accept(AndroidLayoutOrientation::Landscape));
-        assert!(state.accept(AndroidLayoutOrientation::Landscape));
-        assert!(state.accept(AndroidLayoutOrientation::Landscape));
-        assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        for _ in 0..POST_ROTATION_REPAINT_FRAMES {
+            assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        }
         assert!(!state.accept(AndroidLayoutOrientation::Landscape));
         assert_eq!(
             state.orientation(),

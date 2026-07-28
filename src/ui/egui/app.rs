@@ -1355,9 +1355,6 @@ impl EguiFrontendState {
             })
         });
         let update = self.android.observe_layout(snapshot);
-        if update.orientation_changed {
-            self.render_cache.playlist = None;
-        }
         match update.repaint {
             AndroidLayoutReadiness::None => {}
             AndroidLayoutReadiness::AwaitingReadiness => self
