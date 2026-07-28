@@ -31,7 +31,7 @@ use crate::app::preferences_model::{
 use crate::app::preview::{
     apply_preview_options_to_config, apply_preview_playlist, PreviewOptions,
 };
-use crate::app::store::{AppStore, DispatchResult};
+use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
@@ -750,6 +750,33 @@ struct GtkRuntimeTickContext {
     last_tick: Rc<Cell<Instant>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GtkTickRedraw {
+    main: bool,
+    playlist: bool,
+    equalizer: bool,
+}
+
+impl GtkTickRedraw {
+    fn from_changes(changes: StateChangeSet) -> Self {
+        Self {
+            main: changes.intersects(StateChangeSet::RENDER_MAIN),
+            playlist: changes.intersects(StateChangeSet::RENDER_PLAYLIST),
+            equalizer: changes.intersects(StateChangeSet::RENDER_EQUALIZER),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.main |= other.main;
+        self.playlist |= other.playlist;
+        self.equalizer |= other.equalizer;
+    }
+
+    fn any(self) -> bool {
+        self.main || self.playlist || self.equalizer
+    }
+}
+
 fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
     gtk::glib::timeout_add_local_once(delay, move || {
         let now = Instant::now();
@@ -779,7 +806,7 @@ fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
         }
         let (redraw, next_delay, mpris_events, mpris_properties) = {
             let mut state = context.main_state.borrow_mut();
-            let redraw = state.update_timer_tick(elapsed_ms);
+            let redraw = state.update_timer_tick_targets(elapsed_ms);
             let next_delay = state.runtime_tick_interval();
             let events = state.take_mpris_events();
             let properties = state.mpris_player_properties();
@@ -791,13 +818,34 @@ fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
         if handle_mpris_quit_request(&mpris_events, || context.app.quit()) {
             return;
         }
-        if redraw {
-            context.drawing_area.queue_draw();
-            context.panel_windows.playlist_area.queue_draw();
-            context.panel_windows.equalizer_area.queue_draw();
-        }
+        queue_gtk_tick_redraw(
+            redraw,
+            &context.drawing_area,
+            &context.panel_windows,
+            &context.main_state.borrow(),
+        );
         schedule_gtk_runtime_tick(context, next_delay);
     });
+}
+
+fn queue_gtk_tick_redraw(
+    redraw: GtkTickRedraw,
+    drawing_area: &gtk::DrawingArea,
+    panel_windows: &PanelWindows,
+    state: &MainWindowUiState,
+) {
+    let playlist_docked = state.panel_state(PanelKind::Playlist).is_docked_visible();
+    let equalizer_docked = state.panel_state(PanelKind::Equalizer).is_docked_visible();
+    if redraw.main || (redraw.playlist && playlist_docked) || (redraw.equalizer && equalizer_docked)
+    {
+        drawing_area.queue_draw();
+    }
+    if redraw.playlist && !playlist_docked {
+        panel_windows.playlist_area.queue_draw();
+    }
+    if redraw.equalizer && !equalizer_docked {
+        panel_windows.equalizer_area.queue_draw();
+    }
 }
 
 fn poll_socket_control_gtk(
@@ -7179,16 +7227,16 @@ impl MainWindowUiState {
         });
     }
 
-    fn poll_duration_index_results(&mut self) -> bool {
-        let mut changed = false;
+    fn poll_duration_index_results(&mut self) -> GtkTickRedraw {
+        let mut redraw = GtkTickRedraw::default();
         while let Ok(result) = self.duration_index_receiver.try_recv() {
             let dispatch = self.store.apply_duration_index_result(result);
-            changed |= !dispatch.changes.is_empty();
+            redraw.merge(GtkTickRedraw::from_changes(dispatch.changes));
             for effect in dispatch.effects {
                 self.apply_store_effect(effect);
             }
         }
-        changed
+        redraw
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {
@@ -8748,8 +8796,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
-        let duration_changed = self.poll_duration_index_results();
-        self.poll_playback_backend();
+        self.update_timer_tick_targets(elapsed_ms).any()
+    }
+
+    fn update_timer_tick_targets(&mut self, elapsed_ms: u32) -> GtkTickRedraw {
+        let mut redraw = self.poll_duration_index_results();
+        redraw.merge(self.poll_playback_backend());
         let fading = self.update_stop_fade(elapsed_ms);
         let eof_waiting = self.update_pending_eof_advance(elapsed_ms);
         let title = self
@@ -8762,9 +8814,14 @@ impl MainWindowUiState {
             !self.is_shaded(),
             Duration::from_millis(u64::from(elapsed_ms)),
         );
+        redraw.main |= fading || marquee_changed;
+        if eof_waiting {
+            redraw.main = true;
+            redraw.playlist = true;
+        }
         if self.store.state().player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
-            return duration_changed || fading || eof_waiting || marquee_changed;
+            return redraw;
         }
 
         if self.playback_backend.is_none() {
@@ -8775,6 +8832,7 @@ impl MainWindowUiState {
                 .visualization_data_valid()
                 .then(|| *self.store.state().player.visualization_data());
             let result = self.store.tick_playback_position(i64::from(elapsed_ms));
+            redraw.merge(GtkTickRedraw::from_changes(result.changes));
             for effect in result.effects {
                 self.apply_store_effect(effect);
             }
@@ -8782,6 +8840,7 @@ impl MainWindowUiState {
                 let result = self
                     .store
                     .handle_playback_event(PlaybackEvent::Spectrum(data));
+                redraw.merge(GtkTickRedraw::from_changes(result.changes));
                 for effect in result.effects {
                     self.apply_store_effect(effect);
                 }
@@ -8801,7 +8860,8 @@ impl MainWindowUiState {
                 self.visualization_refresh_divisor() as usize,
             );
         }
-        true
+        redraw.main = true;
+        redraw
     }
 
     fn runtime_tick_interval(&self) -> Duration {
@@ -8873,9 +8933,10 @@ impl MainWindowUiState {
         true
     }
 
-    fn poll_playback_backend(&mut self) {
+    fn poll_playback_backend(&mut self) -> GtkTickRedraw {
+        let mut redraw = GtkTickRedraw::default();
         let Some(backend) = self.playback_backend.as_ref().map(Rc::clone) else {
-            return;
+            return redraw;
         };
         let spectrum_layout = if self.visualization.mode() == VisMode::Analyzer
             && self.visualization.analyzer_style() == VisAnalyzerStyle::Bars
@@ -8904,6 +8965,7 @@ impl MainWindowUiState {
                         backend_ready = true;
                     }
                     let result = self.store.handle_playback_event(event);
+                    redraw.merge(GtkTickRedraw::from_changes(result.changes));
                     for effect in result.effects {
                         self.apply_store_effect(effect);
                     }
@@ -8913,6 +8975,8 @@ impl MainWindowUiState {
                 }
                 if end_of_stream {
                     self.playlist_eof_reached();
+                    redraw.main = true;
+                    redraw.playlist = true;
                 }
             }
             Err(err) => eprintln!("xmms-rs: failed to poll playback backend: {err}"),
@@ -8924,6 +8988,7 @@ impl MainWindowUiState {
         let result = self
             .store
             .handle_playback_event(PlaybackEvent::StreamInfo(stream_info));
+        redraw.merge(GtkTickRedraw::from_changes(result.changes));
         for effect in result.effects {
             self.apply_store_effect(effect);
         }
@@ -8933,6 +8998,7 @@ impl MainWindowUiState {
                     .handle_playback_event(crate::player::PlaybackEvent::DurationChanged(Some(
                         duration_ms,
                     )));
+            redraw.merge(GtkTickRedraw::from_changes(result.changes));
             for effect in result.effects {
                 self.apply_store_effect(effect);
             }
@@ -8946,6 +9012,7 @@ impl MainWindowUiState {
                     let result = self
                         .store
                         .update_playback_position_from_runtime(position_ms.max(target_ms));
+                    redraw.merge(GtkTickRedraw::from_changes(result.changes));
                     for effect in result.effects {
                         self.apply_store_effect(effect);
                     }
@@ -8954,11 +9021,13 @@ impl MainWindowUiState {
                 let result = self
                     .store
                     .update_playback_position_from_runtime(position_ms);
+                redraw.merge(GtkTickRedraw::from_changes(result.changes));
                 for effect in result.effects {
                     self.apply_store_effect(effect);
                 }
             }
         }
+        redraw
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
@@ -9888,6 +9957,24 @@ mod tests {
         state.playback_transition = PlaybackTransitionState::Idle;
         state.store.state_mut().player.pause();
         assert_eq!(state.runtime_tick_interval(), GTK_PAUSED_TICK);
+    }
+
+    #[test]
+    fn gtk_playback_tick_dirties_only_main_render_target() {
+        let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
+            vis_mode: VisMode::Off,
+            ..Config::default()
+        }));
+        state.store.state_mut().player.mark_playing();
+
+        assert_eq!(
+            state.update_timer_tick_targets(250),
+            GtkTickRedraw {
+                main: true,
+                playlist: false,
+                equalizer: false,
+            }
+        );
     }
 
     #[test]
