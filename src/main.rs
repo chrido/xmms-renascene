@@ -187,6 +187,15 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             };
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
+        } else if let Some(value) = arg.strip_prefix("--load-playlist=") {
+            options.load_playlist_path = Some(value.to_string());
+            options.show_playlist = true;
+        } else if arg == "--load-playlist" {
+            let Some(value) = iter.next() else {
+                return Err("--load-playlist requires PATH".to_string());
+            };
+            options.load_playlist_path = Some(value.to_string());
+            options.show_playlist = true;
         } else if let Some(value) = arg.strip_prefix("--visualization=") {
             options.visualization_enabled = Some(parse_enabled(value, "--visualization")?);
         } else if !arg.starts_with('-') {
@@ -315,6 +324,13 @@ mod tests {
             options.positional_paths,
             vec!["/tmp/one.wav".to_string(), "/tmp/two.wav".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_saved_playlist_path() {
+        let options = parse_preview_options(&args(&["--load-playlist=/tmp/perf.m3u"])).unwrap();
+        assert_eq!(options.load_playlist_path.as_deref(), Some("/tmp/perf.m3u"));
+        assert!(options.show_playlist);
     }
 
     #[test]

@@ -359,4 +359,37 @@ mod tests {
         assert!(state.config.playlist_visible);
         assert!(state.config.equalizer_visible);
     }
+
+    #[test]
+    fn saved_playlist_restore_preserves_order_and_current_position() {
+        let root = std::env::temp_dir().join(format!(
+            "xmms-session-restore-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let config_path = root.join("config");
+        let playlist_path = root.join("playlist.m3u");
+        Config {
+            playlist_position: 1,
+            ..Config::default()
+        }
+        .save_to_file(&config_path)
+        .unwrap();
+        fs::write(
+            &playlist_path,
+            "#EXTM3U\n#EXTINF:60,First\nfirst.ogg\n#EXTINF:61,Second\nsecond.ogg\n",
+        )
+        .unwrap();
+
+        let state = load_saved_state(&config_path, &playlist_path, false).unwrap();
+
+        assert_eq!(state.playlist.entries()[0].title, "First");
+        assert_eq!(state.playlist.entries()[1].title, "Second");
+        assert_eq!(state.playlist.position(), Some(1));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

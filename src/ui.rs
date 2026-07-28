@@ -28,7 +28,9 @@ use crate::app::playlist_actions::{
 use crate::app::preferences_model::{
     normalize_title_format, set_scale_factor as set_config_scale_factor, title_format_preview,
 };
-use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
+use crate::app::preview::{
+    apply_preview_options_to_config, apply_preview_playlist, PreviewOptions,
+};
 use crate::app::store::{AppStore, DispatchResult};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
@@ -1007,12 +1009,7 @@ fn preview_state_from_app_state(
         initial_state = AppState::default();
     }
     apply_preview_options_to_config(&mut initial_state.config, &options)?;
-    for path in &options.positional_paths {
-        initial_state
-            .playlist
-            .add_location(path)
-            .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
-    }
+    apply_preview_playlist(&mut initial_state, &options)?;
     if let Some(scenario) = options.screenshot_scenario {
         scenario.apply_to_app_state(&mut initial_state);
     }

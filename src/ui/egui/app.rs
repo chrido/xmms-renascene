@@ -15,7 +15,9 @@ use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
 use crate::app::playlist_actions::playlist_row_click_commands;
 use crate::app::preferences_model::{clamped_scale_factor, normalize_preferences_config};
-use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
+use crate::app::preview::{
+    apply_preview_options_to_config, apply_preview_playlist, PreviewOptions,
+};
 use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
@@ -244,12 +246,7 @@ impl EguiFrontendState {
             app_state = AppState::default();
         }
         apply_preview_options_to_config(&mut app_state.config, &options)?;
-        for path in &options.positional_paths {
-            app_state
-                .playlist
-                .add_location(path)
-                .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
-        }
+        apply_preview_playlist(&mut app_state, &options)?;
         app_state.ui.preferences_visible = options.open_preferences;
         let active_skin = load_skin_from_config(&app_state)?;
         let skin_entries = discover_runtime_skins();

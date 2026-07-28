@@ -872,7 +872,14 @@ impl Playlist {
     }
 
     pub fn load_m3u(contents: &str, base_dir: &Path) -> Self {
+        let _perf_span = crate::perf_span!("saved_playlist_parse");
         let mut playlist = Self::new();
+        playlist.entries.reserve(
+            contents
+                .lines()
+                .filter(|line| Self::is_playlist_entry_line(line))
+                .count(),
+        );
         let mut pending_length = -1_i64;
         let mut pending_title: Option<String> = None;
 
@@ -901,16 +908,20 @@ impl Playlist {
             if pending_length >= 0 {
                 entry.length_ms = pending_length;
             }
-            if let Some(title) = pending_title.as_ref().filter(|s| !s.is_empty()) {
-                entry.title = title.clone();
+            if let Some(title) = pending_title.take().filter(|s| !s.is_empty()) {
+                entry.title = title;
             }
             playlist.push_entry(entry);
 
             pending_length = -1;
-            pending_title = None;
         }
 
         playlist
+    }
+
+    fn is_playlist_entry_line(raw: &str) -> bool {
+        let line = raw.trim();
+        !line.is_empty() && !line.starts_with('#')
     }
 
     pub fn save_m3u_file(&self, path: &Path) -> io::Result<()> {
@@ -1379,6 +1390,21 @@ mod tests {
 
         assert_eq!(playlist.len(), 2);
         assert!(playlist.queued_indices().is_empty());
+    }
+
+    #[test]
+    fn large_saved_playlist_load_preserves_order_with_linear_storage() {
+        let contents = (0..10_000)
+            .map(|index| format!("#EXTINF:60,Track {index}\ntrack-{index}.ogg"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let playlist = Playlist::load_m3u(&contents, Path::new("/tmp"));
+
+        assert_eq!(playlist.len(), 10_000);
+        assert_eq!(playlist.entries()[0].title, "Track 0");
+        assert_eq!(playlist.entries()[9_999].title, "Track 9999");
+        assert!(playlist.entries.capacity() >= 10_000);
     }
 
     #[test]

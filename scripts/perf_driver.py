@@ -53,7 +53,7 @@ def app_command(args: argparse.Namespace, port: int) -> list[str]:
         str(port),
     ]
     if args.playlist:
-        command.extend(("--playlist", args.playlist))
+        command.append(f"--load-playlist={args.playlist}")
     if args.audio and not args.playlist:
         command.append(args.audio)
     if args.scenario in {"scroll10kplaylist", "layoutchange"}:
