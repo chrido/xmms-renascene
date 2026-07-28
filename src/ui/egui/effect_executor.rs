@@ -13,7 +13,7 @@ use crate::app_state::AppState;
 use crate::playback::model::PlayerState;
 
 #[cfg(target_os = "android")]
-use super::android_runtime::AndroidRuntime;
+use super::android_runtime::{AndroidPersistenceDue, AndroidRuntime};
 use super::playback_runtime::PlaybackRuntime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,13 +145,17 @@ pub(crate) fn execute_platform_effect(
 
 #[cfg(target_os = "android")]
 pub(crate) fn apply_android_post_dispatch(android: &mut AndroidRuntime, changes: StateChangeSet) {
-    let persistent_changes = StateChangeSet::PLAYER
-        | StateChangeSet::PLAYLIST
+    let position_only =
+        StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN;
+    if changes == position_only {
+        android.mark_position_persistence();
+    }
+    let persistent_changes = StateChangeSet::PLAYLIST
         | StateChangeSet::EQUALIZER
         | StateChangeSet::PANELS
         | StateChangeSet::SKIN
         | StateChangeSet::CONFIG;
-    if changes.intersects(persistent_changes) {
+    if changes != position_only && changes.intersects(persistent_changes) {
         android.mark_persistence();
     }
     if changes.intersects(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST) {
@@ -171,14 +175,26 @@ pub(crate) fn flush_android_persistence(
     if !force && !super::android::is_foreground_activity(android.activity_generation()) {
         return;
     }
-    if !android.take_persistence_due(force) {
+    let Some(due) = android.take_persistence_due(force) else {
         return;
-    }
+    };
     let playback_position_ms = (state.player.state() != PlayerState::Stopped)
         .then(|| playback.position_ms())
         .flatten();
-    if let Err(error) = super::android::persist_app_state(state, playback_position_ms) {
-        android.mark_persistence();
+    let result = match due {
+        AndroidPersistenceDue::Snapshot => {
+            super::android::persist_app_state(state, playback_position_ms)
+        }
+        AndroidPersistenceDue::Position => super::android::persist_playback_position(
+            state,
+            playback_position_ms.unwrap_or(state.config.playback_position_ms),
+        ),
+    };
+    if let Err(error) = result {
+        match due {
+            AndroidPersistenceDue::Snapshot => android.mark_persistence(),
+            AndroidPersistenceDue::Position => android.mark_position_persistence(),
+        }
         crate::app_log_error!(frontend, "failed to save Android session state", error);
         let message = format!("failed to save Android session state: {error}");
         if !pending_messages.contains(&message) {

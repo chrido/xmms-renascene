@@ -34,6 +34,17 @@ pub fn persist_app_state(state: &AppState, playback_position_ms: Option<i64>) ->
     save_fallback_snapshot(&snapshot, &config_path, &playlist_path)
 }
 
+pub fn persist_playback_position(state: &AppState, playback_position_ms: i64) -> io::Result<()> {
+    let _state_io = STATE_IO
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let (config_path, _) = fallback_state_paths(&default_config_dir());
+    let mut config = state.persistence_snapshot().config;
+    config.playback_position_ms = playback_position_ms.max(0);
+    config.save_to_file(&config_path)
+}
+
 pub(crate) fn checkpoint_playback_position(
     backend: &RodioBackend,
     playlist_position: impl FnOnce() -> Option<usize>,
