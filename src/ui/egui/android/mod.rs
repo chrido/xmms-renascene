@@ -60,7 +60,9 @@ pub use media_session::{
     complete_media_control, shared_playback_backend, sync_media_playlist,
     update_playback_notification,
 };
-pub use persistence::{persist_app_state, persist_playback_position};
+pub use persistence::{
+    flush_persistence_writer, persist_app_state, persist_playback_position, take_persistence_error,
+};
 pub use picker::{open, save_equalizer_preset};
 pub use widgets::refresh_player_widgets;
 

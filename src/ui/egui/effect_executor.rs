@@ -175,7 +175,25 @@ pub(crate) fn flush_android_persistence(
     if !force && !super::android::is_foreground_activity(android.activity_generation()) {
         return;
     }
+    if let Err(error) = super::android::take_persistence_error() {
+        surface_android_persistence_error(
+            android,
+            pending_messages,
+            AndroidPersistenceDue::Snapshot,
+            error,
+        );
+    }
     let Some(due) = android.take_persistence_due(force) else {
+        if force {
+            if let Err(error) = super::android::flush_persistence_writer() {
+                surface_android_persistence_error(
+                    android,
+                    pending_messages,
+                    AndroidPersistenceDue::Snapshot,
+                    error,
+                );
+            }
+        }
         return;
     };
     let playback_position_ms = (state.player.state() != PlayerState::Stopped)
@@ -190,16 +208,32 @@ pub(crate) fn flush_android_persistence(
             playback_position_ms.unwrap_or(state.config.playback_position_ms),
         ),
     };
-    if let Err(error) = result {
-        match due {
-            AndroidPersistenceDue::Snapshot => android.mark_persistence(),
-            AndroidPersistenceDue::Position => android.mark_position_persistence(),
+    match result {
+        Ok(()) if force => {
+            if let Err(error) = super::android::flush_persistence_writer() {
+                surface_android_persistence_error(android, pending_messages, due, error);
+            }
         }
-        crate::app_log_error!(frontend, "failed to save Android session state", error);
-        let message = format!("failed to save Android session state: {error}");
-        if !pending_messages.contains(&message) {
-            pending_messages.push(message);
-        }
+        Ok(()) => {}
+        Err(error) => surface_android_persistence_error(android, pending_messages, due, error),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn surface_android_persistence_error(
+    android: &mut AndroidRuntime,
+    pending_messages: &mut Vec<String>,
+    due: AndroidPersistenceDue,
+    error: std::io::Error,
+) {
+    match due {
+        AndroidPersistenceDue::Snapshot => android.mark_persistence(),
+        AndroidPersistenceDue::Position => android.mark_position_persistence(),
+    }
+    crate::app_log_error!(frontend, "failed to save Android session state", error);
+    let message = format!("failed to save Android session state: {error}");
+    if !pending_messages.contains(&message) {
+        pending_messages.push(message);
     }
 }
 
