@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use jni::objects::{JObject, JValue};
 use jni::JNIEnv;
@@ -52,9 +53,16 @@ struct AndroidMediaNotification {
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<AndroidMediaPlaylistState>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
+static LAST_POSITION_PUBLICATION: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+const POSITION_PUBLICATION_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn reset_notification() {
     *MEDIA_NOTIFICATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *LAST_POSITION_PUBLICATION
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
@@ -415,7 +423,7 @@ pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
         update_service_from_backend(env, service);
     }
     persistence::checkpoint_playback_position(&backend, current_media_item_index);
-    update_service_position_from_backend(env, service, &backend);
+    update_service_position_if_due(env, service, &backend);
 }
 
 pub(crate) fn handle_media_control(
@@ -556,6 +564,24 @@ fn update_service_position_from_backend(
         "(J)V",
         &[JValue::Long(position_ms)],
     );
+}
+
+fn update_service_position_if_due(
+    env: &mut JNIEnv<'_>,
+    service: &JObject<'_>,
+    backend: &RodioBackend,
+) {
+    let now = Instant::now();
+    let mut last = LAST_POSITION_PUBLICATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if last.is_some_and(|last| now.saturating_duration_since(last) < POSITION_PUBLICATION_INTERVAL)
+    {
+        return;
+    }
+    update_service_position_from_backend(env, service, backend);
+    *last = Some(now);
 }
 
 fn update_service_from_backend(env: &mut JNIEnv<'_>, service: &JObject<'_>) {

@@ -75,6 +75,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
     private static final int CONTROL_SEEK = 5;
     static final int CONTROL_STOP = 6;
     private static final int CONTROL_PLAY_MEDIA_ITEM = 7;
+    private static final long PLAYING_POLL_INTERVAL_MS = 500;
+    private static final long PAUSED_POLL_INTERVAL_MS = 1000;
 
     /** Playback state values received from the Rust JNI layer via applyNativePlaybackState(). */
     private static final int STATE_STOPPED = 0;
@@ -120,7 +122,11 @@ public final class XmmsPlaybackService extends MediaBrowserService {
             if (playbackState != STATE_STOPPED) {
                 nativePollPlayback();
             }
-            playbackHandler.postDelayed(this, 250);
+            playbackHandler.postDelayed(
+                    this,
+                    playbackState == STATE_PLAYING
+                            ? PLAYING_POLL_INTERVAL_MS
+                            : PAUSED_POLL_INTERVAL_MS);
         }
     };
 
