@@ -110,6 +110,7 @@ use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(20);
+const POSITION_REPAINT_INTERVAL: Duration = Duration::from_millis(250);
 const DURATION_INDEX_BATCH_SIZE: usize = 16;
 
 #[cfg(any(target_os = "android", test))]
@@ -510,15 +511,11 @@ impl EguiFrontendState {
     }
 
     fn tick_visualization(&mut self) -> bool {
-        if self.controller.state().player.state() != PlayerState::Playing {
+        if !self.visualization_should_animate() {
             self.playback.visualization_tick_counter = 0;
             return false;
         }
 
-        self.playback.visualization_tick_counter += 1;
-        if self.playback.visualization_tick_counter < self.visualization_refresh_divisor() {
-            return false;
-        }
         self.playback.visualization_tick_counter = 0;
 
         let data = {
@@ -532,6 +529,29 @@ impl EguiFrontendState {
             self.visualization_refresh_divisor() as usize,
         );
         true
+    }
+
+    fn visualization_should_animate(&self) -> bool {
+        if self.controller.state().player.state() != PlayerState::Playing
+            || self.playback.visualization.mode() == VisMode::Off
+        {
+            return false;
+        }
+        #[cfg(target_os = "android")]
+        if !super::android::is_foreground_activity(self.android.activity_generation()) {
+            return false;
+        }
+        true
+    }
+
+    fn playback_repaint_interval(&self) -> Option<Duration> {
+        if self.controller.state().player.state() != PlayerState::Playing {
+            return None;
+        }
+        if self.visualization_should_animate() {
+            return Some(VISUALIZER_REPAINT_INTERVAL * self.visualization_refresh_divisor() as u32);
+        }
+        Some(POSITION_REPAINT_INTERVAL)
     }
 
     fn poll_socket_control(&mut self, ctx: &egui::Context) {
@@ -872,10 +892,10 @@ impl EguiFrontendState {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
-        if self.controller.state().player.state() != PlayerState::Playing {
+        let Some(repaint_interval) = self.playback_repaint_interval() else {
             return;
-        }
-        ctx.request_repaint_after(VISUALIZER_REPAINT_INTERVAL);
+        };
+        ctx.request_repaint_after(repaint_interval);
         let visualizer_changed = self.tick_visualization();
         let elapsed_ms = elapsed.as_millis().min(i64::MAX as u128) as i64;
         if elapsed_ms == 0 {
@@ -3925,6 +3945,29 @@ mod tests {
 
         assert!(!app.runtime.repaint_requested());
         assert!(app.runtime.dirty_targets().is_empty());
+    }
+
+    #[test]
+    fn egui_playback_repaint_rate_adapts_to_visible_work() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        assert_eq!(app.playback_repaint_interval(), None);
+
+        app.dispatch(PlaylistCommand::AddUris(vec![
+            "file:///music/repaint.ogg".to_string()
+        ]));
+        app.dispatch(PlaylistCommand::SetPosition(0));
+        app.dispatch(PlayerCommand::StartCurrentTrack);
+        app.controller_mut().state_mut().config.vis_refresh_divisor = 4;
+        assert_eq!(
+            app.playback_repaint_interval(),
+            Some(Duration::from_millis(80))
+        );
+
+        app.playback.visualization.set_mode(VisMode::Off);
+        assert_eq!(
+            app.playback_repaint_interval(),
+            Some(POSITION_REPAINT_INTERVAL)
+        );
     }
 
     #[test]

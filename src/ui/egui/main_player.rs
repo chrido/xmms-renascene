@@ -27,6 +27,8 @@ use super::skin_texture::{
 };
 use super::ui_state::MainPressed;
 
+const MARQUEE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(84);
+
 pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
     &view_model.title
 }
@@ -47,8 +49,7 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         .title_marquee
         .is_scrolling(view_model.player_state, !view_model.shaded)
     {
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(50));
+        ui.ctx().request_repaint_after(MARQUEE_REPAINT_INTERVAL);
     }
     let config = &app.controller().state().config;
     let mut render_state = main_render_state(
