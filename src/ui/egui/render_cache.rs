@@ -22,7 +22,7 @@ pub(crate) struct PlaylistTextureKey {
     pub title_preferences_hash: u64,
     pub font_hash: u64,
     pub show_numbers: bool,
-    pub playback_time_visible: bool,
+    pub playback_time_second: Option<i64>,
     pub render_scale_bits: u64,
 }
 
@@ -54,7 +54,8 @@ impl PlaylistTextureKey {
             title_preferences_hash: title_preferences.finish(),
             font_hash: font.finish(),
             show_numbers: state.config.show_numbers_in_pl,
-            playback_time_visible: state.player.state() != PlayerState::Stopped,
+            playback_time_second: (state.player.state() != PlayerState::Stopped)
+                .then_some(state.config.playback_position_ms.max(0) / 1_000),
             render_scale_bits: render_scale.to_bits(),
         }
     }
@@ -151,10 +152,16 @@ mod tests {
     fn playlist_texture_key_uses_revisions_not_rendered_rows() {
         let mut state = AppState::default();
         state.playlist.add_timed_uri("one.mp3", "One", 1_000);
+        state.player.mark_playing();
         let key = PlaylistTextureKey::from_state(&state, 1, 0, 275, 232, 1.0);
 
         state.config.playback_position_ms = 500;
         assert_eq!(
+            key,
+            PlaylistTextureKey::from_state(&state, 1, 0, 275, 232, 1.0)
+        );
+        state.config.playback_position_ms = 1_000;
+        assert_ne!(
             key,
             PlaylistTextureKey::from_state(&state, 1, 0, 275, 232, 1.0)
         );

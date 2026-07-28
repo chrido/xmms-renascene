@@ -1163,6 +1163,7 @@ struct GtkPlaylistRenderKey {
     title_preferences_hash: u64,
     font_hash: u64,
     show_numbers: bool,
+    playback_time_second: Option<i64>,
     scrollbar_dragging: bool,
     search_hash: u64,
     menu: Option<PlaylistMenuRenderKind>,
@@ -5441,6 +5442,7 @@ pub(crate) struct MainWindowUiState {
     last_jump_time_ms: Option<i64>,
     visualization: Visualization,
     visualization_tick_counter: i32,
+    playlist_footer_second: Option<i64>,
     main_pointer: MainPointer,
     title_marquee: TitleMarquee,
 }
@@ -5506,6 +5508,7 @@ impl MainWindowUiState {
             last_jump_time_ms: None,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
+            playlist_footer_second: None,
             main_pointer: MainPointer::default(),
             title_marquee: TitleMarquee::default(),
         };
@@ -6336,6 +6339,7 @@ impl MainWindowUiState {
             title_preferences_hash: title_preferences.finish(),
             font_hash: font.finish(),
             show_numbers: state.config.show_numbers_in_pl,
+            playback_time_second: self.playlist_footer_display_second(),
             scrollbar_dragging: matches!(
                 self.playlist_ui.pointer,
                 PlaylistPointer::DraggingScrollbar { .. }
@@ -6343,6 +6347,19 @@ impl MainWindowUiState {
             search_hash: search.finish(),
             menu: self.playlist_menu().map(PlaylistMenuKind::render_kind),
             menu_hover: self.playlist_menu_hover(),
+        }
+    }
+
+    fn playlist_footer_display_second(&self) -> Option<i64> {
+        (self.store.state().player.state() != PlayerState::Stopped)
+            .then(|| (self.display_time_ms() / 1_000).max(0))
+    }
+
+    fn update_playlist_footer_redraw(&mut self, redraw: &mut GtkTickRedraw) {
+        let footer_second = self.playlist_footer_display_second();
+        if footer_second != self.playlist_footer_second {
+            self.playlist_footer_second = footer_second;
+            redraw.playlist = true;
         }
     }
 
@@ -8986,6 +9003,7 @@ impl MainWindowUiState {
         }
         if self.store.state().player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
+            self.update_playlist_footer_redraw(&mut redraw);
             return redraw;
         }
 
@@ -9026,6 +9044,7 @@ impl MainWindowUiState {
             );
         }
         redraw.main = true;
+        self.update_playlist_footer_redraw(&mut redraw);
         redraw
     }
 
@@ -10131,6 +10150,7 @@ mod tests {
             ..Config::default()
         }));
         state.store.state_mut().player.mark_playing();
+        state.update_timer_tick_targets(250);
 
         assert_eq!(
             state.update_timer_tick_targets(250),
@@ -10140,6 +10160,7 @@ mod tests {
                 equalizer: false,
             }
         );
+        assert!(state.update_timer_tick_targets(500).playlist);
     }
 
     #[test]
