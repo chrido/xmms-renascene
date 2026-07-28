@@ -70,14 +70,25 @@ impl PreferencesViewportState {
     }
 }
 
+fn android_skins_page_visible(state: &PreferencesViewportState) -> bool {
+    !state.android_show_categories && state.selected_page == PreferencesPage::Skins
+}
+
 pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
     apply_pending_viewport_state(app);
     sync_viewport_state_from_app(app);
 
     #[cfg(target_os = "android")]
     {
-        let skin_entries = app.skin_entries.clone();
         let state = Arc::clone(&app.ui.preferences_viewport);
+        let skins_page_visible = {
+            let state = state.lock().expect("preferences viewport state poisoned");
+            android_skins_page_visible(&state)
+        };
+        if skins_page_visible {
+            app.ensure_runtime_skins();
+        }
+        let skin_entries = app.skin_entries.clone();
         let mut state = state.lock().expect("preferences viewport state poisoned");
         let before = state.config.clone();
         show_android_preferences(ctx, &mut state, &skin_entries, app.android.ready_layout());
@@ -1111,6 +1122,19 @@ mod tests {
         assert!(android_page_shows_reset(
             PreferencesPage::VisualizationPlugins
         ));
+    }
+
+    #[test]
+    fn android_skin_discovery_waits_until_the_skins_page_is_visible() {
+        let mut state =
+            PreferencesViewportState::new(&Config::default(), PreferencesPage::Skins, true);
+        assert!(!android_skins_page_visible(&state));
+
+        state.android_show_categories = false;
+        assert!(android_skins_page_visible(&state));
+
+        state.selected_page = PreferencesPage::Options;
+        assert!(!android_skins_page_visible(&state));
     }
 
     #[test]

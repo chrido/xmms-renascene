@@ -1560,7 +1560,7 @@ impl EguiFrontendState {
         self.skin_discovery_complete = true;
     }
 
-    fn ensure_runtime_skins(&mut self) {
+    pub(crate) fn ensure_runtime_skins(&mut self) {
         if !self.skin_discovery_complete {
             self.refresh_runtime_skins();
         }
