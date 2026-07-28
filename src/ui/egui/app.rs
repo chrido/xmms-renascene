@@ -188,6 +188,7 @@ struct DetachedViewportState {
 
 pub struct EguiFrontendState {
     pub skin_entries: Vec<SkinEntry>,
+    skin_discovery_complete: bool,
     pub ui: EguiUiState,
     detached_viewports: Arc<Mutex<DetachedViewportState>>,
     pub render_cache: RenderCache,
@@ -249,7 +250,7 @@ impl EguiFrontendState {
         apply_preview_playlist(&mut app_state, &options)?;
         app_state.ui.preferences_visible = options.open_preferences;
         let active_skin = load_skin_from_config(&app_state)?;
-        let skin_entries = discover_runtime_skins();
+        let skin_entries = Vec::new();
         let scale_factor = app_state.config.scale_factor as f32;
         let persistence_config = app_state.persistence_snapshot().config;
         let ui = EguiUiState::new(
@@ -306,6 +307,7 @@ impl EguiFrontendState {
         }
         let mut state = Self {
             skin_entries,
+            skin_discovery_complete: false,
             ui,
             detached_viewports,
             render_cache: RenderCache::default(),
@@ -1545,9 +1547,15 @@ impl EguiFrontendState {
         self.render_cache.invalidate();
     }
 
-    #[cfg(target_os = "android")]
     pub(crate) fn refresh_runtime_skins(&mut self) {
         self.skin_entries = discover_runtime_skins();
+        self.skin_discovery_complete = true;
+    }
+
+    fn ensure_runtime_skins(&mut self) {
+        if !self.skin_discovery_complete {
+            self.refresh_runtime_skins();
+        }
     }
 
     #[cfg(target_os = "android")]
@@ -3107,6 +3115,7 @@ pub(crate) fn run_egui_frontend_android(
 
 #[cfg(not(target_os = "android"))]
 fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    app.ensure_runtime_skins();
     let mut open = app.skin_browser_open();
     egui::Window::new("Skin selector")
         .open(&mut open)
@@ -3114,12 +3123,7 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
         .default_width(360.0)
         .show(ctx, |ui| {
             if ui.button("Refresh").clicked() {
-                #[cfg(target_os = "android")]
                 app.refresh_runtime_skins();
-                #[cfg(not(target_os = "android"))]
-                {
-                    app.skin_entries = discover_runtime_skins();
-                }
             }
             ui.horizontal(|ui| {
                 if ui.button("Default").clicked() {
@@ -3189,7 +3193,7 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
     };
     match import_skin_to_user_dir(&path) {
         Ok(imported) => {
-            app.skin_entries = discover_runtime_skins();
+            app.refresh_runtime_skins();
             let entry = SkinEntry {
                 name: imported
                     .file_stem()
@@ -3224,7 +3228,7 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
 fn import_skin_path(app: &mut EguiFrontendState, path: &Path) {
     match import_skin_to_user_dir(path) {
         Ok(imported) => {
-            app.skin_entries = discover_runtime_skins();
+            app.refresh_runtime_skins();
             let entry = SkinEntry {
                 name: imported
                     .file_stem()
@@ -3844,6 +3848,22 @@ mod tests {
             shared_playlist_footer_info(app.controller().state()),
             "0:00/0:42"
         );
+    }
+
+    #[test]
+    fn egui_startup_defers_skin_directory_discovery() {
+        let app = EguiFrontendState::new(PreviewOptions {
+            reset: true,
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        assert!(app.skin_entries.is_empty());
+        assert!(!app.skin_discovery_complete);
+        assert!(app
+            .active_skin
+            .get(crate::skin::SkinPixmapKind::Main)
+            .is_some());
     }
 
     #[test]
