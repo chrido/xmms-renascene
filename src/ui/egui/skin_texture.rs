@@ -446,6 +446,8 @@ mod tests {
         let skin = DefaultSkin::load_bundled().unwrap();
         let rows = PlaylistRowsRenderState {
             entries: Vec::new(),
+            first_index: 0,
+            total_entries: 0,
             scroll_offset: 0,
             scrollbar_dragging: false,
             search_query: None,

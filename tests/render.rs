@@ -259,6 +259,8 @@ fn renders_playlist_rows_with_selected_background() {
                             queue_position: None,
                         },
                     ],
+                    first_index: 0,
+                    total_entries: 2,
                     scroll_offset: 0,
                     scrollbar_dragging: false,
                     search_query: Some("Beta".to_string()),
@@ -291,6 +293,8 @@ fn playlist_search_overlay_stays_inside_row_area() {
                 skin,
                 &PlaylistRowsRenderState {
                     entries: vec![],
+                    first_index: 0,
+                    total_entries: 0,
                     scroll_offset: 0,
                     scrollbar_dragging: false,
                     search_query: Some("needle".to_string()),

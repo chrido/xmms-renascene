@@ -10,9 +10,12 @@ use crate::app::playlist_actions::{
 };
 use crate::app::view_model::{
     ellipsize_chars, format_duration, formatted_playlist_entry_title,
+    playlist_rows_render_state_from_projection, PlaylistViewModel,
+};
+#[cfg(test)]
+use crate::app::view_model::{
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state,
-    playlist_rows_render_state_from_projection, PlaylistViewModel,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
@@ -307,6 +310,7 @@ fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
     (format!("{minutes:>3}"), format!("{seconds:02}"))
 }
 
+#[cfg(test)]
 fn playlist_footer_info(app: &EguiFrontendState) -> String {
     shared_playlist_footer_info(app.controller().state())
 }
