@@ -10,7 +10,7 @@ use crate::app_state::AppState;
 use crate::audio_model::EqualizerBandPositions;
 use crate::config::Config;
 use crate::player::PlayerState;
-use crate::playlist::{PlaylistEntry, PlaylistMenuKind};
+use crate::playlist::{PlaylistEntry, PlaylistMenuKind, PlaylistRevisions};
 use crate::render::{PlaylistRowRenderEntry, PlaylistRowsRenderState};
 use crate::skin::layout::{playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton};
 use crate::skin::widget::TextBox;
@@ -141,6 +141,41 @@ pub struct PlaylistViewModel {
     pub visible: bool,
     pub shaded: bool,
     pub detached: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistProjectionKey {
+    revisions: PlaylistRevisions,
+    title_format: String,
+    convert_underscore: bool,
+    convert_twenty: bool,
+}
+
+impl PlaylistProjectionKey {
+    pub fn from_state(state: &AppState) -> Self {
+        Self {
+            revisions: state.playlist.revisions(),
+            title_format: state.config.title_format.clone(),
+            convert_underscore: state.config.convert_underscore,
+            convert_twenty: state.config.convert_twenty,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistProjection {
+    pub rows: Vec<PlaylistRowViewModel>,
+    pub current_index: Option<usize>,
+    pub footer_info: String,
+}
+
+pub fn playlist_projection(state: &AppState) -> PlaylistProjection {
+    let view_model = playlist_view_model(state);
+    PlaylistProjection {
+        rows: view_model.rows,
+        current_index: view_model.current_index,
+        footer_info: playlist_footer_info(state),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -320,6 +355,42 @@ pub fn playlist_rows_render_state(
     let view_model = playlist_view_model(state);
     PlaylistRowsRenderState {
         entries: view_model
+            .rows
+            .iter()
+            .map(|row| PlaylistRowRenderEntry {
+                title: row.title.clone(),
+                length_ms: state
+                    .playlist
+                    .entries()
+                    .get(row.index)
+                    .map(|entry| entry.length_ms)
+                    .unwrap_or(-1),
+                selected: row.selected,
+                current: row.current,
+                queue_position: state.playlist.queue_position(row.index),
+            })
+            .collect(),
+        scroll_offset,
+        scrollbar_dragging,
+        search_query,
+        show_numbers: state.config.show_numbers_in_pl,
+        font_family: state.config.playlist_font.clone(),
+        width,
+        height,
+    }
+}
+
+pub fn playlist_rows_render_state_from_projection(
+    state: &AppState,
+    projection: &PlaylistProjection,
+    scroll_offset: usize,
+    scrollbar_dragging: bool,
+    search_query: Option<String>,
+    width: i32,
+    height: i32,
+) -> PlaylistRowsRenderState {
+    PlaylistRowsRenderState {
+        entries: projection
             .rows
             .iter()
             .map(|row| PlaylistRowRenderEntry {
@@ -778,6 +849,19 @@ mod tests {
         assert_eq!(view_model.rows[0].duration_text.as_deref(), Some("1:23"));
         assert!(view_model.rows[1].selected);
         assert_eq!(view_model.rows[1].duration_text, None);
+    }
+
+    #[test]
+    fn playlist_projection_key_ignores_unrelated_player_state() {
+        let mut state = AppState::default();
+        state.playlist.add_timed_uri("one.mp3", "One", 1_000);
+        let key = PlaylistProjectionKey::from_state(&state);
+
+        state.player.set_volume(25);
+        assert_eq!(PlaylistProjectionKey::from_state(&state), key);
+
+        state.playlist.select_all(true);
+        assert_ne!(PlaylistProjectionKey::from_state(&state), key);
     }
 
     #[test]

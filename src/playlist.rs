@@ -105,6 +105,15 @@ pub struct Playlist {
     shuffle: bool,
     repeat: bool,
     no_advance: bool,
+    revisions: PlaylistRevisions,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PlaylistRevisions {
+    pub content: u64,
+    pub selection: u64,
+    pub queue: u64,
+    pub current: u64,
 }
 
 impl PartialEq for Playlist {
@@ -131,7 +140,12 @@ impl Playlist {
     }
 
     pub fn entries_mut(&mut self) -> &mut [PlaylistEntry] {
+        self.mark_content_changed();
         &mut self.entries
+    }
+
+    pub fn revisions(&self) -> PlaylistRevisions {
+        self.revisions
     }
 
     pub fn len(&self) -> usize {
@@ -164,6 +178,7 @@ impl Playlist {
             return false;
         }
         self.queue.push(id);
+        self.revisions.queue = self.revisions.queue.wrapping_add(1);
         self.debug_assert_queue_integrity();
         true
     }
@@ -176,6 +191,7 @@ impl Playlist {
             return false;
         };
         self.queue.remove(position);
+        self.revisions.queue = self.revisions.queue.wrapping_add(1);
         self.debug_assert_queue_integrity();
         true
     }
@@ -200,6 +216,7 @@ impl Playlist {
             } else {
                 self.queue.push(id);
             }
+            self.revisions.queue = self.revisions.queue.wrapping_add(1);
         }
         self.debug_assert_queue_integrity();
         true
@@ -210,6 +227,7 @@ impl Playlist {
             return false;
         }
         self.queue.clear();
+        self.revisions.queue = self.revisions.queue.wrapping_add(1);
         true
     }
 
@@ -296,21 +314,33 @@ impl Playlist {
     }
 
     pub fn clear(&mut self) {
+        if self.entries.is_empty() && self.position.is_none() && self.queue.is_empty() {
+            return;
+        }
         self.entries.clear();
         self.position = None;
         self.queue.clear();
         self.invalidate_shuffle_order();
+        self.mark_content_changed();
     }
 
     pub fn select_all(&mut self, selected: bool) {
+        let mut changed = false;
         for entry in &mut self.entries {
+            changed |= entry.selected != selected;
             entry.selected = selected;
+        }
+        if changed {
+            self.revisions.selection = self.revisions.selection.wrapping_add(1);
         }
     }
 
     pub fn invert_selection(&mut self) {
         for entry in &mut self.entries {
             entry.selected = !entry.selected;
+        }
+        if !self.entries.is_empty() {
+            self.revisions.selection = self.revisions.selection.wrapping_add(1);
         }
     }
 
@@ -336,6 +366,7 @@ impl Playlist {
         }
         self.retain_valid_queue_entries();
         self.update_position_after_reorder_or_remove(current, old_position);
+        self.mark_content_changed();
         true
     }
 
@@ -349,6 +380,7 @@ impl Playlist {
         }
         self.retain_valid_queue_entries();
         self.update_position_after_reorder_or_remove(current, old_position);
+        self.mark_content_changed();
         true
     }
 
@@ -373,6 +405,7 @@ impl Playlist {
         }
         self.retain_valid_queue_entries();
         self.update_position_after_reorder_or_remove(current, old_position);
+        self.mark_content_changed();
         true
     }
 
@@ -391,6 +424,7 @@ impl Playlist {
         }
         self.retain_valid_queue_entries();
         self.update_position_after_reorder_or_remove(current, old_position);
+        self.mark_content_changed();
         true
     }
 
@@ -418,6 +452,7 @@ impl Playlist {
         }
         self.retain_valid_queue_entries();
         self.update_position_after_reorder_or_remove(current, old_position);
+        self.mark_content_changed();
         Ok(deleted.len())
     }
 
@@ -426,14 +461,15 @@ impl Playlist {
     }
 
     pub fn set_position(&mut self, pos: usize) {
-        if pos < self.entries.len() {
+        if pos < self.entries.len() && self.position != Some(pos) {
             self.position = Some(pos);
+            self.revisions.current = self.revisions.current.wrapping_add(1);
         }
     }
 
     pub fn advance(&mut self) -> bool {
         if let Some(next) = self.next_position() {
-            self.position = Some(next);
+            self.set_position(next);
             true
         } else {
             false
@@ -449,7 +485,7 @@ impl Playlist {
 
     pub fn previous(&mut self) -> bool {
         if let Some(prev) = self.previous_position() {
-            self.position = Some(prev);
+            self.set_position(prev);
             true
         } else {
             false
@@ -474,7 +510,7 @@ impl Playlist {
         }
 
         if let Some(next) = self.next_position().filter(|next| Some(*next) != current) {
-            self.position = Some(next);
+            self.set_position(next);
             true
         } else {
             false
@@ -486,6 +522,7 @@ impl Playlist {
         self.entries
             .sort_by(|left, right| compare_entries(left, right, key));
         self.refresh_position(current);
+        self.mark_content_changed();
     }
 
     pub fn sort_selected_by(&mut self, key: PlaylistSortKey) {
@@ -506,18 +543,21 @@ impl Playlist {
             self.entries[index] = entry;
         }
         self.refresh_position(current);
+        self.mark_content_changed();
     }
 
     pub fn reverse(&mut self) {
         let current = self.current_entry_id();
         self.entries.reverse();
         self.refresh_position(current);
+        self.mark_content_changed();
     }
 
     pub fn randomize(&mut self) {
         let current = self.current_entry_id();
         shuffle_slice(&mut self.entries);
         self.refresh_position(current);
+        self.mark_content_changed();
     }
 
     pub fn move_entry(&mut self, from: usize, to: usize) -> bool {
@@ -529,6 +569,7 @@ impl Playlist {
         let entry = self.entries.remove(from);
         self.entries.insert(to, entry);
         self.refresh_position(current);
+        self.mark_content_changed();
         true
     }
 
@@ -570,6 +611,9 @@ impl Playlist {
                 entry.title = title;
                 changed = true;
             }
+        }
+        if changed {
+            self.revisions.content = self.revisions.content.wrapping_add(1);
         }
         changed
     }
@@ -780,6 +824,7 @@ impl Playlist {
     fn push_entry(&mut self, mut entry: PlaylistEntry) {
         entry.id = self.allocate_entry_id();
         self.entries.push(entry);
+        self.mark_content_changed();
         self.invalidate_shuffle_order();
         self.debug_assert_queue_integrity();
     }
@@ -787,6 +832,7 @@ impl Playlist {
     fn insert_entry(&mut self, index: usize, mut entry: PlaylistEntry) {
         entry.id = self.allocate_entry_id();
         self.entries.insert(index, entry);
+        self.mark_content_changed();
         self.invalidate_shuffle_order();
         self.debug_assert_queue_integrity();
     }
@@ -808,6 +854,13 @@ impl Playlist {
             .iter()
             .enumerate()
             .all(|(index, queued)| !self.queue[..index].contains(queued)));
+    }
+
+    fn mark_content_changed(&mut self) {
+        self.revisions.content = self.revisions.content.wrapping_add(1);
+        self.revisions.selection = self.revisions.selection.wrapping_add(1);
+        self.revisions.queue = self.revisions.queue.wrapping_add(1);
+        self.revisions.current = self.revisions.current.wrapping_add(1);
     }
 
     pub fn load_m3u_file(path: &Path) -> io::Result<Self> {
@@ -1167,6 +1220,33 @@ mod tests {
         assert!(playlist.clear_queue());
         assert!(!playlist.clear_queue());
         assert!(playlist.queued_indices().is_empty());
+    }
+
+    #[test]
+    fn playlist_revisions_track_independent_render_inputs() {
+        let mut playlist = playlist_with_names(&["one", "two"]);
+        let initial = playlist.revisions();
+
+        assert!(playlist.enqueue(1));
+        let queued = playlist.revisions();
+        assert_eq!(queued.content, initial.content);
+        assert_eq!(queued.selection, initial.selection);
+        assert!(queued.queue > initial.queue);
+        assert_eq!(queued.current, initial.current);
+
+        playlist.set_position(1);
+        let current = playlist.revisions();
+        assert_eq!(current.content, queued.content);
+        assert_eq!(current.selection, queued.selection);
+        assert_eq!(current.queue, queued.queue);
+        assert!(current.current > queued.current);
+
+        playlist.select_all(true);
+        let selected = playlist.revisions();
+        assert_eq!(selected.content, current.content);
+        assert!(selected.selection > current.selection);
+        assert_eq!(selected.queue, current.queue);
+        assert_eq!(selected.current, current.current);
     }
 
     #[test]

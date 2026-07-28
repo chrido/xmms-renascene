@@ -11,8 +11,8 @@ use crate::app::playlist_actions::{
 use crate::app::view_model::{
     ellipsize_chars, format_duration, formatted_playlist_entry_title,
     playlist_footer_info as shared_playlist_footer_info,
-    playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
-    PlaylistViewModel,
+    playlist_rows_render_state as shared_playlist_rows_render_state,
+    playlist_rows_render_state_from_projection, PlaylistViewModel,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
@@ -198,12 +198,13 @@ pub(crate) fn show_android_playlist_manager(
 }
 
 pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
-    let view_model = playlist_view_model(app.controller().state());
-    if !view_model.visible {
+    if !app.controller().state().config.playlist_visible {
         return;
     }
-    let rows = shared_playlist_rows_render_state(
+    let projection = app.playlist_projection();
+    let rows = playlist_rows_render_state_from_projection(
         app.controller().state(),
+        &projection,
         app.playlist_scroll_offset,
         false,
         None,
@@ -211,13 +212,13 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         app.playlist_height,
     );
     let shaded_info = shaded_playlist_info(app);
-    let footer_info = playlist_footer_info(app);
+    let footer_info = projection.footer_info.clone();
     let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
     let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
     let texture_key = PlaylistTextureKey {
         generation: app.render_cache.generation,
         focused: true,
-        shaded: view_model.shaded,
+        shaded: app.controller().state().config.playlist_shaded,
         width: app.playlist_width,
         height: app.playlist_height,
         shaded_info,
@@ -266,6 +267,13 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         .expect("playlist texture initialized")
         .texture
         .id();
+    let view_model = PlaylistViewModel {
+        rows: projection.rows.clone(),
+        current_index: projection.current_index,
+        visible: true,
+        shaded: app.controller().state().config.playlist_shaded,
+        detached: app.controller().state().config.playlist_detached,
+    };
     let base_height = playlist_window_height(view_model.shaded, app.playlist_height);
     let size = egui::vec2(
         app.playlist_width as f32 * app.scale_factor,

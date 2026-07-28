@@ -21,7 +21,7 @@ use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
-    volume_to_eq_shaded_position, TitleMarquee,
+    volume_to_eq_shaded_position, PlaylistProjection, TitleMarquee,
 };
 #[cfg(target_os = "android")]
 use crate::app_log_error;
@@ -345,6 +345,12 @@ impl EguiFrontendState {
 
     pub fn controller(&self) -> &AppStore {
         &self.controller
+    }
+
+    pub(crate) fn playlist_projection(&mut self) -> PlaylistProjection {
+        self.render_cache
+            .playlist_projection(self.controller.state())
+            .clone()
     }
 
     #[cfg(test)]
