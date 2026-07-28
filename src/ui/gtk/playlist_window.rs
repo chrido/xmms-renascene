@@ -22,6 +22,7 @@ pub(crate) fn build_playlist_window(
         .content_height(playlist_height * DEFAULT_SCALE)
         .focusable(true)
         .build();
+    let render_cache = Rc::new(RefCell::new(GtkRenderSurfaceCache::default()));
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
@@ -35,7 +36,10 @@ pub(crate) fn build_playlist_window(
         } else {
             playlist_height
         };
-        match render_scaled_to_gtk(
+        let render_key = state.playlist_render_key();
+        match render_scaled_to_gtk_cached(
+            &mut render_cache.borrow_mut(),
+            render_key,
             cr,
             width,
             height,

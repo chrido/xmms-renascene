@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -66,7 +67,9 @@ pub use crate::playlist::PlaylistMenuKind;
 use crate::{app_log_debug, app_log_info, app_log_trace};
 use gtk::cairo;
 
-use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
+use crate::playlist::{
+    file_uri_to_path, DurationIndexResult, Playlist, PlaylistRevisions, PlaylistSortKey,
+};
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, paint_scaled,
     playlist_window_height, render_equalizer_state, render_main_player_state,
@@ -308,14 +311,25 @@ fn build_preview_window(
     ));
 
     {
+        let render_cache = Rc::new(RefCell::new(GtkRenderSurfaceCache::default()));
         let main_state = Rc::clone(&main_state);
         drawing_area.set_draw_func(move |_area, cr, width, height| {
             let state = main_state.borrow();
             let docked_state = state.docked_panel_state();
             let (base_width, base_height) = docked_panel_size(docked_state);
-            match render_scaled_to_gtk(cr, width, height, base_width, base_height, |cr, pass| {
-                render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
-            }) {
+            let render_key = state.docked_render_key();
+            match render_scaled_to_gtk_cached(
+                &mut render_cache.borrow_mut(),
+                render_key,
+                cr,
+                width,
+                height,
+                base_width,
+                base_height,
+                |cr, pass| {
+                    render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
+                },
+            ) {
                 Ok(()) => {
                     app_log_trace!(
                         render,
@@ -1119,38 +1133,55 @@ fn write_surface_png(surface: &mut ImageSurface, path: &Path) -> io::Result<()> 
     surface.save_png(path)
 }
 
-fn paint_soft_surface_to_gtk(
-    cr: &gtk::cairo::Context,
-    surface: &ImageSurface,
-) -> Result<(), crate::render::RenderError> {
-    let mut cairo_surface = gtk::cairo::ImageSurface::create(
-        gtk::cairo::Format::ARgb32,
-        surface.width(),
-        surface.height(),
-    )
-    .map_err(|err| {
-        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
-    })?;
-    {
-        let source = surface.data()?;
-        let mut dest = cairo_surface.data().map_err(|err| {
-            crate::render::RenderError::SurfaceData(crate::render::BorrowError::new(
-                err.to_string(),
-            ))
-        })?;
-        dest.copy_from_slice(&source);
-    }
-    cairo_surface.mark_dirty();
-    cr.set_source_surface(&cairo_surface, 0.0, 0.0)
-        .map_err(|err| {
-            crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
-        })?;
-    cr.paint().map_err(|err| {
-        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
-    })
+struct GtkRenderSurfaceCache<K> {
+    key: Option<K>,
+    soft_surface: Option<ImageSurface>,
+    cairo_surface: Option<gtk::cairo::ImageSurface>,
+    #[cfg(test)]
+    render_count: usize,
 }
 
-fn render_scaled_to_gtk<F>(
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GtkPlaylistRenderKey {
+    skin_generation: u64,
+    focused: bool,
+    shaded: bool,
+    width: i32,
+    height: i32,
+    scroll_offset: usize,
+    revisions: PlaylistRevisions,
+    title_preferences_hash: u64,
+    font_hash: u64,
+    show_numbers: bool,
+    scrollbar_dragging: bool,
+    search_hash: u64,
+    menu: Option<PlaylistMenuRenderKind>,
+    menu_hover: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GtkDockedRenderKey {
+    skin_generation: u64,
+    main: MainWindowRenderState,
+    equalizer: Option<EqualizerRenderState>,
+    playlist: Option<GtkPlaylistRenderKey>,
+}
+
+impl<K> Default for GtkRenderSurfaceCache<K> {
+    fn default() -> Self {
+        Self {
+            key: None,
+            soft_surface: None,
+            cairo_surface: None,
+            #[cfg(test)]
+            render_count: 0,
+        }
+    }
+}
+
+fn render_scaled_to_gtk_cached<K, F>(
+    cache: &mut GtkRenderSurfaceCache<K>,
+    key: K,
     cr: &gtk::cairo::Context,
     device_width: i32,
     device_height: i32,
@@ -1159,21 +1190,82 @@ fn render_scaled_to_gtk<F>(
     draw: F,
 ) -> Result<(), crate::render::RenderError>
 where
+    K: PartialEq,
     F: Fn(&Context, RenderPass) -> Result<(), crate::render::RenderError>,
 {
-    let surface = ImageSurface::create(Format::ARgb32, device_width, device_height)?;
-    let soft_cr = Context::new(&surface)?;
-    render_scaled(
-        &soft_cr,
-        device_width,
-        device_height,
-        base_width,
-        base_height,
-        draw,
-    )?;
-    drop(soft_cr);
-    surface.flush();
-    paint_soft_surface_to_gtk(cr, &surface)
+    let dimensions_changed = cache
+        .soft_surface
+        .as_ref()
+        .is_none_or(|surface| surface.width() != device_width || surface.height() != device_height);
+    if dimensions_changed {
+        cache.soft_surface = Some(ImageSurface::create(
+            Format::ARgb32,
+            device_width,
+            device_height,
+        )?);
+        cache.cairo_surface = Some(
+            gtk::cairo::ImageSurface::create(
+                gtk::cairo::Format::ARgb32,
+                device_width,
+                device_height,
+            )
+            .map_err(|err| {
+                crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+            })?,
+        );
+    }
+
+    if dimensions_changed || cache.key.as_ref() != Some(&key) {
+        #[cfg(test)]
+        {
+            cache.render_count += 1;
+        }
+        let surface = cache
+            .soft_surface
+            .as_ref()
+            .expect("GTK soft render surface initialized");
+        surface.clear();
+        let soft_cr = Context::new(surface)?;
+        render_scaled(
+            &soft_cr,
+            device_width,
+            device_height,
+            base_width,
+            base_height,
+            draw,
+        )?;
+        drop(soft_cr);
+        surface.flush();
+
+        let cairo_surface = cache
+            .cairo_surface
+            .as_mut()
+            .expect("GTK Cairo render surface initialized");
+        cr.set_source_rgb(0.0, 0.0, 0.0);
+        {
+            let source = surface.data()?;
+            let mut dest = cairo_surface.data().map_err(|err| {
+                crate::render::RenderError::SurfaceData(crate::render::BorrowError::new(
+                    err.to_string(),
+                ))
+            })?;
+            dest.copy_from_slice(&source);
+        }
+        cairo_surface.mark_dirty();
+        cache.key = Some(key);
+    }
+
+    let cairo_surface = cache
+        .cairo_surface
+        .as_ref()
+        .expect("GTK Cairo render surface initialized");
+    cr.set_source_surface(cairo_surface, 0.0, 0.0)
+        .map_err(|err| {
+            crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+        })?;
+    cr.paint().map_err(|err| {
+        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+    })
 }
 
 fn style_xmms_popover(popover: &gtk::Popover) {
@@ -1844,6 +1936,7 @@ fn build_equalizer_window(
         .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
+    let render_cache = Rc::new(RefCell::new(GtkRenderSurfaceCache::default()));
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
@@ -1854,13 +1947,23 @@ fn build_equalizer_window(
             EQUALIZER_WINDOW_HEIGHT
         };
         let base_width = EQUALIZER_WINDOW_WIDTH;
-        match render_scaled_to_gtk(cr, width, height, base_width, base_height, |cr, pass| {
-            if pass.is_bitmap() {
-                render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
-            } else {
-                Ok(())
-            }
-        }) {
+        let render_key = (state.skin_generation, render_state.clone());
+        match render_scaled_to_gtk_cached(
+            &mut render_cache.borrow_mut(),
+            render_key,
+            cr,
+            width,
+            height,
+            base_width,
+            base_height,
+            |cr, pass| {
+                if pass.is_bitmap() {
+                    render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
             Ok(()) => app_log_trace!(
                 render,
                 "gtk equalizer",
@@ -5313,6 +5416,7 @@ pub(crate) struct MainWindowUiState {
     dialogs: DialogVisibility,
     last_playlist_file_info: Option<String>,
     active_skin: DefaultSkin,
+    skin_generation: u64,
     playlist_options_opened: bool,
     queue_manager_opened: bool,
     preferences_page: PreferencesPage,
@@ -5377,6 +5481,7 @@ impl MainWindowUiState {
             dialogs: DialogVisibility::default(),
             last_playlist_file_info: None,
             active_skin,
+            skin_generation: 0,
             playlist_options_opened: false,
             queue_manager_opened: false,
             preferences_page: PreferencesPage::Options,
@@ -5521,6 +5626,7 @@ impl MainWindowUiState {
 
     fn load_configured_skin(&mut self) -> io::Result<()> {
         self.active_skin = load_skin_from_config(&self.store.state().config)?;
+        self.skin_generation = self.skin_generation.wrapping_add(1);
         Ok(())
     }
 
@@ -6193,6 +6299,55 @@ impl MainWindowUiState {
             playlist_shaded: config.playlist_shaded,
             playlist_width: self.playlist_ui.width,
             playlist_height: self.playlist_ui.height,
+        }
+    }
+
+    fn playlist_render_key(&self) -> GtkPlaylistRenderKey {
+        let state = self.store.state();
+        let mut title_preferences = DefaultHasher::new();
+        state.config.title_format.hash(&mut title_preferences);
+        state.config.convert_underscore.hash(&mut title_preferences);
+        state.config.convert_twenty.hash(&mut title_preferences);
+
+        let mut font = DefaultHasher::new();
+        state.config.playlist_font.hash(&mut font);
+
+        let mut search = DefaultHasher::new();
+        self.playlist_ui.search.active_query().hash(&mut search);
+
+        GtkPlaylistRenderKey {
+            skin_generation: self.skin_generation,
+            focused: self.playlist_focused(),
+            shaded: self.is_playlist_shaded(),
+            width: self.playlist_ui.width,
+            height: self.playlist_ui.height,
+            scroll_offset: self.playlist_ui.scroll_offset,
+            revisions: state.playlist.revisions(),
+            title_preferences_hash: title_preferences.finish(),
+            font_hash: font.finish(),
+            show_numbers: state.config.show_numbers_in_pl,
+            scrollbar_dragging: matches!(
+                self.playlist_ui.pointer,
+                PlaylistPointer::DraggingScrollbar { .. }
+            ),
+            search_hash: search.finish(),
+            menu: self.playlist_menu().map(PlaylistMenuKind::render_kind),
+            menu_hover: self.playlist_menu_hover(),
+        }
+    }
+
+    fn docked_render_key(&self) -> GtkDockedRenderKey {
+        GtkDockedRenderKey {
+            skin_generation: self.skin_generation,
+            main: self.render_state(),
+            equalizer: self
+                .panel_state(PanelKind::Equalizer)
+                .is_docked_visible()
+                .then(|| self.equalizer_render_state()),
+            playlist: self
+                .panel_state(PanelKind::Playlist)
+                .is_docked_visible()
+                .then(|| self.playlist_render_key()),
         }
     }
 
@@ -9975,6 +10130,23 @@ mod tests {
                 equalizer: false,
             }
         );
+    }
+
+    #[test]
+    fn gtk_render_surface_cache_reuses_unchanged_composition() {
+        let target = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, 20, 20).unwrap();
+        let cr = gtk::cairo::Context::new(&target).unwrap();
+        let mut cache = GtkRenderSurfaceCache::default();
+
+        render_scaled_to_gtk_cached(&mut cache, 1_u64, &cr, 20, 20, 10, 10, |_cr, _pass| Ok(()))
+            .unwrap();
+        render_scaled_to_gtk_cached(&mut cache, 1_u64, &cr, 20, 20, 10, 10, |_cr, _pass| Ok(()))
+            .unwrap();
+        assert_eq!(cache.render_count, 1);
+
+        render_scaled_to_gtk_cached(&mut cache, 2_u64, &cr, 20, 20, 10, 10, |_cr, _pass| Ok(()))
+            .unwrap();
+        assert_eq!(cache.render_count, 2);
     }
 
     #[test]
