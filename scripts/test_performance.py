@@ -130,11 +130,14 @@ class PerformanceTest(unittest.TestCase):
 
     def test_stress_scenarios_issue_expected_commands(self):
         args = mock.Mock(scenario="seek100")
-        with mock.patch.object(perf_driver, "send_command", return_value=1.0) as send:
+        with (
+            mock.patch.object(perf_driver, "send_initial_play_when_ready", return_value=1.0) as play,
+            mock.patch.object(perf_driver, "send_command", return_value=1.0) as send,
+        ):
             latencies = perf_driver.scenario_actions(args, 1234)
         self.assertEqual(len(latencies), 101)
-        self.assertEqual(send.call_args_list[0], mock.call(1234, "play"))
-        seek_calls = send.call_args_list[1:]
+        play.assert_called_once_with(1234)
+        seek_calls = send.call_args_list
         self.assertEqual(len(seek_calls), 100)
         self.assertEqual(seek_calls[0], mock.call(1234, "seek", position_ms=0))
         self.assertEqual(
@@ -143,14 +146,41 @@ class PerformanceTest(unittest.TestCase):
         )
 
         args.scenario = "pauseresume100"
-        with mock.patch.object(perf_driver, "send_command", return_value=1.0) as send:
+        with (
+            mock.patch.object(perf_driver, "send_initial_play_when_ready", return_value=1.0) as play,
+            mock.patch.object(perf_driver, "send_command", return_value=1.0) as send,
+        ):
             latencies = perf_driver.scenario_actions(args, 1234)
         self.assertEqual(len(latencies), 201)
-        self.assertEqual(send.call_count, 201)
-        self.assertEqual(send.call_args_list[1:3], [
+        play.assert_called_once_with(1234)
+        self.assertEqual(send.call_count, 200)
+        self.assertEqual(send.call_args_list[:2], [
             mock.call(1234, "pause"),
             mock.call(1234, "play"),
         ])
+
+    def test_initial_play_retries_until_frontend_acknowledges(self):
+        with (
+            mock.patch.object(
+                perf_driver,
+                "send_command",
+                side_effect=[
+                    TimeoutError("timed out"),
+                    RuntimeError(
+                        "command 'play' was rejected: "
+                        "{'accepted': False, "
+                        "'error': 'frontend did not acknowledge command'}"
+                    ),
+                    1.0,
+                ],
+            ) as send,
+            mock.patch.object(perf_driver.time, "sleep") as sleep,
+        ):
+            latency = perf_driver.send_initial_play_when_ready(1234)
+
+        self.assertGreaterEqual(latency, 0.0)
+        self.assertEqual(send.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
 
 if __name__ == "__main__":

@@ -43,6 +43,25 @@ def send_command(port: int, command: str, **fields: Any) -> float:
     return (time.perf_counter() - started) * 1000.0
 
 
+def send_initial_play_when_ready(port: int, timeout: float = 30.0) -> float:
+    started = time.perf_counter()
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            send_command(port, "play")
+            return (time.perf_counter() - started) * 1000.0
+        except (TimeoutError, OSError) as err:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("frontend did not become ready for initial playback") from err
+        except RuntimeError as err:
+            if (
+                "frontend did not acknowledge command" not in str(err)
+                or time.monotonic() >= deadline
+            ):
+                raise
+        time.sleep(0.1)
+
+
 def app_command(args: argparse.Namespace, port: int) -> list[str]:
     command = [
         args.binary,
@@ -71,7 +90,7 @@ def scenario_actions(args: argparse.Namespace, port: int) -> list[float]:
         "seek100",
         "pauseresume100",
     }:
-        latencies.append(send_command(port, "play"))
+        latencies.append(send_initial_play_when_ready(port))
     if args.scenario == "playbackcontrols":
         for command, fields in (
             ("pause", {}),
