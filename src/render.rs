@@ -72,6 +72,17 @@ mod tests {
     }
 
     #[test]
+    fn cloned_xpm_images_have_independent_surface_cache_entries() {
+        let image = XpmImage::from_argb_pixels(1, 1, vec![0xff01_0203]).unwrap();
+        let cloned = image.clone();
+        assert_eq!(image, cloned);
+
+        let original_surface = surface_from_xpm(&image).unwrap();
+        let cloned_surface = surface_from_xpm(&cloned).unwrap();
+        assert!(!original_surface.shares_storage_with(&cloned_surface));
+    }
+
+    #[test]
     fn blits_source_rect_to_destination() {
         let image = XpmImage::parse(
             r#"/* XPM */

@@ -372,6 +372,28 @@ fn activity_exposes_an_explicit_finish_transition_for_lifecycle_e2e() {
 }
 
 #[test]
+fn activity_repaints_for_single_top_widget_launches_and_focus_returns() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let on_new_intent = java
+        .split("protected void onNewIntent(Intent intent)")
+        .nth(1)
+        .expect("onNewIntent callback")
+        .split("@Override")
+        .next()
+        .expect("onNewIntent body");
+    let on_window_focus = java
+        .split("public void onWindowFocusChanged(boolean hasFocus)")
+        .nth(1)
+        .expect("onWindowFocusChanged callback")
+        .split("@Override")
+        .next()
+        .expect("onWindowFocusChanged body");
+
+    assert!(on_new_intent.contains("nativeRequestRepaint();"));
+    assert!(on_window_focus.contains("nativeRequestRepaint();"));
+}
+
+#[test]
 fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
     let state = include_str!("../src/ui/egui/android_media.rs");
     let media_session = include_str!("../src/ui/egui/android/media_session.rs");

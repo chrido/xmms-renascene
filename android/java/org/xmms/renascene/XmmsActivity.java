@@ -248,6 +248,7 @@ public final class XmmsActivity extends NativeActivity {
         if (hasFocus && activityResumed) {
             nativeLoopReady = true;
             getWindow().getDecorView().post(this::dispatchPendingMediaControl);
+            nativeRequestRepaint();
         }
     }
 
@@ -256,6 +257,7 @@ public final class XmmsActivity extends NativeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleMediaControlIntent(intent);
+        nativeRequestRepaint();
     }
 
     @Override

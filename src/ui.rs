@@ -10315,7 +10315,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_pauses_and_seeks_to_start_without_fading_or_stopping() {
+    fn halt_stops_and_resets_without_fading() {
         let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
             volume: 80,
             stop_with_fadeout: true,
@@ -10326,7 +10326,7 @@ mod tests {
 
         state.activate_push(MainPushButton::Stop);
         assert_eq!(state.playback_position_ms(), 0);
-        assert_eq!(state.store.state().player.state(), PlayerState::Paused);
+        assert_eq!(state.store.state().player.state(), PlayerState::Stopped);
         assert_eq!(state.volume(), 80);
         assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
     }

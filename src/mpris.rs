@@ -653,6 +653,7 @@ pub mod zbus_service {
     struct SharedMprisState {
         state: Arc<Mutex<MprisServiceState>>,
         requests: Sender<MprisServiceRequest>,
+        wakeup: Option<Arc<dyn Fn() + Send + Sync>>,
     }
 
     impl SharedMprisState {
@@ -675,7 +676,11 @@ pub mod zbus_service {
         fn send_request(&self, request: MprisServiceRequest) -> zbus::fdo::Result<()> {
             self.requests.send(request).map_err(|err| {
                 zbus::fdo::Error::Failed(format!("failed to queue MPRIS request: {err}"))
-            })
+            })?;
+            if let Some(wakeup) = &self.wakeup {
+                wakeup();
+            }
+            Ok(())
         }
 
         fn send_command(&self, command: MprisCommand) -> zbus::fdo::Result<()> {
@@ -691,6 +696,20 @@ pub mod zbus_service {
 
     impl EguiMprisService {
         pub fn new(initial_player_properties: MprisPlayerProperties) -> Result<Self, String> {
+            Self::new_inner(initial_player_properties, None)
+        }
+
+        pub fn new_with_wakeup(
+            initial_player_properties: MprisPlayerProperties,
+            wakeup: impl Fn() + Send + Sync + 'static,
+        ) -> Result<Self, String> {
+            Self::new_inner(initial_player_properties, Some(Arc::new(wakeup)))
+        }
+
+        fn new_inner(
+            initial_player_properties: MprisPlayerProperties,
+            wakeup: Option<Arc<dyn Fn() + Send + Sync>>,
+        ) -> Result<Self, String> {
             let state = Arc::new(Mutex::new(MprisServiceState::new(
                 initial_player_properties,
             )));
@@ -698,6 +717,7 @@ pub mod zbus_service {
             let shared = SharedMprisState {
                 state: Arc::clone(&state),
                 requests: requests_sender,
+                wakeup,
             };
 
             let connection = connection::Builder::session()
@@ -1020,6 +1040,31 @@ pub mod zbus_service {
         use super::*;
         use crate::app_state::AppState;
         use crate::mpris::mpris_player_properties;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[test]
+        fn queued_mpris_request_wakes_frontend() {
+            let (requests, receiver) = mpsc::channel();
+            let wakeups = Arc::new(AtomicUsize::new(0));
+            let wakeups_for_callback = Arc::clone(&wakeups);
+            let shared = SharedMprisState {
+                state: Arc::new(Mutex::new(MprisServiceState::new(
+                    mpris_player_properties(&AppState::default(), 0),
+                ))),
+                requests,
+                wakeup: Some(Arc::new(move || {
+                    wakeups_for_callback.fetch_add(1, Ordering::Relaxed);
+                })),
+            };
+
+            shared.send_command(MprisCommand::Play).unwrap();
+
+            assert_eq!(
+                receiver.try_recv(),
+                Ok(MprisServiceRequest::Command(MprisCommand::Play))
+            );
+            assert_eq!(wakeups.load(Ordering::Relaxed), 1);
+        }
 
         #[test]
         #[ignore = "requires an isolated D-Bus session, e.g. dbus-run-session"]

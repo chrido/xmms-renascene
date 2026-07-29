@@ -195,6 +195,48 @@ def test_android_resumes_cached_idle_process(
 @pytest.mark.parametrize(
     "initial_activity_state",
     ANDROID_ACTIVITY_STATES,
+    ids=lambda state: f"from-{state}",
+)
+def test_android_info_widget_open_renders_after_activity_lifecycle(
+    android_device: AndroidDevice,
+    test_output: Any,
+    initial_activity_state: str,
+) -> None:
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+    _enter_android_activity_state(android_device, initial_activity_state)
+
+    android_device.open_player_from_info_widget()
+
+    screenshot = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        timeout=10.0,
+    )
+    android_device.assert_player_rendered(screenshot)
+    android_device.assert_no_app_crash()
+
+
+def test_android_info_widget_repeated_background_returns_render_player(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    android_device.set_portrait()
+    android_device.restart_app(reset_data=True)
+
+    for _ in range(3):
+        android_device.go_home()
+        android_device.open_player_from_info_widget()
+        screenshot = android_device.wait_for_rendered_screenshot(
+            test_output.screenshot_path(),
+            timeout=10.0,
+        )
+        android_device.assert_player_rendered(screenshot)
+        android_device.assert_no_app_crash()
+
+
+@pytest.mark.parametrize(
+    "initial_activity_state",
+    ANDROID_ACTIVITY_STATES,
     ids=lambda state: f"initial-{state}",
 )
 @pytest.mark.parametrize(
@@ -289,6 +331,76 @@ def test_android_redraws_after_background_playback_resume(
 
     assert android_device.app_pid() == original_pid
     android_device.main_player_bounds()
+
+
+def test_android_stop_then_play_stays_synchronized(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    config_path = "files/config/xmms-renascene/config"
+    audio_path = "files/imports/stop-restart.wav"
+    android_device.set_portrait()
+    android_device.force_stop()
+    android_device.shell("pm", "clear", ANDROID_PACKAGE)
+    android_device.grant_runtime_permissions()
+
+    audio = BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(8_000)
+        wav.writeframes(bytes([128]) * 8_000 * 180)
+    android_device.write_private_bytes(audio_path, audio.getvalue())
+    android_device.write_private_file(
+        "files/config/xmms-renascene/playlist.m3u",
+        "#EXTM3U\n"
+        "#EXTINF:180,Stop Restart\n"
+        "file:///data/user/0/org.xmms.renascene/files/imports/stop-restart.wav\n",
+    )
+
+    android_device.restart_app()
+    player_bounds = android_device.main_player_bounds()
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY], player_bounds)
+    android_device.wait_for_service("XmmsPlaybackService")
+    android_device.wait_for_media_session_position_at_least(1_500, timeout=10.0)
+    playing = android_device.screenshot(test_output.screenshot_path())
+
+    android_device.clear_logcat()
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.STOP], player_bounds)
+    android_device.assert_log_contains(
+        "player: button activated, button_name=Stop",
+    )
+    android_device.wait_for_private_file_contains(
+        config_path,
+        "playback_position_ms=0",
+    )
+    stopped = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=playing,
+        minimum_changed_fraction=0.0001,
+    )
+    android_device.wait_for_service_absent("XmmsPlaybackService")
+    time.sleep(1.2)
+    assert _private_config_int(android_device, "playback_position_ms") == 0
+
+    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY], player_bounds)
+    android_device.wait_for_service("XmmsPlaybackService")
+    restarted_position = android_device.wait_for_media_session_position_at_least(
+        500,
+        timeout=10.0,
+    )
+    restarted = android_device.wait_for_rendered_screenshot(
+        test_output.screenshot_path(),
+        changed_from=stopped,
+        minimum_changed_fraction=0.0001,
+    )
+
+    android_device.assert_player_rendered(playing)
+    android_device.assert_player_rendered(stopped)
+    android_device.assert_player_rendered(restarted)
+    assert restarted_position < 3_000
+    assert not android_device.rendered_screens_match(playing, stopped)
+    assert not android_device.rendered_screens_match(stopped, restarted)
 
 
 def test_android_shows_playlist_by_default(

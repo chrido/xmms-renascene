@@ -13,8 +13,13 @@ use crate::skin::{DefaultSkin, SkinPixmapKind};
 
 const MAX_CACHED_XPM_SURFACES: usize = 64;
 
+struct CachedXpmSurface {
+    revision: u64,
+    surface: ImageSurface,
+}
+
 thread_local! {
-    static XPM_SURFACE_CACHE: RefCell<HashMap<XpmImage, ImageSurface>> =
+    static XPM_SURFACE_CACHE: RefCell<HashMap<u64, CachedXpmSurface>> =
         RefCell::new(HashMap::new());
 }
 
@@ -54,7 +59,14 @@ impl From<BorrowError> for RenderError {
 }
 
 pub fn surface_from_xpm(image: &XpmImage) -> Result<ImageSurface, RenderError> {
-    if let Some(surface) = XPM_SURFACE_CACHE.with(|cache| cache.borrow().get(image).cloned()) {
+    let (cache_id, revision) = image.surface_cache_key();
+    if let Some(surface) = XPM_SURFACE_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .get(&cache_id)
+            .filter(|cached| cached.revision == revision)
+            .map(|cached| cached.surface.clone())
+    }) {
         return Ok(surface);
     }
 
@@ -70,10 +82,16 @@ pub fn surface_from_xpm(image: &XpmImage) -> Result<ImageSurface, RenderError> {
     let surface = ImageSurface::from_argb_pixels(width, height, image.pixels_argb())?;
     XPM_SURFACE_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.len() >= MAX_CACHED_XPM_SURFACES {
+        if cache.len() >= MAX_CACHED_XPM_SURFACES && !cache.contains_key(&cache_id) {
             cache.clear();
         }
-        cache.insert(image.clone(), surface.clone());
+        cache.insert(
+            cache_id,
+            CachedXpmSurface {
+                revision,
+                surface: surface.clone(),
+            },
+        );
     });
     Ok(surface)
 }
