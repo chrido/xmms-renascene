@@ -43,16 +43,23 @@ def send_command(port: int, command: str, **fields: Any) -> float:
     return (time.perf_counter() - started) * 1000.0
 
 
-def send_initial_play_when_ready(port: int, timeout: float = 30.0) -> float:
+def send_initial_command_when_ready(
+    port: int,
+    command: str,
+    timeout: float = 30.0,
+    **fields: Any,
+) -> float:
     started = time.perf_counter()
     deadline = time.monotonic() + timeout
     while True:
         try:
-            send_command(port, "play")
+            send_command(port, command, **fields)
             return (time.perf_counter() - started) * 1000.0
         except (TimeoutError, OSError) as err:
             if time.monotonic() >= deadline:
-                raise TimeoutError("frontend did not become ready for initial playback") from err
+                raise TimeoutError(
+                    f"frontend did not become ready for initial command {command!r}"
+                ) from err
         except RuntimeError as err:
             if (
                 "frontend did not acknowledge command" not in str(err)
@@ -90,7 +97,7 @@ def scenario_actions(args: argparse.Namespace, port: int) -> list[float]:
         "seek100",
         "pauseresume100",
     }:
-        latencies.append(send_initial_play_when_ready(port))
+        latencies.append(send_initial_command_when_ready(port, "play"))
     if args.scenario == "playbackcontrols":
         for command, fields in (
             ("pause", {}),
@@ -115,10 +122,21 @@ def scenario_actions(args: argparse.Namespace, port: int) -> list[float]:
             latencies.append(send_command(port, "pause"))
             latencies.append(send_command(port, "play"))
     elif args.scenario == "scroll10kplaylist":
-        for offset in range(0, 10_000, 250):
+        latencies.append(
+            send_initial_command_when_ready(port, "playlist_scroll", offset=0)
+        )
+        for offset in range(250, 10_000, 250):
             latencies.append(send_command(port, "playlist_scroll", offset=offset))
     elif args.scenario == "layoutchange":
-        for width, height in ((275, 232), (550, 464), (350, 348), (275, 232)):
+        latencies.append(
+            send_initial_command_when_ready(
+                port,
+                "playlist_size",
+                width=275,
+                height=232,
+            )
+        )
+        for width, height in ((550, 464), (350, 348), (275, 232)):
             latencies.append(send_command(port, "playlist_size", width=width, height=height))
     return latencies
 

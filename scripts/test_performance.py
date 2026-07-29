@@ -131,12 +131,14 @@ class PerformanceTest(unittest.TestCase):
     def test_stress_scenarios_issue_expected_commands(self):
         args = mock.Mock(scenario="seek100")
         with (
-            mock.patch.object(perf_driver, "send_initial_play_when_ready", return_value=1.0) as play,
+            mock.patch.object(
+                perf_driver, "send_initial_command_when_ready", return_value=1.0
+            ) as initial,
             mock.patch.object(perf_driver, "send_command", return_value=1.0) as send,
         ):
             latencies = perf_driver.scenario_actions(args, 1234)
         self.assertEqual(len(latencies), 101)
-        play.assert_called_once_with(1234)
+        initial.assert_called_once_with(1234, "play")
         seek_calls = send.call_args_list
         self.assertEqual(len(seek_calls), 100)
         self.assertEqual(seek_calls[0], mock.call(1234, "seek", position_ms=0))
@@ -147,19 +149,37 @@ class PerformanceTest(unittest.TestCase):
 
         args.scenario = "pauseresume100"
         with (
-            mock.patch.object(perf_driver, "send_initial_play_when_ready", return_value=1.0) as play,
+            mock.patch.object(
+                perf_driver, "send_initial_command_when_ready", return_value=1.0
+            ) as initial,
             mock.patch.object(perf_driver, "send_command", return_value=1.0) as send,
         ):
             latencies = perf_driver.scenario_actions(args, 1234)
         self.assertEqual(len(latencies), 201)
-        play.assert_called_once_with(1234)
+        initial.assert_called_once_with(1234, "play")
         self.assertEqual(send.call_count, 200)
         self.assertEqual(send.call_args_list[:2], [
             mock.call(1234, "pause"),
             mock.call(1234, "play"),
         ])
 
-    def test_initial_play_retries_until_frontend_acknowledges(self):
+        args.scenario = "scroll10kplaylist"
+        with (
+            mock.patch.object(
+                perf_driver, "send_initial_command_when_ready", return_value=1.0
+            ) as initial,
+            mock.patch.object(perf_driver, "send_command", return_value=1.0) as send,
+        ):
+            latencies = perf_driver.scenario_actions(args, 1234)
+        self.assertEqual(len(latencies), 40)
+        initial.assert_called_once_with(1234, "playlist_scroll", offset=0)
+        self.assertEqual(send.call_count, 39)
+        self.assertEqual(
+            send.call_args_list[0],
+            mock.call(1234, "playlist_scroll", offset=250),
+        )
+
+    def test_initial_command_retries_until_frontend_acknowledges(self):
         with (
             mock.patch.object(
                 perf_driver,
@@ -176,10 +196,15 @@ class PerformanceTest(unittest.TestCase):
             ) as send,
             mock.patch.object(perf_driver.time, "sleep") as sleep,
         ):
-            latency = perf_driver.send_initial_play_when_ready(1234)
+            latency = perf_driver.send_initial_command_when_ready(
+                1234,
+                "playlist_scroll",
+                offset=0,
+            )
 
         self.assertGreaterEqual(latency, 0.0)
         self.assertEqual(send.call_count, 3)
+        send.assert_called_with(1234, "playlist_scroll", offset=0)
         self.assertEqual(sleep.call_count, 2)
 
 
