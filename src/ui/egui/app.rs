@@ -102,7 +102,7 @@ use super::runtime::AndroidLayoutRepaint;
 use super::runtime::EguiRuntime;
 use super::skin_texture::{
     pixel_snapped_rect, render_equalizer_color_image, render_playlist_color_image,
-    render_playlist_menu_color_image,
+    render_playlist_menu_color_image, ImageRenderBuffer,
 };
 #[cfg(test)]
 use super::ui_state::ActiveOverlay;
@@ -370,10 +370,18 @@ impl EguiFrontendState {
         &self.controller
     }
 
-    pub(crate) fn playlist_projection(&mut self) -> PlaylistProjection {
-        self.render_cache
-            .playlist_projection(self.controller.state())
-            .clone()
+    pub(crate) fn playlist_render_parts(
+        &mut self,
+    ) -> (
+        &AppState,
+        &DefaultSkin,
+        &PlaylistProjection,
+        &mut ImageRenderBuffer,
+    ) {
+        let state = self.controller.state();
+        let skin = &self.active_skin;
+        let (projection, staging) = self.render_cache.playlist_projection_and_staging(state);
+        (state, skin, projection, staging)
     }
 
     #[cfg(test)]

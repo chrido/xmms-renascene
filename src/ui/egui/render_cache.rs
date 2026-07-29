@@ -109,7 +109,20 @@ impl RenderCache {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    pub(crate) fn playlist_projection(&mut self, state: &AppState) -> &PlaylistProjection {
+    pub(crate) fn playlist_projection_and_staging(
+        &mut self,
+        state: &AppState,
+    ) -> (&PlaylistProjection, &mut ImageRenderBuffer) {
+        self.ensure_playlist_projection(state);
+        let projection = &self
+            .playlist_projection
+            .as_ref()
+            .expect("playlist projection initialized")
+            .projection;
+        (projection, &mut self.playlist_staging)
+    }
+
+    fn ensure_playlist_projection(&mut self, state: &AppState) {
         let key = PlaylistProjectionKey::from_state(state);
         if self
             .playlist_projection
@@ -121,11 +134,6 @@ impl RenderCache {
                 projection: playlist_projection(state),
             });
         }
-        &self
-            .playlist_projection
-            .as_ref()
-            .expect("playlist projection initialized")
-            .projection
     }
 }
 
@@ -139,13 +147,19 @@ mod tests {
         state.playlist.add_timed_uri("one.mp3", "One", 1_000);
         let mut cache = RenderCache::default();
 
-        let first = cache.playlist_projection(&state) as *const PlaylistProjection;
+        let first = cache.playlist_projection_and_staging(&state).0 as *const PlaylistProjection;
         state.player.set_volume(25);
-        let second = cache.playlist_projection(&state) as *const PlaylistProjection;
+        let second = cache.playlist_projection_and_staging(&state).0 as *const PlaylistProjection;
         assert_eq!(first, second);
 
         state.playlist.select_all(true);
-        assert!(cache.playlist_projection(&state).rows[0].selected);
+        assert!(
+            cache
+                .playlist_projection_and_staging(&state)
+                .0
+                .rows[0]
+                .selected
+        );
     }
 
     #[test]
