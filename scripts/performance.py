@@ -9,6 +9,7 @@ import platform as host_platform
 import shutil
 import socket
 import statistics
+import struct
 import subprocess
 import time
 import wave
@@ -30,6 +31,8 @@ class Scenario:
     duration_seconds: int
     playlist_entries: int = 0
     audio: bool = False
+    audio_seconds: int = 2
+    sparse_audio: bool = False
     expected_hotspots: tuple[str, ...] = ()
 
 
@@ -74,6 +77,24 @@ SCENARIOS = {
             20,
             audio=True,
             expected_hotspots=("input dispatch", "backend completion", "queued work"),
+        ),
+        Scenario(
+            "seek100",
+            DESKTOP_PLATFORMS,
+            20,
+            audio=True,
+            audio_seconds=3_600,
+            sparse_audio=True,
+            expected_hotspots=("seek dispatch", "decoder repositioning", "backend completion"),
+        ),
+        Scenario(
+            "pauseresume100",
+            DESKTOP_PLATFORMS,
+            20,
+            audio=True,
+            audio_seconds=300,
+            sparse_audio=True,
+            expected_hotspots=("transport dispatch", "backend state transitions", "queued work"),
         ),
         Scenario(
             "layoutchange",
@@ -341,7 +362,11 @@ class PerformanceRunner:
             result["playlist"] = str(playlist)
         if spec.audio:
             audio = inputs_dir / "perf-tone.wav"
-            self._write_test_tone(audio)
+            self._write_test_tone(
+                audio,
+                seconds=spec.audio_seconds,
+                sparse=spec.sparse_audio,
+            )
             result["audio"] = str(audio)
         self._write_json(
             inputs_dir / "scenario.json",
@@ -355,9 +380,31 @@ class PerformanceRunner:
         )
         return result
 
-    def _write_test_tone(self, path: Path) -> None:
+    def _write_test_tone(self, path: Path, *, seconds: int, sparse: bool) -> None:
         sample_rate = 8_000
-        seconds = 2
+        if sparse:
+            data_size = sample_rate * seconds * 2
+            header = struct.pack(
+                "<4sI4s4sIHHIIHH4sI",
+                b"RIFF",
+                36 + data_size,
+                b"WAVE",
+                b"fmt ",
+                16,
+                1,
+                1,
+                sample_rate,
+                sample_rate * 2,
+                2,
+                16,
+                b"data",
+                data_size,
+            )
+            with path.open("wb") as output:
+                output.write(header)
+                output.seek(44 + data_size - 1)
+                output.write(b"\0")
+            return
         with wave.open(str(path), "wb") as output:
             output.setnchannels(1)
             output.setsampwidth(2)

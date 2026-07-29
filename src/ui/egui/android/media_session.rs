@@ -113,6 +113,17 @@ pub(crate) fn activity_paused_or_exited(activity: AndroidActivityGeneration) {
         .activity_paused_or_exited(activity);
 }
 
+pub(crate) fn persist_playback_position_now() {
+    let Some(backend) = existing_playback_backend() else {
+        return;
+    };
+    if let Err(err) =
+        persistence::persist_playback_position_now(&backend, current_media_item_index())
+    {
+        eprintln!("xmms-rs: failed to persist Android lifecycle position: {err}");
+    }
+}
+
 pub(crate) fn is_foreground_mirror(activity: AndroidActivityGeneration) -> bool {
     MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))

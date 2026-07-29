@@ -159,6 +159,7 @@ pub(crate) fn handle_activity_paused(env: &mut JNIEnv<'_>, activity_object: &JOb
     let Some(activity_generation) = activity::set_resumed(env, activity_object, false) else {
         return;
     };
+    media_session::persist_playback_position_now();
     media_session::activity_paused_or_exited(activity_generation);
 }
 

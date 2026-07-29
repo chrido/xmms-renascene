@@ -65,7 +65,12 @@ def app_command(args: argparse.Namespace, port: int) -> list[str]:
 
 def scenario_actions(args: argparse.Namespace, port: int) -> list[float]:
     latencies: list[float] = []
-    if args.scenario.startswith("playback") or args.scenario in {"backgroundplayback", "widgets"}:
+    if args.scenario.startswith("playback") or args.scenario in {
+        "backgroundplayback",
+        "widgets",
+        "seek100",
+        "pauseresume100",
+    }:
         latencies.append(send_command(port, "play"))
     if args.scenario == "playbackcontrols":
         for command, fields in (
@@ -82,6 +87,14 @@ def scenario_actions(args: argparse.Namespace, port: int) -> list[float]:
             latencies.append(send_command(port, command, **fields))
         for index in range(20):
             latencies.append(send_command(port, "volume", value=index * 5))
+    elif args.scenario == "seek100":
+        for index in range(100):
+            position_ms = ((index * 37) % 100) * 36_000
+            latencies.append(send_command(port, "seek", position_ms=position_ms))
+    elif args.scenario == "pauseresume100":
+        for _index in range(100):
+            latencies.append(send_command(port, "pause"))
+            latencies.append(send_command(port, "play"))
     elif args.scenario == "scroll10kplaylist":
         for offset in range(0, 10_000, 250):
             latencies.append(send_command(port, "playlist_scroll", offset=offset))

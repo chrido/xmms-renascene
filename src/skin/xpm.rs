@@ -5,7 +5,7 @@ use image::ImageDecoder;
 
 use super::layout::SkinRect;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct XpmImage {
     width: usize,
     height: usize,

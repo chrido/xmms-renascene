@@ -223,3 +223,34 @@ pub(crate) fn checkpoint_playback_position(
         Err(err) => eprintln!("xmms-rs: failed to save Android position checkpoint: {err}"),
     }
 }
+
+pub(crate) fn persist_playback_position_now(
+    backend: &RodioBackend,
+    playlist_position: Option<usize>,
+) -> io::Result<()> {
+    let Some(position_ms) = backend.position_ms().map(|position| position.max(0)) else {
+        return Ok(());
+    };
+    let mut config = {
+        let _state_io = STATE_IO
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let (config_path, _) = fallback_state_paths(&default_config_dir());
+        match Config::load_from_file(&config_path) {
+            Ok(config) => config,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => Config::default(),
+            Err(err) => return Err(err),
+        }
+    };
+    config.playback_position_ms = position_ms;
+    config.playlist_position =
+        playlist_position.map_or(-1, |position| position.min(i32::MAX as usize) as i32);
+    persistence_writer()?.send(PersistenceWrite::Position(config))?;
+    persistence_writer()?.flush()?;
+    *LAST_POSITION_CHECKPOINT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(Instant::now());
+    Ok(())
+}

@@ -58,6 +58,20 @@ mod tests {
     }
 
     #[test]
+    fn caches_xpm_surfaces_until_image_pixels_change() {
+        let mut image = XpmImage::from_argb_pixels(2, 1, vec![0xff01_0203, 0xff04_0506]).unwrap();
+
+        let first = surface_from_xpm(&image).unwrap();
+        let second = surface_from_xpm(&image).unwrap();
+        assert!(first.shares_storage_with(&second));
+
+        image.set_pixel_rgba(0, 0, [10, 20, 30, 255]);
+        let changed = surface_from_xpm(&image).unwrap();
+        assert!(!first.shares_storage_with(&changed));
+        assert_eq!(changed.pixel_argb(0, 0), 0xff0a_141e);
+    }
+
+    #[test]
     fn blits_source_rect_to_destination() {
         let image = XpmImage::parse(
             r#"/* XPM */

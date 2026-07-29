@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 
 use super::surface::{
@@ -8,6 +10,13 @@ use crate::skin::layout::{SkinRect, SpriteSpec};
 use crate::skin::widget::TextBox;
 use crate::skin::xpm::XpmImage;
 use crate::skin::{DefaultSkin, SkinPixmapKind};
+
+const MAX_CACHED_XPM_SURFACES: usize = 64;
+
+thread_local! {
+    static XPM_SURFACE_CACHE: RefCell<HashMap<XpmImage, ImageSurface>> =
+        RefCell::new(HashMap::new());
+}
 
 #[derive(Debug)]
 pub enum RenderError {
@@ -45,6 +54,10 @@ impl From<BorrowError> for RenderError {
 }
 
 pub fn surface_from_xpm(image: &XpmImage) -> Result<ImageSurface, RenderError> {
+    if let Some(surface) = XPM_SURFACE_CACHE.with(|cache| cache.borrow().get(image).cloned()) {
+        return Ok(surface);
+    }
+
     let width = i32::try_from(image.width()).map_err(|_| RenderError::DimensionTooLarge {
         width: image.width(),
         height: image.height(),
@@ -54,15 +67,14 @@ pub fn surface_from_xpm(image: &XpmImage) -> Result<ImageSurface, RenderError> {
         height: image.height(),
     })?;
 
-    let surface = ImageSurface::create(Format::ARgb32, width, height)?;
-    for y in 0..image.height() {
-        for x in 0..image.width() {
-            let pixel = image.pixel_argb(x, y).unwrap_or(0xff00_0000);
-            surface.set_pixel_argb(x as i32, y as i32, pixel);
+    let surface = ImageSurface::from_argb_pixels(width, height, image.pixels_argb())?;
+    XPM_SURFACE_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= MAX_CACHED_XPM_SURFACES {
+            cache.clear();
         }
-    }
-
-    surface.mark_dirty();
+        cache.insert(image.clone(), surface.clone());
+    });
     Ok(surface)
 }
 

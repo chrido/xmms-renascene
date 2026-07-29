@@ -6,6 +6,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -79,39 +80,60 @@ impl SocketControl {
 }
 
 pub fn start_socket_control(port: u16) -> Result<SocketControl, String> {
+    start_socket_control_inner(port, None)
+}
+
+pub fn start_socket_control_with_wakeup(
+    port: u16,
+    wakeup: impl Fn() + Send + Sync + 'static,
+) -> Result<SocketControl, String> {
+    start_socket_control_inner(port, Some(Arc::new(wakeup)))
+}
+
+type SocketWakeup = Arc<dyn Fn() + Send + Sync>;
+
+fn start_socket_control_inner(
+    port: u16,
+    wakeup: Option<SocketWakeup>,
+) -> Result<SocketControl, String> {
     let listener = TcpListener::bind(("127.0.0.1", port))
         .map_err(|err| format!("failed to bind control socket on 127.0.0.1:{port}: {err}"))?;
     listener
         .set_nonblocking(false)
         .map_err(|err| format!("failed to configure control socket: {err}"))?;
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::channel::<SocketRequest>();
     thread::Builder::new()
         .name("xmms-control-socket".to_string())
-        .spawn(move || accept_loop(listener, sender))
+        .spawn(move || accept_loop(listener, sender, wakeup))
         .map_err(|err| format!("failed to start control socket thread: {err}"))?;
     Ok(SocketControl { receiver })
 }
 
-fn accept_loop(listener: TcpListener, sender: Sender<SocketRequest>) {
+fn accept_loop(listener: TcpListener, sender: Sender<SocketRequest>, wakeup: Option<SocketWakeup>) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else {
             continue;
         };
         let sender = sender.clone();
+        let wakeup = wakeup.clone();
         let _ = thread::Builder::new()
             .name("xmms-control-client".to_string())
-            .spawn(move || handle_client(stream, sender));
+            .spawn(move || handle_client(stream, sender, wakeup));
     }
 }
 
-fn handle_client(mut stream: TcpStream, sender: Sender<SocketRequest>) {
+fn handle_client(
+    mut stream: TcpStream,
+    sender: Sender<SocketRequest>,
+    wakeup: Option<SocketWakeup>,
+) {
     let Ok(reader_stream) = stream.try_clone() else {
         return;
     };
     let reader = BufReader::new(reader_stream);
     for line in reader.lines() {
         let response = match line {
-            Ok(line) => handle_line(line.trim(), &sender),
+            Ok(line) => handle_line(line.trim(), &sender, wakeup.as_deref()),
             Err(err) => json!({ "accepted": false, "ok": false, "error": err.to_string() }),
         };
         let response = serde_json::to_string(&response).unwrap_or_else(|_| {
@@ -122,7 +144,11 @@ fn handle_client(mut stream: TcpStream, sender: Sender<SocketRequest>) {
     }
 }
 
-fn handle_line(line: &str, sender: &Sender<SocketRequest>) -> Value {
+fn handle_line(
+    line: &str,
+    sender: &Sender<SocketRequest>,
+    wakeup: Option<&(dyn Fn() + Send + Sync)>,
+) -> Value {
     if line.is_empty() {
         return json!({ "accepted": false, "ok": false, "error": "empty command" });
     }
@@ -148,6 +174,9 @@ fn handle_line(line: &str, sender: &Sender<SocketRequest>) -> Value {
             id,
             SocketAck::rejected("frontend is no longer accepting commands"),
         );
+    }
+    if let Some(wakeup) = wakeup {
+        wakeup();
     }
     match response.recv_timeout(Duration::from_secs(5)) {
         Ok(ack) => ack_json(id, ack),
@@ -349,6 +378,8 @@ fn required_i64_any(value: &Value, keys: &[&str]) -> Result<i64, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     #[test]
@@ -376,5 +407,26 @@ mod tests {
             parse_socket_command(&value).unwrap(),
             SocketCommand::App(AppCommand::Playlist(PlaylistCommand::SetPosition(250)))
         );
+    }
+
+    #[test]
+    fn notifies_frontend_after_enqueuing_request() {
+        let (sender, receiver) = mpsc::channel::<SocketRequest>();
+        let consumer = thread::spawn(move || {
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .accept();
+        });
+        let wakeups = AtomicUsize::new(0);
+        let wakeup = || {
+            wakeups.fetch_add(1, Ordering::Relaxed);
+        };
+
+        let response = handle_line(r#"{"id":1,"command":"pause"}"#, &sender, Some(&wakeup));
+
+        consumer.join().unwrap();
+        assert_eq!(wakeups.load(Ordering::Relaxed), 1);
+        assert_eq!(response["accepted"], true);
     }
 }

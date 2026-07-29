@@ -102,7 +102,7 @@ use crate::skineditor::{
     MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
 };
 use crate::socket_control::{
-    start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
+    start_socket_control_with_wakeup, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
 
 pub(crate) mod file_info;
@@ -282,7 +282,21 @@ fn build_preview_window(
         .focusable(true)
         .build();
     let panel_windows = Rc::new(PanelWindows::new(app, &main_state, &drawing_area, &window));
-    let socket_control = socket_port.map(start_socket_control).transpose()?;
+    let socket_wakeup_action = gtk::gio::SimpleAction::new("socket-control-wakeup", None);
+    app.add_action(&socket_wakeup_action);
+    let socket_wakeup = gtk::glib::SendWeakRef::from(socket_wakeup_action.downgrade());
+    let socket_control = socket_port
+        .map(|port| {
+            start_socket_control_with_wakeup(port, move || {
+                let socket_wakeup = socket_wakeup.clone();
+                gtk::glib::idle_add_once(move || {
+                    if let Some(action) = socket_wakeup.upgrade() {
+                        action.activate(None);
+                    }
+                });
+            })
+        })
+        .transpose()?;
     let socket_control = Rc::new(socket_control);
     let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
@@ -307,6 +321,23 @@ fn build_preview_window(
         &main_state,
         &drawing_area,
     ));
+    let runtime_context = GtkRuntimeTickContext {
+        app: app.clone(),
+        window: window.clone(),
+        drawing_area: drawing_area.clone(),
+        panel_windows: Rc::clone(&panel_windows),
+        menu_popover: Rc::clone(&menu_popover),
+        main_state: Rc::clone(&main_state),
+        mpris_service: Rc::clone(&mpris_service),
+        socket_control: Rc::clone(&socket_control),
+        last_tick: Rc::new(Cell::new(Instant::now())),
+    };
+    {
+        let runtime_context = runtime_context.clone();
+        socket_wakeup_action.connect_activate(move |_action, _parameter| {
+            process_gtk_socket_control(&runtime_context, true);
+        });
+    }
 
     {
         let render_cache = Rc::new(RefCell::new(GtkRenderSurfaceCache::default()));
@@ -711,20 +742,7 @@ fn build_preview_window(
         });
     }
 
-    schedule_gtk_runtime_tick(
-        GtkRuntimeTickContext {
-            app: app.clone(),
-            window: window.clone(),
-            drawing_area: drawing_area.clone(),
-            panel_windows: Rc::clone(&panel_windows),
-            menu_popover: Rc::clone(&menu_popover),
-            main_state: Rc::clone(&main_state),
-            mpris_service: Rc::clone(&mpris_service),
-            socket_control: Rc::clone(&socket_control),
-            last_tick: Rc::new(Cell::new(Instant::now())),
-        },
-        GTK_TRANSITION_TICK,
-    );
+    schedule_gtk_runtime_tick(runtime_context, GTK_TRANSITION_TICK);
 
     window.set_child(Some(&drawing_area));
     window.present();
@@ -808,26 +826,7 @@ fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
             .saturating_duration_since(context.last_tick.replace(now))
             .as_millis()
             .clamp(1, u128::from(u32::MAX)) as u32;
-        let socket_redraw = poll_socket_control_gtk(
-            &context.socket_control,
-            &context.app,
-            &context.window,
-            &context.drawing_area,
-            &context.panel_windows,
-            &context.menu_popover,
-            &context.main_state,
-        );
-        if socket_redraw {
-            context.drawing_area.queue_draw();
-            context.panel_windows.playlist_area.queue_draw();
-            context.panel_windows.equalizer_area.queue_draw();
-            sync_panel_windows(&context.panel_windows, &context.main_state.borrow());
-            resize_main_window(
-                &context.window,
-                &context.drawing_area,
-                &context.main_state.borrow(),
-            );
-        }
+        process_gtk_socket_control(&context, true);
         let (redraw, next_delay, mpris_events, mpris_properties) = {
             let mut state = context.main_state.borrow_mut();
             let redraw = state.update_timer_tick_targets(elapsed_ms);
@@ -850,6 +849,31 @@ fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
         );
         schedule_gtk_runtime_tick(context, next_delay);
     });
+}
+
+fn process_gtk_socket_control(context: &GtkRuntimeTickContext, queue_main_redraw: bool) {
+    let socket_redraw = poll_socket_control_gtk(
+        &context.socket_control,
+        &context.app,
+        &context.window,
+        &context.drawing_area,
+        &context.panel_windows,
+        &context.menu_popover,
+        &context.main_state,
+    );
+    if socket_redraw {
+        if queue_main_redraw {
+            context.drawing_area.queue_draw();
+        }
+        context.panel_windows.playlist_area.queue_draw();
+        context.panel_windows.equalizer_area.queue_draw();
+        sync_panel_windows(&context.panel_windows, &context.main_state.borrow());
+        resize_main_window(
+            &context.window,
+            &context.drawing_area,
+            &context.main_state.borrow(),
+        );
+    }
 }
 
 fn queue_gtk_tick_redraw(

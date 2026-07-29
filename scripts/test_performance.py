@@ -1,9 +1,11 @@
 import json
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from unittest import mock
 
+from scripts import perf_driver
 from scripts.performance import (
     PerformanceRunner,
     metric_deltas,
@@ -18,6 +20,9 @@ class PerformanceTest(unittest.TestCase):
         self.assertEqual(validate_scenario("coldstart", "gtk").name, "coldstart")
         with self.assertRaisesRegex(ValueError, "unsupported on platform"):
             validate_scenario("widgets", "egui")
+        self.assertEqual(validate_scenario("seek100", "egui").audio_seconds, 3_600)
+        with self.assertRaisesRegex(ValueError, "unsupported on platform"):
+            validate_scenario("seek100", "android")
 
     def test_summarizes_iterations_with_tail_percentiles(self):
         summary = summarize_iterations(
@@ -105,6 +110,47 @@ class PerformanceTest(unittest.TestCase):
 
             self.assertEqual(Path(build["binary"]), apk)
             self.assertIn("Using prebuilt", (result / "build.log").read_text())
+
+    def test_seek_scenario_creates_sparse_one_hour_wave(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / "target").mkdir()
+            result = PerformanceRunner(repo).run(
+                scenario="seek100",
+                platform="egui",
+                iterations=1,
+                warmup=0,
+                duration=1,
+                dry_run=True,
+            )
+            audio = result / "inputs" / "perf-tone.wav"
+            with wave.open(str(audio), "rb") as source:
+                self.assertEqual(source.getframerate(), 8_000)
+                self.assertEqual(source.getnframes(), 8_000 * 3_600)
+
+    def test_stress_scenarios_issue_expected_commands(self):
+        args = mock.Mock(scenario="seek100")
+        with mock.patch.object(perf_driver, "send_command", return_value=1.0) as send:
+            latencies = perf_driver.scenario_actions(args, 1234)
+        self.assertEqual(len(latencies), 101)
+        self.assertEqual(send.call_args_list[0], mock.call(1234, "play"))
+        seek_calls = send.call_args_list[1:]
+        self.assertEqual(len(seek_calls), 100)
+        self.assertEqual(seek_calls[0], mock.call(1234, "seek", position_ms=0))
+        self.assertEqual(
+            len({call.kwargs["position_ms"] for call in seek_calls}),
+            100,
+        )
+
+        args.scenario = "pauseresume100"
+        with mock.patch.object(perf_driver, "send_command", return_value=1.0) as send:
+            latencies = perf_driver.scenario_actions(args, 1234)
+        self.assertEqual(len(latencies), 201)
+        self.assertEqual(send.call_count, 201)
+        self.assertEqual(send.call_args_list[1:3], [
+            mock.call(1234, "pause"),
+            mock.call(1234, "play"),
+        ])
 
 
 if __name__ == "__main__":
