@@ -114,8 +114,6 @@ def run_desktop(args: argparse.Namespace) -> dict[str, Any]:
     process = subprocess.Popen(
         command,
         env=environment,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
     )
     startup_ms = None
     latencies: list[float] = []
@@ -126,8 +124,15 @@ def run_desktop(args: argparse.Namespace) -> dict[str, Any]:
         remaining = max(0.0, args.duration - ((time.perf_counter() - started)))
         if remaining:
             time.sleep(remaining)
-        send_command(port, "quit")
-        process.wait(timeout=10)
+        if process.poll() is None:
+            try:
+                send_command(port, "quit")
+            except OSError:
+                if process.poll() is None:
+                    raise
+        return_code = process.wait(timeout=10)
+        if return_code != 0:
+            raise RuntimeError(f"application exited with status {return_code}")
     finally:
         if process.poll() is None:
             process.terminate()

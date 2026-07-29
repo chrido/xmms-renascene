@@ -382,7 +382,11 @@ class PerformanceRunner:
         return {
             "schema_version": 1,
             "commit": commit,
-            "build_profile": "profiling",
+            "build_profile": (
+                "release-prebuilt"
+                if platform == "android" and os.environ.get("XMMS_ANDROID_PERF_APK")
+                else "profiling"
+            ),
             "platform": platform,
             "scenario": spec.name,
             "scenario_parameters": {
@@ -413,7 +417,19 @@ class PerformanceRunner:
         return {"serial": serial, "model": model or "unavailable", "sdk": sdk or "unavailable"}
 
     def _build(self, platform: str, result_dir: Path, *, dry_run: bool) -> dict[str, Any]:
-        if platform == "android":
+        prebuilt_android_apk = (
+            Path(os.environ["XMMS_ANDROID_PERF_APK"])
+            if platform == "android" and os.environ.get("XMMS_ANDROID_PERF_APK")
+            else None
+        )
+        if prebuilt_android_apk is not None:
+            command = ["prebuilt-android-apk", str(prebuilt_android_apk)]
+            binary = (
+                prebuilt_android_apk
+                if prebuilt_android_apk.is_absolute()
+                else self.repo_dir / prebuilt_android_apk
+            )
+        elif platform == "android":
             android_target = os.environ.get(
                 "XMMS_ANDROID_PERF_TARGET", "aarch64-linux-android"
             )
@@ -446,9 +462,14 @@ class PerformanceRunner:
             ]
             binary = self.repo_dir / "target" / "profiling" / "xmms-rs"
         log = result_dir / "build.log"
-        status = self._run_logged(command, log, dry_run=dry_run)
-        if status != 0:
-            raise RuntimeError(f"profiling build failed; see {log}")
+        if prebuilt_android_apk is not None:
+            log.write_text(f"Using prebuilt Android performance APK: {binary}\n")
+            if not dry_run and not binary.is_file():
+                raise RuntimeError(f"prebuilt Android performance APK is missing: {binary}")
+        else:
+            status = self._run_logged(command, log, dry_run=dry_run)
+            if status != 0:
+                raise RuntimeError(f"profiling build failed; see {log}")
         if platform == "android" and not dry_run:
             if not shutil.which("adb"):
                 raise RuntimeError("adb is required to install the Android profiling APK")

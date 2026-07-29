@@ -1039,6 +1039,23 @@ class RepoTool:
             return 0
         return 1
 
+    async def android_apk_emulator_release(self) -> int:
+        """Build the signed x86_64 optimized APK used by emulator performance runs."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+        except RuntimeError as err:
+            logging.error("%s", err)
+            return 1
+        if self._build_android_apk(env, ANDROID_EMULATOR_TARGET, release=True):
+            logging.info(
+                "Android emulator release APK written to %s",
+                REPO_DIR / "target" / "release" / "apk" / "xmms-renascene.apk",
+            )
+            return 0
+        return 1
+
     async def android_apk_release(self, output_dir: str = "release-assets") -> int:
         """Build an arm64 release APK named with its SHA-256 digest."""
         os.chdir(REPO_DIR)

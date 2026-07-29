@@ -127,6 +127,9 @@ jobs:
     continue-on-error: true
     timeout-minutes: 30
 
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+
     strategy:
       fail-fast: false
       matrix:
@@ -143,6 +146,8 @@ jobs:
           - playbacknovisualizer
           - scroll10kplaylist
           - playbackcontrols
+          - seek100
+          - pauseresume100
           - layoutchange
 
     steps:
@@ -162,8 +167,12 @@ jobs:
             libgstreamer-plugins-base1.0-dev \
             libgstreamer1.0-dev \
             libgtk-4-dev \
+            libegl1 \
+            libgl1-mesa-dri \
+            libxkbcommon-x11-0 \
             linux-tools-common \
             pkg-config \
+            xauth \
             xvfb
 
       - name: Capture directional performance scenario
@@ -212,7 +221,7 @@ jobs:
       ANDROID_API_LEVEL: "36"
       ANDROID_BUILD_TOOLS: "36.0.0"
       ANDROID_NDK_VERSION: "27.2.12479018"
-      XMMS_ANDROID_PERF_TARGET: x86_64-linux-android
+      XMMS_ANDROID_PERF_APK: target/release/apk/xmms-renascene.apk
       RUST_BACKTRACE: 1
 
     steps:
@@ -250,6 +259,22 @@ jobs:
 
       - name: Install cargo-apk
         run: cargo install cargo-apk --version 0.10.0 --locked
+
+      - name: Create Android signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
+
+      - name: Build optimized Android performance APK
+        run: ./repo android-apk-emulator-release
 
       - name: Enable KVM access
         run: |

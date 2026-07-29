@@ -1409,7 +1409,7 @@ def test_android_player_widget_is_packaged(
     assert "XmmsWidgetSupport.proportionalPadding(" in info_widget_source
     assert "manager.updateAppWidget(widgetId, views)" in info_widget_source
     assert "widget_player_info_content" in info_widget_source
-    assert "views.setOnClickPendingIntent(open" in info_widget_source
+    assert "views.setOnClickPendingIntent(resources.open" in info_widget_source
     assert "nativeUpdateTitleMarquee(" in info_widget_source
     assert "MARQUEE_HANDLER.postDelayed(this, MARQUEE_TICK_MS)" in info_widget_source
     assert "titleOffsetPx" in info_widget_source
@@ -1429,7 +1429,7 @@ def test_android_player_widget_is_packaged(
         ("next", "CONTROL_NEXT"),
     ):
         assert re.search(
-            rf"setOnClickPendingIntent\s*\(\s*{view_id}\s*,"
+            rf"setOnClickPendingIntent\s*\(\s*resources\.{view_id}\s*,"
             rf"\s*controlPendingIntent\s*\(\s*context\s*,"
             rf"\s*XmmsPlaybackService\.{media_action}\s*\)\s*\)",
             widget_source,

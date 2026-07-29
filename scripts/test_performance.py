@@ -87,6 +87,25 @@ class PerformanceTest(unittest.TestCase):
                 (result / "build.log").read_text(),
             )
 
+    def test_android_build_can_reuse_prebuilt_apk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            result = repo / "result"
+            result.mkdir()
+            apk = repo / "target" / "release" / "apk" / "xmms-renascene.apk"
+            apk.parent.mkdir(parents=True)
+            apk.write_bytes(b"apk")
+            runner = PerformanceRunner(repo)
+            with mock.patch.dict(
+                "os.environ",
+                {"XMMS_ANDROID_PERF_APK": str(apk.relative_to(repo))},
+                clear=False,
+            ):
+                build = runner._build("android", result, dry_run=True)
+
+            self.assertEqual(Path(build["binary"]), apk)
+            self.assertIn("Using prebuilt", (result / "build.log").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
