@@ -93,7 +93,8 @@ fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
         .expect("duration indexing scheduler body");
     assert!(duration_index.contains("thread::spawn(move ||"));
     assert!(duration_index.contains("probe.probe(&item)"));
-    assert!(duration_index.contains("send_duration_index_batch(&sender, &mut results)"));
+    assert!(duration_index.contains("send_duration_index_batch(&sender, results)"));
+    assert!(duration_index.contains("send_batch(&mut results)"));
     assert!(app.contains("const DURATION_INDEX_BATCH_SIZE: usize = 16;"));
     let duration_preflight = duration_index
         .split("thread::spawn(move ||")
