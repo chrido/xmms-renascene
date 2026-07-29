@@ -446,7 +446,7 @@ fn main_keyboard_shortcuts_trigger_preview_actions() {
         .press_shortcut(Shortcut::Pause)
         .assert_player_state(PlayerState::Paused)
         .press_shortcut(Shortcut::Stop)
-        .assert_player_state(PlayerState::Paused)
+        .assert_player_state(PlayerState::Stopped)
         .assert_position(0)
         .click(MainTarget::position(219))
         .assert_position(219)
@@ -607,7 +607,7 @@ fn shaded_transport_controls_trigger_playback_actions() {
         .assert_playlist_position(Some(0))
         .assert_current_playlist_entry("file:///tmp/one.ogg")
         .click(MainTarget::STOP)
-        .assert_player_state(PlayerState::Paused)
+        .assert_player_state(PlayerState::Stopped)
         .assert_position(0);
 }
 
@@ -627,9 +627,9 @@ fn shaded_player_displays_time_and_position_slider() {
         .assert_playback_position_ms(130_000)
         .assert_position(219)
         .click(MainTarget::STOP)
-        .assert_shaded_main_time_text(" 00", "00")
+        .assert_shaded_main_time_text("   ", "  ")
         .assert_shaded_main_position(1)
-        .assert_shaded_main_position_visible(true);
+        .assert_shaded_main_position_visible(false);
 }
 
 #[test]
@@ -1216,8 +1216,8 @@ fn update_timer_advances_position_while_playing_only() {
         .press_shortcut(Shortcut::Stop)
         .update_timer_tick(1_000)
         .assert_position(0)
-        .assert_player_state(PlayerState::Paused)
-        .assert_main_time_digits([10, 0, 0, 0, 0]);
+        .assert_player_state(PlayerState::Stopped)
+        .assert_main_time_digits([10; 5]);
 }
 
 #[test]
@@ -1444,7 +1444,7 @@ fn mpris_transport_methods_drive_playlist_and_playback() {
         .execute_mpris_command(MprisCommand::PlayPause)
         .assert_player_state(PlayerState::Playing)
         .execute_mpris_command(MprisCommand::Stop)
-        .assert_player_state(PlayerState::Paused)
+        .assert_player_state(PlayerState::Stopped)
         .assert_position(0)
         .assert_mpris_event(MprisEvent::PlaybackStatusChanged)
         .assert_mpris_event(MprisEvent::Seeked(0));
@@ -1496,12 +1496,12 @@ fn transport_buttons_update_player_state_and_position() {
 
     app.click(MainTarget::PLAY)
         .click(MainTarget::STOP)
-        .assert_player_state(PlayerState::Paused)
+        .assert_player_state(PlayerState::Stopped)
         .assert_position(0);
 
     app.click(MainTarget::EJECT)
         .assert_window_visible(Window::Player)
-        .assert_player_state(PlayerState::Paused)
+        .assert_player_state(PlayerState::Stopped)
         .assert_file_dialog_visible();
 }
 
@@ -1526,7 +1526,7 @@ fn playlist_footer_transport_buttons_update_player_state_and_position() {
         .click_panel(PanelTarget::PlaylistPrevious)
         .assert_playlist_position(Some(0))
         .click_panel(PanelTarget::PlaylistStop)
-        .assert_player_state(PlayerState::Paused)
+        .assert_player_state(PlayerState::Stopped)
         .assert_position(0)
         .click_panel(PanelTarget::PlaylistEject)
         .assert_file_dialog_visible();
@@ -1544,7 +1544,7 @@ fn docked_playlist_footer_transport_buttons_use_current_geometry() {
     .click_docked_panel(PanelTarget::PlaylistPlay)
     .assert_player_state(PlayerState::Playing)
     .click_docked_panel(PanelTarget::PlaylistStop)
-    .assert_player_state(PlayerState::Paused)
+    .assert_player_state(PlayerState::Stopped)
     .assert_position(0);
 }
 
@@ -2137,7 +2137,7 @@ fn playlist_font_preference_and_visualization_feed_render_state() {
 }
 
 #[test]
-fn halt_preserves_visualization_state() {
+fn halt_clears_visualization_state() {
     let mut app = default_app();
 
     app.set_visualization_mode(VisMode::Analyzer)
@@ -2145,7 +2145,7 @@ fn halt_preserves_visualization_state() {
         .tick_visualization(100)
         .assert_visualization_band_at_least(4, 0.8)
         .press_shortcut(Shortcut::Stop)
-        .assert_visualization_band_at_least(4, 0.8);
+        .assert_visualization_band_at_most(4, 0.0);
 }
 
 #[test]
