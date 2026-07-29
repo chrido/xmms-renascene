@@ -23,6 +23,7 @@ from typing import Any, cast
 from .commandline import acmd_background, cli_follow, command_exists, configure_logging, raise_on_error, required_command
 from .fire_lite import FireLite
 from .flatpak import FlatpakInstaller
+from .performance import PerformanceRunner
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 RUST_BIN = REPO_DIR / "target" / "debug" / "xmms-rs"
@@ -227,6 +228,64 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
 
 
 class RepoTool:
+    async def perf(
+        self,
+        scenario: str,
+        platform: str,
+        iterations: int = 5,
+        warmup: int = 1,
+        duration: int = 0,
+        baseline: str = "",
+        expected_hotspot: str = "",
+        regression_threshold: float = 10.0,
+        diagnostics: bool = True,
+        dry_run: bool = False,
+    ) -> int:
+        """Run a deterministic performance scenario and capture its artifacts."""
+        os.chdir(REPO_DIR)
+        try:
+            result = PerformanceRunner(REPO_DIR).run(
+                scenario=scenario,
+                platform=platform,
+                iterations=iterations,
+                warmup=warmup,
+                duration=duration,
+                baseline=baseline,
+                expected_hotspot=expected_hotspot,
+                regression_threshold=regression_threshold,
+                diagnostics=diagnostics,
+                dry_run=dry_run,
+            )
+        except (OSError, RuntimeError, ValueError) as err:
+            logging.error("%s", err)
+            return 2
+        print(result)
+        return 0
+
+    async def perf_compare(
+        self,
+        before: str,
+        after: str,
+        expected_hotspot: str = "",
+        regression_threshold: float = 10.0,
+        output: str = "",
+    ) -> int:
+        """Compare two result directories from the same scenario and platform."""
+        os.chdir(REPO_DIR)
+        try:
+            result = PerformanceRunner(REPO_DIR).compare(
+                Path(before),
+                Path(after),
+                expected_hotspot=expected_hotspot,
+                regression_threshold=regression_threshold,
+                output=Path(output) if output else None,
+            )
+        except (OSError, ValueError) as err:
+            logging.error("%s", err)
+            return 2
+        print(result)
+        return 0
+
     def _android_environment(self) -> dict[str, str]:
         sdk = ANDROID_SDK
         ndk = Path(os.environ.get("ANDROID_NDK_HOME", str(sdk / "ndk" / ANDROID_NDK_VERSION)))
@@ -976,6 +1035,23 @@ class RepoTool:
             logging.info(
                 "Android emulator APK written to %s",
                 REPO_DIR / "target" / "debug" / "apk" / "xmms-renascene.apk",
+            )
+            return 0
+        return 1
+
+    async def android_apk_emulator_release(self) -> int:
+        """Build the signed x86_64 optimized APK used by emulator performance runs."""
+        os.chdir(REPO_DIR)
+        required_command("cargo-apk")
+        try:
+            env = self._android_environment()
+        except RuntimeError as err:
+            logging.error("%s", err)
+            return 1
+        if self._build_android_apk(env, ANDROID_EMULATOR_TARGET, release=True):
+            logging.info(
+                "Android emulator release APK written to %s",
+                REPO_DIR / "target" / "release" / "apk" / "xmms-renascene.apk",
             )
             return 0
         return 1

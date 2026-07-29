@@ -117,6 +117,27 @@ impl AndroidMediaPlaylistState {
         true
     }
 
+    pub(crate) fn sync_mirror_position(
+        &mut self,
+        activity: AndroidActivityGeneration,
+        position: Option<usize>,
+    ) -> bool {
+        let Self::Mirror {
+            activity: owner,
+            media,
+        } = self
+        else {
+            return false;
+        };
+        if *owner != activity {
+            return false;
+        }
+        if let Some(position) = position {
+            media.playlist.set_position(position);
+        }
+        true
+    }
+
     pub(crate) fn media(&self) -> Option<&AndroidMediaPlaylist> {
         match self {
             Self::Uninitialized => None,

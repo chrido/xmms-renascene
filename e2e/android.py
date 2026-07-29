@@ -210,6 +210,19 @@ class AndroidDevice:
             str(control),
         )
 
+    def open_player_from_info_widget(self) -> None:
+        self.clear_logcat()
+        self.shell(
+            "am",
+            "start",
+            "-W",
+            "-f",
+            "0x30000000",
+            "-n",
+            ANDROID_ACTIVITY,
+        )
+        self.wait_for_app()
+
     def app_pid(self) -> str:
         return self.shell("pidof", ANDROID_PACKAGE, check=False).stdout.strip()
 
@@ -637,10 +650,12 @@ class AndroidDevice:
         *,
         changed_from: bytes | Path | None = None,
         timeout: float = 5.0,
+        minimum_changed_fraction: float = 0.01,
     ) -> Path:
         png = self.wait_for_rendered_screen(
             changed_from=changed_from,
             timeout=timeout,
+            minimum_changed_fraction=minimum_changed_fraction,
         )
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(png)

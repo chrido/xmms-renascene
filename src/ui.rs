@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::fs;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -28,8 +29,10 @@ use crate::app::playlist_actions::{
 use crate::app::preferences_model::{
     normalize_title_format, set_scale_factor as set_config_scale_factor, title_format_preview,
 };
-use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
-use crate::app::store::{AppStore, DispatchResult};
+use crate::app::preview::{
+    apply_preview_options_to_config, apply_preview_playlist, PreviewOptions,
+};
+use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
@@ -64,7 +67,9 @@ pub use crate::playlist::PlaylistMenuKind;
 use crate::{app_log_debug, app_log_info, app_log_trace};
 use gtk::cairo;
 
-use crate::playlist::{file_uri_to_path, DurationIndexResult, Playlist, PlaylistSortKey};
+use crate::playlist::{
+    file_uri_to_path, DurationIndexResult, Playlist, PlaylistRevisions, PlaylistSortKey,
+};
 use crate::render::{
     docked_panel_size, equalizer_window_height, main_window_height, paint_scaled,
     playlist_window_height, render_equalizer_state, render_main_player_state,
@@ -97,7 +102,7 @@ use crate::skineditor::{
     MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
 };
 use crate::socket_control::{
-    start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
+    start_socket_control_with_wakeup, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
 
 pub(crate) mod file_info;
@@ -121,6 +126,11 @@ use style::{
 type SharedPlaybackBackend = Rc<RefCell<Box<dyn PlaybackBackend>>>;
 
 const DEFAULT_SCALE: i32 = 2;
+const GTK_TRANSITION_TICK: Duration = Duration::from_millis(20);
+const GTK_MARQUEE_TICK: Duration = Duration::from_millis(84);
+const GTK_PLAYBACK_TICK: Duration = Duration::from_millis(250);
+const GTK_PAUSED_TICK: Duration = Duration::from_millis(500);
+const GTK_IDLE_TICK: Duration = Duration::from_secs(1);
 const STOP_FADE_DURATION_MS: i64 = 1_000;
 type PreferencesChanged = Rc<dyn Fn()>;
 const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
@@ -207,6 +217,7 @@ fn build_preview_window(
     options: PreviewOptions,
     persist_session: bool,
 ) -> Result<(), String> {
+    let _startup_span = crate::perf_span!("gtk_startup");
     let (config_path, playlist_path) = fallback_state_paths(&default_config_dir());
     let app_state = if persist_session {
         load_saved_state(&config_path, &playlist_path, options.reset)
@@ -221,10 +232,6 @@ fn build_preview_window(
     if let Some(config_dir) = config_path.parent() {
         state.set_equalizer_preset_dir(config_dir.to_path_buf());
     }
-    match create_backend(PlaybackBackendKind::Auto) {
-        Ok(backend) => state.set_playback_backend(Rc::new(RefCell::new(backend))),
-        Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
-    }
     let (initial_width, initial_height) = state.docked_panel_size();
     let initial_scale = state.scale_factor();
     let initial_device_width = scale_dim(initial_width, initial_scale);
@@ -232,6 +239,7 @@ fn build_preview_window(
     let main_state = Rc::new(RefCell::new(state));
     refresh_xmms_skin_css(main_state.borrow().active_skin());
 
+    let _window_span = crate::perf_span!("gtk_window_build");
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("XMMS Renascene Rust Preview")
@@ -274,7 +282,21 @@ fn build_preview_window(
         .focusable(true)
         .build();
     let panel_windows = Rc::new(PanelWindows::new(app, &main_state, &drawing_area, &window));
-    let socket_control = socket_port.map(start_socket_control).transpose()?;
+    let socket_wakeup_action = gtk::gio::SimpleAction::new("socket-control-wakeup", None);
+    app.add_action(&socket_wakeup_action);
+    let socket_wakeup = gtk::glib::SendWeakRef::from(socket_wakeup_action.downgrade());
+    let socket_control = socket_port
+        .map(|port| {
+            start_socket_control_with_wakeup(port, move || {
+                let socket_wakeup = socket_wakeup.clone();
+                gtk::glib::idle_add_once(move || {
+                    if let Some(action) = socket_wakeup.upgrade() {
+                        action.activate(None);
+                    }
+                });
+            })
+        })
+        .transpose()?;
     let socket_control = Rc::new(socket_control);
     let mpris_service = Rc::new(MprisService::own_session_bus(Rc::clone(&main_state)));
     sync_panel_windows(&panel_windows, &main_state.borrow());
@@ -299,16 +321,44 @@ fn build_preview_window(
         &main_state,
         &drawing_area,
     ));
+    let runtime_context = GtkRuntimeTickContext {
+        app: app.clone(),
+        window: window.clone(),
+        drawing_area: drawing_area.clone(),
+        panel_windows: Rc::clone(&panel_windows),
+        menu_popover: Rc::clone(&menu_popover),
+        main_state: Rc::clone(&main_state),
+        mpris_service: Rc::clone(&mpris_service),
+        socket_control: Rc::clone(&socket_control),
+        last_tick: Rc::new(Cell::new(Instant::now())),
+    };
+    {
+        let runtime_context = runtime_context.clone();
+        socket_wakeup_action.connect_activate(move |_action, _parameter| {
+            process_gtk_socket_control(&runtime_context, true);
+        });
+    }
 
     {
+        let render_cache = Rc::new(RefCell::new(GtkRenderSurfaceCache::default()));
         let main_state = Rc::clone(&main_state);
         drawing_area.set_draw_func(move |_area, cr, width, height| {
             let state = main_state.borrow();
             let docked_state = state.docked_panel_state();
             let (base_width, base_height) = docked_panel_size(docked_state);
-            match render_scaled_to_gtk(cr, width, height, base_width, base_height, |cr, pass| {
-                render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
-            }) {
+            let render_key = state.docked_render_key();
+            match render_scaled_to_gtk_cached(
+                &mut render_cache.borrow_mut(),
+                render_key,
+                cr,
+                width,
+                height,
+                base_width,
+                base_height,
+                |cr, pass| {
+                    render_docked_ui_state(cr, state.active_skin(), &state, pass).map(|_| ())
+                },
+            ) {
                 Ok(()) => {
                     app_log_trace!(
                         render,
@@ -692,54 +742,22 @@ fn build_preview_window(
         });
     }
 
-    {
-        let app = app.clone();
-        let drawing_area = drawing_area.clone();
-        let window = window.clone();
-        let panel_windows = Rc::clone(&panel_windows);
-        let menu_popover = Rc::clone(&menu_popover);
-        let main_state = Rc::clone(&main_state);
-        let mpris_service = Rc::clone(&mpris_service);
-        let socket_control = Rc::clone(&socket_control);
-        gtk::glib::timeout_add_local(Duration::from_millis(20), move || {
-            let socket_redraw = poll_socket_control_gtk(
-                &socket_control,
-                &app,
-                &window,
-                &drawing_area,
-                &panel_windows,
-                &menu_popover,
-                &main_state,
-            );
-            if socket_redraw {
-                drawing_area.queue_draw();
-                panel_windows.playlist_area.queue_draw();
-                panel_windows.equalizer_area.queue_draw();
-                sync_panel_windows(&panel_windows, &main_state.borrow());
-                resize_main_window(&window, &drawing_area, &main_state.borrow());
-            }
-            let (redraw, mpris_events, mpris_properties) = {
-                let mut state = main_state.borrow_mut();
-                let redraw = state.update_timer_tick(20);
-                let events = state.take_mpris_events();
-                let properties = state.mpris_player_properties();
-                (redraw, events, properties)
-            };
-            mpris_service.emit_events(&mpris_events, &mpris_properties);
-            if handle_mpris_quit_request(&mpris_events, || app.quit()) {
-                return gtk::glib::ControlFlow::Break;
-            }
-            if redraw {
-                drawing_area.queue_draw();
-                panel_windows.playlist_area.queue_draw();
-                panel_windows.equalizer_area.queue_draw();
-            }
-            gtk::glib::ControlFlow::Continue
-        });
-    }
+    schedule_gtk_runtime_tick(runtime_context, GTK_TRANSITION_TICK);
 
     window.set_child(Some(&drawing_area));
     window.present();
+    if persist_session {
+        let main_state = Rc::clone(&main_state);
+        gtk::glib::idle_add_local_once(move || {
+            let _backend_span = crate::perf_span!("gtk_backend_init");
+            match create_backend(PlaybackBackendKind::Auto) {
+                Ok(backend) => main_state
+                    .borrow_mut()
+                    .set_playback_backend(Rc::new(RefCell::new(backend))),
+                Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
+            }
+        });
+    }
     present_visible_panel_windows(&panel_windows, &main_state.borrow());
     if open_preferences {
         main_state.borrow_mut().set_preferences_visible(true);
@@ -758,6 +776,123 @@ fn handle_mpris_quit_request(events: &[MprisEvent], quit: impl FnOnce()) -> bool
         true
     } else {
         false
+    }
+}
+
+#[derive(Clone)]
+struct GtkRuntimeTickContext {
+    app: gtk::Application,
+    window: gtk::ApplicationWindow,
+    drawing_area: gtk::DrawingArea,
+    panel_windows: Rc<PanelWindows>,
+    menu_popover: Rc<gtk::Popover>,
+    main_state: Rc<RefCell<MainWindowUiState>>,
+    mpris_service: Rc<MprisService>,
+    socket_control: Rc<Option<SocketControl>>,
+    last_tick: Rc<Cell<Instant>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GtkTickRedraw {
+    main: bool,
+    playlist: bool,
+    equalizer: bool,
+}
+
+impl GtkTickRedraw {
+    fn from_changes(changes: StateChangeSet) -> Self {
+        Self {
+            main: changes.intersects(StateChangeSet::RENDER_MAIN),
+            playlist: changes.intersects(StateChangeSet::RENDER_PLAYLIST),
+            equalizer: changes.intersects(StateChangeSet::RENDER_EQUALIZER),
+        }
+    }
+
+    fn merge(&mut self, other: Self) {
+        self.main |= other.main;
+        self.playlist |= other.playlist;
+        self.equalizer |= other.equalizer;
+    }
+
+    fn any(self) -> bool {
+        self.main || self.playlist || self.equalizer
+    }
+}
+
+fn schedule_gtk_runtime_tick(context: GtkRuntimeTickContext, delay: Duration) {
+    gtk::glib::timeout_add_local_once(delay, move || {
+        let now = Instant::now();
+        let elapsed_ms = now
+            .saturating_duration_since(context.last_tick.replace(now))
+            .as_millis()
+            .clamp(1, u128::from(u32::MAX)) as u32;
+        process_gtk_socket_control(&context, true);
+        let (redraw, next_delay, mpris_events, mpris_properties) = {
+            let mut state = context.main_state.borrow_mut();
+            let redraw = state.update_timer_tick_targets(elapsed_ms);
+            let next_delay = state.runtime_tick_interval();
+            let events = state.take_mpris_events();
+            let properties = state.mpris_player_properties();
+            (redraw, next_delay, events, properties)
+        };
+        context
+            .mpris_service
+            .emit_events(&mpris_events, &mpris_properties);
+        if handle_mpris_quit_request(&mpris_events, || context.app.quit()) {
+            return;
+        }
+        queue_gtk_tick_redraw(
+            redraw,
+            &context.drawing_area,
+            &context.panel_windows,
+            &context.main_state.borrow(),
+        );
+        schedule_gtk_runtime_tick(context, next_delay);
+    });
+}
+
+fn process_gtk_socket_control(context: &GtkRuntimeTickContext, queue_main_redraw: bool) {
+    let socket_redraw = poll_socket_control_gtk(
+        &context.socket_control,
+        &context.app,
+        &context.window,
+        &context.drawing_area,
+        &context.panel_windows,
+        &context.menu_popover,
+        &context.main_state,
+    );
+    if socket_redraw {
+        if queue_main_redraw {
+            context.drawing_area.queue_draw();
+        }
+        context.panel_windows.playlist_area.queue_draw();
+        context.panel_windows.equalizer_area.queue_draw();
+        sync_panel_windows(&context.panel_windows, &context.main_state.borrow());
+        resize_main_window(
+            &context.window,
+            &context.drawing_area,
+            &context.main_state.borrow(),
+        );
+    }
+}
+
+fn queue_gtk_tick_redraw(
+    redraw: GtkTickRedraw,
+    drawing_area: &gtk::DrawingArea,
+    panel_windows: &PanelWindows,
+    state: &MainWindowUiState,
+) {
+    let playlist_docked = state.panel_state(PanelKind::Playlist).is_docked_visible();
+    let equalizer_docked = state.panel_state(PanelKind::Equalizer).is_docked_visible();
+    if redraw.main || (redraw.playlist && playlist_docked) || (redraw.equalizer && equalizer_docked)
+    {
+        drawing_area.queue_draw();
+    }
+    if redraw.playlist && !playlist_docked {
+        panel_windows.playlist_area.queue_draw();
+    }
+    if redraw.equalizer && !equalizer_docked {
+        panel_windows.equalizer_area.queue_draw();
     }
 }
 
@@ -1007,12 +1142,7 @@ fn preview_state_from_app_state(
         initial_state = AppState::default();
     }
     apply_preview_options_to_config(&mut initial_state.config, &options)?;
-    for path in &options.positional_paths {
-        initial_state
-            .playlist
-            .add_location(path)
-            .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
-    }
+    apply_preview_playlist(&mut initial_state, &options)?;
     if let Some(scenario) = options.screenshot_scenario {
         scenario.apply_to_app_state(&mut initial_state);
     }
@@ -1037,38 +1167,56 @@ fn write_surface_png(surface: &mut ImageSurface, path: &Path) -> io::Result<()> 
     surface.save_png(path)
 }
 
-fn paint_soft_surface_to_gtk(
-    cr: &gtk::cairo::Context,
-    surface: &ImageSurface,
-) -> Result<(), crate::render::RenderError> {
-    let mut cairo_surface = gtk::cairo::ImageSurface::create(
-        gtk::cairo::Format::ARgb32,
-        surface.width(),
-        surface.height(),
-    )
-    .map_err(|err| {
-        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
-    })?;
-    {
-        let source = surface.data()?;
-        let mut dest = cairo_surface.data().map_err(|err| {
-            crate::render::RenderError::SurfaceData(crate::render::BorrowError::new(
-                err.to_string(),
-            ))
-        })?;
-        dest.copy_from_slice(&source);
-    }
-    cairo_surface.mark_dirty();
-    cr.set_source_surface(&cairo_surface, 0.0, 0.0)
-        .map_err(|err| {
-            crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
-        })?;
-    cr.paint().map_err(|err| {
-        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
-    })
+struct GtkRenderSurfaceCache<K> {
+    key: Option<K>,
+    soft_surface: Option<ImageSurface>,
+    cairo_surface: Option<gtk::cairo::ImageSurface>,
+    #[cfg(test)]
+    render_count: usize,
 }
 
-fn render_scaled_to_gtk<F>(
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GtkPlaylistRenderKey {
+    skin_generation: u64,
+    focused: bool,
+    shaded: bool,
+    width: i32,
+    height: i32,
+    scroll_offset: usize,
+    revisions: PlaylistRevisions,
+    title_preferences_hash: u64,
+    font_hash: u64,
+    show_numbers: bool,
+    playback_time_second: Option<i64>,
+    scrollbar_dragging: bool,
+    search_hash: u64,
+    menu: Option<PlaylistMenuRenderKind>,
+    menu_hover: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct GtkDockedRenderKey {
+    skin_generation: u64,
+    main: MainWindowRenderState,
+    equalizer: Option<EqualizerRenderState>,
+    playlist: Option<GtkPlaylistRenderKey>,
+}
+
+impl<K> Default for GtkRenderSurfaceCache<K> {
+    fn default() -> Self {
+        Self {
+            key: None,
+            soft_surface: None,
+            cairo_surface: None,
+            #[cfg(test)]
+            render_count: 0,
+        }
+    }
+}
+
+fn render_scaled_to_gtk_cached<K, F>(
+    cache: &mut GtkRenderSurfaceCache<K>,
+    key: K,
     cr: &gtk::cairo::Context,
     device_width: i32,
     device_height: i32,
@@ -1077,21 +1225,82 @@ fn render_scaled_to_gtk<F>(
     draw: F,
 ) -> Result<(), crate::render::RenderError>
 where
+    K: PartialEq,
     F: Fn(&Context, RenderPass) -> Result<(), crate::render::RenderError>,
 {
-    let surface = ImageSurface::create(Format::ARgb32, device_width, device_height)?;
-    let soft_cr = Context::new(&surface)?;
-    render_scaled(
-        &soft_cr,
-        device_width,
-        device_height,
-        base_width,
-        base_height,
-        draw,
-    )?;
-    drop(soft_cr);
-    surface.flush();
-    paint_soft_surface_to_gtk(cr, &surface)
+    let dimensions_changed = cache
+        .soft_surface
+        .as_ref()
+        .is_none_or(|surface| surface.width() != device_width || surface.height() != device_height);
+    if dimensions_changed {
+        cache.soft_surface = Some(ImageSurface::create(
+            Format::ARgb32,
+            device_width,
+            device_height,
+        )?);
+        cache.cairo_surface = Some(
+            gtk::cairo::ImageSurface::create(
+                gtk::cairo::Format::ARgb32,
+                device_width,
+                device_height,
+            )
+            .map_err(|err| {
+                crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+            })?,
+        );
+    }
+
+    if dimensions_changed || cache.key.as_ref() != Some(&key) {
+        #[cfg(test)]
+        {
+            cache.render_count += 1;
+        }
+        let surface = cache
+            .soft_surface
+            .as_ref()
+            .expect("GTK soft render surface initialized");
+        surface.clear();
+        let soft_cr = Context::new(surface)?;
+        render_scaled(
+            &soft_cr,
+            device_width,
+            device_height,
+            base_width,
+            base_height,
+            draw,
+        )?;
+        drop(soft_cr);
+        surface.flush();
+
+        let cairo_surface = cache
+            .cairo_surface
+            .as_mut()
+            .expect("GTK Cairo render surface initialized");
+        cr.set_source_rgb(0.0, 0.0, 0.0);
+        {
+            let source = surface.data()?;
+            let mut dest = cairo_surface.data().map_err(|err| {
+                crate::render::RenderError::SurfaceData(crate::render::BorrowError::new(
+                    err.to_string(),
+                ))
+            })?;
+            dest.copy_from_slice(&source);
+        }
+        cairo_surface.mark_dirty();
+        cache.key = Some(key);
+    }
+
+    let cairo_surface = cache
+        .cairo_surface
+        .as_ref()
+        .expect("GTK Cairo render surface initialized");
+    cr.set_source_surface(cairo_surface, 0.0, 0.0)
+        .map_err(|err| {
+            crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+        })?;
+    cr.paint().map_err(|err| {
+        crate::render::RenderError::Surface(crate::render::Error::new(err.to_string()))
+    })
 }
 
 fn style_xmms_popover(popover: &gtk::Popover) {
@@ -1762,6 +1971,7 @@ fn build_equalizer_window(
         .content_height(EQUALIZER_WINDOW_HEIGHT * DEFAULT_SCALE)
         .focusable(true)
         .build();
+    let render_cache = Rc::new(RefCell::new(GtkRenderSurfaceCache::default()));
     let state = Rc::clone(main_state);
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let state = state.borrow();
@@ -1772,13 +1982,23 @@ fn build_equalizer_window(
             EQUALIZER_WINDOW_HEIGHT
         };
         let base_width = EQUALIZER_WINDOW_WIDTH;
-        match render_scaled_to_gtk(cr, width, height, base_width, base_height, |cr, pass| {
-            if pass.is_bitmap() {
-                render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
-            } else {
-                Ok(())
-            }
-        }) {
+        let render_key = (state.skin_generation, render_state.clone());
+        match render_scaled_to_gtk_cached(
+            &mut render_cache.borrow_mut(),
+            render_key,
+            cr,
+            width,
+            height,
+            base_width,
+            base_height,
+            |cr, pass| {
+                if pass.is_bitmap() {
+                    render_equalizer_state(cr, state.active_skin(), &render_state).map(|_| ())
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
             Ok(()) => app_log_trace!(
                 render,
                 "gtk equalizer",
@@ -5231,6 +5451,7 @@ pub(crate) struct MainWindowUiState {
     dialogs: DialogVisibility,
     last_playlist_file_info: Option<String>,
     active_skin: DefaultSkin,
+    skin_generation: u64,
     playlist_options_opened: bool,
     queue_manager_opened: bool,
     preferences_page: PreferencesPage,
@@ -5245,6 +5466,7 @@ pub(crate) struct MainWindowUiState {
     last_jump_time_ms: Option<i64>,
     visualization: Visualization,
     visualization_tick_counter: i32,
+    playlist_footer_second: Option<i64>,
     main_pointer: MainPointer,
     title_marquee: TitleMarquee,
 }
@@ -5295,6 +5517,7 @@ impl MainWindowUiState {
             dialogs: DialogVisibility::default(),
             last_playlist_file_info: None,
             active_skin,
+            skin_generation: 0,
             playlist_options_opened: false,
             queue_manager_opened: false,
             preferences_page: PreferencesPage::Options,
@@ -5309,6 +5532,7 @@ impl MainWindowUiState {
             last_jump_time_ms: None,
             visualization: Visualization::new(WidgetId(6), 24, 43, 76),
             visualization_tick_counter: 0,
+            playlist_footer_second: None,
             main_pointer: MainPointer::default(),
             title_marquee: TitleMarquee::default(),
         };
@@ -5439,6 +5663,7 @@ impl MainWindowUiState {
 
     fn load_configured_skin(&mut self) -> io::Result<()> {
         self.active_skin = load_skin_from_config(&self.store.state().config)?;
+        self.skin_generation = self.skin_generation.wrapping_add(1);
         Ok(())
     }
 
@@ -6111,6 +6336,69 @@ impl MainWindowUiState {
             playlist_shaded: config.playlist_shaded,
             playlist_width: self.playlist_ui.width,
             playlist_height: self.playlist_ui.height,
+        }
+    }
+
+    fn playlist_render_key(&self) -> GtkPlaylistRenderKey {
+        let state = self.store.state();
+        let mut title_preferences = DefaultHasher::new();
+        state.config.title_format.hash(&mut title_preferences);
+        state.config.convert_underscore.hash(&mut title_preferences);
+        state.config.convert_twenty.hash(&mut title_preferences);
+
+        let mut font = DefaultHasher::new();
+        state.config.playlist_font.hash(&mut font);
+
+        let mut search = DefaultHasher::new();
+        self.playlist_ui.search.active_query().hash(&mut search);
+
+        GtkPlaylistRenderKey {
+            skin_generation: self.skin_generation,
+            focused: self.playlist_focused(),
+            shaded: self.is_playlist_shaded(),
+            width: self.playlist_ui.width,
+            height: self.playlist_ui.height,
+            scroll_offset: self.playlist_ui.scroll_offset,
+            revisions: state.playlist.revisions(),
+            title_preferences_hash: title_preferences.finish(),
+            font_hash: font.finish(),
+            show_numbers: state.config.show_numbers_in_pl,
+            playback_time_second: self.playlist_footer_display_second(),
+            scrollbar_dragging: matches!(
+                self.playlist_ui.pointer,
+                PlaylistPointer::DraggingScrollbar { .. }
+            ),
+            search_hash: search.finish(),
+            menu: self.playlist_menu().map(PlaylistMenuKind::render_kind),
+            menu_hover: self.playlist_menu_hover(),
+        }
+    }
+
+    fn playlist_footer_display_second(&self) -> Option<i64> {
+        (self.store.state().player.state() != PlayerState::Stopped)
+            .then(|| (self.display_time_ms() / 1_000).max(0))
+    }
+
+    fn update_playlist_footer_redraw(&mut self, redraw: &mut GtkTickRedraw) {
+        let footer_second = self.playlist_footer_display_second();
+        if footer_second != self.playlist_footer_second {
+            self.playlist_footer_second = footer_second;
+            redraw.playlist = true;
+        }
+    }
+
+    fn docked_render_key(&self) -> GtkDockedRenderKey {
+        GtkDockedRenderKey {
+            skin_generation: self.skin_generation,
+            main: self.render_state(),
+            equalizer: self
+                .panel_state(PanelKind::Equalizer)
+                .is_docked_visible()
+                .then(|| self.equalizer_render_state()),
+            playlist: self
+                .panel_state(PanelKind::Playlist)
+                .is_docked_visible()
+                .then(|| self.playlist_render_key()),
         }
     }
 
@@ -7145,16 +7433,16 @@ impl MainWindowUiState {
         });
     }
 
-    fn poll_duration_index_results(&mut self) -> bool {
-        let mut changed = false;
+    fn poll_duration_index_results(&mut self) -> GtkTickRedraw {
+        let mut redraw = GtkTickRedraw::default();
         while let Ok(result) = self.duration_index_receiver.try_recv() {
             let dispatch = self.store.apply_duration_index_result(result);
-            changed |= !dispatch.changes.is_empty();
+            redraw.merge(GtkTickRedraw::from_changes(dispatch.changes));
             for effect in dispatch.effects {
                 self.apply_store_effect(effect);
             }
         }
-        changed
+        redraw
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {
@@ -8714,8 +9002,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn update_timer_tick(&mut self, elapsed_ms: u32) -> bool {
-        let duration_changed = self.poll_duration_index_results();
-        self.poll_playback_backend();
+        self.update_timer_tick_targets(elapsed_ms).any()
+    }
+
+    fn update_timer_tick_targets(&mut self, elapsed_ms: u32) -> GtkTickRedraw {
+        let mut redraw = self.poll_duration_index_results();
+        redraw.merge(self.poll_playback_backend());
         let fading = self.update_stop_fade(elapsed_ms);
         let eof_waiting = self.update_pending_eof_advance(elapsed_ms);
         let title = self
@@ -8728,9 +9020,15 @@ impl MainWindowUiState {
             !self.is_shaded(),
             Duration::from_millis(u64::from(elapsed_ms)),
         );
+        redraw.main |= fading || marquee_changed;
+        if eof_waiting {
+            redraw.main = true;
+            redraw.playlist = true;
+        }
         if self.store.state().player.state() != PlayerState::Playing {
             self.visualization_tick_counter = 0;
-            return duration_changed || fading || eof_waiting || marquee_changed;
+            self.update_playlist_footer_redraw(&mut redraw);
+            return redraw;
         }
 
         if self.playback_backend.is_none() {
@@ -8741,6 +9039,7 @@ impl MainWindowUiState {
                 .visualization_data_valid()
                 .then(|| *self.store.state().player.visualization_data());
             let result = self.store.tick_playback_position(i64::from(elapsed_ms));
+            redraw.merge(GtkTickRedraw::from_changes(result.changes));
             for effect in result.effects {
                 self.apply_store_effect(effect);
             }
@@ -8748,6 +9047,7 @@ impl MainWindowUiState {
                 let result = self
                     .store
                     .handle_playback_event(PlaybackEvent::Spectrum(data));
+                redraw.merge(GtkTickRedraw::from_changes(result.changes));
                 for effect in result.effects {
                     self.apply_store_effect(effect);
                 }
@@ -8767,7 +9067,38 @@ impl MainWindowUiState {
                 self.visualization_refresh_divisor() as usize,
             );
         }
-        true
+        redraw.main = true;
+        self.update_playlist_footer_redraw(&mut redraw);
+        redraw
+    }
+
+    fn runtime_tick_interval(&self) -> Duration {
+        if self.playback_transition.fadeout().is_some()
+            || self.playback_transition.eof_pause_remaining_ms().is_some()
+            || self.playback_transition.pending_backend_seek_ms().is_some()
+            || self
+                .playback_transition
+                .awaiting_backend_seek_ms()
+                .is_some()
+        {
+            return GTK_TRANSITION_TICK;
+        }
+
+        match self.store.state().player.state() {
+            PlayerState::Playing if self.visualization.mode() != VisMode::Off => {
+                GTK_TRANSITION_TICK
+            }
+            PlayerState::Playing
+                if self
+                    .title_marquee
+                    .is_scrolling(self.store.state().player.state(), !self.is_shaded()) =>
+            {
+                GTK_MARQUEE_TICK
+            }
+            PlayerState::Playing => GTK_PLAYBACK_TICK,
+            PlayerState::Paused => GTK_PAUSED_TICK,
+            PlayerState::Stopped => GTK_IDLE_TICK,
+        }
     }
 
     fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
@@ -8810,9 +9141,10 @@ impl MainWindowUiState {
         true
     }
 
-    fn poll_playback_backend(&mut self) {
+    fn poll_playback_backend(&mut self) -> GtkTickRedraw {
+        let mut redraw = GtkTickRedraw::default();
         let Some(backend) = self.playback_backend.as_ref().map(Rc::clone) else {
-            return;
+            return redraw;
         };
         let spectrum_layout = if self.visualization.mode() == VisMode::Analyzer
             && self.visualization.analyzer_style() == VisAnalyzerStyle::Bars
@@ -8841,6 +9173,7 @@ impl MainWindowUiState {
                         backend_ready = true;
                     }
                     let result = self.store.handle_playback_event(event);
+                    redraw.merge(GtkTickRedraw::from_changes(result.changes));
                     for effect in result.effects {
                         self.apply_store_effect(effect);
                     }
@@ -8850,6 +9183,8 @@ impl MainWindowUiState {
                 }
                 if end_of_stream {
                     self.playlist_eof_reached();
+                    redraw.main = true;
+                    redraw.playlist = true;
                 }
             }
             Err(err) => eprintln!("xmms-rs: failed to poll playback backend: {err}"),
@@ -8861,6 +9196,7 @@ impl MainWindowUiState {
         let result = self
             .store
             .handle_playback_event(PlaybackEvent::StreamInfo(stream_info));
+        redraw.merge(GtkTickRedraw::from_changes(result.changes));
         for effect in result.effects {
             self.apply_store_effect(effect);
         }
@@ -8870,6 +9206,7 @@ impl MainWindowUiState {
                     .handle_playback_event(crate::player::PlaybackEvent::DurationChanged(Some(
                         duration_ms,
                     )));
+            redraw.merge(GtkTickRedraw::from_changes(result.changes));
             for effect in result.effects {
                 self.apply_store_effect(effect);
             }
@@ -8883,6 +9220,7 @@ impl MainWindowUiState {
                     let result = self
                         .store
                         .update_playback_position_from_runtime(position_ms.max(target_ms));
+                    redraw.merge(GtkTickRedraw::from_changes(result.changes));
                     for effect in result.effects {
                         self.apply_store_effect(effect);
                     }
@@ -8891,11 +9229,13 @@ impl MainWindowUiState {
                 let result = self
                     .store
                     .update_playback_position_from_runtime(position_ms);
+                redraw.merge(GtkTickRedraw::from_changes(result.changes));
                 for effect in result.effects {
                     self.apply_store_effect(effect);
                 }
             }
         }
+        redraw
     }
 
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
@@ -9805,6 +10145,66 @@ mod tests {
     }
 
     #[test]
+    fn gtk_runtime_tick_cadence_tracks_visible_work() {
+        let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
+            vis_mode: VisMode::Off,
+            ..Config::default()
+        }));
+        assert_eq!(state.runtime_tick_interval(), GTK_IDLE_TICK);
+
+        state.store.state_mut().player.mark_playing();
+        assert_eq!(state.runtime_tick_interval(), GTK_PLAYBACK_TICK);
+
+        state.set_visualization_mode(VisMode::Analyzer);
+        state.set_visualization_refresh_divisor(3);
+        assert_eq!(state.runtime_tick_interval(), GTK_TRANSITION_TICK);
+
+        state.playback_transition = PlaybackTransitionState::start_fadeout(100);
+        assert_eq!(state.runtime_tick_interval(), GTK_TRANSITION_TICK);
+
+        state.playback_transition = PlaybackTransitionState::Idle;
+        state.store.state_mut().player.pause();
+        assert_eq!(state.runtime_tick_interval(), GTK_PAUSED_TICK);
+    }
+
+    #[test]
+    fn gtk_playback_tick_dirties_only_main_render_target() {
+        let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
+            vis_mode: VisMode::Off,
+            ..Config::default()
+        }));
+        state.store.state_mut().player.mark_playing();
+        state.update_timer_tick_targets(250);
+
+        assert_eq!(
+            state.update_timer_tick_targets(250),
+            GtkTickRedraw {
+                main: true,
+                playlist: false,
+                equalizer: false,
+            }
+        );
+        assert!(state.update_timer_tick_targets(500).playlist);
+    }
+
+    #[test]
+    fn gtk_render_surface_cache_reuses_unchanged_composition() {
+        let target = gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, 20, 20).unwrap();
+        let cr = gtk::cairo::Context::new(&target).unwrap();
+        let mut cache = GtkRenderSurfaceCache::default();
+
+        render_scaled_to_gtk_cached(&mut cache, 1_u64, &cr, 20, 20, 10, 10, |_cr, _pass| Ok(()))
+            .unwrap();
+        render_scaled_to_gtk_cached(&mut cache, 1_u64, &cr, 20, 20, 10, 10, |_cr, _pass| Ok(()))
+            .unwrap();
+        assert_eq!(cache.render_count, 1);
+
+        render_scaled_to_gtk_cached(&mut cache, 2_u64, &cr, 20, 20, 10, 10, |_cr, _pass| Ok(()))
+            .unwrap();
+        assert_eq!(cache.render_count, 2);
+    }
+
+    #[test]
     fn pause_between_songs_delays_eof_advance() {
         let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
             pause_between_songs: true,
@@ -9915,7 +10315,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_pauses_and_seeks_to_start_without_fading_or_stopping() {
+    fn halt_stops_and_resets_without_fading() {
         let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
             volume: 80,
             stop_with_fadeout: true,
@@ -9926,7 +10326,7 @@ mod tests {
 
         state.activate_push(MainPushButton::Stop);
         assert_eq!(state.playback_position_ms(), 0);
-        assert_eq!(state.store.state().player.state(), PlayerState::Paused);
+        assert_eq!(state.store.state().player.state(), PlayerState::Stopped);
         assert_eq!(state.volume(), 80);
         assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
     }

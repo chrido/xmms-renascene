@@ -176,6 +176,40 @@ impl ImageSurface {
         })
     }
 
+    pub(crate) fn from_argb_pixels(width: i32, height: i32, pixels: &[u32]) -> Result<Self, Error> {
+        if width < 0 || height < 0 {
+            return Err(Error::new(format!(
+                "negative surface dimensions {width}x{height}"
+            )));
+        }
+        let expected = (width as usize).saturating_mul(height as usize);
+        if pixels.len() != expected {
+            return Err(Error::new(format!(
+                "surface dimensions {width}x{height} require {expected} pixels, got {}",
+                pixels.len()
+            )));
+        }
+
+        let stride = width.saturating_mul(4);
+        let mut data = vec![0; expected.saturating_mul(4)];
+        for (destination, pixel) in data.chunks_exact_mut(4).zip(pixels) {
+            destination.copy_from_slice(&pixel.to_ne_bytes());
+        }
+        Ok(Self {
+            inner: Rc::new(ImageSurfaceInner {
+                width,
+                height,
+                stride,
+                data: RefCell::new(data),
+            }),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub fn width(&self) -> i32 {
         self.inner.width
     }
@@ -197,6 +231,10 @@ impl ImageSurface {
             .try_borrow()
             .map(|borrow| Ref::map(borrow, |vec| vec.as_slice()))
             .map_err(|err| BorrowError(err.to_string()))
+    }
+
+    pub fn clear(&self) {
+        self.inner.data.borrow_mut().fill(0);
     }
 
     pub fn set_pixel_argb(&self, x: i32, y: i32, argb: u32) {

@@ -58,9 +58,11 @@ pub use events::{
 pub use layout::window_layout_snapshot_pixels;
 pub use media_session::{
     complete_media_control, shared_playback_backend, sync_media_playlist,
-    update_playback_notification,
+    sync_media_playlist_position, update_playback_notification,
 };
-pub use persistence::persist_app_state;
+pub use persistence::{
+    flush_persistence_writer, persist_app_state, persist_playback_position, take_persistence_error,
+};
 pub use picker::{open, save_equalizer_preset};
 pub use widgets::refresh_player_widgets;
 
@@ -157,6 +159,7 @@ pub(crate) fn handle_activity_paused(env: &mut JNIEnv<'_>, activity_object: &JOb
     let Some(activity_generation) = activity::set_resumed(env, activity_object, false) else {
         return;
     };
+    media_session::persist_playback_position_now();
     media_session::activity_paused_or_exited(activity_generation);
 }
 

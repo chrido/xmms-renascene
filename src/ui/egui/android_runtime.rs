@@ -13,19 +13,22 @@ use super::android::playlist_manager::PlaylistManager;
 #[cfg(target_os = "android")]
 use super::android_media::AndroidActivityGeneration;
 
-const PERSIST_INTERVAL: Duration = Duration::from_millis(500);
-const POST_ROTATION_REPAINT_FRAMES: u8 = 3;
+const SNAPSHOT_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
+const POSITION_PERSIST_INTERVAL: Duration = Duration::from_secs(10);
+const POST_ROTATION_REPAINT_FRAMES: u8 = 1;
 
 pub(crate) struct AndroidRuntime {
-    persistence_dirty: bool,
-    last_persist: Instant,
+    snapshot_dirty: bool,
+    position_dirty: bool,
+    last_snapshot_persist: Instant,
+    last_position_persist: Instant,
     layout: LayoutState,
     layout_view: AndroidLayoutView,
     #[cfg(target_os = "android")]
     pub playlist_manager: PlaylistManager,
     #[cfg(target_os = "android")]
     activity_generation: Option<AndroidActivityGeneration>,
-    media_playlist_snapshot: Option<Playlist>,
+    media_playlist_content_revision: Option<u64>,
     media_projection_pending: bool,
 }
 
@@ -37,24 +40,36 @@ pub struct AndroidSystemInsets {
     pub bottom: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AndroidPersistenceDue {
+    Snapshot,
+    Position,
+}
+
 impl AndroidRuntime {
     pub fn new() -> Self {
         Self {
-            persistence_dirty: false,
-            last_persist: Instant::now(),
+            snapshot_dirty: false,
+            position_dirty: false,
+            last_snapshot_persist: Instant::now(),
+            last_position_persist: Instant::now(),
             layout: LayoutState::default(),
             layout_view: AndroidLayoutView::Unavailable,
             #[cfg(target_os = "android")]
             playlist_manager: PlaylistManager::new(),
             #[cfg(target_os = "android")]
             activity_generation: None,
-            media_playlist_snapshot: None,
+            media_playlist_content_revision: None,
             media_projection_pending: true,
         }
     }
 
     pub fn mark_persistence(&mut self) {
-        self.persistence_dirty = true;
+        self.snapshot_dirty = true;
+    }
+
+    pub fn mark_position_persistence(&mut self) {
+        self.position_dirty = true;
     }
 
     #[cfg(target_os = "android")]
@@ -68,25 +83,47 @@ impl AndroidRuntime {
             .expect("Android runtime must be bound to its Activity before the first frame")
     }
 
-    pub fn take_persistence_due(&mut self, force: bool) -> bool {
+    pub fn take_persistence_due(&mut self, force: bool) -> Option<AndroidPersistenceDue> {
         let now = Instant::now();
-        if !self.persistence_dirty
-            || (!force && now.saturating_duration_since(self.last_persist) < PERSIST_INTERVAL)
+        if self.snapshot_dirty
+            && (force
+                || now.saturating_duration_since(self.last_snapshot_persist)
+                    >= SNAPSHOT_PERSIST_INTERVAL)
         {
-            return false;
+            self.snapshot_dirty = false;
+            self.position_dirty = false;
+            self.last_snapshot_persist = now;
+            self.last_position_persist = now;
+            return Some(AndroidPersistenceDue::Snapshot);
         }
-        self.persistence_dirty = false;
-        self.last_persist = now;
-        true
+        if self.position_dirty
+            && (force
+                || now.saturating_duration_since(self.last_position_persist)
+                    >= POSITION_PERSIST_INTERVAL)
+        {
+            self.position_dirty = false;
+            self.last_position_persist = now;
+            return Some(AndroidPersistenceDue::Position);
+        }
+        None
     }
 
     pub fn persistence_delay(&self) -> Option<Duration> {
-        self.persistence_dirty
-            .then(|| PERSIST_INTERVAL.saturating_sub(self.last_persist.elapsed()))
+        let snapshot_delay = self.snapshot_dirty.then(|| {
+            SNAPSHOT_PERSIST_INTERVAL.saturating_sub(self.last_snapshot_persist.elapsed())
+        });
+        let position_delay = self.position_dirty.then(|| {
+            POSITION_PERSIST_INTERVAL.saturating_sub(self.last_position_persist.elapsed())
+        });
+        match (snapshot_delay, position_delay) {
+            (Some(snapshot), Some(position)) => Some(snapshot.min(position)),
+            (Some(delay), None) | (None, Some(delay)) => Some(delay),
+            (None, None) => None,
+        }
     }
 
     pub fn playlist_changed(&self, playlist: &Playlist) -> bool {
-        self.media_playlist_snapshot.as_ref() != Some(playlist)
+        self.media_playlist_content_revision != Some(playlist.revisions().content)
     }
 
     pub fn mark_media_projection(&mut self) {
@@ -97,8 +134,8 @@ impl AndroidRuntime {
         std::mem::take(&mut self.media_projection_pending)
     }
 
-    pub fn remember_playlist(&mut self, playlist: Playlist) {
-        self.media_playlist_snapshot = Some(playlist);
+    pub fn remember_playlist(&mut self, playlist: &Playlist) {
+        self.media_playlist_content_revision = Some(playlist.revisions().content);
     }
 
     pub fn observe_layout(
@@ -376,9 +413,43 @@ mod tests {
 
         assert!(runtime
             .persistence_delay()
-            .is_some_and(|delay| delay <= PERSIST_INTERVAL));
-        assert!(runtime.take_persistence_due(true));
+            .is_some_and(|delay| delay <= SNAPSHOT_PERSIST_INTERVAL));
+        assert_eq!(
+            runtime.take_persistence_due(true),
+            Some(AndroidPersistenceDue::Snapshot)
+        );
         assert_eq!(runtime.persistence_delay(), None);
+    }
+
+    #[test]
+    fn position_persistence_uses_the_slower_checkpoint() {
+        let mut runtime = AndroidRuntime::new();
+
+        runtime.mark_position_persistence();
+
+        assert!(runtime
+            .persistence_delay()
+            .is_some_and(|delay| delay > SNAPSHOT_PERSIST_INTERVAL));
+        assert_eq!(
+            runtime.take_persistence_due(true),
+            Some(AndroidPersistenceDue::Position)
+        );
+    }
+
+    #[test]
+    fn media_queue_version_ignores_non_content_playlist_changes() {
+        let mut runtime = AndroidRuntime::new();
+        let mut playlist = Playlist::new();
+        playlist.add_uri("one.mp3");
+        assert!(runtime.playlist_changed(&playlist));
+
+        runtime.remember_playlist(&playlist);
+        playlist.select_all(true);
+        playlist.set_position(0);
+        assert!(!runtime.playlist_changed(&playlist));
+
+        playlist.add_uri("two.mp3");
+        assert!(runtime.playlist_changed(&playlist));
     }
 
     #[test]
@@ -386,9 +457,9 @@ mod tests {
         let mut state = LayoutState::default();
 
         assert!(state.accept(AndroidLayoutOrientation::Portrait));
-        assert!(state.accept(AndroidLayoutOrientation::Portrait));
-        assert!(state.accept(AndroidLayoutOrientation::Portrait));
-        assert!(state.accept(AndroidLayoutOrientation::Portrait));
+        for _ in 0..POST_ROTATION_REPAINT_FRAMES {
+            assert!(state.accept(AndroidLayoutOrientation::Portrait));
+        }
         assert!(!state.accept(AndroidLayoutOrientation::Portrait));
         assert_eq!(
             state.orientation(),
@@ -399,9 +470,9 @@ mod tests {
             orientation: AndroidLayoutOrientation::Landscape,
         };
         assert!(state.accept(AndroidLayoutOrientation::Landscape));
-        assert!(state.accept(AndroidLayoutOrientation::Landscape));
-        assert!(state.accept(AndroidLayoutOrientation::Landscape));
-        assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        for _ in 0..POST_ROTATION_REPAINT_FRAMES {
+            assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        }
         assert!(!state.accept(AndroidLayoutOrientation::Landscape));
         assert_eq!(
             state.orientation(),

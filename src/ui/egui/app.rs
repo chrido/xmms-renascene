@@ -15,13 +15,15 @@ use crate::app::effect::{AppEffect, FileDialogRequest};
 use crate::app::input::AppShortcut;
 use crate::app::playlist_actions::playlist_row_click_commands;
 use crate::app::preferences_model::{clamped_scale_factor, normalize_preferences_config};
-use crate::app::preview::{apply_preview_options_to_config, PreviewOptions};
+use crate::app::preview::{
+    apply_preview_options_to_config, apply_preview_playlist, PreviewOptions,
+};
 use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, equalizer_view_model,
     playlist_footer_info as shared_playlist_footer_info,
     playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
-    volume_to_eq_shaded_position, TitleMarquee,
+    volume_to_eq_shaded_position, PlaylistProjection, TitleMarquee,
 };
 #[cfg(target_os = "android")]
 use crate::app_log_error;
@@ -39,7 +41,7 @@ use crate::mpris::zbus_service::{EguiMprisService, MprisServiceRequest};
 use crate::mpris::{
     app_action_for_mpris_command, mpris_player_properties, MprisAppAction, MprisCommand, MprisEvent,
 };
-#[cfg(any(target_os = "android", test))]
+#[cfg(test)]
 use crate::playback::backend::PlaybackBackend;
 #[cfg(all(not(target_os = "android"), not(test)))]
 use crate::playback::backend::{create_backend, PlaybackBackendKind};
@@ -68,7 +70,7 @@ use crate::skin::layout::{
 use crate::skin::widget::{VisAnalyzerStyle, VisMode};
 use crate::skin::{discover_skins_in_dirs, skin_browser_search_dirs, DefaultSkin, SkinEntry};
 use crate::socket_control::{
-    start_socket_control, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
+    start_socket_control_with_wakeup, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
 };
 use crate::{app_log_debug, app_log_trace};
 
@@ -100,7 +102,7 @@ use super::runtime::AndroidLayoutRepaint;
 use super::runtime::EguiRuntime;
 use super::skin_texture::{
     pixel_snapped_rect, render_equalizer_color_image, render_playlist_color_image,
-    render_playlist_menu_color_image,
+    render_playlist_menu_color_image, ImageRenderBuffer,
 };
 #[cfg(test)]
 use super::ui_state::ActiveOverlay;
@@ -108,6 +110,7 @@ use super::ui_state::{EguiUiState, EqualizerPressed, MainPressed};
 use super::{equalizer, main_player, playlist};
 
 const VISUALIZER_REPAINT_INTERVAL: Duration = Duration::from_millis(20);
+const POSITION_REPAINT_INTERVAL: Duration = Duration::from_millis(250);
 const DURATION_INDEX_BATCH_SIZE: usize = 16;
 
 #[cfg(any(target_os = "android", test))]
@@ -175,6 +178,8 @@ enum DetachedFocus {
 struct DetachedViewportState {
     equalizer: Option<DetachedPanelSnapshot>,
     playlist: Option<DetachedPanelSnapshot>,
+    equalizer_requested_size: Option<egui::Vec2>,
+    playlist_requested_size: Option<egui::Vec2>,
     focus: DetachedFocus,
     actions: Vec<DetachedPanelAction>,
     playlist_menu_hover: Option<(PlaylistMenuRenderKind, usize)>,
@@ -186,8 +191,12 @@ struct DetachedViewportState {
 
 pub struct EguiFrontendState {
     pub skin_entries: Vec<SkinEntry>,
+    skin_discovery_complete: bool,
     pub ui: EguiUiState,
     detached_viewports: Arc<Mutex<DetachedViewportState>>,
+    repaint_context: Arc<Mutex<Option<egui::Context>>>,
+    #[cfg(not(target_os = "android"))]
+    last_requested_root_size: Option<egui::Vec2>,
     pub render_cache: RenderCache,
     pub last_tick: Instant,
     #[cfg(target_os = "android")]
@@ -244,15 +253,10 @@ impl EguiFrontendState {
             app_state = AppState::default();
         }
         apply_preview_options_to_config(&mut app_state.config, &options)?;
-        for path in &options.positional_paths {
-            app_state
-                .playlist
-                .add_location(path)
-                .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
-        }
+        apply_preview_playlist(&mut app_state, &options)?;
         app_state.ui.preferences_visible = options.open_preferences;
         let active_skin = load_skin_from_config(&app_state)?;
-        let skin_entries = discover_runtime_skins();
+        let skin_entries = Vec::new();
         let scale_factor = app_state.config.scale_factor as f32;
         let persistence_config = app_state.persistence_snapshot().config;
         let ui = EguiUiState::new(
@@ -261,12 +265,36 @@ impl EguiFrontendState {
             options.open_preferences,
         );
         let detached_viewports = Arc::new(Mutex::new(DetachedViewportState::default()));
-        let socket_control = options.socket_port.map(start_socket_control).transpose()?;
+        let repaint_context = Arc::new(Mutex::new(None::<egui::Context>));
+        let socket_control = options
+            .socket_port
+            .map(|port| {
+                let repaint_context = Arc::clone(&repaint_context);
+                start_socket_control_with_wakeup(port, move || {
+                    if let Some(ctx) = repaint_context
+                        .lock()
+                        .expect("egui repaint context poisoned")
+                        .as_ref()
+                    {
+                        ctx.request_repaint();
+                    }
+                })
+            })
+            .transpose()?;
         #[cfg(feature = "desktop-egui")]
         let mpris_service = {
             let initial_properties =
                 mpris_player_properties(&app_state, app_state.config.playback_position_ms);
-            match EguiMprisService::new(initial_properties) {
+            let repaint_context = Arc::clone(&repaint_context);
+            match EguiMprisService::new_with_wakeup(initial_properties, move || {
+                if let Some(ctx) = repaint_context
+                    .lock()
+                    .expect("egui repaint context poisoned")
+                    .as_ref()
+                {
+                    ctx.request_repaint();
+                }
+            }) {
                 Ok(service) => Some(service),
                 Err(err) => {
                     app_log_debug!(mpris, "egui MPRIS service unavailable", err);
@@ -280,16 +308,7 @@ impl EguiFrontendState {
             .unwrap_or_else(|| snap_playlist_size(PLAYLIST_DEFAULT_WIDTH, PLAYLIST_DEFAULT_HEIGHT));
         let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         #[cfg(target_os = "android")]
-        let (playback_backend, playback_backend_error) =
-            match super::android::shared_playback_backend() {
-                Ok(backend) => (Some(Box::new(backend) as Box<dyn PlaybackBackend>), None),
-                Err(err) => (
-                    None,
-                    Some(format!(
-                        "audio output is not ready; playback will retry: {err}"
-                    )),
-                ),
-            };
+        let (playback_backend, playback_backend_error) = (None, None);
         #[cfg(all(not(target_os = "android"), not(test)))]
         let (playback_backend, playback_backend_error) =
             match create_backend(PlaybackBackendKind::Auto) {
@@ -309,8 +328,12 @@ impl EguiFrontendState {
         }
         let mut state = Self {
             skin_entries,
+            skin_discovery_complete: false,
             ui,
             detached_viewports,
+            repaint_context,
+            #[cfg(not(target_os = "android"))]
+            last_requested_root_size: None,
             render_cache: RenderCache::default(),
             last_tick: Instant::now(),
             #[cfg(target_os = "android")]
@@ -345,6 +368,20 @@ impl EguiFrontendState {
 
     pub fn controller(&self) -> &AppStore {
         &self.controller
+    }
+
+    pub(crate) fn playlist_render_parts(
+        &mut self,
+    ) -> (
+        &AppState,
+        &DefaultSkin,
+        &PlaylistProjection,
+        &mut ImageRenderBuffer,
+    ) {
+        let state = self.controller.state();
+        let skin = &self.active_skin;
+        let (projection, staging) = self.render_cache.playlist_projection_and_staging(state);
+        (state, skin, projection, staging)
     }
 
     #[cfg(test)]
@@ -505,15 +542,11 @@ impl EguiFrontendState {
     }
 
     fn tick_visualization(&mut self) -> bool {
-        if self.controller.state().player.state() != PlayerState::Playing {
+        if !self.visualization_should_animate() {
             self.playback.visualization_tick_counter = 0;
             return false;
         }
 
-        self.playback.visualization_tick_counter += 1;
-        if self.playback.visualization_tick_counter < self.visualization_refresh_divisor() {
-            return false;
-        }
         self.playback.visualization_tick_counter = 0;
 
         let data = {
@@ -527,6 +560,29 @@ impl EguiFrontendState {
             self.visualization_refresh_divisor() as usize,
         );
         true
+    }
+
+    fn visualization_should_animate(&self) -> bool {
+        if self.controller.state().player.state() != PlayerState::Playing
+            || self.playback.visualization.mode() == VisMode::Off
+        {
+            return false;
+        }
+        #[cfg(target_os = "android")]
+        if !super::android::is_foreground_activity(self.android.activity_generation()) {
+            return false;
+        }
+        true
+    }
+
+    fn playback_repaint_interval(&self) -> Option<Duration> {
+        if self.controller.state().player.state() != PlayerState::Playing {
+            return None;
+        }
+        if self.visualization_should_animate() {
+            return Some(VISUALIZER_REPAINT_INTERVAL * self.visualization_refresh_divisor() as u32);
+        }
+        Some(POSITION_REPAINT_INTERVAL)
     }
 
     fn poll_socket_control(&mut self, ctx: &egui::Context) {
@@ -768,8 +824,23 @@ impl EguiFrontendState {
 
         #[allow(unused_variables)]
         let sender = self.duration_index_sender.clone();
+        let repaint_context = Arc::clone(&self.repaint_context);
         thread::spawn(move || {
             let mut results = Vec::with_capacity(DURATION_INDEX_BATCH_SIZE);
+            let send_batch = |results: &mut Vec<DurationIndexResult>| {
+                let had_results = !results.is_empty();
+                let sent = send_duration_index_batch(&sender, results);
+                if sent && had_results {
+                    if let Some(ctx) = repaint_context
+                        .lock()
+                        .expect("egui repaint context poisoned")
+                        .as_ref()
+                    {
+                        ctx.request_repaint();
+                    }
+                }
+                sent
+            };
             #[cfg(feature = "rodio-backend")]
             {
                 use crate::playback::backend::AudioMetadataProbe as _;
@@ -780,7 +851,7 @@ impl EguiFrontendState {
                         Ok(Some(result)) => {
                             results.push(result);
                             if results.len() >= DURATION_INDEX_BATCH_SIZE
-                                && !send_duration_index_batch(&sender, &mut results)
+                                && !send_batch(&mut results)
                             {
                                 return;
                             }
@@ -839,13 +910,13 @@ impl EguiFrontendState {
                         title: None,
                     });
                     if results.len() >= DURATION_INDEX_BATCH_SIZE
-                        && !send_duration_index_batch(&sender, &mut results)
+                        && !send_batch(&mut results)
                     {
                         return;
                     }
                 }
             }
-            send_duration_index_batch(&sender, &mut results);
+            send_batch(&mut results);
         });
     }
 
@@ -867,10 +938,10 @@ impl EguiFrontendState {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_tick);
         self.last_tick = now;
-        if self.controller.state().player.state() != PlayerState::Playing {
+        let Some(repaint_interval) = self.playback_repaint_interval() else {
             return;
-        }
-        ctx.request_repaint_after(VISUALIZER_REPAINT_INTERVAL);
+        };
+        ctx.request_repaint_after(repaint_interval);
         let visualizer_changed = self.tick_visualization();
         let elapsed_ms = elapsed.as_millis().min(i64::MAX as u128) as i64;
         if elapsed_ms == 0 {
@@ -921,6 +992,7 @@ impl EguiFrontendState {
                 let config = &self.controller.state().config;
                 let errors = self.playback.apply_effect(
                     &effect,
+                    config.balance,
                     EqualizerBackendState {
                         active: config.equalizer_active,
                         preamp_position: config.equalizer_preamp_pos,
@@ -1339,9 +1411,6 @@ impl EguiFrontendState {
             })
         });
         let update = self.android.observe_layout(snapshot);
-        if update.orientation_changed {
-            self.render_cache.playlist = None;
-        }
         match update.repaint {
             AndroidLayoutReadiness::None => {}
             AndroidLayoutReadiness::AwaitingReadiness => self
@@ -1373,6 +1442,16 @@ impl EguiFrontendState {
             width as f32 * self.scale_factor,
             height as f32 * self.scale_factor,
         )
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn take_root_viewport_resize(&mut self) -> Option<egui::Vec2> {
+        let desired_size = self.desired_window_size();
+        if self.last_requested_root_size == Some(desired_size) {
+            return None;
+        }
+        self.last_requested_root_size = Some(desired_size);
+        Some(desired_size)
     }
 
     pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
@@ -1413,6 +1492,15 @@ impl eframe::App for EguiFrontendState {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        {
+            let mut repaint_context = self
+                .repaint_context
+                .lock()
+                .expect("egui repaint context poisoned");
+            if repaint_context.is_none() {
+                *repaint_context = Some(ctx.clone());
+            }
+        }
         #[cfg(target_os = "android")]
         let android_activity_media_control_handled = self.poll_android_platform_events(ctx);
         #[cfg(target_os = "android")]
@@ -1440,7 +1528,9 @@ impl eframe::App for EguiFrontendState {
         #[cfg(feature = "desktop-egui")]
         self.sync_mpris_properties(std::iter::empty());
         #[cfg(not(target_os = "android"))]
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.desired_window_size()));
+        if let Some(size) = self.take_root_viewport_resize() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1542,9 +1632,15 @@ impl EguiFrontendState {
         self.render_cache.invalidate();
     }
 
-    #[cfg(target_os = "android")]
     pub(crate) fn refresh_runtime_skins(&mut self) {
         self.skin_entries = discover_runtime_skins();
+        self.skin_discovery_complete = true;
+    }
+
+    pub(crate) fn ensure_runtime_skins(&mut self) {
+        if !self.skin_discovery_complete {
+            self.refresh_runtime_skins();
+        }
     }
 
     #[cfg(target_os = "android")]
@@ -1959,6 +2055,12 @@ fn update_detached_panel_snapshots(app: &mut EguiFrontendState) {
         .detached_viewports
         .lock()
         .expect("detached viewport state poisoned");
+    if equalizer.is_none() {
+        state.equalizer_requested_size = None;
+    }
+    if playlist.is_none() {
+        state.playlist_requested_size = None;
+    }
     state.equalizer = equalizer;
     state.playlist = playlist;
 }
@@ -2176,12 +2278,28 @@ fn show_detached_panel_viewport(
         return;
     };
     let size = detached_panel_viewport_size(&snapshot);
+    let resize_requested = {
+        let mut state = shared.lock().expect("detached viewport state poisoned");
+        let requested_size = if equalizer_panel {
+            &mut state.equalizer_requested_size
+        } else {
+            &mut state.playlist_requested_size
+        };
+        if *requested_size == Some(size) {
+            false
+        } else {
+            *requested_size = Some(size);
+            true
+        }
+    };
     let builder = detached_panel_viewport_builder(title, &snapshot, equalizer_panel);
     ctx.show_viewport_deferred(
         egui::ViewportId::from_hash_of(id),
         builder,
         move |ctx, class| {
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            if resize_requested {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            }
             if ctx.input(|input| input.viewport().close_requested()) {
                 push_detached_command(
                     &shared,
@@ -2191,6 +2309,7 @@ fn show_detached_panel_viewport(
                         PanelCommand::SetPlaylistVisibility(false)
                     },
                 );
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
                 return;
             }
             match class {
@@ -2209,6 +2328,7 @@ fn show_detached_panel_viewport(
                             });
                     if focus_changed {
                         ctx.request_repaint();
+                        ctx.request_repaint_of(egui::ViewportId::ROOT);
                     }
                     egui::CentralPanel::default()
                         .frame(egui::Frame::NONE)
@@ -2290,6 +2410,7 @@ fn show_detached_snapshot(
                 state.playlist_resize_request = Some((local_x + offset_x, local_y + offset_y));
             }
             ui.ctx().request_repaint();
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
             return;
         }
         let mut state = shared.lock().expect("detached viewport state poisoned");
@@ -2321,6 +2442,7 @@ fn show_detached_snapshot(
             state.playlist_resize_start =
                 Some((snapshot.width - local_x, snapshot.height - local_y));
             ui.ctx().request_repaint();
+            ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
             return;
         }
     }
@@ -3104,6 +3226,7 @@ pub(crate) fn run_egui_frontend_android(
 
 #[cfg(not(target_os = "android"))]
 fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendState) {
+    app.ensure_runtime_skins();
     let mut open = app.skin_browser_open();
     egui::Window::new("Skin selector")
         .open(&mut open)
@@ -3111,12 +3234,7 @@ fn show_skin_browser_placeholder(ctx: &egui::Context, app: &mut EguiFrontendStat
         .default_width(360.0)
         .show(ctx, |ui| {
             if ui.button("Refresh").clicked() {
-                #[cfg(target_os = "android")]
                 app.refresh_runtime_skins();
-                #[cfg(not(target_os = "android"))]
-                {
-                    app.skin_entries = discover_runtime_skins();
-                }
             }
             ui.horizontal(|ui| {
                 if ui.button("Default").clicked() {
@@ -3186,7 +3304,7 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
     };
     match import_skin_to_user_dir(&path) {
         Ok(imported) => {
-            app.skin_entries = discover_runtime_skins();
+            app.refresh_runtime_skins();
             let entry = SkinEntry {
                 name: imported
                     .file_stem()
@@ -3221,7 +3339,7 @@ fn import_skin_from_dialog(app: &mut EguiFrontendState) {
 fn import_skin_path(app: &mut EguiFrontendState, path: &Path) {
     match import_skin_to_user_dir(path) {
         Ok(imported) => {
-            app.skin_entries = discover_runtime_skins();
+            app.refresh_runtime_skins();
             let entry = SkinEntry {
                 name: imported
                     .file_stem()
@@ -3489,6 +3607,29 @@ mod tests {
         assert!(app.controller().state().config.playlist_visible);
         assert_eq!((app.playlist_width, app.playlist_height), (325, 290));
         assert_eq!(app.desired_window_size().x, 325.0 * app.scale_factor);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    #[test]
+    fn root_viewport_resize_is_requested_only_when_desired_size_changes() {
+        let mut app = EguiFrontendState::new(PreviewOptions {
+            playlist_size: Some((325, 290)),
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        assert_eq!(
+            app.take_root_viewport_resize(),
+            Some(app.desired_window_size())
+        );
+        assert_eq!(app.take_root_viewport_resize(), None);
+        assert!(app.set_playlist_size(350, 290));
+        let resized = app.desired_window_size();
+        assert_eq!(
+            app.take_root_viewport_resize(),
+            Some(resized)
+        );
+        assert_eq!(app.take_root_viewport_resize(), None);
     }
 
     #[test]
@@ -3844,6 +3985,22 @@ mod tests {
     }
 
     #[test]
+    fn egui_startup_defers_skin_directory_discovery() {
+        let app = EguiFrontendState::new(PreviewOptions {
+            reset: true,
+            ..PreviewOptions::default()
+        })
+        .unwrap();
+
+        assert!(app.skin_entries.is_empty());
+        assert!(!app.skin_discovery_complete);
+        assert!(app
+            .active_skin
+            .get(crate::skin::SkinPixmapKind::Main)
+            .is_some());
+    }
+
+    #[test]
     fn egui_visualizer_render_state_uses_spectrum_events() {
         let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
         let mut spectrum = [0.0; SPECTRUM_BANDS];
@@ -3902,6 +4059,29 @@ mod tests {
 
         assert!(!app.runtime.repaint_requested());
         assert!(app.runtime.dirty_targets().is_empty());
+    }
+
+    #[test]
+    fn egui_playback_repaint_rate_adapts_to_visible_work() {
+        let mut app = EguiFrontendState::new(PreviewOptions::default()).unwrap();
+        assert_eq!(app.playback_repaint_interval(), None);
+
+        app.dispatch(PlaylistCommand::AddUris(vec![
+            "file:///music/repaint.ogg".to_string()
+        ]));
+        app.dispatch(PlaylistCommand::SetPosition(0));
+        app.dispatch(PlayerCommand::StartCurrentTrack);
+        app.controller_mut().state_mut().config.vis_refresh_divisor = 4;
+        assert_eq!(
+            app.playback_repaint_interval(),
+            Some(Duration::from_millis(80))
+        );
+
+        app.playback.visualization.set_mode(VisMode::Off);
+        assert_eq!(
+            app.playback_repaint_interval(),
+            Some(POSITION_REPAINT_INTERVAL)
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use crate::app::effect::{AppEffect, FileDialogRequest, RenderTarget};
-#[cfg(target_os = "android")]
+#[cfg(any(test, target_os = "android"))]
 use crate::app::store::StateChangeSet;
 #[cfg(target_os = "android")]
 use crate::app::view_model::{formatted_current_title, formatted_playlist_entry_title};
@@ -13,7 +13,7 @@ use crate::app_state::AppState;
 use crate::playback::model::PlayerState;
 
 #[cfg(target_os = "android")]
-use super::android_runtime::AndroidRuntime;
+use super::android_runtime::{AndroidPersistenceDue, AndroidRuntime};
 use super::playback_runtime::PlaybackRuntime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,18 +145,43 @@ pub(crate) fn execute_platform_effect(
 
 #[cfg(target_os = "android")]
 pub(crate) fn apply_android_post_dispatch(android: &mut AndroidRuntime, changes: StateChangeSet) {
-    let persistent_changes = StateChangeSet::PLAYER
-        | StateChangeSet::PLAYLIST
+    match android_persistence_impact(changes) {
+        AndroidPersistenceImpact::None => {}
+        AndroidPersistenceImpact::Position => android.mark_position_persistence(),
+        AndroidPersistenceImpact::Snapshot => android.mark_persistence(),
+    }
+    if changes.intersects(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST) {
+        android.mark_media_projection();
+    }
+}
+
+#[cfg(any(test, target_os = "android"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AndroidPersistenceImpact {
+    None,
+    Position,
+    Snapshot,
+}
+
+#[cfg(any(test, target_os = "android"))]
+fn android_persistence_impact(changes: StateChangeSet) -> AndroidPersistenceImpact {
+    let position_only =
+        StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN;
+    if changes == position_only {
+        return AndroidPersistenceImpact::Position;
+    }
+    let persistent_changes = StateChangeSet::PLAYLIST
         | StateChangeSet::EQUALIZER
         | StateChangeSet::PANELS
         | StateChangeSet::SKIN
         | StateChangeSet::CONFIG;
     if changes.intersects(persistent_changes) {
-        android.mark_persistence();
+        return AndroidPersistenceImpact::Snapshot;
     }
-    if changes.intersects(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST) {
-        android.mark_media_projection();
+    if changes.intersects(StateChangeSet::PLAYER) {
+        return AndroidPersistenceImpact::Position;
     }
+    AndroidPersistenceImpact::None
 }
 
 #[cfg(target_os = "android")]
@@ -167,22 +192,69 @@ pub(crate) fn flush_android_persistence(
     pending_messages: &mut Vec<String>,
     force: bool,
 ) {
+    let _perf_span = crate::perf_span!("persistence_flush");
     if !force && !super::android::is_foreground_activity(android.activity_generation()) {
         return;
     }
-    if !android.take_persistence_due(force) {
-        return;
+    if let Err(error) = super::android::take_persistence_error() {
+        surface_android_persistence_error(
+            android,
+            pending_messages,
+            AndroidPersistenceDue::Snapshot,
+            error,
+        );
     }
+    let Some(due) = android.take_persistence_due(force) else {
+        if force {
+            if let Err(error) = super::android::flush_persistence_writer() {
+                surface_android_persistence_error(
+                    android,
+                    pending_messages,
+                    AndroidPersistenceDue::Snapshot,
+                    error,
+                );
+            }
+        }
+        return;
+    };
     let playback_position_ms = (state.player.state() != PlayerState::Stopped)
         .then(|| playback.position_ms())
         .flatten();
-    if let Err(error) = super::android::persist_app_state(state, playback_position_ms) {
-        android.mark_persistence();
-        crate::app_log_error!(frontend, "failed to save Android session state", error);
-        let message = format!("failed to save Android session state: {error}");
-        if !pending_messages.contains(&message) {
-            pending_messages.push(message);
+    let result = match due {
+        AndroidPersistenceDue::Snapshot => {
+            super::android::persist_app_state(state, playback_position_ms)
         }
+        AndroidPersistenceDue::Position => super::android::persist_playback_position(
+            state,
+            playback_position_ms.unwrap_or(state.config.playback_position_ms),
+        ),
+    };
+    match result {
+        Ok(()) if force => {
+            if let Err(error) = super::android::flush_persistence_writer() {
+                surface_android_persistence_error(android, pending_messages, due, error);
+            }
+        }
+        Ok(()) => {}
+        Err(error) => surface_android_persistence_error(android, pending_messages, due, error),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn surface_android_persistence_error(
+    android: &mut AndroidRuntime,
+    pending_messages: &mut Vec<String>,
+    due: AndroidPersistenceDue,
+    error: std::io::Error,
+) {
+    match due {
+        AndroidPersistenceDue::Snapshot => android.mark_persistence(),
+        AndroidPersistenceDue::Position => android.mark_position_persistence(),
+    }
+    crate::app_log_error!(frontend, "failed to save Android session state", error);
+    let message = format!("failed to save Android session state: {error}");
+    if !pending_messages.contains(&message) {
+        pending_messages.push(message);
     }
 }
 
@@ -212,7 +284,12 @@ pub(crate) fn flush_android_media_projection(
             android.mark_media_projection();
             return;
         }
-        android.remember_playlist(state.playlist.clone());
+        android.remember_playlist(&state.playlist);
+    }
+    if !super::android::sync_media_playlist_position(activity_generation, state.playlist.position())
+    {
+        android.mark_media_projection();
+        return;
     }
     let playback_state = super::android::AndroidPlaybackState::from(state.player.state());
     let position_ms = playback
@@ -233,6 +310,7 @@ pub(crate) fn flush_android_media_projection(
         position_ms,
         current_index,
         playlist_len,
+        state.playlist.revisions().content,
         has_entries,
         has_entries,
     ) {
@@ -260,5 +338,27 @@ mod tests {
             owner(AppEffect::SaveConfig),
             EffectOwner::Platform(PlatformEffect::SaveConfig)
         ));
+    }
+
+    #[test]
+    fn android_player_transitions_checkpoint_without_full_snapshots() {
+        assert_eq!(
+            android_persistence_impact(StateChangeSet::PLAYER | StateChangeSet::RENDER_MAIN),
+            AndroidPersistenceImpact::Position
+        );
+        assert_eq!(
+            android_persistence_impact(
+                StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN
+            ),
+            AndroidPersistenceImpact::Position
+        );
+        assert_eq!(
+            android_persistence_impact(StateChangeSet::PLAYER | StateChangeSet::PLAYLIST),
+            AndroidPersistenceImpact::Snapshot
+        );
+        assert_eq!(
+            android_persistence_impact(StateChangeSet::RENDER_MAIN),
+            AndroidPersistenceImpact::None
+        );
     }
 }

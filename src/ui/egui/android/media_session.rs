@@ -14,6 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use jni::objects::{JObject, JValue};
 use jni::JNIEnv;
@@ -44,6 +45,7 @@ struct AndroidMediaNotification {
     duration_ms: i64,
     current_index: i64,
     playlist_len: i32,
+    queue_version: u64,
     has_previous: bool,
     has_next: bool,
 }
@@ -51,9 +53,16 @@ struct AndroidMediaNotification {
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
 static MEDIA_PLAYLIST: OnceLock<Mutex<AndroidMediaPlaylistState>> = OnceLock::new();
 static PLAYBACK_BACKEND: OnceLock<Mutex<Option<RodioBackend>>> = OnceLock::new();
+static LAST_POSITION_PUBLICATION: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+
+const POSITION_PUBLICATION_INTERVAL: Duration = Duration::from_secs(1);
 
 pub(crate) fn reset_notification() {
     *MEDIA_NOTIFICATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    *LAST_POSITION_PUBLICATION
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = None;
@@ -70,6 +79,14 @@ pub fn shared_playback_backend() -> Result<RodioBackend, String> {
     let created = RodioBackend::new()?;
     *backend = Some(created.clone());
     Ok(created)
+}
+
+fn existing_playback_backend() -> Option<RodioBackend> {
+    PLAYBACK_BACKEND
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .clone()
 }
 
 pub(crate) fn replace_activity(activity: AndroidActivityGeneration, resumed: bool) {
@@ -96,6 +113,17 @@ pub(crate) fn activity_paused_or_exited(activity: AndroidActivityGeneration) {
         .activity_paused_or_exited(activity);
 }
 
+pub(crate) fn persist_playback_position_now() {
+    let Some(backend) = existing_playback_backend() else {
+        return;
+    };
+    if let Err(err) =
+        persistence::persist_playback_position_now(&backend, current_media_item_index())
+    {
+        eprintln!("xmms-rs: failed to persist Android lifecycle position: {err}");
+    }
+}
+
 pub(crate) fn is_foreground_mirror(activity: AndroidActivityGeneration) -> bool {
     MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
@@ -119,6 +147,17 @@ pub fn sync_media_playlist(
         )
 }
 
+pub fn sync_media_playlist_position(
+    activity: AndroidActivityGeneration,
+    position: Option<usize>,
+) -> bool {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .sync_mirror_position(activity, position)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn update_playback_notification(
     activity: AndroidActivityGeneration,
@@ -131,6 +170,7 @@ pub fn update_playback_notification(
     position_ms: i64,
     current_index: i64,
     playlist_len: i32,
+    queue_version: u64,
     has_previous: bool,
     has_next: bool,
 ) -> Result<bool, String> {
@@ -152,6 +192,7 @@ pub fn update_playback_notification(
         duration_ms,
         current_index,
         playlist_len,
+        queue_version,
         has_previous,
         has_next,
     };
@@ -304,8 +345,35 @@ pub(crate) fn current_media_item_index() -> Option<usize> {
         .and_then(|shared| shared.playlist.position())
 }
 
+pub(crate) fn media_queue_snapshot_json() -> String {
+    let state = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let Some(media) = state.media() else {
+        return r#"{"version":0,"items":[]}"#.to_string();
+    };
+    let items = media
+        .playlist
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            serde_json::json!({
+                "title": media.titles.get(index).unwrap_or(&entry.title),
+                "durationMs": entry.length_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "version": media.playlist.revisions().content,
+        "items": items,
+    })
+    .to_string()
+}
+
 pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
-    let Ok(backend) = shared_playback_backend() else {
+    let Some(backend) = existing_playback_backend() else {
         return;
     };
     let order = events::lock_media_control_order();
@@ -366,7 +434,7 @@ pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
         update_service_from_backend(env, service);
     }
     persistence::checkpoint_playback_position(&backend, current_media_item_index);
-    update_service_position_from_backend(env, service, &backend);
+    update_service_position_if_due(env, service, &backend);
 }
 
 pub(crate) fn handle_media_control(
@@ -460,11 +528,7 @@ fn execute_android_media_control(
             playlist.play_media_item(index, |uri| backend.play_uri(uri))
         }
         AndroidMediaControl::HaltPlayback => match backend.state().transition(PlayerAction::Halt) {
-            Some(PlayerTransition::PauseAndSeekToStart) => {
-                backend.pause()?;
-                backend.seek(0)
-            }
-            Some(PlayerTransition::SeekToStart) => backend.seek(0),
+            Some(PlayerTransition::Stop) => backend.stop(),
             _ => Ok(()),
         },
         AndroidMediaControl::PlaylistEof => {
@@ -509,8 +573,26 @@ fn update_service_position_from_backend(
     );
 }
 
+fn update_service_position_if_due(
+    env: &mut JNIEnv<'_>,
+    service: &JObject<'_>,
+    backend: &RodioBackend,
+) {
+    let now = Instant::now();
+    let mut last = LAST_POSITION_PUBLICATION
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if last.is_some_and(|last| now.saturating_duration_since(last) < POSITION_PUBLICATION_INTERVAL)
+    {
+        return;
+    }
+    update_service_position_from_backend(env, service, backend);
+    *last = Some(now);
+}
+
 fn update_service_from_backend(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
-    let Ok(backend) = shared_playback_backend() else {
+    let Some(backend) = existing_playback_backend() else {
         return;
     };
     let state = AndroidPlaybackState::from(backend.state());

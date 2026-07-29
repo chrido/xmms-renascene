@@ -14,3 +14,4 @@ __pycache__/
 *.la
 *.lo
 .libs/
+xmms-1.2.6/

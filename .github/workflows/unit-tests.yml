@@ -121,6 +121,201 @@ jobs:
           path: testoutput
           if-no-files-found: ignore
 
+  perf-reference-desktop:
+    name: Perf / ${{ matrix.platform }} / ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - gtk
+          - egui
+        scenario:
+          - coldstart
+          - load100playlist
+          - load1kplaylist
+          - load10kplaylist
+          - idle
+          - playbackvisualizer
+          - playbacknovisualizer
+          - scroll10kplaylist
+          - playbackcontrols
+          - seek100
+          - pauseresume100
+          - layoutchange
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install performance dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes \
+            build-essential \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer1.0-dev \
+            libgtk-4-dev \
+            libegl1 \
+            libgl1-mesa-dri \
+            libxkbcommon-x11-0 \
+            linux-tools-common \
+            pkg-config \
+            xauth \
+            xvfb
+
+      - name: Capture directional performance scenario
+        run: >-
+          ./repo perf
+          --scenario=${{ matrix.scenario }}
+          --platform=${{ matrix.platform }}
+          --iterations=3
+          --warmup=1
+          --duration=2
+          --diagnostics=false
+
+      - name: Upload directional performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ matrix.platform }}-${{ matrix.scenario }}-${{ github.sha }}
+          path: target/perf/${{ matrix.platform }}/${{ matrix.scenario }}
+          retention-days: 30
+          if-no-files-found: error
+
+  perf-reference-android:
+    name: Perf / android / ${{ matrix.scenario }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - coldstart
+          - load100playlist
+          - load1kplaylist
+          - load10kplaylist
+          - idle
+          - playbackvisualizer
+          - playbacknovisualizer
+          - scroll10kplaylist
+          - playbackcontrols
+          - layoutchange
+          - backgroundplayback
+          - widgets
+
+    env:
+      ANDROID_API_LEVEL: "36"
+      ANDROID_BUILD_TOOLS: "36.0.0"
+      ANDROID_NDK_VERSION: "27.2.12479018"
+      XMMS_ANDROID_PERF_APK: target/release/apk/xmms-renascene.apk
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API_LEVEL}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install Rust Android toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-perf
+
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --version 0.10.0 --locked
+
+      - name: Create Android signing key
+        run: |
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000
+
+      - name: Build optimized Android performance APK
+        run: ./repo android-apk-emulator-release
+
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Capture directional Android performance scenario
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: >-
+            -no-window
+            -gpu swiftshader_indirect
+            -no-snapshot
+            -noaudio
+            -no-boot-anim
+            -no-metrics
+          script: >-
+            ./repo perf
+            --scenario=${{ matrix.scenario }}
+            --platform=android
+            --iterations=3
+            --warmup=1
+            --duration=2
+            --diagnostics=false
+
+      - name: Upload directional Android performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-android-${{ matrix.scenario }}-${{ github.sha }}
+          path: target/perf/android/${{ matrix.scenario }}
+          retention-days: 30
+          if-no-files-found: error
+
   android-pye2e:
     name: Android UI E2E
     runs-on: ubuntu-latest

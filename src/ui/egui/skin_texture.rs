@@ -1,11 +1,12 @@
 //! Pure Rust image to egui texture helpers.
 
 use crate::render::{
-    equalizer_window_height, playlist_window_height, render_equalizer_state,
-    render_main_player_state, render_playlist_frame, render_playlist_menu, render_playlist_rows,
-    render_scaled, render_transport_buttons, Context, EqualizerRenderState, Format, ImageSurface,
-    MainWindowRenderState, PlaylistMenuRenderState, PlaylistRowsRenderState, RenderError,
-    EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT, MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
+    equalizer_window_height, playlist_window_height, render_equalizer_state, render_main_player,
+    render_main_player_dynamic_state, render_main_player_state, render_playlist_frame,
+    render_playlist_menu, render_playlist_rows, render_scaled, render_transport_buttons, Context,
+    EqualizerRenderState, Format, ImageSurface, MainWindowRenderState, PlaylistMenuRenderState,
+    PlaylistRowsRenderState, RenderError, EQUALIZER_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT,
+    MAIN_WINDOW_HEIGHT, MAIN_WINDOW_WIDTH,
 };
 use crate::skin::layout::MainPushButton;
 use crate::skin::DefaultSkin;
@@ -16,6 +17,36 @@ pub const PLAYER_INFO_X: usize = 104;
 pub const PLAYER_INFO_Y: usize = 20;
 pub const PLAYER_INFO_WIDTH: usize = 164;
 pub const PLAYER_INFO_HEIGHT: usize = 37;
+
+#[derive(Default)]
+pub(crate) struct ImageRenderBuffer {
+    surface: Option<ImageSurface>,
+    #[cfg(test)]
+    allocations: usize,
+}
+
+impl ImageRenderBuffer {
+    fn surface(&mut self, width: i32, height: i32) -> Result<ImageSurface, RenderError> {
+        if self
+            .surface
+            .as_ref()
+            .is_none_or(|surface| surface.width() != width || surface.height() != height)
+        {
+            self.surface = Some(ImageSurface::create(Format::ARgb32, width, height)?);
+            #[cfg(test)]
+            {
+                self.allocations += 1;
+            }
+        } else if let Some(surface) = &self.surface {
+            surface.clear();
+        }
+        Ok(self
+            .surface
+            .as_ref()
+            .expect("render surface initialized")
+            .clone())
+    }
+}
 
 pub fn player_info_render_state(
     title: &str,
@@ -52,25 +83,27 @@ pub fn surface_to_color_image(surface: &mut ImageSurface) -> Result<egui::ColorI
     let height = surface.height() as usize;
     let stride = surface.stride() as usize;
     let data = surface.data()?;
-    let mut rgba = Vec::with_capacity(width * height * 4);
+    let mut pixels = Vec::with_capacity(width * height);
     for y in 0..height {
         let row = &data[y * stride..y * stride + width * 4];
         for pixel in row.chunks_exact(4) {
             let [r, g, b, a] =
                 argb_to_egui_rgba(u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]));
-            rgba.extend_from_slice(&[r, g, b, a]);
+            pixels.push(egui::Color32::from_rgba_unmultiplied(r, g, b, a));
         }
     }
-    Ok(egui::ColorImage::from_rgba_unmultiplied(
-        [width, height],
-        &rgba,
-    ))
+    Ok(egui::ColorImage {
+        size: [width, height],
+        pixels,
+        source_size: egui::vec2(width as f32, height as f32),
+    })
 }
 
 pub fn render_main_player_color_image(
     skin: &DefaultSkin,
     state: &MainWindowRenderState,
 ) -> Result<egui::ColorImage, RenderError> {
+    let _perf_span = crate::perf_span!("main_player_render");
     let height = if state.shaded {
         MAIN_TITLEBAR_HEIGHT
     } else {
@@ -79,6 +112,61 @@ pub fn render_main_player_color_image(
     let mut surface = ImageSurface::create(Format::ARgb32, MAIN_WINDOW_WIDTH, height)?;
     let cr = Context::new(&surface)?;
     render_main_player_state(&cr, skin, state)?;
+    drop(cr);
+    surface_to_color_image(&mut surface)
+}
+
+pub fn render_main_player_static_color_image(
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+) -> Result<egui::ColorImage, RenderError> {
+    render_main_player_static_color_image_buffered(
+        skin,
+        focused,
+        shaded,
+        &mut ImageRenderBuffer::default(),
+    )
+}
+
+pub(crate) fn render_main_player_static_color_image_buffered(
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+    buffer: &mut ImageRenderBuffer,
+) -> Result<egui::ColorImage, RenderError> {
+    let height = if shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        MAIN_WINDOW_HEIGHT
+    };
+    let mut surface = buffer.surface(MAIN_WINDOW_WIDTH, height)?;
+    let cr = Context::new(&surface)?;
+    render_main_player(&cr, skin, focused, shaded)?;
+    drop(cr);
+    surface_to_color_image(&mut surface)
+}
+
+pub fn render_main_player_dynamic_color_image(
+    skin: &DefaultSkin,
+    state: &MainWindowRenderState,
+) -> Result<egui::ColorImage, RenderError> {
+    render_main_player_dynamic_color_image_buffered(skin, state, &mut ImageRenderBuffer::default())
+}
+
+pub(crate) fn render_main_player_dynamic_color_image_buffered(
+    skin: &DefaultSkin,
+    state: &MainWindowRenderState,
+    buffer: &mut ImageRenderBuffer,
+) -> Result<egui::ColorImage, RenderError> {
+    let height = if state.shaded {
+        MAIN_TITLEBAR_HEIGHT
+    } else {
+        MAIN_WINDOW_HEIGHT
+    };
+    let mut surface = buffer.surface(MAIN_WINDOW_WIDTH, height)?;
+    let cr = Context::new(&surface)?;
+    render_main_player_dynamic_state(&cr, skin, state)?;
     drop(cr);
     surface_to_color_image(&mut surface)
 }
@@ -146,8 +234,16 @@ pub fn render_equalizer_color_image(
     skin: &DefaultSkin,
     state: &EqualizerRenderState,
 ) -> Result<egui::ColorImage, RenderError> {
+    render_equalizer_color_image_buffered(skin, state, &mut ImageRenderBuffer::default())
+}
+
+pub(crate) fn render_equalizer_color_image_buffered(
+    skin: &DefaultSkin,
+    state: &EqualizerRenderState,
+    buffer: &mut ImageRenderBuffer,
+) -> Result<egui::ColorImage, RenderError> {
     let height = equalizer_window_height(state.shaded);
-    let mut surface = ImageSurface::create(Format::ARgb32, EQUALIZER_WINDOW_WIDTH, height)?;
+    let mut surface = buffer.surface(EQUALIZER_WINDOW_WIDTH, height)?;
     let cr = Context::new(&surface)?;
     render_equalizer_state(&cr, skin, state)?;
     drop(cr);
@@ -168,6 +264,37 @@ pub fn render_playlist_color_image(
     footer_time_seconds: Option<&str>,
     scale: f64,
 ) -> Result<egui::ColorImage, RenderError> {
+    render_playlist_color_image_buffered(
+        skin,
+        focused,
+        shaded,
+        width,
+        height,
+        shaded_info,
+        rows,
+        footer_info,
+        footer_time_minutes,
+        footer_time_seconds,
+        scale,
+        &mut ImageRenderBuffer::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_playlist_color_image_buffered(
+    skin: &DefaultSkin,
+    focused: bool,
+    shaded: bool,
+    width: i32,
+    height: i32,
+    shaded_info: Option<&str>,
+    rows: &PlaylistRowsRenderState,
+    footer_info: Option<&str>,
+    footer_time_minutes: Option<&str>,
+    footer_time_seconds: Option<&str>,
+    scale: f64,
+    buffer: &mut ImageRenderBuffer,
+) -> Result<egui::ColorImage, RenderError> {
     let render_height = playlist_window_height(shaded, height);
     // Render at the final device resolution so the vector song-name font is
     // rasterised crisply (like GTK), instead of rendering at 1x and letting
@@ -177,7 +304,7 @@ pub fn render_playlist_color_image(
     let scale = scale.max(1.0);
     let device_width = ((width as f64) * scale).round().max(1.0) as i32;
     let device_height = ((render_height as f64) * scale).round().max(1.0) as i32;
-    let mut surface = ImageSurface::create(Format::ARgb32, device_width, device_height)?;
+    let mut surface = buffer.surface(device_width, device_height)?;
     let cr = Context::new(&surface)?;
     render_scaled(
         &cr,
@@ -244,6 +371,7 @@ pub fn upload_color_image(
     name: impl Into<String>,
     image: egui::ColorImage,
 ) -> egui::TextureHandle {
+    let _perf_span = crate::perf_span!("texture_upload");
     ctx.load_texture(name, image, egui::TextureOptions::NEAREST)
 }
 
@@ -271,6 +399,18 @@ mod tests {
     fn argb_conversion_outputs_rgba() {
         let argb = u32::from_ne_bytes([3, 2, 1, 4]);
         assert_eq!(argb_to_egui_rgba(argb), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn image_render_buffer_reuses_same_sized_surface() {
+        let mut buffer = ImageRenderBuffer::default();
+
+        buffer.surface(10, 20).unwrap();
+        buffer.surface(10, 20).unwrap();
+        assert_eq!(buffer.allocations, 1);
+
+        buffer.surface(20, 20).unwrap();
+        assert_eq!(buffer.allocations, 2);
     }
 
     #[test]
@@ -444,6 +584,8 @@ mod tests {
         let skin = DefaultSkin::load_bundled().unwrap();
         let rows = PlaylistRowsRenderState {
             entries: Vec::new(),
+            first_index: 0,
+            total_entries: 0,
             scroll_offset: 0,
             scrollbar_dragging: false,
             search_query: None,

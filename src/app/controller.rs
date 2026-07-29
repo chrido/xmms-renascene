@@ -475,17 +475,7 @@ impl AppController {
                     AppEffect::QueueRender(RenderTarget::All),
                 ]
             }
-            Some(PlayerTransition::PauseAndSeekToStart) => {
-                self.state.player.pause();
-                self.state.config.playback_position_ms = 0;
-                vec![
-                    AppEffect::PausePlayback,
-                    AppEffect::SeekPlayback(0),
-                    AppEffect::SaveConfig,
-                    AppEffect::QueueRender(RenderTarget::All),
-                ]
-            }
-            Some(PlayerTransition::SeekToStart) => self.seek_to(0),
+            Some(PlayerTransition::Stop) => self.terminate_playback(),
             None => Vec::new(),
         }
     }
@@ -722,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_pauses_playing_state_and_seeks_to_start() {
+    fn halt_stops_playback_and_resets_position() {
         for state in [PlayerState::Playing, PlayerState::Paused] {
             let mut app_state = AppState::default();
             app_state
@@ -738,14 +728,11 @@ mod tests {
 
             let effects = controller.handle_command(PlayerCommand::Halt.into());
 
-            assert_eq!(controller.state().player.state(), PlayerState::Paused);
+            assert_eq!(controller.state().player.state(), PlayerState::Stopped);
             assert_eq!(controller.state().config.playback_position_ms, 0);
-            assert!(effects.contains(&AppEffect::SeekPlayback(0)));
-            assert_eq!(
-                effects.contains(&AppEffect::PausePlayback),
-                state == PlayerState::Playing
-            );
-            assert!(!effects.contains(&AppEffect::StopPlayback));
+            assert!(effects.contains(&AppEffect::StopPlayback));
+            assert!(!effects.contains(&AppEffect::PausePlayback));
+            assert!(!effects.contains(&AppEffect::SeekPlayback(0)));
         }
     }
 

@@ -10,9 +10,12 @@ use crate::app::playlist_actions::{
 };
 use crate::app::view_model::{
     ellipsize_chars, format_duration, formatted_playlist_entry_title,
+    playlist_rows_render_state_from_projection, PlaylistViewModel,
+};
+#[cfg(test)]
+use crate::app::view_model::{
     playlist_footer_info as shared_playlist_footer_info,
-    playlist_rows_render_state as shared_playlist_rows_render_state, playlist_view_model,
-    PlaylistViewModel,
+    playlist_rows_render_state as shared_playlist_rows_render_state,
 };
 use crate::app_log_info;
 use crate::player::PlayerState;
@@ -34,13 +37,19 @@ use super::app::EguiFrontendState;
 use super::layout::clamp_popup_to_rect;
 use super::render_cache::{CachedPlaylistTexture, PlaylistTextureKey};
 use super::skin_texture::{
-    pixel_snapped_rect, render_playlist_color_image, render_playlist_menu_color_image,
+    pixel_snapped_rect, render_playlist_color_image_buffered, render_playlist_menu_color_image,
     upload_color_image,
 };
 use super::ui_state::ActiveOverlay;
 
 pub fn playlist_row_count(view_model: &PlaylistViewModel) -> usize {
     view_model.rows.len()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlaylistInteractionState {
+    row_count: usize,
+    shaded: bool,
 }
 
 #[cfg(any(target_os = "android", test))]
@@ -198,53 +207,49 @@ pub(crate) fn show_android_playlist_manager(
 }
 
 pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
-    let view_model = playlist_view_model(app.controller().state());
-    if !view_model.visible {
+    if !app.controller().state().config.playlist_visible {
         return;
     }
-    let rows = shared_playlist_rows_render_state(
+    let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
+    let texture_key = PlaylistTextureKey::from_state(
         app.controller().state(),
+        app.render_cache.generation,
         app.playlist_scroll_offset,
-        false,
-        None,
         app.playlist_width,
         app.playlist_height,
+        render_scale,
     );
-    let shaded_info = shaded_playlist_info(app);
-    let footer_info = playlist_footer_info(app);
-    let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
-    let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
-    let texture_key = PlaylistTextureKey {
-        generation: app.render_cache.generation,
-        focused: true,
-        shaded: view_model.shaded,
-        width: app.playlist_width,
-        height: app.playlist_height,
-        shaded_info,
-        rows,
-        footer_info,
-        footer_time_minutes,
-        footer_time_seconds,
-        render_scale_bits: render_scale.to_bits(),
-    };
     if app
         .render_cache
         .playlist
         .as_ref()
         .is_none_or(|cached| cached.key != texture_key)
     {
-        let Ok(image) = render_playlist_color_image(
-            &app.active_skin,
+        let shaded_info = shaded_playlist_info(app);
+        let (footer_time_minutes, footer_time_seconds) = playlist_footer_time_parts(app);
+        let (state, skin, projection, staging) = app.playlist_render_parts();
+        let rows = playlist_rows_render_state_from_projection(
+            state,
+            projection,
+            texture_key.scroll_offset,
+            false,
+            None,
+            texture_key.width,
+            texture_key.height,
+        );
+        let Ok(image) = render_playlist_color_image_buffered(
+            skin,
             texture_key.focused,
             texture_key.shaded,
             texture_key.width,
             texture_key.height,
-            Some(&texture_key.shaded_info),
-            &texture_key.rows,
-            Some(&texture_key.footer_info),
-            Some(&texture_key.footer_time_minutes),
-            Some(&texture_key.footer_time_seconds),
+            Some(&shaded_info),
+            &rows,
+            Some(&projection.footer_info),
+            Some(&footer_time_minutes),
+            Some(&footer_time_seconds),
             render_scale,
+            staging,
         ) else {
             ui.label("failed to render skinned playlist");
             return;
@@ -266,7 +271,11 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         .expect("playlist texture initialized")
         .texture
         .id();
-    let base_height = playlist_window_height(view_model.shaded, app.playlist_height);
+    let interaction = PlaylistInteractionState {
+        row_count: app.controller().state().playlist.entries().len(),
+        shaded: app.controller().state().config.playlist_shaded,
+    };
+    let base_height = playlist_window_height(interaction.shaded, app.playlist_height);
     let size = egui::vec2(
         app.playlist_width as f32 * app.scale_factor,
         base_height as f32 * app.scale_factor,
@@ -279,8 +288,8 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         egui::Color32::WHITE,
     );
     add_playlist_titlebar_drag_region(ui, app, rect);
-    add_playlist_hit_regions(ui, app, rect, &view_model);
-    add_playlist_resize_handle(ui, app, rect, &view_model);
+    add_playlist_hit_regions(ui, app, rect, interaction);
+    add_playlist_resize_handle(ui, app, rect, interaction.shaded);
     show_playlist_sort_popover(ui.ctx(), app, rect);
     add_playlist_menu_popover(ui, app, rect);
     show_physical_delete_confirmation(ui.ctx(), app);
@@ -299,6 +308,7 @@ fn playlist_footer_time_parts(app: &EguiFrontendState) -> (String, String) {
     (format!("{minutes:>3}"), format!("{seconds:02}"))
 }
 
+#[cfg(test)]
 fn playlist_footer_info(app: &EguiFrontendState) -> String {
     shared_playlist_footer_info(app.controller().state())
 }
@@ -335,16 +345,16 @@ fn add_playlist_hit_regions(
     ui: &mut egui::Ui,
     app: &mut EguiFrontendState,
     base_rect: egui::Rect,
-    view_model: &PlaylistViewModel,
+    interaction: PlaylistInteractionState,
 ) {
     app.ui.playlist_menu_hover = None;
     add_playlist_title_button_hits(ui, app, base_rect);
-    if view_model.shaded {
+    if interaction.shaded {
         return;
     }
 
     if app.ui.active_overlay.playlist_menu().is_none() {
-        add_playlist_rows_hit_region(ui, app, base_rect, view_model);
+        add_playlist_rows_hit_region(ui, app, base_rect, interaction.row_count);
     }
     for menu in [
         PlaylistMenuButton::Add,
@@ -398,9 +408,9 @@ fn add_playlist_resize_handle(
     ui: &mut egui::Ui,
     app: &mut EguiFrontendState,
     base_rect: egui::Rect,
-    view_model: &PlaylistViewModel,
+    shaded: bool,
 ) {
-    if view_model.shaded {
+    if shaded {
         app.playlist_resize_start = None;
         return;
     }
@@ -523,7 +533,7 @@ fn add_playlist_rows_hit_region(
     ui: &mut egui::Ui,
     app: &mut EguiFrontendState,
     base_rect: egui::Rect,
-    view_model: &PlaylistViewModel,
+    row_count: usize,
 ) {
     let rows_rect = scale_skin_rect(
         base_rect,
@@ -537,7 +547,7 @@ fn add_playlist_rows_hit_region(
     let response = ui.interact(rows_rect, ui.id().with("playlist-rows"), rows_sense);
     #[cfg(target_os = "android")]
     let touch_gesture_handled =
-        handle_playlist_touch_scroll(ui, app, &response, rows_rect, view_model);
+        handle_playlist_touch_scroll(ui, app, &response, rows_rect, row_count);
     #[cfg(not(target_os = "android"))]
     let touch_gesture_handled = false;
     response.context_menu(|ui| {
@@ -592,9 +602,9 @@ fn add_playlist_rows_hit_region(
         let ctrl = ui
             .ctx()
             .input(|input| input.modifiers.ctrl || input.modifiers.command);
-        if let Some(model) = view_model.rows.get(index) {
+        if index < row_count {
             app.dispatch_all(playlist_row_click_commands(
-                model.index,
+                index,
                 response.double_clicked(),
                 ctrl,
             ));
@@ -617,7 +627,7 @@ fn handle_playlist_touch_scroll(
     app: &mut EguiFrontendState,
     response: &egui::Response,
     rows_rect: egui::Rect,
-    view_model: &PlaylistViewModel,
+    row_count: usize,
 ) -> bool {
     let mut gesture_handled = false;
     let press_origin = ui.ctx().input(|input| {
@@ -639,7 +649,7 @@ fn handle_playlist_touch_scroll(
             let row =
                 ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
             let index = app.playlist_scroll_offset.saturating_add(row);
-            view_model.rows.get(index).map(|model| model.index)
+            (index < row_count).then_some(index)
         };
         app.playlist_touch_gesture.begin(drag_start, row);
     }
@@ -692,7 +702,7 @@ fn handle_playlist_touch_scroll(
                     let row = ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor()
                         as usize;
                     let index = app.playlist_scroll_offset.saturating_add(row);
-                    view_model.rows.get(index).map(|model| model.index)
+                    (index < row_count).then_some(index)
                 })
             });
             if let Some(swiped_index) = swiped_index {

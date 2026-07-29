@@ -1,16 +1,41 @@
 use std::fmt;
 use std::io::{BufReader, Cursor};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use image::ImageDecoder;
 
 use super::layout::SkinRect;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+static NEXT_CACHE_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug)]
 pub struct XpmImage {
     width: usize,
     height: usize,
     argb: Vec<u32>,
+    cache_id: u64,
+    revision: u64,
 }
+
+impl Clone for XpmImage {
+    fn clone(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            argb: self.argb.clone(),
+            cache_id: next_cache_id(),
+            revision: 0,
+        }
+    }
+}
+
+impl PartialEq for XpmImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width && self.height == other.height && self.argb == other.argb
+    }
+}
+
+impl Eq for XpmImage {}
 
 impl XpmImage {
     pub fn from_argb_pixels(width: usize, height: usize, argb: Vec<u32>) -> Result<Self, XpmError> {
@@ -25,6 +50,8 @@ impl XpmImage {
             width,
             height,
             argb,
+            cache_id: next_cache_id(),
+            revision: 0,
         })
     }
 
@@ -44,6 +71,10 @@ impl XpmImage {
         &self.argb
     }
 
+    pub(crate) fn surface_cache_key(&self) -> (u64, u64) {
+        (self.cache_id, self.revision)
+    }
+
     pub fn set_pixel_rgba(&mut self, x: usize, y: usize, rgba: [u8; 4]) -> bool {
         if x >= self.width || y >= self.height {
             return false;
@@ -55,6 +86,7 @@ impl XpmImage {
             return false;
         }
         self.argb[offset] = pixel;
+        self.revision = self.revision.wrapping_add(1);
         true
     }
 
@@ -88,6 +120,9 @@ impl XpmImage {
                 }
             }
         }
+        if changed {
+            self.revision = self.revision.wrapping_add(1);
+        }
         changed
     }
 
@@ -97,6 +132,10 @@ impl XpmImage {
         }
         self.argb.get(y * self.width + x).copied()
     }
+}
+
+fn next_cache_id() -> u64 {
+    NEXT_CACHE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 fn parse_with_library(contents: &str) -> Result<XpmImage, XpmError> {

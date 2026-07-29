@@ -6,6 +6,9 @@ use xmms_renascene::egui_frontend;
 use xmms_renascene::ui;
 
 fn main() {
+    if let Err(err) = xmms_renascene::perf::initialize() {
+        eprintln!("xmms-rs: {err}");
+    }
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_help();
@@ -184,8 +187,27 @@ fn parse_preview_options(args: &[String]) -> Result<PreviewOptions, String> {
             };
             options.playlist_size = Some(parse_playlist_size(value)?);
             options.show_playlist = true;
+        } else if let Some(value) = arg.strip_prefix("--load-playlist=") {
+            options.load_playlist_path = Some(value.to_string());
+            options.show_playlist = true;
+        } else if arg == "--load-playlist" {
+            let Some(value) = iter.next() else {
+                return Err("--load-playlist requires PATH".to_string());
+            };
+            options.load_playlist_path = Some(value.to_string());
+            options.show_playlist = true;
+        } else if let Some(value) = arg.strip_prefix("--visualization=") {
+            options.visualization_enabled = Some(parse_enabled(value, "--visualization")?);
         } else if !arg.starts_with('-') {
             options.positional_paths.push(arg.to_string());
+        }
+
+        fn parse_enabled(value: &str, option: &str) -> Result<bool, String> {
+            match value {
+                "on" | "true" | "1" => Ok(true),
+                "off" | "false" | "0" => Ok(false),
+                _ => Err(format!("{option} requires on or off")),
+            }
         }
     }
     Ok(options)
@@ -289,12 +311,26 @@ mod tests {
     }
 
     #[test]
+    fn parses_disabled_visualization_for_performance_scenarios() {
+        let options = parse_preview_options(&args(&["--visualization=off"])).unwrap();
+        assert_eq!(options.visualization_enabled, Some(false));
+        assert!(parse_preview_options(&args(&["--visualization=maybe"])).is_err());
+    }
+
+    #[test]
     fn parses_positional_playlist_paths() {
         let options = parse_preview_options(&args(&["/tmp/one.wav", "/tmp/two.wav"])).unwrap();
         assert_eq!(
             options.positional_paths,
             vec!["/tmp/one.wav".to_string(), "/tmp/two.wav".to_string()]
         );
+    }
+
+    #[test]
+    fn parses_saved_playlist_path() {
+        let options = parse_preview_options(&args(&["--load-playlist=/tmp/perf.m3u"])).unwrap();
+        assert_eq!(options.load_playlist_path.as_deref(), Some("/tmp/perf.m3u"));
+        assert!(options.show_playlist);
     }
 
     #[test]

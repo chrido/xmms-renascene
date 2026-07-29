@@ -172,6 +172,18 @@ mod tests {
     }
 
     #[test]
+    fn position_only_invalidation_leaves_other_targets_clean() {
+        let mut runtime = EguiRuntime::default();
+
+        runtime.invalidate_changes(
+            StateChangeSet::PLAYER | StateChangeSet::CONFIG | StateChangeSet::RENDER_MAIN,
+        );
+        runtime.apply_effect(UiEffect::QueueRender(RenderTarget::Main));
+
+        assert_eq!(runtime.dirty_targets(), &[RenderTarget::Main]);
+    }
+
+    #[test]
     fn state_change_and_layout_repaints_remain_distinct() {
         let mut runtime = EguiRuntime::default();
 

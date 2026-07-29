@@ -10,13 +10,16 @@ use crate::app_state::AppState;
 use crate::audio_model::EqualizerBandPositions;
 use crate::config::Config;
 use crate::player::PlayerState;
-use crate::playlist::{PlaylistEntry, PlaylistMenuKind};
+use crate::playlist::{PlaylistEntry, PlaylistMenuKind, PlaylistRevisions};
 use crate::render::{PlaylistRowRenderEntry, PlaylistRowsRenderState};
 use crate::skin::layout::{playlist_menu_button_at, playlist_menu_popup_rect, PlaylistMenuButton};
 use crate::skin::widget::TextBox;
 
 const TITLE_SCROLL_SPEED_PX_PER_SECOND: f64 = 12.0;
 const TITLE_SCROLL_END_PAUSE: Duration = Duration::from_millis(1_500);
+const PLAYLIST_ROW_HEIGHT: i32 = 11;
+const PLAYLIST_ROW_AREA_CHROME: i32 = 58;
+const PLAYLIST_ROW_OVERSCAN: usize = 2;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TitleMarquee {
@@ -144,6 +147,41 @@ pub struct PlaylistViewModel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistProjectionKey {
+    revisions: PlaylistRevisions,
+    title_format: String,
+    convert_underscore: bool,
+    convert_twenty: bool,
+}
+
+impl PlaylistProjectionKey {
+    pub fn from_state(state: &AppState) -> Self {
+        Self {
+            revisions: state.playlist.revisions(),
+            title_format: state.config.title_format.clone(),
+            convert_underscore: state.config.convert_underscore,
+            convert_twenty: state.config.convert_twenty,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaylistProjection {
+    pub rows: Vec<PlaylistRowViewModel>,
+    pub current_index: Option<usize>,
+    pub footer_info: String,
+}
+
+pub fn playlist_projection(state: &AppState) -> PlaylistProjection {
+    let view_model = playlist_view_model(state);
+    PlaylistProjection {
+        rows: view_model.rows,
+        current_index: view_model.current_index,
+        footer_info: playlist_footer_info(state),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EqualizerViewModel {
     pub active: bool,
     pub auto: bool,
@@ -190,6 +228,7 @@ pub fn formatted_current_title(state: &AppState) -> String {
 }
 
 pub fn playlist_view_model(state: &AppState) -> PlaylistViewModel {
+    let _perf_span = crate::perf_span!("playlist_view_model_build");
     let current_index = state.playlist.position();
     let rows = state
         .playlist
@@ -315,10 +354,40 @@ pub fn playlist_rows_render_state(
     width: i32,
     height: i32,
 ) -> PlaylistRowsRenderState {
-    let view_model = playlist_view_model(state);
+    let _perf_span = crate::perf_span!("playlist_rows_render_state");
+    let projection = playlist_projection(state);
+    playlist_rows_render_state_from_projection(
+        state,
+        &projection,
+        scroll_offset,
+        scrollbar_dragging,
+        search_query,
+        width,
+        height,
+    )
+}
+
+pub fn playlist_rows_render_state_from_projection(
+    state: &AppState,
+    projection: &PlaylistProjection,
+    scroll_offset: usize,
+    scrollbar_dragging: bool,
+    search_query: Option<String>,
+    width: i32,
+    height: i32,
+) -> PlaylistRowsRenderState {
+    let visible_rows =
+        ((height.max(0) - PLAYLIST_ROW_AREA_CHROME) / PLAYLIST_ROW_HEIGHT).max(0) as usize;
+    let first_index = scroll_offset.saturating_sub(PLAYLIST_ROW_OVERSCAN);
+    let end_index = scroll_offset
+        .saturating_add(visible_rows)
+        .saturating_add(PLAYLIST_ROW_OVERSCAN)
+        .min(projection.rows.len());
     PlaylistRowsRenderState {
-        entries: view_model
+        entries: projection
             .rows
+            .get(first_index..end_index)
+            .unwrap_or_default()
             .iter()
             .map(|row| PlaylistRowRenderEntry {
                 title: row.title.clone(),
@@ -333,6 +402,8 @@ pub fn playlist_rows_render_state(
                 queue_position: state.playlist.queue_position(row.index),
             })
             .collect(),
+        first_index,
+        total_entries: projection.rows.len(),
         scroll_offset,
         scrollbar_dragging,
         search_query,
@@ -344,6 +415,7 @@ pub fn playlist_rows_render_state(
 }
 
 pub fn playlist_footer_info(state: &AppState) -> String {
+    let _perf_span = crate::perf_span!("playlist_footer_aggregation");
     let mut selected_ms = 0_i64;
     let mut total_ms = 0_i64;
     let mut selected_more = false;
@@ -757,6 +829,25 @@ mod tests {
     }
 
     #[test]
+    fn playlist_rows_render_state_is_bounded_for_large_playlists() {
+        let mut state = AppState::default();
+        for index in 0..10_000 {
+            state.playlist.add_timed_uri(
+                format!("file:///tmp/{index}.ogg"),
+                format!("Track {index}"),
+                1_000,
+            );
+        }
+
+        let rows = playlist_rows_render_state(&state, 5_000, false, None, 275, 232);
+
+        assert_eq!(rows.total_entries, 10_000);
+        assert_eq!(rows.first_index, 4_998);
+        assert!(rows.entries.len() <= 19);
+        assert_eq!(rows.entries[2].title, "Track 5000");
+    }
+
+    #[test]
     fn playlist_view_model_marks_current_and_selected_rows() {
         let mut state = AppState::default();
         state
@@ -775,6 +866,19 @@ mod tests {
         assert_eq!(view_model.rows[0].duration_text.as_deref(), Some("1:23"));
         assert!(view_model.rows[1].selected);
         assert_eq!(view_model.rows[1].duration_text, None);
+    }
+
+    #[test]
+    fn playlist_projection_key_ignores_unrelated_player_state() {
+        let mut state = AppState::default();
+        state.playlist.add_timed_uri("one.mp3", "One", 1_000);
+        let key = PlaylistProjectionKey::from_state(&state);
+
+        state.player.set_volume(25);
+        assert_eq!(PlaylistProjectionKey::from_state(&state), key);
+
+        state.playlist.select_all(true);
+        assert_ne!(PlaylistProjectionKey::from_state(&state), key);
     }
 
     #[test]

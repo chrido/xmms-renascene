@@ -93,7 +93,8 @@ fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
         .expect("duration indexing scheduler body");
     assert!(duration_index.contains("thread::spawn(move ||"));
     assert!(duration_index.contains("probe.probe(&item)"));
-    assert!(duration_index.contains("send_duration_index_batch(&sender, &mut results)"));
+    assert!(duration_index.contains("send_duration_index_batch(&sender, results)"));
+    assert!(duration_index.contains("send_batch(&mut results)"));
     assert!(app.contains("const DURATION_INDEX_BATCH_SIZE: usize = 16;"));
     let duration_preflight = duration_index
         .split("thread::spawn(move ||")
@@ -372,6 +373,28 @@ fn activity_exposes_an_explicit_finish_transition_for_lifecycle_e2e() {
 }
 
 #[test]
+fn activity_repaints_for_single_top_widget_launches_and_focus_returns() {
+    let java = include_str!("../android/java/org/xmms/renascene/XmmsActivity.java");
+    let on_new_intent = java
+        .split("protected void onNewIntent(Intent intent)")
+        .nth(1)
+        .expect("onNewIntent callback")
+        .split("@Override")
+        .next()
+        .expect("onNewIntent body");
+    let on_window_focus = java
+        .split("public void onWindowFocusChanged(boolean hasFocus)")
+        .nth(1)
+        .expect("onWindowFocusChanged callback")
+        .split("@Override")
+        .next()
+        .expect("onWindowFocusChanged body");
+
+    assert!(on_new_intent.contains("nativeRequestRepaint();"));
+    assert!(on_window_focus.contains("nativeRequestRepaint();"));
+}
+
+#[test]
 fn android_media_playlist_authority_and_repaint_ownership_are_explicit() {
     let state = include_str!("../src/ui/egui/android_media.rs");
     let media_session = include_str!("../src/ui/egui/android/media_session.rs");
@@ -617,7 +640,9 @@ fn player_info_widget_is_packaged_and_opens_player() {
     assert!(provider.contains("PendingIntent.getActivity("));
     assert!(provider.contains("OPEN_PLAYER_REQUEST_CODE,"));
     assert!(provider.contains("PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE"));
-    assert!(provider.contains("views.setOnClickPendingIntent(open"));
+    assert!(provider.contains("views.setOnClickPendingIntent(resources.open"));
+    assert!(provider.contains("cachedBitmapState"));
+    assert!(provider.contains("cachedResourceIds"));
     assert!(provider.contains("widget_player_info_content"));
     assert!(provider.contains("widgetIds.length == 0"));
     assert!(provider.contains("nativeRenderPlayerInfoWidget("));

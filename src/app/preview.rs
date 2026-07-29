@@ -4,6 +4,8 @@
 
 use crate::app::screenshot_scenarios::ScreenshotScenario;
 use crate::config::Config;
+use crate::playlist::Playlist;
+use crate::skin::widget::VisMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FrontendKind {
@@ -42,8 +44,27 @@ pub struct PreviewOptions {
     pub screenshot_scenario: Option<ScreenshotScenario>,
     pub scale_factor: Option<String>,
     pub socket_port: Option<u16>,
+    pub visualization_enabled: Option<bool>,
     pub positional_paths: Vec<String>,
+    pub load_playlist_path: Option<String>,
     pub frontend: FrontendKind,
+}
+
+pub fn apply_preview_playlist(
+    state: &mut crate::app_state::AppState,
+    options: &PreviewOptions,
+) -> Result<(), String> {
+    if let Some(path) = options.load_playlist_path.as_ref() {
+        state.playlist = Playlist::load_m3u_file(std::path::Path::new(path))
+            .map_err(|err| format!("failed to load playlist '{path}': {err}"))?;
+    }
+    for path in &options.positional_paths {
+        state
+            .playlist
+            .add_location(path)
+            .map_err(|err| format!("failed to add playlist location '{path}': {err}"))?;
+    }
+    Ok(())
 }
 
 pub fn apply_preview_options_to_config(
@@ -80,6 +101,13 @@ pub fn apply_preview_options_to_config(
             .map_err(|_| format!("invalid scale factor '{scale_factor}'"))?
             .clamp(1.0, 5.0);
         config.doublesize = config.scale_factor > 1.0;
+    }
+    if let Some(enabled) = options.visualization_enabled {
+        config.vis_mode = if enabled {
+            VisMode::Analyzer
+        } else {
+            VisMode::Off
+        };
     }
     Ok(())
 }

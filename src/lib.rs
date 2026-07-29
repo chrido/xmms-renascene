@@ -10,6 +10,7 @@ pub mod e2e;
 pub mod egui_frontend;
 pub mod equalizer;
 pub mod mpris;
+pub mod perf;
 pub mod playback;
 pub mod player;
 pub mod playlist;

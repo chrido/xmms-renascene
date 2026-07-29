@@ -28,6 +28,8 @@ pub struct PlaylistRowRenderEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistRowsRenderState {
     pub entries: Vec<PlaylistRowRenderEntry>,
+    pub first_index: usize,
+    pub total_entries: usize,
     pub scroll_offset: usize,
     pub scrollbar_dragging: bool,
     pub search_query: Option<String>,
@@ -224,7 +226,11 @@ pub fn render_playlist_rows(
         0
     };
     for row in 0..visible {
-        let Some(entry) = state.entries.get(row + state.scroll_offset) else {
+        let absolute_index = row + state.scroll_offset;
+        let Some(local_index) = absolute_index.checked_sub(state.first_index) else {
+            continue;
+        };
+        let Some(entry) = state.entries.get(local_index) else {
             break;
         };
         let y = list_y + row as i32 * entry_h;
@@ -265,7 +271,7 @@ pub fn render_playlist_rows(
             title = format!("[{}] {title}", queue_position + 1);
         }
         if state.show_numbers {
-            title = format!("{}. {title}", row + state.scroll_offset + 1);
+            title = format!("{}. {title}", absolute_index + 1);
         }
         let title = ellipsize_text(cr, title, text_w)?;
         cr.move_to(f64::from(list_x), f64::from(y + baseline));
@@ -274,7 +280,7 @@ pub fn render_playlist_rows(
 
     if pass.is_bitmap() {
         if let Some((thumb_y, thumb_h)) =
-            playlist_scrollbar_geometry(state.entries.len(), visible, state.scroll_offset, height)
+            playlist_scrollbar_geometry(state.total_entries, visible, state.scroll_offset, height)
         {
             if let Some(pledit) = skin.get(SkinPixmapKind::PlEdit) {
                 let pledit = surface_from_xpm(pledit)?;
