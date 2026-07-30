@@ -15,7 +15,7 @@ use super::android_media::AndroidActivityGeneration;
 
 const SNAPSHOT_PERSIST_INTERVAL: Duration = Duration::from_millis(500);
 const POSITION_PERSIST_INTERVAL: Duration = Duration::from_secs(10);
-const POST_ROTATION_REPAINT_FRAMES: u8 = 1;
+const POST_ROTATION_REPAINT_FRAMES: u8 = 3;
 
 pub(crate) struct AndroidRuntime {
     snapshot_dirty: bool,
@@ -478,6 +478,17 @@ mod tests {
             state.orientation(),
             Some(AndroidLayoutOrientation::Landscape)
         );
+    }
+
+    #[test]
+    fn rotation_keeps_repainting_while_android_surface_settles() {
+        let mut state = LayoutState::default();
+
+        assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        assert!(state.accept(AndroidLayoutOrientation::Landscape));
+        assert!(!state.accept(AndroidLayoutOrientation::Landscape));
     }
 
     #[test]

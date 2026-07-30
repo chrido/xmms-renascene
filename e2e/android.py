@@ -193,8 +193,14 @@ class AndroidDevice:
             check=False,
         )
 
-    def force_stop(self) -> None:
+    def force_stop(self, timeout: float = 5.0) -> None:
         self.shell("am", "force-stop", ANDROID_PACKAGE, check=False)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self.app_pid():
+                return
+            time.sleep(0.1)
+        raise TimeoutError(f"Android app did not stop: {self.app_pid()}")
 
     def start_widget_control(self, control: int = 2) -> None:
         self.shell(
@@ -344,6 +350,21 @@ class AndroidDevice:
             self.start_activity()
             self.main_player_bounds()
 
+    def recover_input_dispatch(self) -> None:
+        self.shell(
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "-n",
+            ANDROID_ACTIVITY,
+        )
+        self.wait_for_app()
+        self.main_player_bounds()
+
     def wait_for_app(self, timeout: float = 15.0) -> None:
         deadline = time.monotonic() + timeout
         pid = ""
@@ -484,6 +505,12 @@ class AndroidDevice:
     def set_landscape(self) -> None:
         self._set_rotation(1)
 
+    def set_sensor_portrait(self) -> None:
+        self._set_sensor_rotation(0)
+
+    def set_sensor_landscape(self) -> None:
+        self._set_sensor_rotation(1)
+
     def _set_rotation(self, rotation: int) -> None:
         try:
             acceleration = _ROTATION_ACCELERATION_VECTORS[rotation]
@@ -509,6 +536,32 @@ class AndroidDevice:
                 return
             time.sleep(0.2)
         raise TimeoutError(f"Android display did not rotate to {rotation}")
+
+    def _set_sensor_rotation(self, rotation: int) -> None:
+        try:
+            acceleration = _ROTATION_ACCELERATION_VECTORS[rotation]
+        except KeyError as error:
+            raise ValueError("rotation must be between 0 and 3") from error
+        if self.serial is None or not self.serial.startswith("emulator-"):
+            raise RuntimeError("sensor rotation requires an Android emulator")
+        self.shell("settings", "put", "system", "accelerometer_rotation", "1")
+        self.command(
+            "emu",
+            "sensor",
+            "set",
+            "acceleration",
+            acceleration,
+            check=False,
+        )
+        expected_landscape = rotation in {1, 3}
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            geometry = self.display_geometry()
+            if (geometry.width > geometry.height) == expected_landscape:
+                time.sleep(0.5)
+                return
+            time.sleep(0.2)
+        raise TimeoutError(f"Android display did not follow sensor rotation {rotation}")
 
     def display_geometry(self) -> DisplayGeometry:
         window_dump = self.shell("dumpsys", "window").stdout
@@ -630,6 +683,8 @@ class AndroidDevice:
                 candidate = None
                 time.sleep(0.1)
                 continue
+            if stable_for <= 0:
+                return latest_png
             now = time.monotonic()
             if rendered != candidate:
                 candidate = rendered
@@ -650,11 +705,13 @@ class AndroidDevice:
         *,
         changed_from: bytes | Path | None = None,
         timeout: float = 5.0,
+        stable_for: float = 0.3,
         minimum_changed_fraction: float = 0.01,
     ) -> Path:
         png = self.wait_for_rendered_screen(
             changed_from=changed_from,
             timeout=timeout,
+            stable_for=stable_for,
             minimum_changed_fraction=minimum_changed_fraction,
         )
         path.parent.mkdir(parents=True, exist_ok=True)

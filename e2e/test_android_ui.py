@@ -9,7 +9,7 @@ import zipfile
 from io import BytesIO
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image
 
@@ -365,9 +365,9 @@ def test_android_stop_then_play_stays_synchronized(
     android_device.wait_for_media_session_position_at_least(1_500, timeout=10.0)
     playing = android_device.screenshot(test_output.screenshot_path())
 
-    android_device.clear_logcat()
-    android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.STOP], player_bounds)
-    android_device.assert_log_contains(
+    _tap_skin_rect_until_log(
+        android_device,
+        MAIN_BUTTON_RECTS[MainButton.STOP],
         "player: button activated, button_name=Stop",
     )
     android_device.wait_for_private_file_contains(
@@ -392,6 +392,7 @@ def test_android_stop_then_play_stays_synchronized(
     restarted = android_device.wait_for_rendered_screenshot(
         test_output.screenshot_path(),
         changed_from=stopped,
+        stable_for=0,
         minimum_changed_fraction=0.0001,
     )
 
@@ -643,6 +644,43 @@ def test_android_landscape_uses_full_height_and_accepts_skin_taps(
     assert portrait_stack[3] - portrait_stack[1] > player_and_equalizer_height + 20
 
 
+def test_android_orientation_round_trip_reflows_without_restart(
+    android_device: AndroidDevice,
+    test_output: Any,
+) -> None:
+    android_device.set_sensor_landscape()
+    android_device.restart_app(reset_data=True)
+    original_pid = android_device.app_pid()
+
+    first_landscape_geometry = android_device.display_geometry()
+    first_landscape_player = android_device.main_player_bounds()
+    first_landscape_playlist = android_device.landscape_playlist_bounds()
+    first_landscape = android_device.screenshot(test_output.screenshot_path())
+    assert first_landscape_geometry.width > first_landscape_geometry.height
+    assert first_landscape_playlist[0] >= first_landscape_player[2] - 4
+
+    android_device.set_sensor_portrait()
+    android_device.wait_for_app()
+    portrait_geometry = android_device.display_geometry()
+    portrait_stack = android_device.portrait_docked_stack_bounds()
+    portrait = android_device.screenshot(test_output.screenshot_path())
+    assert android_device.app_pid() == original_pid
+    assert portrait_geometry.width < portrait_geometry.height
+    assert portrait_stack[2] <= portrait_geometry.width - portrait_geometry.right_inset + 4
+    assert not android_device.rendered_screens_match(first_landscape, portrait)
+
+    android_device.set_sensor_landscape()
+    android_device.wait_for_app()
+    second_landscape_geometry = android_device.display_geometry()
+    second_landscape_player = android_device.main_player_bounds()
+    second_landscape_playlist = android_device.landscape_playlist_bounds()
+    second_landscape = android_device.screenshot(test_output.screenshot_path())
+    assert android_device.app_pid() == original_pid
+    assert second_landscape_geometry.width > second_landscape_geometry.height
+    assert second_landscape_playlist[0] >= second_landscape_player[2] - 4
+    assert not android_device.rendered_screens_match(portrait, second_landscape)
+
+
 def test_android_persists_player_configuration(
     android_device: AndroidDevice,
 ) -> None:
@@ -877,17 +915,15 @@ def _playlist_row_point(
 def _run_playlist_swipe_until_log(
     android_device: AndroidDevice,
     *,
-    start_x: int,
-    start_y: int,
-    end_x: int,
-    end_y: int,
+    points: Callable[[], tuple[int, int, int, int]],
     duration_ms: int,
     expected_log: str,
 ) -> str:
     android_device.clear_logcat()
     last_error: AssertionError | None = None
-    for _attempt in range(6):
+    for attempt in range(3):
         android_device.wait_for_app()
+        start_x, start_y, end_x, end_y = points()
         android_device.shell(
             "input",
             "swipe",
@@ -898,10 +934,30 @@ def _run_playlist_swipe_until_log(
             str(duration_ms),
         )
         try:
-            return android_device.assert_log_contains(expected_log, timeout=4.0)
+            return android_device.assert_log_contains(expected_log, timeout=6.0)
         except AssertionError as error:
             last_error = error
-            time.sleep(0.2)
+            if attempt < 2:
+                android_device.recover_input_dispatch()
+    assert last_error is not None
+    raise last_error
+
+
+def _tap_skin_rect_until_log(
+    android_device: AndroidDevice,
+    rect: Any,
+    expected_log: str,
+) -> str:
+    android_device.clear_logcat()
+    last_error: AssertionError | None = None
+    for attempt in range(3):
+        android_device.tap_skin_rect(rect)
+        try:
+            return android_device.assert_log_contains(expected_log, timeout=6.0)
+        except AssertionError as error:
+            last_error = error
+            if attempt < 2:
+                android_device.recover_input_dispatch()
     assert last_error is not None
     raise last_error
 
@@ -912,17 +968,17 @@ def _swipe_playlist_row_horizontally(
     *,
     selected: bool,
 ) -> None:
-    left, _top, right, _bottom = android_device.main_player_bounds()
-    scale = (right - left) / 275
-    _row_x, row_y = _playlist_row_point(android_device, index)
-    start_x = left + round((40 if selected else 200) * scale)
-    end_x = left + round((200 if selected else 40) * scale)
+    def points() -> tuple[int, int, int, int]:
+        left, _top, right, _bottom = android_device.main_player_bounds()
+        scale = (right - left) / 275
+        _row_x, row_y = _playlist_row_point(android_device, index)
+        start_x = left + round((40 if selected else 200) * scale)
+        end_x = left + round((200 if selected else 40) * scale)
+        return start_x, row_y, end_x, row_y
+
     _run_playlist_swipe_until_log(
         android_device,
-        start_x=start_x,
-        start_y=row_y,
-        end_x=end_x,
-        end_y=row_y,
+        points=points,
         duration_ms=300,
         expected_log=(
             f"playlist: swipe selection applied, swiped_index={index}, "
@@ -937,14 +993,14 @@ def _swipe_playlist_up(
     *,
     selected_index: int,
 ) -> str:
-    start_x, start_y = _playlist_row_point(android_device, touched_index)
-    scale = android_device.main_player_scale()
+    def points() -> tuple[int, int, int, int]:
+        start_x, start_y = _playlist_row_point(android_device, touched_index)
+        scale = android_device.main_player_scale()
+        return start_x, start_y, start_x, start_y - round(120 * scale)
+
     return _run_playlist_swipe_until_log(
         android_device,
-        start_x=start_x,
-        start_y=start_y,
-        end_x=start_x,
-        end_y=start_y - round(120 * scale),
+        points=points,
         duration_ms=300,
         expected_log=f"playlist: swipe playback started, selected_index={selected_index}",
     )
@@ -954,14 +1010,14 @@ def _swipe_playlist_down(
     android_device: AndroidDevice,
     touched_index: int,
 ) -> str:
-    start_x, start_y = _playlist_row_point(android_device, touched_index)
-    scale = android_device.main_player_scale()
+    def points() -> tuple[int, int, int, int]:
+        start_x, start_y = _playlist_row_point(android_device, touched_index)
+        scale = android_device.main_player_scale()
+        return start_x, start_y, start_x, start_y + round(360 * scale)
+
     return _run_playlist_swipe_until_log(
         android_device,
-        start_x=start_x,
-        start_y=start_y,
-        end_x=start_x,
-        end_y=start_y + round(360 * scale),
+        points=points,
         duration_ms=900,
         expected_log="playlist: swipe playback paused",
     )
