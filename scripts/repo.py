@@ -20,7 +20,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, cast
 
-from .commandline import acmd_background, cli_follow, command_exists, configure_logging, raise_on_error, required_command
+from .commandline import AsyncBackgroundProcess, acmd_background, cli_follow, command_exists, configure_logging, raise_on_error, required_command
 from .fire_lite import FireLite
 from .flatpak import FlatpakInstaller
 from .performance import PerformanceRunner
@@ -519,7 +519,10 @@ class RepoTool:
         work_dir = REPO_DIR / "target" / "android" / "java"
         classes_dir = work_dir / "classes"
         dex_dir = work_dir / "dex"
-        shutil.rmtree(work_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(work_dir)
+        except FileNotFoundError:
+            pass
         classes_dir.mkdir(parents=True)
         dex_dir.mkdir()
 
@@ -871,7 +874,7 @@ class RepoTool:
         logging.info("Restarting under Xvfb: %s", " ".join(command))
         os.execvpe("xvfb-run", command, self._xvfb_environment(background))
 
-    async def _start_app_in_background(self, args: tuple[str, ...]) -> asyncio.subprocess.Process:
+    async def _start_app_in_background(self, args: tuple[str, ...]) -> AsyncBackgroundProcess:
         self._ensure_rust_binary()
         command = [str(RUST_BIN), *_app_args(args)]
         logging.info("Starting app for screenshot: %s", " ".join(command))
@@ -1268,13 +1271,7 @@ class RepoTool:
             return 0
         finally:
             if proc.returncode is None:
-                proc.terminate()
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=5)
-                except asyncio.TimeoutError as err:
-                    logging.debug("Timed out waiting for screenshot process shutdown: %s", err)
-                    proc.kill()
-                    await proc.wait()
+                await proc.stop(timeout_seconds=5)
 
     def _write_offscreen_frontend_screenshot(self, frontend: str, scenario: str, output: Path) -> None:
         self._ensure_rust_binary()

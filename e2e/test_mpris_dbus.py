@@ -25,6 +25,7 @@ from conftest import (  # noqa: E402 - import after optional dbus-next dependenc
     generate_sine_tracks,
     read_process_log,
     start_gui_process,
+    stop_process,
 )
 from mpris import (  # noqa: E402 - import after optional dbus-next dependency check.
     PLAYER_IFACE,
@@ -66,13 +67,7 @@ def dbus_session() -> Iterator[DbusSession]:
             raise AssertionError(f"dbus-daemon printed an empty address; stderr={stderr}")
         yield DbusSession(address)
     finally:
-        if process.poll() is None:
-            process.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=5)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
+        stop_process(process)
 
 
 @pytest.fixture
