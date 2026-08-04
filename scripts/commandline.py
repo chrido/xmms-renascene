@@ -2,10 +2,11 @@
 import asyncio
 import codecs
 import contextlib
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from functools import cache
 from datetime import datetime, timedelta
 import io
+import inspect
 import os
 import json
 import logging
@@ -27,6 +28,17 @@ from typing import (
 )
 
 T = TypeVar("T")
+_SECRET_PATTERNS = (
+    re.compile(r"AccountKey=([\w|+=/]*)"),
+    re.compile(r"sig=(\w*)"),
+)
+
+
+def _load_json(value: str) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as error:
+        raise error
 
 
 class ConsoleColor:
@@ -161,7 +173,7 @@ class CmdResult:
 
     def json_or_error(self) -> dict[str, str]:
         if self.exit_code == 0:
-            return json.loads(self.stdout)
+            return _load_json(self.stdout)
         else:
             raise Exception(
                 f"Command failed with exit code {self.exit_code}: stderr: {self.stderr}, stdout: {self.stdout}"
@@ -198,12 +210,12 @@ def _apply_mask(command: str, mask: list[str] | str | None = None) -> str:
     mask = _to_list(mask)
 
     # Always mask common secrets
-    for r in [r"AccountKey=([\w|+=/]*)", r"sig=(\w*)"]:
-        command = re.sub(r, "***masked***", command)
+    for pattern in _SECRET_PATTERNS:
+        command = pattern.sub("***masked***", command)
 
     for m in mask:
         if m.strip():
-            command = re.sub(m, "***masked***", command)
+            command = command.replace(m, "***masked***")
     return command
 
 
@@ -225,6 +237,282 @@ async def _resolve_exit_code(proc: asyncio.subprocess.Process) -> int:
     if exit_code is None:
         raise Exception("Process did not return an exit code")
     return exit_code
+
+
+async def _create_subprocess(
+    args: list[str] | str,
+    *,
+    stdin: Any = None,
+    stdout: Any = None,
+    stderr: Any = None,
+    env: dict[str, str] | None = None,
+    cwd: str | None = None,
+    start_new_session: bool = False,
+) -> asyncio.subprocess.Process:
+    if isinstance(args, list):
+        if len(args) < 1:
+            raise Exception("Needs at least one argument")
+        return await asyncio.create_subprocess_exec(
+            *args,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            env=env,
+            cwd=cwd,
+            start_new_session=start_new_session,
+        )
+    elif isinstance(args, str):
+        return await asyncio.create_subprocess_shell(
+            args,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            env=env,
+            cwd=cwd,
+            start_new_session=start_new_session,
+        )
+    else:
+        raise Exception("Needs at least one argument")
+
+
+class AsyncBackgroundProcess:
+    """A running command with drained output, line subscriptions, and lifecycle hooks.
+
+    Register line or exit callbacks immediately after ``acmd_background`` returns.
+    List-form commands are executed directly, so signals target the requested
+    executable; string commands run through the platform shell.
+    """
+
+    def __init__(
+        self,
+        process: asyncio.subprocess.Process,
+        command: str,
+        mask: list[str] | str | None = None,
+    ) -> None:
+        self.process = process
+        self.command = command
+        self.mask = _to_list(mask)
+        self._stdout_buffer = io.StringIO()
+        self._stderr_buffer = io.StringIO()
+        self._stdout_subscribers: list[asyncio.Queue[str | None]] = []
+        self._stderr_subscribers: list[asyncio.Queue[str | None]] = []
+        self._stdout_callbacks: list[Callable[[str], Any | Awaitable[Any]]] = []
+        self._stderr_callbacks: list[Callable[[str], Any | Awaitable[Any]]] = []
+        self._exit_callbacks: list[Callable[[CmdResult], Any | Awaitable[Any]]] = []
+        self._stdout_closed = process.stdout is None
+        self._stderr_closed = process.stderr is None
+        self._result: CmdResult | None = None
+        self._stdout_task = asyncio.create_task(
+            self._pump_stream(
+                process.stdout,
+                self._stdout_buffer,
+                self._stdout_subscribers,
+                self._stdout_callbacks,
+                "_stdout_closed",
+            )
+        )
+        self._stderr_task = asyncio.create_task(
+            self._pump_stream(
+                process.stderr,
+                self._stderr_buffer,
+                self._stderr_subscribers,
+                self._stderr_callbacks,
+                "_stderr_closed",
+            )
+        )
+        self._wait_task = asyncio.create_task(self._wait_for_exit())
+
+    @property
+    def pid(self) -> int:
+        return self.process.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self.process.returncode
+
+    @property
+    def stdin(self) -> asyncio.StreamWriter | None:
+        return self.process.stdin
+
+    @property
+    def stdout(self) -> asyncio.StreamReader | None:
+        return self.process.stdout
+
+    @property
+    def stderr(self) -> asyncio.StreamReader | None:
+        return self.process.stderr
+
+    @property
+    def stdout_text(self) -> str:
+        return self._stdout_buffer.getvalue()
+
+    @property
+    def stderr_text(self) -> str:
+        return self._stderr_buffer.getvalue()
+
+    async def _pump_stream(
+        self,
+        stream: asyncio.StreamReader | None,
+        buffer: io.StringIO,
+        subscribers: list[asyncio.Queue[str | None]],
+        callbacks: list[Callable[[str], Any | Awaitable[Any]]],
+        closed_attr: str,
+    ) -> None:
+        if stream is None:
+            setattr(self, closed_attr, True)
+            return
+
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        current_line = ""
+
+        try:
+            while True:
+                chunk = await stream.read(1000)
+                decoded = decoder.decode(chunk or b"", final=not chunk)
+                if decoded:
+                    buffer.write(decoded)
+                    current_line += decoded
+                    while "\n" in current_line:
+                        line, current_line = current_line.split("\n", 1)
+                        while "\r" in line:
+                            line = line[: line.find("\r")]
+                        await self._publish_line(line, subscribers, callbacks)
+                if not chunk:
+                    if current_line:
+                        await self._publish_line(current_line, subscribers, callbacks)
+                    return
+        finally:
+            setattr(self, closed_attr, True)
+            for subscriber in list(subscribers):
+                subscriber.put_nowait(None)
+
+    async def _publish_line(
+        self,
+        line: str,
+        subscribers: list[asyncio.Queue[str | None]],
+        callbacks: list[Callable[[str], Any | Awaitable[Any]]],
+    ) -> None:
+        for subscriber in list(subscribers):
+            subscriber.put_nowait(line)
+        for callback in list(callbacks):
+            try:
+                callback_result = callback(line)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
+            except Exception:
+                logging.exception("Background command line callback failed")
+
+    async def _invoke_exit_callback(self, callback: Callable[[CmdResult], Any | Awaitable[Any]], result: CmdResult) -> None:
+        try:
+            callback_result = callback(result)
+            if inspect.isawaitable(callback_result):
+                await callback_result
+        except Exception:
+            logging.exception("Background command exit callback failed")
+
+    def _subscribe_lines(
+        self,
+        subscribers: list[asyncio.Queue[str | None]],
+        closed: bool,
+    ) -> asyncio.Queue[str | None]:
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        if closed:
+            queue.put_nowait(None)
+        else:
+            subscribers.append(queue)
+        return queue
+
+    async def stdout_lines(self) -> AsyncIterator[str]:
+        queue = self._subscribe_lines(self._stdout_subscribers, self._stdout_closed)
+        try:
+            while True:
+                line = await queue.get()
+                if line is None:
+                    break
+                yield line
+        finally:
+            with contextlib.suppress(ValueError):
+                self._stdout_subscribers.remove(queue)
+
+    async def stderr_lines(self) -> AsyncIterator[str]:
+        queue = self._subscribe_lines(self._stderr_subscribers, self._stderr_closed)
+        try:
+            while True:
+                line = await queue.get()
+                if line is None:
+                    break
+                yield line
+        finally:
+            with contextlib.suppress(ValueError):
+                self._stderr_subscribers.remove(queue)
+
+    def on_stdout_line(self, callback: Callable[[str], Any | Awaitable[Any]]) -> "AsyncBackgroundProcess":
+        self._stdout_callbacks.append(callback)
+        return self
+
+    def on_stderr_line(self, callback: Callable[[str], Any | Awaitable[Any]]) -> "AsyncBackgroundProcess":
+        self._stderr_callbacks.append(callback)
+        return self
+
+    def on_exit(self, callback: Callable[[CmdResult], Any | Awaitable[Any]]) -> "AsyncBackgroundProcess":
+        self._exit_callbacks.append(callback)
+        if self._result is not None:
+            asyncio.create_task(self._invoke_exit_callback(callback, self._result))
+        return self
+
+    async def write_stdin(self, data: str | bytes) -> None:
+        if self.process.stdin is None:
+            raise Exception("Process stdin is not available")
+        self.process.stdin.write(data.encode("utf-8") if isinstance(data, str) else data)
+        await self.process.stdin.drain()
+
+    def close_stdin(self) -> None:
+        if self.process.stdin is not None:
+            self.process.stdin.close()
+
+    def send_signal(self, signal_number: int) -> None:
+        self.process.send_signal(signal_number)
+
+    def terminate(self) -> None:
+        self.process.terminate()
+
+    def kill(self) -> None:
+        self.process.kill()
+
+    async def wait(self) -> int:
+        return await self._wait_task
+
+    async def _wait_for_exit(self) -> int:
+        exit_code = await _resolve_exit_code(self.process)
+        await self._stdout_task
+        await self._stderr_task
+        self._result = CmdResult(
+            command=self.command,
+            exit_code=exit_code,
+            stdout=self._stdout_buffer.getvalue(),
+            stderr=self._stderr_buffer.getvalue(),
+            mask=self.mask,
+        )
+        for callback in list(self._exit_callbacks):
+            await self._invoke_exit_callback(callback, self._result)
+        return exit_code
+
+    async def wait_result(self) -> CmdResult:
+        await self.wait()
+        if self._result is None:
+            raise Exception("Process completed without a result")
+        return self._result
+
+    async def stop(self, timeout_seconds: float = 5.0) -> int:
+        if self.returncode is not None:
+            return await self.wait()
+        self.terminate()
+        try:
+            return await asyncio.wait_for(asyncio.shield(self.wait()), timeout=timeout_seconds)
+        except asyncio.TimeoutError as timeout_error:
+            logging.debug("Timed out waiting for background process shutdown: %s", timeout_error)
+            self.kill()
+            return await self.wait()
 
 
 def _log_command(
@@ -284,13 +572,13 @@ async def acmd(
     if log_command:
         _log_command(command, mask, env)
 
-    proc = await asyncio.create_subprocess_shell(
-        command,
+    proc = await _create_subprocess(
+        args,
         stdin=stdin,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
-        shell=True,
+        cwd=cwd,
     )
     stdout, stderr = await proc.communicate()
     exit_code = await _resolve_exit_code(proc)
@@ -316,13 +604,13 @@ async def acmd_input(
     if log_command:
         _log_command(command, mask, env)
 
-    proc = await asyncio.create_subprocess_shell(
-        command,
+    proc = await _create_subprocess(
+        args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
-        shell=True,
+        cwd=cwd,
     )
     stdin_bytes = input_data.encode("utf-8") if isinstance(input_data, str) else input_data
     stdout_bytes, stderr_bytes = await proc.communicate(stdin_bytes)
@@ -343,12 +631,23 @@ async def acmd_background(
     mask: list[str] | str | None = None,
     cwd: str | None = None,
     log_command: bool = True,
-) -> asyncio.subprocess.Process:
+    start_new_session: bool = False,
+) -> AsyncBackgroundProcess:
+    """Start a command while continuously draining stdout and stderr."""
     command = _to_command(args, cwd)
     if log_command:
         _log_command(command, mask, env)
 
-    return await asyncio.create_subprocess_shell(command, env=env)
+    proc = await _create_subprocess(
+        args,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+        cwd=cwd,
+        start_new_session=start_new_session,
+    )
+    return AsyncBackgroundProcess(proc, command, mask)
 
 
 def _run_awaitable(awaitable: Coroutine[Any, Any, T]) -> T:
@@ -935,7 +1234,10 @@ class DevopsPytestProgress(Progress):
     def handle(self, line: str):
         m = re.search(self.progress, line)
         if m:
-            percent = int(m.group("percent"))
+            try:
+                percent = int(m.group("percent"))
+            except ValueError:
+                return
             print(f"##vso[task.setprogress value={percent};]{self.application}")
 
     def finished(self):
@@ -984,13 +1286,13 @@ async def acmd_follow(
     command = _to_command(args, cwd)
     _log_command(command, mask, env)
 
-    proc = await asyncio.create_subprocess_shell(
-        command,
+    proc = await _create_subprocess(
+        args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        shell=True,
         env=env,
+        cwd=cwd,
     )
 
     stdout_buffer = io.StringIO()
@@ -1320,8 +1622,13 @@ class CommandEnvironment:
             self.result_transform,
         )
 
-    def __exit__(self, exc_type, exc_value, traceback) -> None:
-        pass
+    def __exit__(
+        self,
+        type: type[BaseException] | None,
+        value: BaseException | None,
+        traceback: Any,
+    ) -> None:
+        del type, value, traceback
 
     def __rmatmul__(self, args: list[str] | str) -> Any:
         return self.__enter__().__rmatmul__(args)
@@ -1345,7 +1652,13 @@ def cmd(
     command = _to_command(arg, cwd)
     _log_command(command, mask, env)
 
-    cp = subprocess.run(command, capture_output=True, shell=True, encoding="utf-8", env=env)
+    if isinstance(arg, list):
+        run_args = arg
+    elif sys.platform == "win32":
+        run_args = [os.environ.get("COMSPEC", "cmd.exe"), "/c", arg]
+    else:
+        run_args = ["/bin/sh", "-c", arg]
+    cp = subprocess.run(run_args, capture_output=True, encoding="utf-8", env=env, cwd=cwd, check=False)
     return CmdResult(
         command=command,
         exit_code=cp.returncode,
@@ -1487,7 +1800,7 @@ class TestCommandlineFunctions(_CommandlineTestMixin, unittest.TestCase):
                 )
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -1537,7 +1850,7 @@ class TestCommandlineFunctions(_CommandlineTestMixin, unittest.TestCase):
                 ).result()
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -1684,7 +1997,7 @@ class TestCommandlineFunctions(_CommandlineTestMixin, unittest.TestCase):
                     result = (self.python_command(code) @ env).result()
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -1745,7 +2058,7 @@ class TestAsyncCommandlineFunctions(_CommandlineTestMixin, unittest.IsolatedAsyn
                 )
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -1763,7 +2076,7 @@ class TestAsyncCommandlineFunctions(_CommandlineTestMixin, unittest.IsolatedAsyn
                 ).result()
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -1840,7 +2153,7 @@ class TestAsyncCommandlineFunctions(_CommandlineTestMixin, unittest.IsolatedAsyn
                 )
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -1898,7 +2211,7 @@ class TestAsyncCommandlineFunctions(_CommandlineTestMixin, unittest.IsolatedAsyn
                 )
 
         self.assertEqual(result.exit_code, 0)
-        payload = json.loads(result.stdout)
+        payload = _load_json(result.stdout)
         self.assertEqual(payload["value"], "ok")
         self.assertEqual(payload["cwd"], tmpdir)
 
@@ -2044,6 +2357,61 @@ class TestAsyncCommandlineFunctions(_CommandlineTestMixin, unittest.IsolatedAsyn
         self.assertIs(result_b, sentinel)
         self.assertIs(result_c, sentinel)
         self.assertEqual(call_count, 1)
+
+    async def test_acmd_background_exposes_stream_iterators_callbacks_and_result(self):
+        code = (
+            "import sys, time\n"
+            "time.sleep(0.05)\n"
+            "print('stdout line', flush=True)\n"
+            "print('stderr line', file=sys.stderr, flush=True)\n"
+        )
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        stdout_callback_lines: list[str] = []
+        stderr_callback_lines: list[str] = []
+        exit_codes: list[int] = []
+        exit_event = asyncio.Event()
+
+        async def collect_lines(iterator: AsyncIterator[str], target: list[str]) -> None:
+            async for line in iterator:
+                target.append(line)
+
+        def exited(result: CmdResult) -> None:
+            exit_codes.append(result.exit_code)
+            exit_event.set()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            proc = await acmd_background(self.python_command(code))
+            proc.on_stdout_line(stdout_callback_lines.append)
+            proc.on_stderr_line(stderr_callback_lines.append)
+            proc.on_exit(exited)
+            stdout_task = asyncio.create_task(collect_lines(proc.stdout_lines(), stdout_lines))
+            stderr_task = asyncio.create_task(collect_lines(proc.stderr_lines(), stderr_lines))
+            await asyncio.wait_for(exit_event.wait(), timeout=5.0)
+            result = await proc.wait_result()
+            await asyncio.gather(stdout_task, stderr_task)
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "stdout line\n")
+        self.assertEqual(result.stderr, "stderr line\n")
+        self.assertEqual(stdout_lines, ["stdout line"])
+        self.assertEqual(stderr_lines, ["stderr line"])
+        self.assertEqual(stdout_callback_lines, ["stdout line"])
+        self.assertEqual(stderr_callback_lines, ["stderr line"])
+        self.assertEqual(exit_codes, [0])
+        self.assertEqual(proc.stdout_text, "stdout line\n")
+        self.assertEqual(proc.stderr_text, "stderr line\n")
+
+    async def test_acmd_background_stop_terminates_process(self):
+        code = "import time\ntime.sleep(60)\n"
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            proc = await acmd_background(self.python_command(code))
+            await asyncio.sleep(0.05)
+            exit_code = await proc.stop(timeout_seconds=1.0)
+
+        self.assertIsNotNone(exit_code)
+        self.assertIsNotNone(proc.returncode)
 
 
 class TestAcmdFollow(_CommandlineTestMixin, unittest.IsolatedAsyncioTestCase):

@@ -176,6 +176,17 @@ def gtk_environment(tmp_path: Path) -> dict[str, str]:
     return gui_environment(tmp_path)
 
 
+def stop_process(process: subprocess.Popen[Any], timeout: float = 5.0) -> None:
+    if process.poll() is not None:
+        return
+    process.terminate()
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=timeout)
+    if process.poll() is None:
+        process.kill()
+        process.wait(timeout=timeout)
+
+
 def start_gui_process(
     tmp_path: Path,
     frontend: GuiFrontend,
@@ -201,14 +212,10 @@ def start_gui_process(
     try:
         yield process
     finally:
-        if process.poll() is None:
-            process.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=5)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
-        log.close()
+        try:
+            stop_process(process)
+        finally:
+            log.close()
 
 
 def start_gtk_process(tmp_path: Path, extra_args: list[str] | None = None, log_name: str = "xmms-gtk.log") -> Iterator[subprocess.Popen[bytes]]:
@@ -328,14 +335,10 @@ def gtk_socket_app(tmp_path: Path, gtk_socket_port: int) -> Iterator[subprocess.
         control_socket.wait_for_socket(gtk_socket_port, timeout=10.0)
         yield process
     finally:
-        if process.poll() is None:
-            process.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=5)
-            if process.poll() is None:
-                process.kill()
-                process.wait(timeout=5)
-        log.close()
+        try:
+            stop_process(process)
+        finally:
+            log.close()
 
 
 @pytest.fixture
