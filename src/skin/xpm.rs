@@ -160,7 +160,7 @@ fn parse_with_library(contents: &str) -> Result<XpmImage, XpmError> {
     XpmImage::from_argb_pixels(width as usize, height as usize, argb)
 }
 
-fn premultiply_rgba([r, g, b, a]: [u8; 4]) -> u32 {
+pub(super) fn premultiply_rgba([r, g, b, a]: [u8; 4]) -> u32 {
     let pr = ((u16::from(r) * u16::from(a) + 127) / 255) as u32;
     let pg = ((u16::from(g) * u16::from(a) + 127) / 255) as u32;
     let pb = ((u16::from(b) * u16::from(a) + 127) / 255) as u32;
@@ -233,6 +233,33 @@ mod tests {
         assert_eq!(image.pixel_argb(0, 0), Some(0));
         assert_eq!(image.pixel_argb(1, 0), Some(0xff00_ff00));
         assert_eq!(image.pixel_argb(2, 0), None);
+    }
+
+    #[test]
+    fn premultiplication_rounds_partial_alpha_and_handles_extremes() {
+        for (rgba, expected) in [
+            ([1, 1, 1, 127], 0x7f00_0000),
+            ([1, 1, 1, 128], 0x8001_0101),
+            ([255, 128, 64, 128], 0x8080_4020),
+            ([255, 255, 255, 0], 0),
+            ([48, 255, 50, 255], 0xff30_ff32),
+        ] {
+            assert_eq!(premultiply_rgba(rgba), expected, "{rgba:?}");
+        }
+    }
+
+    #[test]
+    fn xpm_parsing_and_mutation_do_not_apply_loader_chroma_key() {
+        let mut image = XpmImage::parse(
+            "/* XPM */\nstatic char *x[] = {\n\"2 1 1 1\",\n\". c #30ff32\",\n\"..\"};\n",
+        )
+        .unwrap();
+        assert_eq!(image.pixels_argb(), &[0xff30_ff32, 0xff30_ff32]);
+
+        assert!(image.set_pixel_rgba(0, 0, [48, 255, 50, 128]));
+        assert_eq!(image.pixel_argb(0, 0), Some(0x8018_8019));
+        assert!(image.fill_rect_rgba(SkinRect::new(0, 0, 2, 1), [48, 255, 50, 255]));
+        assert_eq!(image.pixels_argb(), &[0xff30_ff32, 0xff30_ff32]);
     }
 
     #[test]
