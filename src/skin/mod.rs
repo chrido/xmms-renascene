@@ -1,20 +1,24 @@
+mod archive;
 pub mod edit;
 pub mod layout;
+mod source;
 pub mod widget;
 pub mod xpm;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
+#[cfg(test)]
 use std::fs::File;
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::session::default_config_dir;
 
 use image::GenericImageView;
 pub use layout::SkinPixmapInfo;
-use xpm::XpmImage;
+use source::AssetSource;
+use xpm::{premultiply_rgba, XpmImage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkinEntry {
@@ -249,41 +253,18 @@ impl DefaultSkin {
         })
     }
 
+    /// Loads a directory skin. Missing optional assets still use bundled defaults.
+    /// Unlike the former permissive lookup, missing or unreadable directories
+    /// (including nested directories) now return an error instead of a partial skin.
     pub fn load_from_dir(dir: &Path) -> io::Result<Self> {
-        let mut skin = Self::load_bundled()?;
-        let mut loaded = BTreeSet::new();
-
-        for kind in SkinPixmapKind::ALL {
-            let mut numbers_fallback = false;
-            let mut path = Self::find_skin_file(dir, kind.info().file_stem);
-            if path.is_none() && kind == SkinPixmapKind::Numbers {
-                path = Self::find_skin_file(dir, "numbers");
-                numbers_fallback = path.is_some();
-            }
-            let Some(path) = path else {
-                continue;
-            };
-
-            let mut image = Self::load_skin_image(&path)?;
-            if numbers_fallback {
-                image = expand_numbers_fallback(image);
-            }
-            skin.pixmaps.insert(kind, image);
-            loaded.insert(kind);
-        }
-
-        apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
-        apply_loaded_eq_ex_fallback(&mut skin.pixmaps, &loaded);
-        skin.vis_colors = load_vis_colors_from_dir(dir)?;
-        skin.playlist_colors = load_playlist_colors_from_dir(dir)?;
-        skin.region_masks = load_region_masks_from_dir(dir)?;
-        skin.text_colors = text_colors_from_pixmaps(&skin.pixmaps);
-
-        Ok(skin)
+        Self::load_from_source(AssetSource::directory(dir)?)
     }
 
     pub fn load_from_path(path: &Path) -> io::Result<Self> {
-        if path.is_dir() {
+        let metadata = fs::metadata(path).map_err(|err| {
+            io::Error::new(err.kind(), format!("stat skin {}: {err}", path.display()))
+        })?;
+        if metadata.is_dir() {
             Self::load_from_dir(path)
         } else {
             Self::load_from_archive(path)
@@ -291,26 +272,27 @@ impl DefaultSkin {
     }
 
     fn load_from_archive(path: &Path) -> io::Result<Self> {
-        let entries = archive_entries(path)?;
+        let entries = archive::entries(path)?;
+        Self::load_from_source(AssetSource::archive(path, &entries))
+    }
+
+    fn load_from_source(source: AssetSource<'_>) -> io::Result<Self> {
         let mut skin = Self::load_bundled()?;
         let mut loaded = BTreeSet::new();
 
         for kind in SkinPixmapKind::ALL {
             let mut numbers_fallback = false;
-            let mut entry = find_archive_skin_entry(&entries, kind.info().file_stem);
-            if entry.is_none() && kind == SkinPixmapKind::Numbers {
-                entry = find_archive_skin_entry(&entries, "numbers");
-                numbers_fallback = entry.is_some();
+            let mut asset = source.image(kind.info().file_stem)?;
+            if asset.is_none() && kind == SkinPixmapKind::Numbers {
+                asset = source.image("numbers")?;
+                numbers_fallback = asset.is_some();
             }
-            let Some((name, contents)) = entry else {
+            let Some(asset) = asset else {
                 continue;
             };
 
-            let mut image = Self::load_skin_image_bytes(
-                &format!("{}:{name}", path.display()),
-                Path::new(name),
-                contents,
-            )?;
+            let mut image =
+                Self::load_skin_image_bytes(&asset.label, &asset.path, &asset.contents)?;
             if numbers_fallback {
                 image = expand_numbers_fallback(image);
             }
@@ -320,47 +302,24 @@ impl DefaultSkin {
 
         apply_loaded_balance_fallback(&mut skin.pixmaps, &loaded);
         apply_loaded_eq_ex_fallback(&mut skin.pixmaps, &loaded);
-        skin.vis_colors = load_vis_colors_from_archive(&entries)?;
-        skin.playlist_colors = load_playlist_colors_from_archive(&entries)?;
-        skin.region_masks = load_region_masks_from_archive(&entries)?;
+        skin.vis_colors = source
+            .text("viscolor.txt")?
+            .as_deref()
+            .map(parse_vis_colors)
+            .unwrap_or(DEFAULT_VIS_COLORS);
+        skin.playlist_colors = source
+            .text("pledit.txt")?
+            .as_deref()
+            .map(parse_playlist_colors)
+            .unwrap_or(DEFAULT_PLAYLIST_COLORS);
+        skin.region_masks = source
+            .text("region.txt")?
+            .as_deref()
+            .map(parse_region_masks)
+            .unwrap_or_default();
         skin.text_colors = text_colors_from_pixmaps(&skin.pixmaps);
 
         Ok(skin)
-    }
-
-    fn find_skin_file(dir: &Path, name: &str) -> Option<PathBuf> {
-        let lower = name.to_ascii_lowercase();
-        let upper = name.to_ascii_uppercase();
-        let mut title = lower.clone();
-        if let Some(first) = title.get_mut(0..1) {
-            first.make_ascii_uppercase();
-        }
-        let cases = [name, lower.as_str(), upper.as_str(), title.as_str()];
-        let exts = [".bmp", ".BMP", ".png", ".PNG", ".xpm", ".XPM"];
-        let mut candidates = Vec::new();
-
-        for ext in exts {
-            for case in cases {
-                candidates.push(format!("{case}{ext}"));
-            }
-        }
-
-        for candidate in &candidates {
-            if let Some(path) = find_file_in_dir_case_insensitive(dir, candidate) {
-                return Some(path);
-            }
-        }
-        for candidate in &candidates {
-            if let Some(path) = find_file_recursively_case_insensitive(dir, candidate) {
-                return Some(path);
-            }
-        }
-        None
-    }
-
-    fn load_skin_image(path: &Path) -> io::Result<XpmImage> {
-        let contents = fs::read(path)?;
-        Self::load_skin_image_bytes(&path.display().to_string(), path, &contents)
     }
 
     fn load_skin_image_bytes(label: &str, path: &Path, contents: &[u8]) -> io::Result<XpmImage> {
@@ -390,10 +349,7 @@ impl DefaultSkin {
             if r == 48 && g == 255 && b == 50 {
                 a = 0;
             }
-            let pr = ((u16::from(r) * u16::from(a) + 127) / 255) as u32;
-            let pg = ((u16::from(g) * u16::from(a) + 127) / 255) as u32;
-            let pb = ((u16::from(b) * u16::from(a) + 127) / 255) as u32;
-            argb.push((u32::from(a) << 24) | (pr << 16) | (pg << 8) | pb);
+            argb.push(premultiply_rgba([r, g, b, a]));
         }
 
         XpmImage::from_argb_pixels(width as usize, height as usize, argb)
@@ -516,16 +472,7 @@ fn scan_skin_dir(dir: &Path, skins: &mut Vec<SkinEntry>) -> io::Result<()> {
 
 /// Whether `path` has an archive format supported by the skin loader.
 pub fn is_skin_archive_path(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    [
-        ".zip", ".wsz", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-    ]
-    .iter()
-    .any(|suffix| name.ends_with(suffix))
+    archive::classify_path(path).is_some()
 }
 
 fn skin_display_name(path: &Path) -> String {
@@ -533,13 +480,9 @@ fn skin_display_name(path: &Path) -> String {
         return path.display().to_string();
     };
 
-    let mut name = file_name.to_string();
-    if is_skin_archive_path(path) {
-        if let Some((base, _extension)) = skin_name_parts(file_name) {
-            name = base.to_string();
-        }
-    }
-    name
+    skin_name_parts(file_name)
+        .map_or(file_name, |(base, _)| base)
+        .to_string()
 }
 
 /// Returns the directory where user-imported skins are stored.
@@ -609,15 +552,8 @@ pub fn unique_skin_import_destination(destination_dir: &Path, name: &OsStr) -> P
 }
 
 fn skin_name_parts(name: &str) -> Option<(&str, &str)> {
-    const ARCHIVE_EXTENSIONS: &[&str] = &[
-        ".tar.bz2", ".tar.gz", ".tbz2", ".tgz", ".zip", ".wsz", ".tar",
-    ];
-    let lowercase = name.to_ascii_lowercase();
-    ARCHIVE_EXTENSIONS.iter().find_map(|extension| {
-        lowercase
-            .strip_suffix(extension)
-            .map(|stem| (&name[..stem.len()], &name[stem.len()..]))
-    })
+    let matched = archive::classify_name(name)?;
+    Some((&name[..name.len() - matched.suffix.len()], matched.suffix))
 }
 
 fn copy_skin_dir_recursive(source: &Path, destination: &Path) -> io::Result<()> {
@@ -633,207 +569,6 @@ fn copy_skin_dir_recursive(source: &Path, destination: &Path) -> io::Result<()> 
         }
     }
     Ok(())
-}
-
-fn archive_entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    if name.ends_with(".zip") || name.ends_with(".wsz") {
-        return zip_archive_entries(path);
-    }
-
-    if name.ends_with(".tar") {
-        let file = File::open(path)?;
-        return tar_archive_entries(file);
-    }
-
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-        let file = File::open(path)?;
-        return tar_archive_entries(flate2::read::GzDecoder::new(file));
-    }
-
-    if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") {
-        let file = File::open(path)?;
-        return tar_archive_entries(bzip2::read::BzDecoder::new(file));
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!("unsupported skin archive format: {}", path.display()),
-    ))
-}
-
-fn zip_archive_entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file).map_err(zip_error)?;
-    let mut entries = Vec::new();
-
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(zip_error)?;
-        if entry.is_dir() {
-            continue;
-        }
-
-        let mut contents = Vec::new();
-        entry.read_to_end(&mut contents)?;
-        entries.push((entry.name().to_string(), contents));
-    }
-
-    Ok(entries)
-}
-
-fn tar_archive_entries<R: Read>(reader: R) -> io::Result<Vec<(String, Vec<u8>)>> {
-    let mut archive = tar::Archive::new(reader);
-    let mut entries = Vec::new();
-
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        if !entry.header().entry_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path()?.to_string_lossy().into_owned();
-        let mut contents = Vec::new();
-        entry.read_to_end(&mut contents)?;
-        entries.push((path, contents));
-    }
-
-    Ok(entries)
-}
-
-fn zip_error(err: zip::result::ZipError) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, err)
-}
-
-fn find_file_in_dir_case_insensitive(dir: &Path, file: &str) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
-    for entry in entries {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_file() {
-            continue;
-        }
-        let file_name = entry.file_name();
-        let Some(file_name) = file_name.to_str() else {
-            continue;
-        };
-        if file_name.eq_ignore_ascii_case(file) {
-            return Some(entry.path());
-        }
-    }
-    None
-}
-
-fn find_file_recursively_case_insensitive(dir: &Path, file: &str) -> Option<PathBuf> {
-    if let Some(path) = find_file_in_dir_case_insensitive(dir, file) {
-        return Some(path);
-    }
-
-    let entries = fs::read_dir(dir).ok()?;
-    for entry in entries {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_dir() {
-            continue;
-        }
-        if let Some(path) = find_file_recursively_case_insensitive(&entry.path(), file) {
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn find_archive_skin_entry<'a>(
-    entries: &'a [(String, Vec<u8>)],
-    name: &str,
-) -> Option<(&'a str, &'a [u8])> {
-    for extension in ["bmp", "png", "xpm"] {
-        for (entry_name, contents) in entries {
-            let entry_path = Path::new(entry_name);
-            let Some(stem) = entry_path.file_stem().and_then(|stem| stem.to_str()) else {
-                continue;
-            };
-            let Some(entry_extension) = entry_path.extension().and_then(|ext| ext.to_str()) else {
-                continue;
-            };
-            if stem.eq_ignore_ascii_case(name) && entry_extension.eq_ignore_ascii_case(extension) {
-                return Some((entry_name, contents));
-            }
-        }
-    }
-
-    None
-}
-
-fn load_vis_colors_from_dir(dir: &Path) -> io::Result<[[u8; 3]; 24]> {
-    let Some(path) = find_file_recursively_case_insensitive(dir, "viscolor.txt") else {
-        return Ok(DEFAULT_VIS_COLORS);
-    };
-    let contents = fs::read_to_string(&path)?;
-    Ok(parse_vis_colors(&contents))
-}
-
-fn load_vis_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<[[u8; 3]; 24]> {
-    let Some((name, contents)) = entries.iter().find(|(name, _)| {
-        Path::new(name)
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.eq_ignore_ascii_case("viscolor.txt"))
-    }) else {
-        return Ok(DEFAULT_VIS_COLORS);
-    };
-
-    let contents = std::str::from_utf8(contents)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {err}")))?;
-    Ok(parse_vis_colors(contents))
-}
-
-fn load_playlist_colors_from_dir(dir: &Path) -> io::Result<PlaylistColors> {
-    let Some(path) = find_file_recursively_case_insensitive(dir, "pledit.txt") else {
-        return Ok(DEFAULT_PLAYLIST_COLORS);
-    };
-    let contents = fs::read_to_string(&path)?;
-    Ok(parse_playlist_colors(&contents))
-}
-
-fn load_playlist_colors_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<PlaylistColors> {
-    let Some((name, contents)) = entries.iter().find(|(name, _)| {
-        Path::new(name)
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.eq_ignore_ascii_case("pledit.txt"))
-    }) else {
-        return Ok(DEFAULT_PLAYLIST_COLORS);
-    };
-
-    let contents = std::str::from_utf8(contents)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {err}")))?;
-    Ok(parse_playlist_colors(contents))
-}
-
-fn load_region_masks_from_dir(dir: &Path) -> io::Result<RegionMasks> {
-    let Some(path) = find_file_recursively_case_insensitive(dir, "region.txt") else {
-        return Ok(RegionMasks::default());
-    };
-    let contents = fs::read_to_string(&path)?;
-    Ok(parse_region_masks(&contents))
-}
-
-fn load_region_masks_from_archive(entries: &[(String, Vec<u8>)]) -> io::Result<RegionMasks> {
-    let Some((name, contents)) = entries.iter().find(|(name, _)| {
-        Path::new(name)
-            .file_name()
-            .and_then(|file_name| file_name.to_str())
-            .is_some_and(|file_name| file_name.eq_ignore_ascii_case("region.txt"))
-    }) else {
-        return Ok(RegionMasks::default());
-    };
-
-    let contents = std::str::from_utf8(contents)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("{name}: {err}")))?;
-    Ok(parse_region_masks(contents))
 }
 
 fn parse_region_masks(contents: &str) -> RegionMasks {
@@ -973,14 +708,14 @@ fn parse_skin_color(value: &str) -> Option<[u8; 3]> {
     }
     let mut color = [0, 0, 0];
     if value.len() >= 6 {
-        color[0] = parse_hex_byte(&value[0..2])?;
-        color[1] = parse_hex_byte(&value[2..4])?;
-        color[2] = parse_hex_byte(&value[4..6])?;
+        color[0] = parse_hex_byte(value.get(0..2)?)?;
+        color[1] = parse_hex_byte(value.get(2..4)?)?;
+        color[2] = parse_hex_byte(value.get(4..6)?)?;
     } else if value.len() >= 4 {
-        color[1] = parse_hex_byte(&value[0..2])?;
-        color[2] = parse_hex_byte(&value[2..4])?;
+        color[1] = parse_hex_byte(value.get(0..2)?)?;
+        color[2] = parse_hex_byte(value.get(2..4)?)?;
     } else {
-        color[2] = parse_hex_byte(&value[0..2])?;
+        color[2] = parse_hex_byte(value.get(0..2)?)?;
     }
     Some(color)
 }
@@ -1402,6 +1137,33 @@ static char * main_xpm[] = {
     }
 
     #[test]
+    fn skin_colors_reject_unicode_crossing_hex_byte_boundaries() {
+        for value in [
+            "€",     // two-digit branch, first component
+            "€1",    // four-digit branch, first component
+            "12€",   // four-digit branch, second component
+            "€123",  // six-digit branch, first component
+            "a€123", // six-digit branch, first component after one ASCII byte
+            "12€34", // six-digit branch, second component
+            "1234€", // six-digit branch, third component
+        ] {
+            assert_eq!(parse_skin_color(value), None, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn skin_colors_keep_ascii_prefix_and_trailing_compatibility() {
+        for (value, expected) in [
+            ("#56?", [0, 0, 0x56]),
+            ("1234?", [0, 0x12, 0x34]),
+            ("#010203rest", [1, 2, 3]),
+            ("A0B0C0€", [0xa0, 0xb0, 0xc0]),
+        ] {
+            assert_eq!(parse_skin_color(value), Some(expected), "{value:?}");
+        }
+    }
+
+    #[test]
     fn parses_region_masks_for_all_original_sections() {
         let masks = parse_region_masks(
             r#"
@@ -1639,17 +1401,54 @@ static char * main_xpm[] = {
     }
 
     #[test]
-    fn archive_discovery_matches_loader_supported_extensions() {
-        assert!(is_skin_archive_path(Path::new("Example.zip")));
-        assert!(is_skin_archive_path(Path::new("Example.wsz")));
-        assert!(is_skin_archive_path(Path::new("Example.tar")));
-        assert!(is_skin_archive_path(Path::new("Example.tar.gz")));
-        assert!(is_skin_archive_path(Path::new("Example.tgz")));
-        assert!(is_skin_archive_path(Path::new("Example.tar.bz2")));
-        assert!(is_skin_archive_path(Path::new("Example.tbz2")));
-        assert!(!is_skin_archive_path(Path::new("Example.gz")));
-        assert!(!is_skin_archive_path(Path::new("Example.bz2")));
-        assert!(!is_skin_archive_path(Path::new("Example.txt")));
+    fn archive_formats_and_names_share_case_insensitive_suffix_recognition() {
+        use archive::ArchiveFormat::{Tar, TarBz2, TarGz, Zip};
+
+        for (filename, format, suffix) in [
+            ("Classic.ZIP", Zip, ".ZIP"),
+            ("Classic.WsZ", Zip, ".WsZ"),
+            ("Classic.TaR", Tar, ".TaR"),
+            ("Classic.TAR.Gz", TarGz, ".TAR.Gz"),
+            ("Classic.TgZ", TarGz, ".TgZ"),
+            ("Classic.Tar.BZ2", TarBz2, ".Tar.BZ2"),
+            ("Classic.TbZ2", TarBz2, ".TbZ2"),
+        ] {
+            let path = Path::new(filename);
+            let matched = archive::classify_path(path).unwrap();
+            assert_eq!(matched.format, format, "{filename}");
+            assert_eq!(matched.suffix, suffix, "{filename}");
+            assert_eq!(skin_name_parts(filename), Some(("Classic", suffix)));
+            assert_eq!(SkinEntry::from_path(path.to_owned()).name, "Classic");
+            assert!(is_skin_archive_path(path));
+        }
+        assert_eq!(
+            skin_name_parts("Música.TAR.GZ"),
+            Some(("Música", ".TAR.GZ"))
+        );
+
+        for filename in [
+            "Classic.gz",
+            "Classic.bz2",
+            "Classic.txt",
+            "Classic.tar.gzip",
+            "Classic.tar.bz",
+            "Classic.zip.tmp",
+            "Classic.tar.gz.old",
+            "Classic.tgz.backup",
+            "Classic.WsZ-extra",
+            "Classiczip",
+            "Classic.zip/inner.txt",
+        ] {
+            assert!(!is_skin_archive_path(Path::new(filename)), "{filename}");
+            if !filename.contains('/') {
+                assert_eq!(skin_name_parts(filename), None, "{filename}");
+                assert_eq!(
+                    archive::entries(Path::new(filename)).unwrap_err().kind(),
+                    io::ErrorKind::InvalidInput,
+                    "{filename}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1663,7 +1462,9 @@ static char * main_xpm[] = {
         let destination = root.join("destination");
         fs::create_dir_all(&source).unwrap();
 
-        for extension in ["zip", "wsz", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2"] {
+        for extension in [
+            "zip", "wsz", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2", "TAR.GZ", "TaR.BZ2", "WsZ",
+        ] {
             let source_path = source.join(format!("Example.{extension}"));
             fs::write(&source_path, b"skin archive").unwrap();
             let imported = import_skin_to_dir(&source_path, &destination).unwrap();
@@ -1674,7 +1475,7 @@ static char * main_xpm[] = {
             assert_eq!(imported.name, "Example");
         }
 
-        for extension in ["gz", "bz2", "txt"] {
+        for extension in ["gz", "bz2", "txt", "zip.backup", "tar.gz.old"] {
             let source_path = source.join(format!("Unsupported.{extension}"));
             fs::write(&source_path, b"not a skin archive").unwrap();
             let err = import_skin_to_dir(&source_path, &destination).unwrap_err();
@@ -1729,11 +1530,20 @@ static char * main_xpm[] = {
             std::env::temp_dir().join(format!("xmms-rs-skin-import-name-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("Example.tar.gz"), b"existing").unwrap();
-        assert_eq!(
-            unique_skin_import_destination(&root, OsStr::new("Example.tar.gz")),
-            root.join("Example 1.tar.gz")
-        );
+        for (original, collision) in [
+            ("Example.tar.gz", "Example 1.tar.gz"),
+            ("Example.TAR.GZ", "Example 1.TAR.GZ"),
+            ("Example.Tar.Bz2", "Example 1.Tar.Bz2"),
+            ("Example.WsZ", "Example 1.WsZ"),
+            ("Example.zip.backup", "Example.zip.backup 1"),
+        ] {
+            fs::write(root.join(original), b"existing").unwrap();
+            assert_eq!(
+                unique_skin_import_destination(&root, OsStr::new(original)),
+                root.join(collision),
+                "{original}"
+            );
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1764,7 +1574,10 @@ static char * main_xpm[] = {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 
-        for extension in ["zip", "wsz", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2"] {
+        for extension in [
+            "zip", "wsz", "tar", "tar.gz", "tgz", "tar.bz2", "tbz2", "ZIP", "WsZ", "TAR", "TAR.GZ",
+            "TgZ", "TAR.BZ2", "TbZ2",
+        ] {
             let path = root.join(format!("Example.{extension}"));
             write_test_skin_archive(&path, ONE_PIXEL_XPM.as_bytes()).unwrap();
             let skin = DefaultSkin::load_from_path(&path).unwrap();
@@ -1779,53 +1592,47 @@ static char * main_xpm[] = {
     }
 
     fn write_test_skin_archive(path: &Path, contents: &[u8]) -> io::Result<()> {
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        if name.ends_with(".zip") || name.ends_with(".wsz") {
-            let file = File::create(path)?;
-            let mut archive = zip::ZipWriter::new(file);
-            let options = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
-            archive.start_file("Example/main.xpm", options)?;
-            archive.write_all(contents)?;
-            archive.finish()?;
-            return Ok(());
+        match archive::classify_path(path).map(|matched| matched.format) {
+            Some(archive::ArchiveFormat::Zip) => {
+                let file = File::create(path)?;
+                let mut archive = zip::ZipWriter::new(file);
+                let options = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated);
+                archive.start_file("Example/main.xpm", options)?;
+                archive.write_all(contents)?;
+                archive.finish()?;
+            }
+            Some(archive::ArchiveFormat::Tar) => {
+                let mut archive = tar::Builder::new(File::create(path)?);
+                append_test_skin_tar_entry(&mut archive, contents)?;
+                archive.finish()?;
+            }
+            Some(archive::ArchiveFormat::TarGz) => {
+                let encoder = flate2::write::GzEncoder::new(
+                    File::create(path)?,
+                    flate2::Compression::default(),
+                );
+                let mut archive = tar::Builder::new(encoder);
+                append_test_skin_tar_entry(&mut archive, contents)?;
+                archive.into_inner()?.finish()?;
+            }
+            Some(archive::ArchiveFormat::TarBz2) => {
+                let encoder = bzip2::write::BzEncoder::new(
+                    File::create(path)?,
+                    bzip2::Compression::default(),
+                );
+                let mut archive = tar::Builder::new(encoder);
+                append_test_skin_tar_entry(&mut archive, contents)?;
+                archive.into_inner()?.finish()?;
+            }
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unsupported test archive: {}", path.display()),
+                ));
+            }
         }
-
-        if name.ends_with(".tar") {
-            let file = File::create(path)?;
-            let mut archive = tar::Builder::new(file);
-            append_test_skin_tar_entry(&mut archive, contents)?;
-            archive.finish()?;
-            return Ok(());
-        }
-
-        if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-            let file = File::create(path)?;
-            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-            let mut archive = tar::Builder::new(encoder);
-            append_test_skin_tar_entry(&mut archive, contents)?;
-            archive.into_inner()?.finish()?;
-            return Ok(());
-        }
-
-        if name.ends_with(".tar.bz2") || name.ends_with(".tbz2") {
-            let file = File::create(path)?;
-            let encoder = bzip2::write::BzEncoder::new(file, bzip2::Compression::default());
-            let mut archive = tar::Builder::new(encoder);
-            append_test_skin_tar_entry(&mut archive, contents)?;
-            archive.into_inner()?.finish()?;
-            return Ok(());
-        }
-
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsupported test archive: {}", path.display()),
-        ))
+        Ok(())
     }
 
     fn append_test_skin_tar_entry<W: Write>(
