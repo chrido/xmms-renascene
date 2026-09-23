@@ -613,6 +613,7 @@ impl EguiFrontendState {
                 self.handle_socket_ui_command(command);
                 request.accept();
             }
+            SocketCommand::Ping => request.accept(),
             SocketCommand::Quit => {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 request.accept();
