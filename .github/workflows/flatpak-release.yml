@@ -55,6 +55,9 @@ jobs:
 
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Override v3's default: the legacy tools package was removed.
+          packages: platform-tools
 
       - name: Install Android SDK packages
         run: |
