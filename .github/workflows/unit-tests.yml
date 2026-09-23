@@ -39,6 +39,11 @@ jobs:
             pkg-config \
             xvfb
 
+      - name: Test performance harness
+        run: >-
+          python3 -m unittest
+          scripts.test_performance scripts.test_perf_driver
+
       - name: Run unit tests
         run: xvfb-run -a cargo test --locked --all-targets
 

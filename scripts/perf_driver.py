@@ -7,11 +7,19 @@ import json
 import os
 import resource
 import shutil
+import signal
 import socket
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+
+
+class ProcessHandle(Protocol):
+    def poll(self) -> int | None: ...
+
+    def wait(self, timeout: float) -> int: ...
 
 
 def unused_tcp_port() -> int:
@@ -20,9 +28,19 @@ def unused_tcp_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def wait_for_socket(port: int, timeout: float = 30.0) -> None:
+def require_running(process: ProcessHandle, phase: str) -> None:
+    code = process.poll()
+    if code is not None:
+        raise RuntimeError(f"application exited with status {code} {phase}")
+
+
+def wait_for_socket(
+    port: int, timeout: float = 30.0, *, process: ProcessHandle | None = None
+) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if process is not None:
+            require_running(process, "before its control socket opened")
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=0.2):
                 return
@@ -31,16 +49,104 @@ def wait_for_socket(port: int, timeout: float = 30.0) -> None:
     raise TimeoutError(f"control socket did not open on 127.0.0.1:{port}")
 
 
-def send_command(port: int, command: str, **fields: Any) -> float:
+ACK_TIMEOUT = "frontend did not acknowledge command"
+FRONTEND_CLOSED = "frontend is no longer accepting commands"
+
+
+class CommandRejected(RuntimeError):
+    def __init__(self, command: str, response: dict[str, Any]):
+        self.reason = response.get("error")
+        super().__init__(f"command {command!r} was rejected: {response}")
+
+
+def remaining_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("control command deadline exceeded")
+    return remaining
+
+
+def send_command(
+    port: int, command: str, *, timeout: float = 5.0, **fields: Any
+) -> float:
     started = time.perf_counter()
-    with socket.create_connection(("127.0.0.1", port), timeout=5.0) as connection:
+    deadline = time.monotonic() + timeout
+    with socket.create_connection(
+        ("127.0.0.1", port), timeout=remaining_time(deadline)
+    ) as connection:
         request = json.dumps({"id": 1, "command": command, **fields}) + "\n"
+        connection.settimeout(remaining_time(deadline))
         connection.sendall(request.encode())
-        response = connection.makefile("r", encoding="utf-8").readline()
+        connection.settimeout(remaining_time(deadline))
+        with connection.makefile("r", encoding="utf-8") as reader:
+            response = reader.readline()
+    if not response:
+        raise ConnectionError(f"control socket closed before acknowledging {command!r}")
     value = json.loads(response)
     if not value.get("accepted"):
-        raise RuntimeError(f"command {command!r} was rejected: {value}")
+        raise CommandRejected(command, value)
     return (time.perf_counter() - started) * 1000.0
+
+
+def wait_for_frontend(port: int, process: ProcessHandle, timeout: float = 30.0) -> None:
+    """Wait for a no-op processed by the frontend, not just an open listener."""
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while True:
+        require_running(process, "before frontend readiness")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                "frontend did not acknowledge readiness before deadline"
+            ) from last_error
+        try:
+            send_command(port, "ping", timeout=min(5.0, remaining))
+            return
+        except CommandRejected as err:
+            if err.reason != ACK_TIMEOUT:
+                raise
+            last_error = err
+        except OSError as err:
+            last_error = err
+        time.sleep(max(0.0, min(0.1, deadline - time.monotonic())))
+
+
+def shutdown_desktop(port: int, process: ProcessHandle, timeout: float = 30.0) -> None:
+    """Retry idempotent quit requests, but require a confirmed clean exit."""
+    deadline = time.monotonic() + timeout
+    requested = False
+    acknowledged = False
+    last_error: Exception | None = None
+    while True:
+        code = process.poll()
+        if code is not None:
+            if code != 0 or not requested:
+                raise RuntimeError(
+                    f"application exited with status {code} before clean shutdown"
+                )
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                "application did not exit before shutdown deadline"
+            ) from last_error
+        if not acknowledged:
+            requested = True
+            try:
+                send_command(port, "quit", timeout=min(5.0, remaining))
+                acknowledged = True
+            except CommandRejected as err:
+                if err.reason not in {ACK_TIMEOUT, FRONTEND_CLOSED}:
+                    raise
+                last_error = err
+            except OSError as err:
+                # EOF/reset/refusal may mean quit succeeded before the reply.
+                # Only process exit status 0 (above) can make this a success.
+                last_error = err
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=min(0.1, remaining))
 
 
 def send_initial_command_when_ready(
@@ -137,7 +243,9 @@ def scenario_actions(args: argparse.Namespace, port: int) -> list[float]:
             )
         )
         for width, height in ((550, 464), (350, 348), (275, 232)):
-            latencies.append(send_command(port, "playlist_size", width=width, height=height))
+            latencies.append(
+                send_command(port, "playlist_size", width=width, height=height)
+            )
     return latencies
 
 
@@ -164,39 +272,37 @@ def run_desktop(args: argparse.Namespace) -> dict[str, Any]:
     process = subprocess.Popen(
         command,
         env=environment,
+        start_new_session=True,
     )
     startup_ms = None
     latencies: list[float] = []
     try:
-        wait_for_socket(port)
+        wait_for_socket(port, process=process)
         startup_ms = (time.perf_counter() - started) * 1000.0
+        wait_for_frontend(port, process)
+        input_ready_ms = (time.perf_counter() - started) * 1000.0
         latencies = scenario_actions(args, port)
-        remaining = max(0.0, args.duration - ((time.perf_counter() - started)))
+        remaining = max(0.0, args.duration - (time.perf_counter() - started))
         if remaining:
             time.sleep(remaining)
-        if process.poll() is None:
-            try:
-                send_command(port, "quit")
-            except OSError:
-                if process.poll() is None:
-                    raise
-        return_code = process.wait(timeout=10)
-        if return_code != 0:
-            raise RuntimeError(f"application exited with status {return_code}")
+        shutdown_desktop(port, process)
     finally:
         if process.poll() is None:
-            process.terminate()
-            try:
+            # xvfb-run/perf may be the immediate child. Stop the whole session
+            # on failure so the application and X server cannot be orphaned.
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            with suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
+            with suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     return {
         "elapsed_ms": elapsed_ms,
         "startup_ms": startup_ms,
-        "input_ready_ms": max(latencies) if latencies else startup_ms,
+        "input_ready_ms": input_ready_ms,
         "frame_time_median_ms": None,
         "frame_time_p95_ms": None,
         "frame_time_p99_ms": None,
