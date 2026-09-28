@@ -949,6 +949,7 @@ fn handle_socket_request_gtk(
             );
             true
         }
+        SocketCommand::Ping => false,
         SocketCommand::Quit => {
             app.quit();
             false

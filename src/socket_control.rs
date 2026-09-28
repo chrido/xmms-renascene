@@ -18,6 +18,8 @@ use crate::app::command::{AppCommand, AudioCommand, PanelCommand, PlayerCommand,
 pub enum SocketCommand {
     App(AppCommand),
     Ui(SocketUiCommand),
+    /// A no-op acknowledged by the frontend event loop, not the socket thread.
+    Ping,
     Quit,
 }
 
@@ -295,6 +297,7 @@ pub fn parse_socket_command(value: &Value) -> Result<SocketCommand, String> {
             SocketUiCommand::SetSkinBrowserVisible(false),
         )),
         "toggle_skin_browser" => Ok(SocketCommand::Ui(SocketUiCommand::ToggleSkinBrowser)),
+        "ping" => Ok(SocketCommand::Ping),
         "quit" | "exit" => Ok(SocketCommand::Quit),
         other => Err(format!("unknown command '{other}'")),
     }
@@ -381,6 +384,31 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+
+    #[test]
+    fn ping_waits_for_frontend_acknowledgment() {
+        let (sender, receiver) = mpsc::channel::<SocketRequest>();
+        let (response_sender, response_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let response = handle_line(r#"{"id":42,"command":"ping"}"#, &sender, None);
+            response_sender.send(response).unwrap();
+        });
+
+        let request = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(request.command, SocketCommand::Ping);
+        // Merely enqueueing the probe must not report frontend readiness.
+        assert!(matches!(
+            response_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        request.accept();
+        let response = response_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(response["id"], 42);
+        assert_eq!(response["accepted"], true);
+        server.join().unwrap();
+    }
 
     #[test]
     fn parses_panel_visibility_command() {

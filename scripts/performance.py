@@ -11,13 +11,12 @@ import socket
 import statistics
 import struct
 import subprocess
-import time
+import sys
 import wave
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
 
 SUPPORTED_PLATFORMS = ("gtk", "egui", "android")
 DESKTOP_PLATFORMS = frozenset(("gtk", "egui"))
@@ -850,6 +849,22 @@ class PerformanceRunner:
                 stderr=subprocess.STDOUT,
                 check=False,
             )
+        if process.returncode != 0:
+            # Keep the complete log in the artifact, but expose the actual
+            # failure in Actions output without dumping potentially huge logs.
+            try:
+                with log.open("rb") as source:
+                    source.seek(0, os.SEEK_END)
+                    source.seek(max(0, source.tell() - 16 * 1024))
+                    tail = source.read().decode("utf-8", errors="replace").splitlines()[-60:]
+                print(
+                    f"--- {log.name}: exit {process.returncode}, log tail ---",
+                    file=sys.stderr,
+                )
+                print("\n".join(tail), file=sys.stderr)
+                print(f"--- full log: {log} ---", file=sys.stderr)
+            except OSError as err:
+                print(f"Could not read failure log {log}: {err}", file=sys.stderr)
         return process.returncode
 
     def _command_output(self, command: list[str]) -> str:
