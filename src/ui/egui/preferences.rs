@@ -11,6 +11,7 @@ use crate::config::{Config, TimerMode};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
 };
+#[cfg(target_os = "android")]
 use crate::skin::SkinEntry;
 
 #[cfg(target_os = "android")]
@@ -88,7 +89,7 @@ pub fn show_preferences(ctx: &egui::Context, app: &mut EguiFrontendState) {
         if skins_page_visible {
             app.ensure_runtime_skins();
         }
-        let skin_entries = app.skin_entries.clone();
+        let skin_entries = app.skins.entries.clone();
         let mut state = state.lock().expect("preferences viewport state poisoned");
         let before = state.config.clone();
         show_android_preferences(ctx, &mut state, &skin_entries, app.android.ready_layout());
@@ -234,12 +235,10 @@ fn apply_pending_viewport_state(app: &mut EguiFrontendState) {
         }
     }
     if save_config {
-        app.apply_effect(crate::app::effect::AppEffect::SaveConfig);
+        app.request_config_save();
     }
     if queue_render {
-        app.apply_effect(crate::app::effect::AppEffect::QueueRender(
-            crate::app::effect::RenderTarget::All,
-        ));
+        app.request_render(crate::app::effect::RenderTarget::All);
     }
 }
 

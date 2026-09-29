@@ -2,10 +2,8 @@
 
 use std::time::Duration;
 
-use crate::app::effect::RenderTarget;
+use crate::app::effect::{RenderTarget, UiEffect};
 use crate::app::store::StateChangeSet;
-
-use super::effect_executor::UiEffect;
 
 const ANDROID_LAYOUT_REPAINT_INTERVAL: Duration = Duration::from_millis(16);
 

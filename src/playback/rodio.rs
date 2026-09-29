@@ -1345,7 +1345,7 @@ fn is_unsupported_uri_error(err: &str) -> bool {
 }
 
 #[cfg(test)]
-fn test_wav_bytes(sample_rate: u32, channels: u16, frames: u32) -> Vec<u8> {
+pub(crate) fn test_wav_bytes(sample_rate: u32, channels: u16, frames: u32) -> Vec<u8> {
     let bits_per_sample = 16u16;
     let block_align = channels * (bits_per_sample / 8);
     let byte_rate = sample_rate * u32::from(block_align);

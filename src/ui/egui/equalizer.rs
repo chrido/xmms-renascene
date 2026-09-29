@@ -1,7 +1,7 @@
 //! egui equalizer panel/window.
 
 use crate::app::command::{AudioCommand, EqualizerCommand, PanelCommand};
-use crate::app::effect::{AppEffect, FileDialogRequest};
+use crate::app::effect::FileDialogRequest;
 use crate::app::equalizer_actions::{EqualizerPresetAction, EQUALIZER_PRESET_FILE_ITEMS};
 use crate::app::view_model::{
     balance_to_eq_shaded_position, eq_shaded_position_to_balance, eq_shaded_position_to_volume,
@@ -73,8 +73,8 @@ pub fn show_equalizer(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         EQUALIZER_WINDOW_HEIGHT
     };
     let size = egui::vec2(
-        EQUALIZER_WINDOW_WIDTH as f32 * app.scale_factor,
-        base_height as f32 * app.scale_factor,
+        EQUALIZER_WINDOW_WIDTH as f32 * app.scale_factor(),
+        base_height as f32 * app.scale_factor(),
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
@@ -95,7 +95,7 @@ fn equalizer_render_state(
     app: &EguiFrontendState,
     view_model: &EqualizerViewModel,
 ) -> EqualizerRenderState {
-    let (pressed_control, pressed_slider) = app.equalizer_pressed.render_parts();
+    let (pressed_control, pressed_slider) = app.equalizer.pressed.render_parts();
     EqualizerRenderState {
         focused: true,
         shaded: view_model.shaded,
@@ -116,7 +116,7 @@ fn add_equalizer_hit_regions(
     base_rect: egui::Rect,
     view_model: &EqualizerViewModel,
 ) {
-    app.equalizer_pressed = EqualizerPressed::None;
+    app.equalizer.pressed = EqualizerPressed::None;
     add_equalizer_title_button_hits(ui, app, base_rect);
     if view_model.shaded {
         add_equalizer_slider_hit(ui, app, base_rect, EqualizerSlider::ShadedVolume);
@@ -129,14 +129,18 @@ fn add_equalizer_hit_regions(
         EqualizerControl::Auto,
         EqualizerControl::Presets,
     ] {
-        let rect = scale_skin_rect(base_rect, equalizer_control_rect(control), app.scale_factor);
+        let rect = scale_skin_rect(
+            base_rect,
+            equalizer_control_rect(control),
+            app.scale_factor(),
+        );
         let response = ui.interact(
             rect,
             ui.id().with(("eq-control", control as u8)),
             egui::Sense::click(),
         );
         if response.is_pointer_button_down_on() {
-            app.equalizer_pressed = EqualizerPressed::Control(control);
+            app.equalizer.pressed = EqualizerPressed::Control(control);
             ui.ctx().request_repaint();
         }
         if response.clicked() {
@@ -164,7 +168,7 @@ fn add_equalizer_titlebar_drag_region(
             EQUALIZER_WINDOW_WIDTH,
             crate::render::MAIN_TITLEBAR_HEIGHT,
         ),
-        app.scale_factor,
+        app.scale_factor(),
     );
     let response = ui.interact(
         titlebar,
@@ -175,8 +179,8 @@ fn add_equalizer_titlebar_drag_region(
         let Some(pointer) = response.interact_pointer_pos() else {
             return;
         };
-        let x = ((pointer.x - base_rect.left()) / app.scale_factor).floor() as i32;
-        let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
+        let x = ((pointer.x - base_rect.left()) / app.scale_factor()).floor() as i32;
+        let y = ((pointer.y - base_rect.top()) / app.scale_factor()).floor() as i32;
         if equalizer_titlebar_drag_excluded(x, y, view_model.shaded) {
             return;
         }
@@ -209,7 +213,7 @@ fn add_equalizer_title_button_hits(
         let rect = scale_skin_rect(
             base_rect,
             panel_title_button_rect(LayoutPanelKind::Equalizer, button, EQUALIZER_WINDOW_WIDTH),
-            app.scale_factor,
+            app.scale_factor(),
         );
         let response = ui.interact(
             rect,
@@ -236,7 +240,7 @@ fn add_equalizer_slider_hit(
     slider: EqualizerSlider,
 ) {
     let layout = equalizer_slider_layout(slider);
-    let rect = scale_skin_rect(base_rect, layout.rect, app.scale_factor);
+    let rect = scale_skin_rect(base_rect, layout.rect, app.scale_factor());
     let response = ui.interact(
         rect,
         ui.id().with(("eq-slider", equalizer_slider_id(slider))),
@@ -244,7 +248,7 @@ fn add_equalizer_slider_hit(
     );
     let pointer_down = response.is_pointer_button_down_on();
     if pointer_down || response.dragged() {
-        app.equalizer_pressed = EqualizerPressed::Slider(slider);
+        app.equalizer.pressed = EqualizerPressed::Slider(slider);
         ui.ctx().request_repaint();
     }
     if (response.clicked() || response.dragged() || pointer_down)
@@ -292,8 +296,8 @@ pub(crate) fn show_equalizer_presets_popover(
     // full menu remains visible inside the equalizer/window bounds.
     let popup_pos = clamp_popup_to_rect(
         egui::pos2(
-            equalizer_rect.left() + presets_button.x as f32 * app.scale_factor,
-            equalizer_rect.top() + presets_button.bottom() as f32 * app.scale_factor,
+            equalizer_rect.left() + presets_button.x as f32 * app.scale_factor(),
+            equalizer_rect.top() + presets_button.bottom() as f32 * app.scale_factor(),
         ),
         equalizer_rect,
         egui::vec2(estimated_popup_width, 0.0),
@@ -345,7 +349,7 @@ pub(crate) fn show_equalizer_presets_popover(
                 .or_else(|| input.pointer.latest_pos())
                 .is_some_and(|pos| {
                     let presets_rect =
-                        scale_skin_rect(equalizer_rect, presets_button, app.scale_factor);
+                        scale_skin_rect(equalizer_rect, presets_button, app.scale_factor());
                     !response.response.rect.contains(pos) && !presets_rect.contains(pos)
                 })
     });
@@ -368,14 +372,10 @@ fn equalizer_popup_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
 fn dispatch_equalizer_preset_action(app: &mut EguiFrontendState, action: EqualizerPresetAction) {
     match action {
         EqualizerPresetAction::Load => {
-            app.apply_effect(AppEffect::OpenFileDialog(
-                FileDialogRequest::LoadEqualizerPreset,
-            ));
+            app.open_file_dialog(FileDialogRequest::LoadEqualizerPreset);
         }
         EqualizerPresetAction::Save => {
-            app.apply_effect(AppEffect::OpenFileDialog(
-                FileDialogRequest::SaveEqualizerPreset,
-            ));
+            app.open_file_dialog(FileDialogRequest::SaveEqualizerPreset);
         }
     }
 }
@@ -395,13 +395,13 @@ fn dispatch_equalizer_slider(
 ) {
     match slider {
         EqualizerSlider::Preamp => {
-            let pixel = ((pointer.y - rect.top()) / app.scale_factor).round() as i32;
+            let pixel = ((pointer.y - rect.top()) / app.scale_factor()).round() as i32;
             app.dispatch(EqualizerCommand::SetPreamp(eq_slider_pixel_to_position(
                 pixel,
             )));
         }
         EqualizerSlider::Band(band) => {
-            let pixel = ((pointer.y - rect.top()) / app.scale_factor).round() as i32;
+            let pixel = ((pointer.y - rect.top()) / app.scale_factor()).round() as i32;
             app.dispatch(EqualizerCommand::SetBand {
                 band,
                 position: eq_slider_pixel_to_position(pixel),
@@ -409,14 +409,14 @@ fn dispatch_equalizer_slider(
         }
         EqualizerSlider::ShadedVolume => {
             let layout = equalizer_slider_layout(slider);
-            let position = ((pointer.x - rect.left()) / app.scale_factor).round() as i32;
+            let position = ((pointer.x - rect.left()) / app.scale_factor()).round() as i32;
             app.dispatch(AudioCommand::SetVolume(eq_shaded_position_to_volume(
                 position.clamp(layout.min, layout.max),
             )));
         }
         EqualizerSlider::ShadedBalance => {
             let layout = equalizer_slider_layout(slider);
-            let position = ((pointer.x - rect.left()) / app.scale_factor).round() as i32;
+            let position = ((pointer.x - rect.left()) / app.scale_factor()).round() as i32;
             app.dispatch(AudioCommand::SetBalance(eq_shaded_position_to_balance(
                 position.clamp(layout.min, layout.max),
             )));
@@ -499,7 +499,7 @@ mod tests {
         let mut app =
             EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
 
-        let scale = app.scale_factor;
+        let scale = app.scale_factor();
         dispatch_equalizer_slider(
             &mut app,
             EqualizerSlider::ShadedVolume,

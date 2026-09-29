@@ -1,7 +1,7 @@
 //! egui playlist panel/window.
 
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
-use crate::app::effect::{AppEffect, FileDialogRequest};
+use crate::app::effect::FileDialogRequest;
 #[cfg(target_os = "android")]
 use crate::app::playlist_actions::playlist_play_first_selected_commands;
 use crate::app::playlist_actions::{
@@ -210,13 +210,13 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     if !app.controller().state().config.playlist_visible {
         return;
     }
-    let render_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
+    let render_scale = app.scale_factor() as f64 * ui.ctx().pixels_per_point() as f64;
     let texture_key = PlaylistTextureKey::from_state(
         app.controller().state(),
         app.render_cache.generation,
-        app.playlist_scroll_offset,
-        app.playlist_width,
-        app.playlist_height,
+        app.playlist.scroll_offset,
+        app.playlist.width,
+        app.playlist.height,
         render_scale,
     );
     if app
@@ -275,10 +275,10 @@ pub fn show_playlist(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         row_count: app.controller().state().playlist.entries().len(),
         shaded: app.controller().state().config.playlist_shaded,
     };
-    let base_height = playlist_window_height(interaction.shaded, app.playlist_height);
+    let base_height = playlist_window_height(interaction.shaded, app.playlist.height);
     let size = egui::vec2(
-        app.playlist_width as f32 * app.scale_factor,
-        base_height as f32 * app.scale_factor,
+        app.playlist.width as f32 * app.scale_factor(),
+        base_height as f32 * app.scale_factor(),
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
@@ -333,7 +333,7 @@ pub(crate) fn shaded_playlist_info(app: &EguiFrontendState) -> String {
     } else {
         String::new()
     };
-    let max_len = ((app.playlist_width - 35) / 5)
+    let max_len = ((app.playlist.width - 35) / 5)
         .saturating_sub(prefix.len() as i32)
         .saturating_sub(suffix.len() as i32)
         .max(0) as usize;
@@ -365,8 +365,8 @@ fn add_playlist_hit_regions(
     ] {
         let rect = scale_skin_rect(
             base_rect,
-            playlist_menu_button_rect(menu, app.playlist_width, app.playlist_height),
-            app.scale_factor,
+            playlist_menu_button_rect(menu, app.playlist.width, app.playlist.height),
+            app.scale_factor(),
         );
         let response = ui.interact(
             rect,
@@ -390,8 +390,8 @@ fn add_playlist_hit_regions(
     ] {
         let rect = scale_skin_rect(
             base_rect,
-            playlist_footer_button_rect(button, app.playlist_width, app.playlist_height),
-            app.scale_factor,
+            playlist_footer_button_rect(button, app.playlist.width, app.playlist.height),
+            app.scale_factor(),
         );
         let response = ui.interact(
             rect,
@@ -411,20 +411,20 @@ fn add_playlist_resize_handle(
     shaded: bool,
 ) {
     if shaded {
-        app.playlist_resize_start = None;
+        app.playlist.resize_start = None;
         return;
     }
     let rect = scale_skin_rect(
         base_rect,
-        SkinRect::new(app.playlist_width - 20, app.playlist_height - 20, 20, 20),
-        app.scale_factor,
+        SkinRect::new(app.playlist.width - 20, app.playlist.height - 20, 20, 20),
+        app.scale_factor(),
     );
     let response = ui.interact(
         rect,
         ui.id().with("playlist-resize-handle"),
         egui::Sense::click_and_drag(),
     );
-    if response.hovered() || app.playlist_resize_start.is_some() {
+    if response.hovered() || app.playlist.resize_start.is_some() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
     }
     // Start the resize on the primary press edge whose origin lies on the handle,
@@ -443,20 +443,20 @@ fn add_playlist_resize_handle(
     });
     if let Some(origin) = press_origin {
         if rect.contains(origin) {
-            let local_y = ((origin.y - base_rect.top()) / app.scale_factor).round() as i32;
-            app.playlist_resize_start = Some(app.playlist_height - local_y);
+            let local_y = ((origin.y - base_rect.top()) / app.scale_factor()).round() as i32;
+            app.playlist.resize_start = Some(app.playlist.height - local_y);
         }
     }
-    if let Some(offset_y) = app.playlist_resize_start {
+    if let Some(offset_y) = app.playlist.resize_start {
         if ui.ctx().input(|input| input.pointer.primary_down()) {
             if let Some(pointer) = ui.ctx().input(|input| input.pointer.latest_pos()) {
-                let local_y = ((pointer.y - base_rect.top()) / app.scale_factor).round() as i32;
+                let local_y = ((pointer.y - base_rect.top()) / app.scale_factor()).round() as i32;
                 if app.set_playlist_size(PLAYLIST_MIN_WIDTH, local_y + offset_y) {
                     ui.ctx().request_repaint();
                 }
             }
         } else {
-            app.playlist_resize_start = None;
+            app.playlist.resize_start = None;
         }
     }
 }
@@ -471,10 +471,10 @@ fn add_playlist_titlebar_drag_region(
         SkinRect::new(
             0,
             0,
-            app.playlist_width,
+            app.playlist.width,
             crate::render::MAIN_TITLEBAR_HEIGHT,
         ),
-        app.scale_factor,
+        app.scale_factor(),
     );
     let response = ui.interact(
         titlebar,
@@ -485,12 +485,12 @@ fn add_playlist_titlebar_drag_region(
         let Some(pointer) = response.interact_pointer_pos() else {
             return;
         };
-        let x = ((pointer.x - base_rect.left()) / app.scale_factor).floor() as i32;
-        let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
+        let x = ((pointer.x - base_rect.left()) / app.scale_factor()).floor() as i32;
+        let y = ((pointer.y - base_rect.top()) / app.scale_factor()).floor() as i32;
         if [PanelTitleButton::Shade, PanelTitleButton::Close]
             .into_iter()
             .any(|button| {
-                panel_title_button_rect(LayoutPanelKind::Playlist, button, app.playlist_width)
+                panel_title_button_rect(LayoutPanelKind::Playlist, button, app.playlist.width)
                     .contains(x, y)
             })
         {
@@ -508,8 +508,8 @@ fn add_playlist_title_button_hits(
     for button in [PanelTitleButton::Shade, PanelTitleButton::Close] {
         let rect = scale_skin_rect(
             base_rect,
-            panel_title_button_rect(LayoutPanelKind::Playlist, button, app.playlist_width),
-            app.scale_factor,
+            panel_title_button_rect(LayoutPanelKind::Playlist, button, app.playlist.width),
+            app.scale_factor(),
         );
         let response = ui.interact(
             rect,
@@ -537,8 +537,8 @@ fn add_playlist_rows_hit_region(
 ) {
     let rows_rect = scale_skin_rect(
         base_rect,
-        SkinRect::new(12, 20, app.playlist_width - 31, app.playlist_height - 58),
-        app.scale_factor,
+        SkinRect::new(12, 20, app.playlist.width - 31, app.playlist.height - 58),
+        app.scale_factor(),
     );
     #[cfg(target_os = "android")]
     let rows_sense = egui::Sense::click_and_drag();
@@ -597,8 +597,8 @@ fn add_playlist_rows_hit_region(
         && response.interact_pointer_pos().is_some()
     {
         let pointer = response.interact_pointer_pos().unwrap();
-        let row = ((pointer.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
-        let index = app.playlist_scroll_offset.saturating_add(row);
+        let row = ((pointer.y - rows_rect.top()) / (11.0 * app.scale_factor())).floor() as usize;
+        let index = app.playlist.scroll_offset.saturating_add(row);
         let ctrl = ui
             .ctx()
             .input(|input| input.modifiers.ctrl || input.modifiers.command);
@@ -647,13 +647,13 @@ fn handle_playlist_touch_scroll(
     if let Some(drag_start) = drag_start {
         let row = {
             let row =
-                ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor() as usize;
-            let index = app.playlist_scroll_offset.saturating_add(row);
+                ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor())).floor() as usize;
+            let index = app.playlist.scroll_offset.saturating_add(row);
             (index < row_count).then_some(index)
         };
-        app.playlist_touch_gesture.begin(drag_start, row);
+        app.playlist.touch_gesture.begin(drag_start, row);
     }
-    if let Some(drag_start) = app.playlist_touch_gesture.start() {
+    if let Some(drag_start) = app.playlist.touch_gesture.start() {
         let event_delta = ui.ctx().input(|input| {
             input
                 .events
@@ -667,13 +667,13 @@ fn handle_playlist_touch_scroll(
                 .max_by(|left, right| left.length_sq().total_cmp(&right.length_sq()))
         });
         if let Some(event_delta) = event_delta {
-            app.playlist_touch_gesture.observe(event_delta);
+            app.playlist.touch_gesture.observe(event_delta);
         }
     }
     if response.dragged() {
-        let rows = app.playlist_touch_gesture.drag(
+        let rows = app.playlist.touch_gesture.drag(
             response.total_drag_delta().unwrap_or_default(),
-            11.0 * app.scale_factor,
+            11.0 * app.scale_factor(),
         );
         if rows != 0 {
             scroll_playlist_rows(app, rows);
@@ -681,7 +681,7 @@ fn handle_playlist_touch_scroll(
         }
     }
     let drag_released = response.drag_stopped()
-        || (app.playlist_touch_gesture.is_active()
+        || (app.playlist.touch_gesture.is_active()
             && !ui.ctx().input(|input| input.pointer.primary_down()));
     if drag_released {
         let release_pointer = ui
@@ -689,7 +689,8 @@ fn handle_playlist_touch_scroll(
             .input(|input| input.pointer.latest_pos())
             .or_else(|| response.interact_pointer_pos());
         let release = app
-            .playlist_touch_gesture
+            .playlist
+            .touch_gesture
             .release(release_pointer)
             .expect("active playlist gesture");
         let drag_delta = release.delta;
@@ -699,9 +700,9 @@ fn handle_playlist_touch_scroll(
             let swiped_index = release.row.or_else(|| {
                 response.interact_pointer_pos().and_then(|pointer| {
                     let drag_start = pointer - drag_delta;
-                    let row = ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor)).floor()
-                        as usize;
-                    let index = app.playlist_scroll_offset.saturating_add(row);
+                    let row = ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor()))
+                        .floor() as usize;
+                    let index = app.playlist.scroll_offset.saturating_add(row);
                     (index < row_count).then_some(index)
                 })
             });
@@ -811,12 +812,14 @@ fn play_first_selected_playlist_entry(app: &mut EguiFrontendState) {
 #[cfg(target_os = "android")]
 fn scroll_playlist_rows(app: &mut EguiFrontendState, rows: i32) {
     if rows < 0 {
-        app.playlist_scroll_offset = app
-            .playlist_scroll_offset
+        app.playlist.scroll_offset = app
+            .playlist
+            .scroll_offset
             .saturating_sub(rows.unsigned_abs() as usize);
     } else {
-        app.playlist_scroll_offset = app
-            .playlist_scroll_offset
+        app.playlist.scroll_offset = app
+            .playlist
+            .scroll_offset
             .saturating_add(rows as usize)
             .min(app.playlist_max_scroll_offset());
     }
@@ -881,9 +884,9 @@ fn add_playlist_menu_popover(
         show_android_playlist_misc_popover(ui.ctx(), app, base_rect);
         return;
     }
-    let popup = playlist_menu_popup_rect(kind, app.playlist_width, app.playlist_height);
-    let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor);
-    let item_height = 18.0 * app.scale_factor;
+    let popup = playlist_menu_popup_rect(kind, app.playlist.width, app.playlist.height);
+    let popup_rect = scale_skin_rect(base_rect, popup, app.scale_factor());
+    let item_height = 18.0 * app.scale_factor();
     app.ui.playlist_menu_hover = None;
     let mut clicked_item = None;
     for index in 0..kind.item_count() {
@@ -916,14 +919,14 @@ fn add_playlist_menu_popover(
     ) {
         let misc_button = playlist_menu_button_rect(
             PlaylistMenuButton::Misc,
-            app.playlist_width,
-            app.playlist_height,
+            app.playlist.width,
+            app.playlist.height,
         );
         let popup_size = egui::vec2(260.0, 184.0);
         let popup_pos = clamp_popup_to_rect(
             egui::pos2(
-                playlist_rect.left() + misc_button.x as f32 * app.scale_factor,
-                playlist_rect.top() + misc_button.y as f32 * app.scale_factor - popup_size.y,
+                playlist_rect.left() + misc_button.x as f32 * app.scale_factor(),
+                playlist_rect.top() + misc_button.y as f32 * app.scale_factor() - popup_size.y,
             ),
             playlist_rect,
             popup_size,
@@ -956,7 +959,7 @@ fn add_playlist_menu_popover(
                     .or_else(|| input.pointer.latest_pos())
                     .is_some_and(|pos| {
                         let misc_rect =
-                            scale_skin_rect(playlist_rect, misc_button, app.scale_factor);
+                            scale_skin_rect(playlist_rect, misc_button, app.scale_factor());
                         !response.response.rect.contains(pos) && !misc_rect.contains(pos)
                     })
         });
@@ -973,7 +976,7 @@ fn add_playlist_menu_popover(
         .playlist_menu_hover
         .and_then(|(hover_kind, index)| (hover_kind == kind).then_some(index));
     let render_state = PlaylistMenuRenderState { kind, hover };
-    let menu_scale = app.scale_factor as f64 * ui.ctx().pixels_per_point() as f64;
+    let menu_scale = app.scale_factor() as f64 * ui.ctx().pixels_per_point() as f64;
     match render_playlist_menu_color_image(
         &app.active_skin,
         render_state,
@@ -999,7 +1002,7 @@ fn add_playlist_menu_popover(
                 popup_rect.left_top(),
                 egui::Align2::LEFT_TOP,
                 format!("menu render error: {err}"),
-                egui::FontId::monospace(8.0 * app.scale_factor),
+                egui::FontId::monospace(8.0 * app.scale_factor()),
                 egui::Color32::WHITE,
             );
         }
@@ -1010,8 +1013,8 @@ fn add_playlist_menu_popover(
             && input.pointer.latest_pos().is_some_and(|pos| {
                 let button_rect = scale_skin_rect(
                     base_rect,
-                    playlist_menu_button_rect(kind, app.playlist_width, app.playlist_height),
-                    app.scale_factor,
+                    playlist_menu_button_rect(kind, app.playlist.width, app.playlist.height),
+                    app.scale_factor(),
                 );
                 !popup_rect.contains(pos) && !button_rect.contains(pos)
             })
@@ -1035,11 +1038,9 @@ pub(crate) fn dispatch_playlist_menu_item(
             app.ui.prompt_open = Some(super::menu::EguiPrompt::OpenLocation);
             app.ui.prompt_text.clear();
         }
-        (PlaylistMenuKind::Add, 1) => app.apply_effect(AppEffect::OpenFileDialog(
-            FileDialogRequest::AddAudioDirectory,
-        )),
+        (PlaylistMenuKind::Add, 1) => app.open_file_dialog(FileDialogRequest::AddAudioDirectory),
         (PlaylistMenuKind::Add, 2) => {
-            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles));
+            app.open_file_dialog(FileDialogRequest::AddAudioFiles);
         }
         (PlaylistMenuKind::Misc, 0) => {
             app.ui.active_overlay = ActiveOverlay::PlaylistSort;
@@ -1063,8 +1064,8 @@ fn show_playlist_sort_popover(
 
     let misc_button = playlist_menu_button_rect(
         PlaylistMenuButton::Misc,
-        app.playlist_width,
-        app.playlist_height,
+        app.playlist.width,
+        app.playlist.height,
     );
     let estimated_popup_height = if cfg!(target_os = "android") {
         420.0
@@ -1083,8 +1084,9 @@ fn show_playlist_sort_popover(
     // Clamp the popover so it stays fully inside the playlist window.
     let popup_pos = clamp_popup_to_rect(
         egui::pos2(
-            playlist_rect.left() + misc_button.x as f32 * app.scale_factor,
-            playlist_rect.top() + misc_button.y as f32 * app.scale_factor - estimated_popup_height,
+            playlist_rect.left() + misc_button.x as f32 * app.scale_factor(),
+            playlist_rect.top() + misc_button.y as f32 * app.scale_factor()
+                - estimated_popup_height,
         ),
         playlist_rect,
         egui::vec2(popup_width, estimated_popup_height),
@@ -1126,7 +1128,7 @@ fn show_playlist_sort_popover(
                 .interact_pos()
                 .or_else(|| input.pointer.latest_pos())
                 .is_some_and(|pos| {
-                    let misc_rect = scale_skin_rect(playlist_rect, misc_button, app.scale_factor);
+                    let misc_rect = scale_skin_rect(playlist_rect, misc_button, app.scale_factor());
                     !response.response.rect.contains(pos) && !misc_rect.contains(pos)
                 })
     });
@@ -1164,21 +1166,19 @@ pub(crate) fn dispatch_playlist_footer_button(
         PlaylistFooterButton::Pause => app.dispatch(PlayerCommand::Pause),
         PlaylistFooterButton::Stop => app.dispatch(PlayerCommand::Halt),
         PlaylistFooterButton::Next => app.dispatch(PlayerCommand::NextTrack),
-        PlaylistFooterButton::Eject => {
-            app.apply_effect(AppEffect::OpenFileDialog(FileDialogRequest::AddAudioFiles))
-        }
+        PlaylistFooterButton::Eject => app.open_file_dialog(FileDialogRequest::AddAudioFiles),
         PlaylistFooterButton::ScrollUp => {
-            app.playlist_scroll_offset = app.playlist_scroll_offset.saturating_sub(1);
+            app.playlist.scroll_offset = app.playlist.scroll_offset.saturating_sub(1);
         }
         PlaylistFooterButton::ScrollDown => {
-            let visible_rows = ((app.playlist_height - 58) / 11).max(1) as usize;
+            let visible_rows = ((app.playlist.height - 58) / 11).max(1) as usize;
             let max_offset = app
                 .controller()
                 .state()
                 .playlist
                 .len()
                 .saturating_sub(visible_rows);
-            app.playlist_scroll_offset = (app.playlist_scroll_offset + 1).min(max_offset);
+            app.playlist.scroll_offset = (app.playlist.scroll_offset + 1).min(max_offset);
         }
     }
 }
@@ -1240,11 +1240,11 @@ mod tests {
 
         let rows = shared_playlist_rows_render_state(
             app.controller().state(),
-            app.playlist_scroll_offset,
+            app.playlist.scroll_offset,
             false,
             None,
-            app.playlist_width,
-            app.playlist_height,
+            app.playlist.width,
+            app.playlist.height,
         );
         let expected = crate::app::view_model::format_title_for_preferences(
             "%t (%p)",
@@ -1306,8 +1306,8 @@ mod tests {
             0,
             false,
             None,
-            app.playlist_width,
-            app.playlist_height,
+            app.playlist.width,
+            app.playlist.height,
         );
         assert_eq!(rows.entries[0].queue_position, None);
         assert_eq!(rows.entries[1].queue_position, Some(0));
@@ -1429,9 +1429,9 @@ mod tests {
         }
 
         dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::ScrollDown);
-        assert_eq!(app.playlist_scroll_offset, 1);
+        assert_eq!(app.playlist.scroll_offset, 1);
         dispatch_playlist_footer_button(&mut app, PlaylistFooterButton::ScrollUp);
-        assert_eq!(app.playlist_scroll_offset, 0);
+        assert_eq!(app.playlist.scroll_offset, 0);
     }
 
     #[test]

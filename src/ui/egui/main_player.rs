@@ -38,20 +38,12 @@ pub fn main_player_title(view_model: &MainPlayerViewModel) -> &str {
 
 pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
     let view_model = main_player_view_model(app.controller().state());
-    let now = std::time::Instant::now();
-    let marquee_elapsed = now.saturating_duration_since(app.last_title_marquee_tick);
-    app.last_title_marquee_tick = now;
-    app.title_marquee.update(
+    if app.main.update_marquee(
         &view_model.title,
-        crate::render::MAIN_TITLE_TEXT_WIDTH,
         view_model.player_state,
-        !view_model.shaded,
-        marquee_elapsed,
-    );
-    if app
-        .title_marquee
-        .is_scrolling(view_model.player_state, !view_model.shaded)
-    {
+        view_model.shaded,
+        std::time::Instant::now(),
+    ) {
         ui.ctx().request_repaint_after(MARQUEE_REPAINT_INTERVAL);
     }
     let config = &app.controller().state().config;
@@ -61,11 +53,12 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         current_duration_ms(app),
         config.equalizer_visible,
         config.playlist_visible,
-        app.main_pressed,
+        app.main.pressed,
         config.timer_mode,
+        app.eof_pause_remaining_ms(),
         app.visualization_render_state(),
     );
-    render_state.title_offset_px = app.title_marquee.offset_px();
+    render_state.title_offset_px = app.main.title_marquee.offset_px();
     let needs_static_update = app.render_cache.main_static.as_ref().is_none_or(|cached| {
         cached.generation != app.render_cache.generation
             || cached.focused != render_state.focused
@@ -139,8 +132,8 @@ pub fn show_main_player(ui: &mut egui::Ui, app: &mut EguiFrontendState) {
         MAIN_WINDOW_HEIGHT
     };
     let size = egui::vec2(
-        MAIN_WINDOW_WIDTH as f32 * app.scale_factor,
-        base_height as f32 * app.scale_factor,
+        MAIN_WINDOW_WIDTH as f32 * app.scale_factor(),
+        base_height as f32 * app.scale_factor(),
     );
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().image(
@@ -170,15 +163,35 @@ pub(crate) fn main_render_state(
     playlist_visible: bool,
     pressed: MainPressed,
     timer_mode: TimerMode,
+    eof_pause_remaining_ms: Option<i64>,
     visualization: VisualizationRenderState,
 ) -> MainWindowRenderState {
     let (pressed_push, pressed_toggle, pressed_slider) = pressed.render_parts();
-    let (shaded_time_min, shaded_time_sec) = shaded_time_parts(
-        view_model.player_state,
-        playback_position_ms,
-        duration_ms,
-        timer_mode,
-    );
+    let time_state = if eof_pause_remaining_ms.is_some() {
+        PlayerState::Playing
+    } else {
+        view_model.player_state
+    };
+    let time_position = eof_pause_remaining_ms.unwrap_or(playback_position_ms);
+    let time_duration = if eof_pause_remaining_ms.is_some() {
+        None
+    } else {
+        duration_ms
+    };
+    let time_mode = if eof_pause_remaining_ms.is_some() {
+        TimerMode::Elapsed
+    } else {
+        timer_mode
+    };
+    let (mut shaded_time_min, shaded_time_sec) =
+        shaded_time_parts(time_state, time_position, time_duration, time_mode);
+    if eof_pause_remaining_ms.is_some() && timer_mode == TimerMode::Remaining {
+        shaded_time_min.replace_range(..1, "-");
+    }
+    let mut digits = time_digits(time_state, time_position, time_duration, time_mode);
+    if eof_pause_remaining_ms.is_some() && timer_mode == TimerMode::Remaining {
+        digits[0] = NumberDisplay::DASH;
+    }
     MainWindowRenderState {
         title: if view_model.title.is_empty() {
             "XMMS Renascene".to_string()
@@ -210,12 +223,7 @@ pub(crate) fn main_render_state(
         pressed_push,
         pressed_toggle,
         pressed_slider,
-        time_digits: time_digits(
-            view_model.player_state,
-            playback_position_ms,
-            duration_ms,
-            timer_mode,
-        ),
+        time_digits: digits,
         shaded_time_min,
         shaded_time_sec,
         visualization,
@@ -337,7 +345,7 @@ fn add_main_titlebar_drag_region(
     let titlebar = scale_skin_rect(
         base_rect,
         SkinRect::new(0, 0, MAIN_WINDOW_WIDTH, MAIN_TITLEBAR_HEIGHT),
-        app.scale_factor,
+        app.scale_factor(),
     );
     let response = ui.interact(
         titlebar,
@@ -348,8 +356,8 @@ fn add_main_titlebar_drag_region(
         let Some(pointer) = response.interact_pointer_pos() else {
             return;
         };
-        let x = ((pointer.x - base_rect.left()) / app.scale_factor).floor() as i32;
-        let y = ((pointer.y - base_rect.top()) / app.scale_factor).floor() as i32;
+        let x = ((pointer.x - base_rect.left()) / app.scale_factor()).floor() as i32;
+        let y = ((pointer.y - base_rect.top()) / app.scale_factor()).floor() as i32;
         if main_titlebar_drag_excluded(x, y, view_model.shaded) {
             return;
         }
@@ -384,13 +392,13 @@ fn add_main_hit_regions(
     base_rect: egui::Rect,
     view_model: &MainPlayerViewModel,
 ) {
-    app.main_pressed = MainPressed::None;
+    app.main.pressed = MainPressed::None;
 
     for &button in main_push_buttons(view_model.shaded) {
         let rect = scale_skin_rect(
             base_rect,
             main_push_hit_rect(button, view_model.shaded),
-            app.scale_factor,
+            app.scale_factor(),
         );
         let response = ui.interact(
             rect,
@@ -398,7 +406,7 @@ fn add_main_hit_regions(
             egui::Sense::click(),
         );
         if response.is_pointer_button_down_on() {
-            app.main_pressed = MainPressed::Push(button);
+            app.main.pressed = MainPressed::Push(button);
             ui.ctx().request_repaint();
         }
         if response.clicked() {
@@ -414,15 +422,18 @@ fn add_main_hit_regions(
             MainToggleButton::Equalizer,
             MainToggleButton::Playlist,
         ] {
-            let rect =
-                scale_skin_rect(base_rect, main_toggle_button_rect(toggle), app.scale_factor);
+            let rect = scale_skin_rect(
+                base_rect,
+                main_toggle_button_rect(toggle),
+                app.scale_factor(),
+            );
             let response = ui.interact(
                 rect,
                 ui.id().with(("main-toggle", toggle as u8)),
                 egui::Sense::click(),
             );
             if response.is_pointer_button_down_on() {
-                app.main_pressed = MainPressed::Toggle(toggle);
+                app.main.pressed = MainPressed::Toggle(toggle);
                 ui.ctx().request_repaint();
             }
             if response.clicked() {
@@ -434,14 +445,14 @@ fn add_main_hit_regions(
 
     for &slider in main_sliders(view_model.shaded) {
         let layout = main_slider_layout(slider, view_model.shaded);
-        let rect = scale_skin_rect(base_rect, layout.rect, app.scale_factor);
+        let rect = scale_skin_rect(base_rect, layout.rect, app.scale_factor());
         let response = ui.interact(
             rect,
             ui.id().with(("main-slider", slider as u8)),
             egui::Sense::click_and_drag(),
         );
         if response.is_pointer_button_down_on() || response.dragged() {
-            app.main_pressed = MainPressed::Slider(slider);
+            app.main.pressed = MainPressed::Slider(slider);
             ui.ctx().request_repaint();
         }
         if (response.clicked() || response.dragged()) && response.interact_pointer_pos().is_some() {
@@ -451,7 +462,7 @@ fn add_main_hit_regions(
                 layout.min + ((layout.max - layout.min) as f32 * normalized).round() as i32;
             let position_changed = response.clicked()
                 || slider_drag_position_changed(
-                    &mut app.main_slider_drag_position,
+                    &mut app.main.slider_drag_position,
                     slider,
                     position,
                 );
@@ -461,7 +472,7 @@ fn add_main_hit_regions(
             }
         }
         if response.drag_stopped() {
-            app.main_slider_drag_position = None;
+            app.main.slider_drag_position = None;
         }
     }
 }
@@ -527,9 +538,9 @@ fn dispatch_push(ctx: &egui::Context, app: &mut EguiFrontendState, button: MainP
         MainPushButton::Pause => app.dispatch(PlayerCommand::Pause),
         MainPushButton::Stop => app.dispatch(PlayerCommand::Halt),
         MainPushButton::Next => app.dispatch(PlayerCommand::NextTrack),
-        MainPushButton::Eject => app.apply_effect(crate::app::effect::AppEffect::OpenFileDialog(
-            crate::app::effect::FileDialogRequest::AddAudioFiles,
-        )),
+        MainPushButton::Eject => {
+            app.open_file_dialog(crate::app::effect::FileDialogRequest::AddAudioFiles)
+        }
         MainPushButton::Shade => app.dispatch(PanelCommand::ToggleMainShade),
         MainPushButton::Menu => {
             #[cfg(target_os = "android")]
@@ -654,6 +665,7 @@ mod tests {
             true,
             MainPressed::Slider(MainSlider::Volume),
             TimerMode::Elapsed,
+            None,
             VisualizationRenderState::default(),
         );
 
@@ -694,6 +706,7 @@ mod tests {
             false,
             MainPressed::None,
             TimerMode::Elapsed,
+            None,
             visualization.clone(),
         );
 
@@ -722,6 +735,7 @@ mod tests {
             false,
             MainPressed::None,
             TimerMode::Elapsed,
+            None,
             VisualizationRenderState::default(),
         );
         assert_eq!(state.time_digits, [NumberDisplay::BLANK, 0, 1, 0, 5]);
@@ -738,6 +752,7 @@ mod tests {
             false,
             MainPressed::None,
             TimerMode::Remaining,
+            None,
             VisualizationRenderState::default(),
         );
         assert_eq!(state.time_digits, [NumberDisplay::DASH, 0, 1, 0, 5]);
@@ -768,6 +783,7 @@ mod tests {
             false,
             MainPressed::None,
             TimerMode::Elapsed,
+            None,
             VisualizationRenderState::default(),
         );
         assert_eq!(state.time_digits, [NumberDisplay::BLANK; 5]);
@@ -775,6 +791,34 @@ mod tests {
             (state.shaded_time_min, state.shaded_time_sec),
             ("   ".to_string(), "  ".to_string())
         );
+    }
+
+    #[test]
+    fn eof_wait_displays_countdown_even_while_stopped() {
+        let view_model = MainPlayerViewModel {
+            player_state: PlayerState::Stopped,
+            ..main_player_view_model(&crate::app_state::AppState::default())
+        };
+        for (mode, prefix, shaded) in [
+            (TimerMode::Elapsed, NumberDisplay::BLANK, " 00"),
+            (TimerMode::Remaining, NumberDisplay::DASH, "-00"),
+        ] {
+            let state = main_render_state(
+                &view_model,
+                0,
+                Some(120_000),
+                false,
+                false,
+                MainPressed::None,
+                mode,
+                Some(2_000),
+                VisualizationRenderState::default(),
+            );
+            assert_eq!(state.time_digits, [prefix, 0, 0, 0, 2]);
+            assert_eq!(state.shaded_time_min, shaded);
+            assert_eq!(state.shaded_time_sec, "02");
+            assert_eq!(state.play_status, PlayStatusValue::Stopped);
+        }
     }
 
     #[test]

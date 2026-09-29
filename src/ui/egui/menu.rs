@@ -37,7 +37,7 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
     }
 
     let mut close_after_click = false;
-    let dropdown_pos = egui::pos2(6.0 * app.scale_factor, 15.0 * app.scale_factor);
+    let dropdown_pos = egui::pos2(6.0 * app.scale_factor(), 15.0 * app.scale_factor());
     let response = egui::Area::new(egui::Id::new("xmms-egui-main-menu-dropdown"))
         .order(egui::Order::Foreground)
         .fixed_pos(dropdown_pos)
@@ -82,8 +82,8 @@ pub fn show_main_menu(ctx: &egui::Context, app: &mut EguiFrontendState) {
         input.pointer.any_released()
             && input.pointer.latest_pos().is_some_and(|pos| {
                 let menu_button_rect = egui::Rect::from_min_size(
-                    egui::pos2(6.0 * app.scale_factor, 3.0 * app.scale_factor),
-                    egui::vec2(9.0 * app.scale_factor, 9.0 * app.scale_factor),
+                    egui::pos2(6.0 * app.scale_factor(), 3.0 * app.scale_factor()),
+                    egui::vec2(9.0 * app.scale_factor(), 9.0 * app.scale_factor()),
                 );
                 !response.response.rect.contains(pos) && !menu_button_rect.contains(pos)
             })

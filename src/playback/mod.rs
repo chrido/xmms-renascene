@@ -5,8 +5,10 @@
 //! evolves.
 
 pub mod backend;
+pub mod duration_indexer;
 #[cfg(feature = "gstreamer-backend")]
 pub mod gstreamer;
 pub mod model;
 #[cfg(feature = "rodio-backend")]
 pub mod rodio;
+pub mod runtime;
