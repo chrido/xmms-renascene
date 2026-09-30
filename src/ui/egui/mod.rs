@@ -20,7 +20,6 @@ pub mod interaction;
 pub mod layout;
 pub mod main_player;
 pub mod menu;
-pub mod playback_runtime;
 pub mod playlist;
 pub mod preferences;
 pub mod render_cache;

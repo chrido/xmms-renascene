@@ -5,8 +5,6 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use gtk::prelude::*;
@@ -15,9 +13,13 @@ use crate::app::command::{
     AppCommand, AudioCommand, EqualizerCommand, PanelCommand, PlayerCommand, PlaylistCommand,
     UiCommand,
 };
-use crate::app::effect::AppEffect;
+use crate::app::effect::{PlatformEffect, UiEffect};
 pub use crate::app::equalizer_actions::EqualizerPresetAction;
 use crate::app::equalizer_actions::EQUALIZER_PRESET_FILE_ITEMS;
+use crate::app::external_commands::{
+    mpris_open_uri_playback_events, mpris_service_events, translate_mpris_command,
+    translate_socket_command, FrontendAction, SocketUiTarget,
+};
 use crate::app::input::{AppShortcut, APP_SHORTCUTS};
 pub use crate::app::panel::PanelKind;
 use crate::app::panel::{PanelState, PanelVisibility};
@@ -32,7 +34,10 @@ use crate::app::preferences_model::{
 use crate::app::preview::{
     apply_preview_options_to_config, apply_preview_playlist, PreviewOptions,
 };
-use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
+use crate::app::runtime::{
+    FrontendEffect, FrontendRuntime, PlaybackExecution, RuntimeEvent, RuntimeUpdate,
+};
+use crate::app::store::StateChangeSet;
 use crate::app::view_model::{
     balance_to_eq_shaded_position, balance_to_position, ellipsize_chars,
     eq_shaded_position_to_balance, eq_shaded_position_to_volume, eq_slider_pixel_to_position,
@@ -45,7 +50,7 @@ use crate::app::view_model::{
     TitleMarquee,
 };
 use crate::app_state::AppState;
-use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb, SpectrumLayout};
+use crate::audio_model::{equalizer_position_to_db, EqualizerBandDb};
 use crate::config::{Config, TimerMode};
 use crate::equalizer::{
     built_in_equalizer_presets, default_equalizer_presets, find_preset, load_preset_store,
@@ -53,18 +58,16 @@ use crate::equalizer::{
     EqualizerPreset,
 };
 use crate::mpris::{
-    app_action_for_mpris_command, gio_service::MprisService, mpris_player_properties,
-    mpris_root_properties, MprisAppAction, MprisCommand, MprisEvent, MprisPlayerProperties,
-    MprisRootProperties,
+    gio_service::MprisService, mpris_player_properties, mpris_root_properties, MprisCommand,
+    MprisEvent, MprisPlayerProperties, MprisRootProperties,
 };
 use crate::playback::backend::{create_backend, PlaybackBackend, PlaybackBackendKind};
 use crate::playback::model::{
-    EqualizerBackendState, OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent,
-    PlayerState,
+    OutputDevice, OutputDeviceGroups, OutputDeviceSelection, PlaybackEvent, PlayerState,
 };
 use crate::player::group_output_devices;
 pub use crate::playlist::PlaylistMenuKind;
-use crate::{app_log_debug, app_log_info, app_log_trace};
+use crate::{app_log_info, app_log_trace};
 use gtk::cairo;
 
 use crate::playlist::{
@@ -92,7 +95,7 @@ use crate::skin::layout::{
 };
 use crate::skin::widget::{
     NumberDisplay, PlayStatusValue, VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode,
-    VisScopeMode, VisVuMode, Visualization, WidgetId,
+    VisScopeMode, VisVuMode,
 };
 use crate::skin::{
     discover_skins_in_dirs, import_skin_to_user_dir, runtime_skin_browser_dirs,
@@ -102,9 +105,7 @@ use crate::skineditor::{
     ElementSlot, SkinEditorState, SkinGradient, Tool, COLOR_SHELF_SIZE, GRADIENT_SHELF_SIZE,
     MAX_ZOOM, MIN_ZOOM, ZOOM_STEP,
 };
-use crate::socket_control::{
-    start_socket_control_with_wakeup, SocketCommand, SocketControl, SocketRequest, SocketUiCommand,
-};
+use crate::socket_control::{start_socket_control_with_wakeup, SocketControl, SocketRequest};
 
 pub(crate) mod file_info;
 #[path = "ui/gtk/mod.rs"]
@@ -124,15 +125,12 @@ use style::{
     style_skin_editor_custom_color_button,
 };
 
-type SharedPlaybackBackend = Rc<RefCell<Box<dyn PlaybackBackend>>>;
-
 const DEFAULT_SCALE: i32 = 2;
 const GTK_TRANSITION_TICK: Duration = Duration::from_millis(20);
 const GTK_MARQUEE_TICK: Duration = Duration::from_millis(84);
 const GTK_PLAYBACK_TICK: Duration = Duration::from_millis(250);
 const GTK_PAUSED_TICK: Duration = Duration::from_millis(500);
 const GTK_IDLE_TICK: Duration = Duration::from_secs(1);
-const STOP_FADE_DURATION_MS: i64 = 1_000;
 type PreferencesChanged = Rc<dyn Fn()>;
 const PREFERENCES_VOLUME_WIDGET: &str = "xmms-preferences-volume";
 const PREFERENCES_BALANCE_WIDGET: &str = "xmms-preferences-balance";
@@ -752,9 +750,7 @@ fn build_preview_window(
         gtk::glib::idle_add_local_once(move || {
             crate::perf_span!("gtk_backend_init");
             match create_backend(PlaybackBackendKind::Auto) {
-                Ok(backend) => main_state
-                    .borrow_mut()
-                    .set_playback_backend(Rc::new(RefCell::new(backend))),
+                Ok(backend) => main_state.borrow_mut().set_playback_backend(backend),
                 Err(err) => eprintln!("xmms-rs: audio playback backend unavailable: {err}"),
             }
         });
@@ -765,7 +761,6 @@ fn build_preview_window(
         panel_windows.preferences.present();
     }
     if open_skin_editor {
-        main_state.borrow_mut().set_skin_editor_visible(true);
         panel_windows.skin_editor.present();
     }
     Ok(())
@@ -933,29 +928,29 @@ fn handle_socket_request_gtk(
     main_state: &Rc<RefCell<MainWindowUiState>>,
     request: SocketRequest,
 ) -> bool {
-    let command = request.command.clone();
-    let redraw = match command {
-        SocketCommand::App(command) => {
+    let translation = translate_socket_command(&request.command);
+    if let Some(target) = translation.ui_target {
+        apply_socket_ui_command_gtk(
+            target,
+            translation.events,
+            panel_windows,
+            menu_popover,
+            drawing_area,
+            main_state,
+        );
+    } else {
+        for event in translation.events {
+            let RuntimeEvent::Command(command) = event else {
+                unreachable!()
+            };
             apply_socket_app_command_gtk(command, panel_windows, main_state);
-            true
         }
-        SocketCommand::Ui(command) => {
-            apply_socket_ui_command_gtk(
-                command,
-                panel_windows,
-                menu_popover,
-                drawing_area,
-                main_state,
-            );
-            true
-        }
-        SocketCommand::Ping => false,
-        SocketCommand::Quit => {
-            app.quit();
-            false
-        }
-    };
+    }
+    if translation.action == Some(FrontendAction::Quit) {
+        app.quit();
+    }
     request.accept();
+    let redraw = translation.redraw;
     if redraw {
         sync_panel_windows(panel_windows, &main_state.borrow());
         resize_main_window(window, drawing_area, &main_state.borrow());
@@ -968,43 +963,15 @@ fn apply_socket_app_command_gtk(
     panel_windows: &PanelWindows,
     main_state: &Rc<RefCell<MainWindowUiState>>,
 ) {
-    let result = main_state.borrow_mut().dispatch_store_command(command);
-    apply_store_effects_gtk(main_state, panel_windows, result.effects);
+    main_state.borrow_mut().dispatch_store_command(command);
+    // Application commands may change skinned panel state, but must not present
+    // unrelated dialogs. Explicit SocketUiCommand handling below owns that.
     sync_panel_windows(panel_windows, &main_state.borrow());
 }
 
-fn apply_store_effects_gtk(
-    main_state: &Rc<RefCell<MainWindowUiState>>,
-    panel_windows: &PanelWindows,
-    effects: impl IntoIterator<Item = AppEffect>,
-) {
-    for effect in effects {
-        let ui_effect = main_state.borrow_mut().apply_store_effect(effect);
-        match ui_effect {
-            GtkUiEffect::None => {}
-            GtkUiEffect::OpenPreferences => panel_windows.preferences.present(),
-            GtkUiEffect::OpenSkinBrowser => panel_windows.skin_browser.present(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GtkUiEffect {
-    None,
-    OpenPreferences,
-    OpenSkinBrowser,
-}
-
-/// Which top-level GTK window/popover a `SocketUiCommand` addresses.
-#[derive(Copy, Clone, Debug)]
-enum UiTarget {
-    Preferences,
-    SkinBrowser,
-    MainMenu,
-}
-
 fn apply_socket_ui_command_gtk(
-    command: SocketUiCommand,
+    target: SocketUiTarget,
+    events: Vec<RuntimeEvent>,
     panel_windows: &PanelWindows,
     menu_popover: &gtk::Popover,
     drawing_area: &gtk::DrawingArea,
@@ -1015,35 +982,21 @@ fn apply_socket_ui_command_gtk(
     // dialog windows have `connect_closed` / `connect_hide` handlers that call
     // `main_state.borrow_mut()`; keeping our borrow across `.popdown()` /
     // `.hide()` / `.present()` would reenter and panic with "already borrowed".
-    let app_command = match command {
-        SocketUiCommand::SetPreferencesVisible(v) => UiCommand::SetPreferencesVisible(v),
-        SocketUiCommand::TogglePreferences => UiCommand::TogglePreferences,
-        SocketUiCommand::SetSkinBrowserVisible(v) => UiCommand::SetSkinBrowserVisible(v),
-        SocketUiCommand::ToggleSkinBrowser => UiCommand::ToggleSkinBrowser,
-        SocketUiCommand::SetMainMenuVisible(v) => UiCommand::SetMainMenuVisible(v),
-    };
-    let (target, visible) = {
+    let visible = {
         let mut state = main_state.borrow_mut();
-        state.dispatch_store_command_and_apply_local_effects(app_command);
-        match command {
-            SocketUiCommand::SetPreferencesVisible(_) | SocketUiCommand::TogglePreferences => (
-                UiTarget::Preferences,
-                state.store.state().ui.preferences_visible,
-            ),
-            SocketUiCommand::SetSkinBrowserVisible(_) | SocketUiCommand::ToggleSkinBrowser => (
-                UiTarget::SkinBrowser,
-                state.store.state().ui.skin_browser_visible,
-            ),
-            SocketUiCommand::SetMainMenuVisible(_) => {
-                (UiTarget::MainMenu, state.store.state().ui.main_menu_visible)
-            }
+        for event in events {
+            let RuntimeEvent::Command(command) = event else {
+                unreachable!()
+            };
+            state.dispatch_store_command(command);
         }
+        target.visible(state.core.store().state())
     };
 
     match target {
-        UiTarget::Preferences => set_window_visible_gtk(&panel_windows.preferences, visible),
-        UiTarget::SkinBrowser => set_window_visible_gtk(&panel_windows.skin_browser, visible),
-        UiTarget::MainMenu => {
+        SocketUiTarget::Preferences => set_window_visible_gtk(&panel_windows.preferences, visible),
+        SocketUiTarget::SkinBrowser => set_window_visible_gtk(&panel_windows.skin_browser, visible),
+        SocketUiTarget::MainMenu => {
             if visible {
                 show_main_menu(menu_popover, drawing_area, &main_state.borrow());
             } else {
@@ -1594,7 +1547,7 @@ fn handle_keyboard_shortcut(
         MainKeyboardShortcut::ToggleNoAdvance => {
             main_state
                 .borrow_mut()
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleNoAdvance);
+                .dispatch_store_command(PlaylistCommand::ToggleNoAdvance);
         }
         MainKeyboardShortcut::ShadeMain => {
             let toggled_panel = main_state.borrow_mut().toggle_selected_window_shade();
@@ -1879,7 +1832,6 @@ fn build_main_menu_popover(
         {
             let mut state = main_state.borrow_mut();
             state.set_menu_visible(false);
-            state.set_skin_editor_visible(true);
         }
         popover.popdown();
         skin_editor_window.present();
@@ -1984,7 +1936,7 @@ fn build_equalizer_window(
             EQUALIZER_WINDOW_HEIGHT
         };
         let base_width = EQUALIZER_WINDOW_WIDTH;
-        let render_key = (state.skin_generation, render_state);
+        let render_key = (state.skin.generation, render_state);
         match render_scaled_to_gtk_cached(
             &mut render_cache.borrow_mut(),
             render_key,
@@ -2987,11 +2939,11 @@ fn build_skin_editor_window(
             let (changed, picked_color) = {
                 let mut state = main_state.borrow_mut();
                 let previous_color = state.skin_editor().color;
-                let slots = state.skin_editor.layout(state.active_skin());
-                let mut editor = std::mem::take(&mut state.skin_editor);
+                let slots = state.skin.editor.layout(state.active_skin());
+                let mut editor = std::mem::take(&mut state.skin.editor);
                 let changed = editor.press(state.active_skin_mut(), &slots, x, y);
                 let picked_color = (editor.color != previous_color).then_some(editor.color);
-                state.skin_editor = editor;
+                state.skin.editor = editor;
                 (changed, picked_color)
             };
             if let Some(color) = picked_color {
@@ -3021,11 +2973,11 @@ fn build_skin_editor_window(
             let (changed, picked_color) = {
                 let mut state = main_state.borrow_mut();
                 let previous_color = state.skin_editor().color;
-                let slots = state.skin_editor.layout(state.active_skin());
-                let mut editor = std::mem::take(&mut state.skin_editor);
+                let slots = state.skin.editor.layout(state.active_skin());
+                let mut editor = std::mem::take(&mut state.skin.editor);
                 let changed = editor.release(state.active_skin_mut(), &slots, x, y);
                 let picked_color = (editor.color != previous_color).then_some(editor.color);
-                state.skin_editor = editor;
+                state.skin.editor = editor;
                 (changed, picked_color)
             };
             if let Some(color) = picked_color {
@@ -3072,11 +3024,11 @@ fn build_skin_editor_window(
             let (changed, picked_color) = {
                 let mut state = main_state.borrow_mut();
                 let previous_color = state.skin_editor().color;
-                let slots = state.skin_editor.layout(state.active_skin());
-                let mut editor = std::mem::take(&mut state.skin_editor);
+                let slots = state.skin.editor.layout(state.active_skin());
+                let mut editor = std::mem::take(&mut state.skin.editor);
                 let changed = editor.drag(state.active_skin_mut(), &slots, x, y);
                 let picked_color = (editor.color != previous_color).then_some(editor.color);
-                state.skin_editor = editor;
+                state.skin.editor = editor;
                 (changed, picked_color)
             };
             if let Some(color) = picked_color {
@@ -3123,7 +3075,10 @@ fn build_skin_editor_window(
     }
     canvas.add_controller(scroll);
 
-    bind_visibility_window!(&window, main_state, set_skin_editor_visible);
+    window.connect_close_request(|window| {
+        window.hide();
+        gtk::glib::Propagation::Stop
+    });
 
     window.set_child(Some(&root));
     window
@@ -3340,9 +3295,9 @@ fn build_skin_editor_tools(
         let main_state = Rc::clone(main_state);
         copy.connect_clicked(move |_| {
             let mut state = main_state.borrow_mut();
-            let mut editor = std::mem::take(&mut state.skin_editor);
+            let mut editor = std::mem::take(&mut state.skin.editor);
             editor.copy_selection(state.active_skin());
-            state.skin_editor = editor;
+            state.skin.editor = editor;
         });
     }
     {
@@ -3354,9 +3309,9 @@ fn build_skin_editor_tools(
         cut.connect_clicked(move |_| {
             let changed = {
                 let mut state = main_state.borrow_mut();
-                let mut editor = std::mem::take(&mut state.skin_editor);
+                let mut editor = std::mem::take(&mut state.skin.editor);
                 let changed = editor.cut_selection(state.active_skin_mut());
-                state.skin_editor = editor;
+                state.skin.editor = editor;
                 changed
             };
             queue_skin_editor_areas(
@@ -3377,9 +3332,9 @@ fn build_skin_editor_tools(
         paste.connect_clicked(move |_| {
             let changed = {
                 let mut state = main_state.borrow_mut();
-                let editor = std::mem::take(&mut state.skin_editor);
+                let editor = std::mem::take(&mut state.skin.editor);
                 let changed = editor.paste_clipboard(state.active_skin_mut());
-                state.skin_editor = editor;
+                state.skin.editor = editor;
                 changed
             };
             queue_skin_editor_areas(
@@ -5124,130 +5079,6 @@ enum PlaybackControlEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PlaybackTransitionState {
-    Idle,
-    StoppedAt(i64),
-    PendingBackendSeek(i64),
-    AwaitingBackendSeek(i64),
-    WaitingBetweenSongs {
-        remaining_ms: i64,
-    },
-    FadingOut {
-        remaining_ms: i64,
-        start_volume: i32,
-    },
-}
-
-impl PlaybackTransitionState {
-    fn stopped_at_or_idle(position_ms: i64) -> Self {
-        if position_ms > 0 {
-            Self::StoppedAt(position_ms)
-        } else {
-            Self::Idle
-        }
-    }
-
-    #[allow(dead_code)]
-    fn start_playback() -> Self {
-        Self::Idle
-    }
-
-    fn stop_playback() -> Self {
-        Self::Idle
-    }
-
-    fn request_backend_seek(position_ms: i64) -> Self {
-        Self::PendingBackendSeek(position_ms)
-    }
-
-    fn await_backend_seek(position_ms: i64) -> Self {
-        Self::AwaitingBackendSeek(position_ms)
-    }
-
-    fn start_fadeout(start_volume: i32) -> Self {
-        Self::FadingOut {
-            remaining_ms: STOP_FADE_DURATION_MS,
-            start_volume,
-        }
-    }
-
-    fn tick_fadeout(self, elapsed_ms: u32) -> Option<(Self, i32)> {
-        let (remaining_ms, start_volume) = self.fadeout()?;
-        let remaining_ms = (remaining_ms - i64::from(elapsed_ms)).max(0);
-        let volume =
-            ((i64::from(start_volume) * remaining_ms) / STOP_FADE_DURATION_MS).clamp(0, 100) as i32;
-        Some((
-            Self::FadingOut {
-                remaining_ms,
-                start_volume,
-            },
-            volume,
-        ))
-    }
-
-    fn wait_between_songs(remaining_ms: i64) -> Self {
-        Self::WaitingBetweenSongs { remaining_ms }
-    }
-
-    fn tick_eof_pause(self, elapsed_ms: u32) -> Option<(Self, bool)> {
-        let remaining = self.eof_pause_remaining_ms()? - i64::from(elapsed_ms);
-        if remaining > 0 {
-            Some((
-                Self::WaitingBetweenSongs {
-                    remaining_ms: remaining,
-                },
-                false,
-            ))
-        } else {
-            Some((Self::Idle, true))
-        }
-    }
-
-    fn eof_pause_remaining_ms(self) -> Option<i64> {
-        match self {
-            PlaybackTransitionState::WaitingBetweenSongs { remaining_ms } => Some(remaining_ms),
-            _ => None,
-        }
-    }
-
-    fn pending_backend_seek_ms(self) -> Option<i64> {
-        match self {
-            PlaybackTransitionState::PendingBackendSeek(position_ms) => Some(position_ms),
-            _ => None,
-        }
-    }
-
-    fn awaiting_backend_seek_ms(self) -> Option<i64> {
-        match self {
-            PlaybackTransitionState::AwaitingBackendSeek(position_ms) => Some(position_ms),
-            _ => None,
-        }
-    }
-
-    fn fadeout(self) -> Option<(i64, i32)> {
-        match self {
-            PlaybackTransitionState::FadingOut {
-                remaining_ms,
-                start_volume,
-            } => Some((remaining_ms, start_volume)),
-            _ => None,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn play_start_position_ms(self, fallback_ms: i64) -> i64 {
-        match self {
-            PlaybackTransitionState::StoppedAt(position_ms) => position_ms,
-            PlaybackTransitionState::WaitingBetweenSongs { .. } => 0,
-            PlaybackTransitionState::Idle
-            | PlaybackTransitionState::PendingBackendSeek(_)
-            | PlaybackTransitionState::AwaitingBackendSeek(_)
-            | PlaybackTransitionState::FadingOut { .. } => fallback_ms,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UiAction {
     None,
     Quit,
@@ -5301,6 +5132,8 @@ struct PlaylistUiState {
     last_click: Option<(usize, Instant)>,
     pending_double_click: Option<usize>,
     search: PlaylistSearch,
+    footer_second: Option<i64>,
+    options_opened: bool,
 }
 
 impl PlaylistUiState {
@@ -5315,77 +5148,153 @@ impl PlaylistUiState {
             last_click: None,
             pending_double_click: None,
             search: PlaylistSearch::default(),
+            footer_second: None,
+            options_opened: false,
         }
+    }
+
+    fn reset_for_loaded_playlist(&mut self) {
+        self.scroll_offset = 0;
+        self.search.stop();
+    }
+
+    fn update_footer_second(&mut self, second: Option<i64>) -> bool {
+        if self.footer_second == second {
+            return false;
+        }
+        self.footer_second = second;
+        true
     }
 }
 
-#[derive(Default)]
-struct DialogVisibility {
+struct SkinWorkspace {
+    active: DefaultSkin,
+    generation: u64,
+    entries: Vec<SkinEntry>,
+    reload_count: u32,
+    editor: SkinEditorState,
+}
+
+impl SkinWorkspace {
+    fn new(active: DefaultSkin) -> Self {
+        Self {
+            active,
+            generation: 0,
+            entries: Vec::new(),
+            reload_count: 0,
+            editor: SkinEditorState::default(),
+        }
+    }
+
+    fn replace_active(&mut self, skin: DefaultSkin) {
+        self.active = skin;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    // Selection is always derived from the authoritative configured skin.
+    fn selected_index(&self, configured_skin: Option<&str>) -> usize {
+        configured_skin
+            .and_then(|current| {
+                self.entries
+                    .iter()
+                    .position(|entry| entry.path == Path::new(current))
+                    .map(|index| index + 1)
+            })
+            .unwrap_or(0)
+    }
+}
+
+struct DialogUiState {
     playlist_load: bool,
     playlist_save: bool,
     open_location: bool,
     jump_time: bool,
-    skin_editor: bool,
     output_device_picker: bool,
     file: bool,
     directory: bool,
+    preferences_page: PreferencesPage,
+    last_playlist_file_info: Option<String>,
+    last_open_location: Option<String>,
+    last_jump_time_ms: Option<i64>,
+}
+
+impl Default for DialogUiState {
+    fn default() -> Self {
+        Self {
+            playlist_load: false,
+            playlist_save: false,
+            open_location: false,
+            jump_time: false,
+            output_device_picker: false,
+            file: false,
+            directory: false,
+            preferences_page: PreferencesPage::Options,
+            last_playlist_file_info: None,
+            last_open_location: None,
+            last_jump_time_ms: None,
+        }
+    }
+}
+
+impl DialogUiState {
+    fn accept_open_location(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.last_open_location = Some(text.to_string());
+        self.open_location = false;
+        true
+    }
+
+    fn accept_jump_time(&mut self, text: &str) -> Option<i64> {
+        let ms = parse_time_ms(text)?;
+        self.last_jump_time_ms = Some(ms);
+        self.jump_time = false;
+        Some(ms)
+    }
 }
 
 #[derive(Default)]
-struct SkinBrowserState {
-    entries: Vec<SkinEntry>,
-    selected_index: usize,
-    reload_count: u32,
+struct MainInteraction {
+    docked_focus: KeyboardFocus,
+    keyboard_slider: Option<MainSlider>,
+    pointer: MainPointer,
+    title_marquee: TitleMarquee,
+}
+
+#[derive(Default)]
+struct OutputDeviceUiState {
+    groups: OutputDeviceGroups,
+    switch_count: u32,
 }
 
 pub(crate) struct MainWindowUiState {
-    store: AppStore,
-    playback_backend: Option<SharedPlaybackBackend>,
-    duration_index_sender: Sender<DurationIndexResult>,
-    duration_index_receiver: Receiver<DurationIndexResult>,
-    last_playback_request: Option<String>,
-    docked_focus: KeyboardFocus,
+    core: FrontendRuntime,
     equalizer: EqualizerUiState,
     playlist_ui: PlaylistUiState,
-    dialogs: DialogVisibility,
-    last_playlist_file_info: Option<String>,
-    active_skin: DefaultSkin,
-    skin_generation: u64,
-    playlist_options_opened: bool,
-    queue_manager_opened: bool,
-    preferences_page: PreferencesPage,
-    skin_browser: SkinBrowserState,
-    skin_editor: SkinEditorState,
-    output_device_groups: OutputDeviceGroups,
-    output_switch_count: u32,
+    dialogs: DialogUiState,
+    skin: SkinWorkspace,
+    output_devices: OutputDeviceUiState,
     mpris_events: Vec<MprisEvent>,
-    playback_transition: PlaybackTransitionState,
-    main_keyboard_slider: Option<MainSlider>,
-    last_open_location: Option<String>,
-    last_jump_time_ms: Option<i64>,
-    visualization: Visualization,
-    visualization_tick_counter: i32,
-    playlist_footer_second: Option<i64>,
-    main_pointer: MainPointer,
-    title_marquee: TitleMarquee,
+    main: MainInteraction,
 }
 
 impl fmt::Debug for MainWindowUiState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MainWindowUiState")
-            .field("store_revision", &self.store.revision())
-            .field("store_state", self.store.state())
-            .field("shaded", &self.store.state().config.main_shaded)
+            .field("store_revision", &self.core.store().revision())
+            .field("store_state", self.core.store().state())
+            .field("shaded", &self.core.store().state().config.main_shaded)
             .field(
                 "playlist_shaded",
-                &self.store.state().config.playlist_shaded,
+                &self.core.store().state().config.playlist_shaded,
             )
             .field(
                 "preferences_visible",
-                &self.store.state().ui.preferences_visible,
+                &self.core.store().state().ui.preferences_visible,
             )
-            .field("preferences_page", &self.preferences_page)
-            .field("player_state", &self.store.state().player.state())
+            .field("preferences_page", &self.dialogs.preferences_page)
+            .field("player_state", &self.core.store().state().player.state())
             .finish_non_exhaustive()
     }
 }
@@ -5398,171 +5307,99 @@ impl Default for MainWindowUiState {
 
 impl MainWindowUiState {
     pub(crate) fn from_state(app_state: AppState) -> Self {
-        let (duration_index_sender, duration_index_receiver) = mpsc::channel();
         let active_skin = load_skin_from_config(&app_state.config).unwrap_or_else(|err| {
             eprintln!("xmms-rs: failed to load configured skin: {err}");
             DefaultSkin::load_bundled().expect("bundled default skin should load")
         });
-        let playback_position_ms = app_state.config.playback_position_ms.max(0);
+        let mut core = FrontendRuntime::new(app_state, None);
+        core.use_installed_backend_only();
         let mut state = Self {
-            store: AppStore::new(app_state),
-            playback_backend: None,
-            duration_index_sender,
-            duration_index_receiver,
-            last_playback_request: None,
-            docked_focus: KeyboardFocus::default(),
+            core,
             equalizer: EqualizerUiState::new(),
             playlist_ui: PlaylistUiState::new(),
-            dialogs: DialogVisibility::default(),
-            last_playlist_file_info: None,
-            active_skin,
-            skin_generation: 0,
-            playlist_options_opened: false,
-            queue_manager_opened: false,
-            preferences_page: PreferencesPage::Options,
-            skin_browser: SkinBrowserState::default(),
-            skin_editor: SkinEditorState::default(),
-            output_device_groups: OutputDeviceGroups::default(),
-            output_switch_count: 0,
+            dialogs: DialogUiState::default(),
+            skin: SkinWorkspace::new(active_skin),
+            output_devices: OutputDeviceUiState::default(),
             mpris_events: Vec::new(),
-            playback_transition: PlaybackTransitionState::stopped_at_or_idle(playback_position_ms),
-            main_keyboard_slider: None,
-            last_open_location: None,
-            last_jump_time_ms: None,
-            visualization: Visualization::new(WidgetId(6), 24, 43, 76),
-            visualization_tick_counter: 0,
-            playlist_footer_second: None,
-            main_pointer: MainPointer::default(),
-            title_marquee: TitleMarquee::default(),
+            main: MainInteraction::default(),
         };
         state.apply_visualization_preferences();
         state
     }
 
-    fn dispatch_store_command(&mut self, command: impl Into<AppCommand>) -> DispatchResult {
-        self.store.dispatch(command.into())
+    fn dispatch_store_command(&mut self, command: impl Into<AppCommand>) -> RuntimeUpdate {
+        self.handle_runtime_event(RuntimeEvent::Command(command.into()))
     }
 
-    fn dispatch_store_command_and_apply_local_effects(
-        &mut self,
-        command: impl Into<AppCommand>,
-    ) -> DispatchResult {
-        let mut result = self.dispatch_store_command(command);
-        let effects = std::mem::take(&mut result.effects);
-        for effect in effects {
-            self.apply_store_effect(effect);
+    fn handle_runtime_event(&mut self, event: RuntimeEvent) -> RuntimeUpdate {
+        let mut update = self.core.handle(event, PlaybackExecution::Local);
+        for start in std::mem::take(&mut update.pending_playback_starts) {
+            self.start_backend_playback_uri(&start.uri, start.position_ms);
+            let prepared = self.core.handle(
+                RuntimeEvent::PlaybackStartPrepared(start),
+                PlaybackExecution::Local,
+            );
+            update.merge(prepared);
         }
-        result
+        self.apply_runtime_update(&update);
+        update
+    }
+
+    fn apply_runtime_update(&mut self, update: &RuntimeUpdate) {
+        for message in &update.messages {
+            eprintln!("xmms-rs: {message}");
+        }
+        for effect in &update.frontend_effects {
+            match effect {
+                FrontendEffect::Ui(UiEffect::OpenPreferences) => {
+                    self.dispatch_store_command(UiCommand::SetPreferencesVisible(true));
+                }
+                FrontendEffect::Ui(UiEffect::OpenSkinBrowser) => {
+                    self.dispatch_store_command(UiCommand::SetSkinBrowserVisible(true));
+                }
+                FrontendEffect::Ui(UiEffect::OpenFileInfoDialog) => {
+                    self.dispatch_store_command(UiCommand::SetFileInfoVisible(true));
+                }
+                FrontendEffect::Platform(PlatformEffect::SetOutputVolume(volume)) => {
+                    if let Some(error) = self.core.set_output_volume(*volume) {
+                        eprintln!("xmms-rs: {error}");
+                    }
+                }
+                FrontendEffect::Platform(PlatformEffect::SaveConfig) => {}
+                FrontendEffect::Ui(_) => {}
+            }
+        }
     }
 
     fn update_config_via_store(&mut self, update: impl FnOnce(&mut Config)) {
-        let mut config = self.store.state().persistence_snapshot().config;
+        let mut config = self.core.state().persistence_snapshot().config;
         update(&mut config);
-        let effects = self.store.apply_config_from_preferences(config).effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::Preferences(config));
     }
 
-    fn start_backend_playback_uri(&mut self, uri: &str, position_ms: i64) {
+    fn start_backend_playback_uri(&mut self, uri: &str, _position_ms: i64) {
         self.load_equalizer_auto_preset_for_uri(uri);
-        self.last_playback_request = Some(uri.to_string());
-        self.playback_transition = if position_ms > 0 {
-            PlaybackTransitionState::request_backend_seek(position_ms)
-        } else {
-            PlaybackTransitionState::Idle
-        };
-        let pending_seek = position_ms > 0;
-        app_log_info!(backend, "gtk play_uri", uri, position_ms, pending_seek);
-        if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().play_uri(uri) {
-                eprintln!("xmms-rs: failed to play {uri}: {err}");
-                self.playback_transition = PlaybackTransitionState::Idle;
-            }
-        }
-    }
-
-    fn apply_store_effect(&mut self, effect: AppEffect) -> GtkUiEffect {
-        app_log_debug!(frontend_effect, "gtk {effect:?}");
-        match effect {
-            AppEffect::StartPlaybackUri { uri, position_ms } => {
-                self.start_backend_playback_uri(&uri, position_ms);
-            }
-            AppEffect::ResumePlayback => self.unpause_playback(),
-            AppEffect::PausePlayback => self.pause_playback(),
-            AppEffect::StopPlayback => self.stop_playback(),
-            AppEffect::BeginStopFade { start_volume } => {
-                self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
-            }
-            AppEffect::SeekPlayback(position_ms) => {
-                self.playback_transition = PlaybackTransitionState::Idle;
-                app_log_info!(backend, "gtk seek_to_ms", position_ms);
-                if let Some(backend) = &self.playback_backend {
-                    if let Err(err) = backend.borrow().seek(position_ms) {
-                        eprintln!("xmms-rs: failed to seek playback: {err}");
-                    }
-                }
-            }
-            AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume) => {
-                if let Some(backend) = &self.playback_backend {
-                    let _ = backend.borrow().set_volume(volume);
-                }
-            }
-            AppEffect::SetBackendBalance(balance) => {
-                if let Some(backend) = &self.playback_backend {
-                    let _ = backend.borrow().set_balance(balance);
-                }
-            }
-            AppEffect::SetBackendEqualizer => self.sync_equalizer_to_backend(),
-            AppEffect::OpenPreferences => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    UiCommand::SetPreferencesVisible(true),
-                );
-                return GtkUiEffect::OpenPreferences;
-            }
-            AppEffect::OpenSkinBrowser => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    UiCommand::SetSkinBrowserVisible(true),
-                );
-                return GtkUiEffect::OpenSkinBrowser;
-            }
-            AppEffect::OpenFileInfoDialog => {
-                self.dispatch_store_command_and_apply_local_effects(UiCommand::SetFileInfoVisible(
-                    true,
-                ));
-            }
-            AppEffect::SaveConfig
-            | AppEffect::QueueRender(_)
-            | AppEffect::OpenFileDialog(_)
-            | AppEffect::OpenPath(_)
-            | AppEffect::OpenSkinEditor
-            | AppEffect::ShowError(_)
-            | AppEffect::ShowMessage(_)
-            | AppEffect::StartPlayback
-            | AppEffect::StartPlaybackFromCurrent => {}
-        }
-        GtkUiEffect::None
     }
 
     pub(crate) fn active_skin(&self) -> &DefaultSkin {
-        &self.active_skin
+        &self.skin.active
     }
 
     pub(crate) fn active_skin_mut(&mut self) -> &mut DefaultSkin {
-        &mut self.active_skin
+        &mut self.skin.active
     }
 
     pub(crate) fn skin_editor(&self) -> &SkinEditorState {
-        &self.skin_editor
+        &self.skin.editor
     }
 
     pub(crate) fn skin_editor_mut(&mut self) -> &mut SkinEditorState {
-        &mut self.skin_editor
+        &mut self.skin.editor
     }
 
     fn load_configured_skin(&mut self) -> io::Result<()> {
-        self.active_skin = load_skin_from_config(&self.store.state().config)?;
-        self.skin_generation = self.skin_generation.wrapping_add(1);
+        let skin = load_skin_from_config(&self.core.store().state().config)?;
+        self.skin.replace_active(skin);
         Ok(())
     }
 
@@ -5587,7 +5424,7 @@ impl MainWindowUiState {
     }
 
     fn current_equalizer_preset(&self, name: impl Into<String>) -> EqualizerPreset {
-        let config = &self.store.state().config;
+        let config = &self.core.store().state().config;
         EqualizerPreset::from_positions(
             name,
             config.equalizer_preamp_pos,
@@ -5596,13 +5433,10 @@ impl MainWindowUiState {
     }
 
     fn apply_equalizer_preset_values(&mut self, preset: &EqualizerPreset) {
-        let effects = self
-            .store
-            .apply_equalizer_preset_positions(preset.preamp_position(), preset.band_positions())
-            .effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::EqualizerPreset {
+            preamp: preset.preamp_position(),
+            bands: preset.band_positions(),
+        });
     }
 
     fn load_named_equalizer_preset(&mut self, name: &str, automatic: bool) -> bool {
@@ -5644,51 +5478,29 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn scale_factor(&self) -> f64 {
-        self.store.state().config.scale_factor
+        self.core.store().state().config.scale_factor
     }
 
     fn save_runtime_snapshot(&self, config_path: &Path, playlist_path: &Path) -> io::Result<()> {
-        save_fallback_state(self.store.state(), config_path, playlist_path)
+        save_fallback_state(self.core.store().state(), config_path, playlist_path)
     }
 
-    pub(crate) fn set_playback_backend(&mut self, backend: SharedPlaybackBackend) {
-        self.output_device_groups = backend.borrow().output_device_groups();
-        {
-            let mut backend = backend.borrow_mut();
-            let selection = self
-                .store
-                .state()
-                .config
-                .output_device
-                .as_deref()
-                .map(OutputDeviceSelection::System)
-                .unwrap_or(OutputDeviceSelection::Automatic);
-            if let Err(err) = backend.select_output_device(selection) {
-                eprintln!("xmms-rs: failed to apply saved output device: {err}");
-            }
-            let state = self.store.state();
-            let player = &state.player;
-            let config = &state.config;
-            let _ = backend.set_volume(player.volume());
-            let _ = backend.set_balance(player.balance());
-            let _ = backend.set_equalizer(EqualizerBackendState {
-                active: config.equalizer_active,
-                preamp_position: config.equalizer_preamp_pos,
-                band_positions: config.equalizer_band_pos,
-            });
-            self.output_device_groups = backend.output_device_groups();
+    pub(crate) fn set_playback_backend(&mut self, backend: Box<dyn PlaybackBackend>) {
+        let (groups, selection_error) = self.core.install_gtk_backend(backend);
+        self.output_devices.groups = groups;
+        if let Some(err) = selection_error {
+            eprintln!("xmms-rs: failed to apply saved output device: {err}");
         }
-        self.playback_backend = Some(backend);
     }
 
     fn render_state(&self) -> MainWindowRenderState {
-        let state = self.store.state();
+        let state = self.core.store().state();
         MainWindowRenderState {
             focused: self.main_focused(),
             title: self
                 .equalizer_drag_info_text()
                 .unwrap_or_else(|| self.formatted_current_title()),
-            title_offset_px: self.title_marquee.offset_px(),
+            title_offset_px: self.main.title_marquee.offset_px(),
             shaded: state.config.main_shaded,
             volume_position: volume_to_position(state.player.volume()),
             balance_position: balance_to_position(state.player.balance()),
@@ -5719,7 +5531,7 @@ impl MainWindowUiState {
 
     fn playlist_rows_render_state(&self) -> PlaylistRowsRenderState {
         shared_playlist_rows_render_state(
-            self.store.state(),
+            self.core.store().state(),
             self.playlist_ui.scroll_offset,
             matches!(
                 self.playlist_ui.pointer,
@@ -5732,7 +5544,7 @@ impl MainWindowUiState {
     }
 
     fn bitrate_text(&self) -> String {
-        let bitrate = self.store.state().player.bitrate();
+        let bitrate = self.core.store().state().player.bitrate();
         if bitrate <= 0 {
             return "   ".to_string();
         }
@@ -5744,7 +5556,7 @@ impl MainWindowUiState {
     }
 
     fn frequency_text(&self) -> String {
-        let frequency = self.store.state().player.frequency();
+        let frequency = self.core.store().state().player.frequency();
         if frequency <= 0 {
             return "  ".to_string();
         }
@@ -5757,12 +5569,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn formatted_current_title(&self) -> String {
-        shared_formatted_current_title(self.store.state())
+        shared_formatted_current_title(self.core.store().state())
     }
 
     fn equalizer_drag_info_text(&self) -> Option<String> {
         let slider = self.equalizer.pointer.dragging_slider()?;
-        let config = &self.store.state().config;
+        let config = &self.core.store().state().config;
         let (label, position) = match slider {
             EqualizerSlider::Preamp => ("PREAMP", config.equalizer_preamp_pos),
             EqualizerSlider::Band(0) => ("60HZ", config.equalizer_band_pos[0]),
@@ -5786,11 +5598,11 @@ impl MainWindowUiState {
     }
 
     fn formatted_playlist_entry_title(&self, entry: &crate::playlist::PlaylistEntry) -> String {
-        shared_formatted_playlist_entry_title(self.store.state(), entry)
+        shared_formatted_playlist_entry_title(self.core.store().state(), entry)
     }
 
     pub(crate) fn shaded_playlist_info(&self) -> String {
-        let state = self.store.state();
+        let state = self.core.store().state();
         let Some(position) = state.playlist.position() else {
             return String::new();
         };
@@ -5818,11 +5630,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_footer_info(&self) -> String {
-        shared_playlist_footer_info(self.store.state())
+        shared_playlist_footer_info(self.core.store().state())
     }
 
     fn playlist_footer_time_parts(&self) -> (String, String) {
-        if self.store.state().player.state() == PlayerState::Stopped {
+        if self.core.store().state().player.state() == PlayerState::Stopped {
             return ("   ".to_string(), "  ".to_string());
         }
         let display_ms = self.display_time_ms();
@@ -5830,7 +5642,7 @@ impl MainWindowUiState {
         if seconds > i64::from(99 * 60) {
             seconds /= 60;
         }
-        let prefix = if self.store.state().config.timer_mode == TimerMode::Remaining
+        let prefix = if self.core.store().state().config.timer_mode == TimerMode::Remaining
             && self
                 .current_duration_ms()
                 .is_some_and(|duration| duration > 0)
@@ -5854,8 +5666,9 @@ impl MainWindowUiState {
     }
 
     fn current_duration_ms(&self) -> Option<i64> {
-        self.store.state().player.duration_ms().or_else(|| {
-            self.store
+        self.core.store().state().player.duration_ms().or_else(|| {
+            self.core
+                .store()
                 .state()
                 .playlist
                 .position()
@@ -5865,10 +5678,10 @@ impl MainWindowUiState {
     }
 
     fn ensure_current_playlist_position_for_seek(&mut self) {
-        if self.store.state().playlist.position().is_none()
-            && !self.store.state().playlist.is_empty()
+        if self.core.store().state().playlist.position().is_none()
+            && !self.core.store().state().playlist.is_empty()
         {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::SetPosition(0));
+            self.dispatch_store_command(PlaylistCommand::SetPosition(0));
         }
     }
 
@@ -5878,7 +5691,8 @@ impl MainWindowUiState {
         };
         let position_slider = main_slider_layout(MainSlider::Position, false);
         ((self
-            .store
+            .core
+            .store()
             .state()
             .config
             .playback_position_ms
@@ -5888,7 +5702,7 @@ impl MainWindowUiState {
     }
 
     fn shaded_position_slider_visible(&self) -> bool {
-        self.store.state().player.state() != PlayerState::Stopped
+        self.core.store().state().player.state() != PlayerState::Stopped
             && self
                 .current_duration_ms()
                 .is_some_and(|duration| duration > 0)
@@ -5899,7 +5713,8 @@ impl MainWindowUiState {
             return 1;
         };
         (((self
-            .store
+            .core
+            .store()
             .state()
             .config
             .playback_position_ms
@@ -5911,11 +5726,11 @@ impl MainWindowUiState {
     }
 
     fn display_time_ms(&self) -> i64 {
-        if let Some(remaining) = self.playback_transition.eof_pause_remaining_ms() {
+        if let Some(remaining) = self.core.transition().wait_remaining() {
             return remaining.max(0);
         }
-        let elapsed = self.store.state().config.playback_position_ms.max(0);
-        if self.store.state().config.timer_mode == TimerMode::Remaining {
+        let elapsed = self.core.store().state().config.playback_position_ms.max(0);
+        if self.core.store().state().config.timer_mode == TimerMode::Remaining {
             if let Some(duration) = self.current_duration_ms().filter(|duration| *duration > 0) {
                 return (duration - elapsed).max(0);
             }
@@ -5924,8 +5739,8 @@ impl MainWindowUiState {
     }
 
     fn time_digits(&self) -> [i32; 5] {
-        if self.store.state().player.state() == PlayerState::Stopped
-            && self.playback_transition.eof_pause_remaining_ms().is_none()
+        if self.core.store().state().player.state() == PlayerState::Stopped
+            && self.core.transition().wait_remaining().is_none()
         {
             return [NumberDisplay::BLANK; 5];
         }
@@ -5936,7 +5751,7 @@ impl MainWindowUiState {
         }
         let minutes = seconds / 60;
         [
-            if self.store.state().config.timer_mode == TimerMode::Remaining
+            if self.core.store().state().config.timer_mode == TimerMode::Remaining
                 && self
                     .current_duration_ms()
                     .is_some_and(|duration| duration > 0)
@@ -5953,7 +5768,7 @@ impl MainWindowUiState {
     }
 
     fn shaded_time_parts(&self) -> (String, String) {
-        if self.store.state().player.state() == PlayerState::Stopped {
+        if self.core.store().state().player.state() == PlayerState::Stopped {
             return ("   ".to_string(), "  ".to_string());
         }
         let display_ms = self.display_time_ms();
@@ -5961,7 +5776,7 @@ impl MainWindowUiState {
         if seconds > i64::from(99 * 60) {
             seconds /= 60;
         }
-        let prefix = if self.store.state().config.timer_mode == TimerMode::Remaining
+        let prefix = if self.core.store().state().config.timer_mode == TimerMode::Remaining
             && self
                 .current_duration_ms()
                 .is_some_and(|duration| duration > 0)
@@ -5985,18 +5800,7 @@ impl MainWindowUiState {
     }
 
     fn make_visualization_render_state(&self) -> VisualizationRenderState {
-        VisualizationRenderState {
-            mode: self.visualization.mode(),
-            analyzer_style: self.visualization.analyzer_style(),
-            analyzer_mode: self.visualization.analyzer_mode(),
-            scope_mode: self.visualization.scope_mode(),
-            peaks_enabled: self.visualization.peaks_enabled(),
-            vu_mode: self.store.state().config.vis_vu_mode,
-            data: *self.visualization.data(),
-            peak: *self.visualization.peak(),
-            milkdrop_energy: self.visualization.milkdrop_energy(),
-            milkdrop_phase: self.visualization.milkdrop_phase(),
-        }
+        self.core.visualization_render_state()
     }
 
     fn main_focused(&self) -> bool {
@@ -6007,7 +5811,8 @@ impl MainWindowUiState {
         if self.is_panel_detached(PanelKind::Equalizer) {
             self.equalizer.panel.focused()
         } else {
-            self.docked_focus == KeyboardFocus::Equalizer || self.equalizer.panel.dragging_title
+            self.main.docked_focus == KeyboardFocus::Equalizer
+                || self.equalizer.panel.dragging_title
         }
     }
 
@@ -6015,12 +5820,13 @@ impl MainWindowUiState {
         if self.is_panel_detached(PanelKind::Playlist) {
             self.playlist_ui.panel.focused()
         } else {
-            self.docked_focus == KeyboardFocus::Playlist || self.playlist_ui.panel.dragging_title
+            self.main.docked_focus == KeyboardFocus::Playlist
+                || self.playlist_ui.panel.dragging_title
         }
     }
 
     fn select_focus_target(&mut self, target: KeyboardFocus) {
-        self.docked_focus = target;
+        self.main.docked_focus = target;
         self.equalizer.panel.focused = target == KeyboardFocus::Equalizer;
         self.playlist_ui.panel.focused = target == KeyboardFocus::Playlist;
     }
@@ -6073,12 +5879,12 @@ impl MainWindowUiState {
             (KeyboardFocus::Main, ArrowKey::Up) => KeyCommand::Volume(4),
             (KeyboardFocus::Main, ArrowKey::Down) => KeyCommand::Volume(-4),
             (KeyboardFocus::Main, ArrowKey::Left)
-                if self.main_keyboard_slider == Some(MainSlider::Balance) =>
+                if self.main.keyboard_slider == Some(MainSlider::Balance) =>
             {
                 KeyCommand::Balance(-4)
             }
             (KeyboardFocus::Main, ArrowKey::Right)
-                if self.main_keyboard_slider == Some(MainSlider::Balance) =>
+                if self.main.keyboard_slider == Some(MainSlider::Balance) =>
             {
                 KeyCommand::Balance(4)
             }
@@ -6159,7 +5965,7 @@ impl MainWindowUiState {
     }
 
     fn selected_docked_panel(&self) -> Option<PanelKind> {
-        match self.docked_focus {
+        match self.main.docked_focus {
             KeyboardFocus::Main => None,
             KeyboardFocus::Equalizer => self
                 .panel_state(PanelKind::Equalizer)
@@ -6173,7 +5979,7 @@ impl MainWindowUiState {
     }
 
     fn equalizer_render_state(&self) -> EqualizerRenderState {
-        let state = self.store.state();
+        let state = self.core.store().state();
         let config = &state.config;
         EqualizerRenderState {
             focused: self.equalizer_focused(),
@@ -6190,7 +5996,7 @@ impl MainWindowUiState {
     }
 
     fn panel_state(&self, kind: PanelKind) -> PanelState {
-        let config = &self.store.state().config;
+        let config = &self.core.store().state().config;
         let (visible, detached, shaded) = match kind {
             PanelKind::Equalizer => (
                 config.equalizer_visible,
@@ -6221,7 +6027,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn docked_panel_state(&self) -> DockedPanelState {
-        let config = &self.store.state().config;
+        let config = &self.core.store().state().config;
         DockedPanelState {
             main_focused: self.main_focused(),
             main_shaded: config.main_shaded,
@@ -6239,7 +6045,7 @@ impl MainWindowUiState {
     }
 
     fn playlist_render_key(&self) -> GtkPlaylistRenderKey {
-        let state = self.store.state();
+        let state = self.core.store().state();
         let mut title_preferences = DefaultHasher::new();
         state.config.title_format.hash(&mut title_preferences);
         state.config.convert_underscore.hash(&mut title_preferences);
@@ -6252,7 +6058,7 @@ impl MainWindowUiState {
         self.playlist_ui.search.active_query().hash(&mut search);
 
         GtkPlaylistRenderKey {
-            skin_generation: self.skin_generation,
+            skin_generation: self.skin.generation,
             focused: self.playlist_focused(),
             shaded: self.is_playlist_shaded(),
             width: self.playlist_ui.width,
@@ -6274,21 +6080,18 @@ impl MainWindowUiState {
     }
 
     fn playlist_footer_display_second(&self) -> Option<i64> {
-        (self.store.state().player.state() != PlayerState::Stopped)
+        (self.core.store().state().player.state() != PlayerState::Stopped)
             .then(|| (self.display_time_ms() / 1_000).max(0))
     }
 
     fn update_playlist_footer_redraw(&mut self, redraw: &mut GtkTickRedraw) {
         let footer_second = self.playlist_footer_display_second();
-        if footer_second != self.playlist_footer_second {
-            self.playlist_footer_second = footer_second;
-            redraw.playlist = true;
-        }
+        redraw.playlist |= self.playlist_ui.update_footer_second(footer_second);
     }
 
     fn docked_render_key(&self) -> GtkDockedRenderKey {
         GtkDockedRenderKey {
-            skin_generation: self.skin_generation,
+            skin_generation: self.skin.generation,
             main: self.render_state(),
             equalizer: self
                 .panel_state(PanelKind::Equalizer)
@@ -6339,22 +6142,18 @@ impl MainWindowUiState {
     pub(crate) fn set_panel_detached(&mut self, kind: PanelKind, detached: bool) {
         match kind {
             PanelKind::Equalizer => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    PanelCommand::SetEqualizerDetached(detached),
-                );
+                self.dispatch_store_command(PanelCommand::SetEqualizerDetached(detached));
             }
             PanelKind::Playlist => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    PanelCommand::SetPlaylistDetached(detached),
-                );
+                self.dispatch_store_command(PanelCommand::SetPlaylistDetached(detached));
             }
         }
     }
 
     pub(crate) fn is_panel_detached(&self, kind: PanelKind) -> bool {
         match kind {
-            PanelKind::Equalizer => self.store.state().config.equalizer_detached,
-            PanelKind::Playlist => self.store.state().config.playlist_detached,
+            PanelKind::Equalizer => self.core.store().state().config.equalizer_detached,
+            PanelKind::Playlist => self.core.store().state().config.playlist_detached,
         }
     }
 
@@ -6363,23 +6162,23 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn is_shaded(&self) -> bool {
-        self.store.state().config.main_shaded
+        self.core.store().state().config.main_shaded
     }
 
     pub(crate) fn is_menu_visible(&self) -> bool {
-        self.store.state().ui.main_menu_visible
+        self.core.store().state().ui.main_menu_visible
     }
 
     pub(crate) fn set_menu_visible(&mut self, visible: bool) {
-        self.dispatch_store_command_and_apply_local_effects(UiCommand::SetMainMenuVisible(visible));
+        self.dispatch_store_command(UiCommand::SetMainMenuVisible(visible));
     }
 
     pub(crate) fn is_equalizer_shaded(&self) -> bool {
-        self.store.state().config.equalizer_shaded
+        self.core.store().state().config.equalizer_shaded
     }
 
     pub(crate) fn is_playlist_shaded(&self) -> bool {
-        self.store.state().config.playlist_shaded
+        self.core.store().state().config.playlist_shaded
     }
 
     pub(crate) fn playlist_menu(&self) -> Option<PlaylistMenuKind> {
@@ -6415,40 +6214,28 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_playlist_visible(&mut self, visible: bool) {
-        self.dispatch_store_command_and_apply_local_effects(PanelCommand::SetPlaylistVisibility(
-            visible,
-        ));
+        self.dispatch_store_command(PanelCommand::SetPlaylistVisibility(visible));
     }
 
     pub(crate) fn is_preferences_visible(&self) -> bool {
-        self.store.state().ui.preferences_visible
+        self.core.store().state().ui.preferences_visible
     }
 
     pub(crate) fn set_preferences_visible(&mut self, visible: bool) {
-        self.dispatch_store_command_and_apply_local_effects(UiCommand::SetPreferencesVisible(
-            visible,
-        ));
+        self.dispatch_store_command(UiCommand::SetPreferencesVisible(visible));
     }
 
     pub(crate) fn preferences_page(&self) -> PreferencesPage {
-        self.preferences_page
+        self.dialogs.preferences_page
     }
 
     pub(crate) fn set_preferences_page(&mut self, page: PreferencesPage) {
-        self.preferences_page = page;
+        self.dialogs.preferences_page = page;
     }
 
     pub(crate) fn reset_preferences_to_defaults(&mut self) {
-        let effects = self
-            .store
-            .apply_config_from_preferences(Config::default())
-            .effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
-        self.playback_transition = PlaybackTransitionState::stopped_at_or_idle(
-            self.store.state().config.playback_position_ms,
-        );
+        self.handle_runtime_event(RuntimeEvent::Preferences(Config::default()));
+        self.core.reset_stopped_position();
         self.apply_visualization_preferences();
     }
 
@@ -6469,17 +6256,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn is_skin_browser_visible(&self) -> bool {
-        self.store.state().ui.skin_browser_visible
+        self.core.store().state().ui.skin_browser_visible
     }
 
     pub(crate) fn set_skin_browser_visible(&mut self, visible: bool) {
-        self.dispatch_store_command_and_apply_local_effects(UiCommand::SetSkinBrowserVisible(
-            visible,
-        ));
-    }
-
-    pub(crate) fn set_skin_editor_visible(&mut self, visible: bool) {
-        self.dialogs.skin_editor = visible;
+        self.dispatch_store_command(UiCommand::SetSkinBrowserVisible(visible));
     }
 
     pub(crate) fn is_output_device_picker_visible(&self) -> bool {
@@ -6491,43 +6272,46 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_output_devices(&mut self, system_devices: Vec<OutputDevice>) {
-        self.output_device_groups = group_output_devices(system_devices);
+        self.output_devices.groups = group_output_devices(system_devices);
     }
 
     pub(crate) fn output_device_groups(&self) -> &OutputDeviceGroups {
-        &self.output_device_groups
+        &self.output_devices.groups
     }
 
     pub(crate) fn selected_output_device(&self) -> Option<&str> {
-        self.store.state().config.output_device.as_deref()
+        self.core.store().state().config.output_device.as_deref()
     }
 
     pub(crate) fn select_output_device(&mut self, selection: OutputDeviceSelection<'_>) -> bool {
         match selection {
             OutputDeviceSelection::Automatic => {
                 self.update_config_via_store(|config| config.output_device = None);
-                self.output_switch_count = self.output_switch_count.saturating_add(1);
+                self.output_devices.switch_count =
+                    self.output_devices.switch_count.saturating_add(1);
                 true
             }
             OutputDeviceSelection::System(id) => {
                 let found = self
-                    .output_device_groups
+                    .output_devices
+                    .groups
                     .local
                     .iter()
-                    .chain(self.output_device_groups.network.iter())
+                    .chain(self.output_devices.groups.network.iter())
                     .any(|device| device.id == id);
                 if !found {
                     return false;
                 }
                 self.update_config_via_store(|config| config.output_device = Some(id.to_string()));
-                self.output_switch_count = self.output_switch_count.saturating_add(1);
+                self.output_devices.switch_count =
+                    self.output_devices.switch_count.saturating_add(1);
                 true
             }
         }
     }
 
     pub(crate) fn output_switch_count(&self) -> u32 {
-        self.output_switch_count
+        self.output_devices.switch_count
     }
 
     pub(crate) fn mpris_root_properties(&self) -> MprisRootProperties {
@@ -6536,8 +6320,8 @@ impl MainWindowUiState {
 
     pub(crate) fn mpris_player_properties(&self) -> MprisPlayerProperties {
         mpris_player_properties(
-            self.store.state(),
-            self.store.state().config.playback_position_ms,
+            self.core.store().state(),
+            self.core.store().state().config.playback_position_ms,
         )
     }
 
@@ -6551,95 +6335,68 @@ impl MainWindowUiState {
 
     pub(crate) fn set_mpris_volume(&mut self, volume: f64) {
         let percent = (volume * 100.0) as i32;
-        self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(percent));
+        self.dispatch_store_command(AudioCommand::SetVolume(percent));
     }
 
     pub(crate) fn execute_mpris_command(&mut self, command: MprisCommand) {
-        let playback_position_ms = self.store.state().config.playback_position_ms;
-        match app_action_for_mpris_command(&command, playback_position_ms) {
-            MprisAppAction::Raise => self.mpris_events.push(MprisEvent::Raised),
-            MprisAppAction::Quit => self.mpris_events.push(MprisEvent::QuitRequested),
-            MprisAppAction::Dispatch(app_command) => {
-                self.dispatch_store_command_and_apply_local_effects(app_command);
-                match command {
-                    MprisCommand::Seek { .. } | MprisCommand::SetPosition { .. } => {
-                        self.mpris_events.push(MprisEvent::Seeked(
-                            self.store.state().config.playback_position_ms * 1_000,
-                        ));
-                    }
-                    MprisCommand::Stop => {
-                        self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-                        self.mpris_events.push(MprisEvent::Seeked(
-                            self.store.state().config.playback_position_ms * 1_000,
-                        ));
-                    }
-                    MprisCommand::Next
-                    | MprisCommand::Previous
-                    | MprisCommand::Pause
-                    | MprisCommand::PlayPause
-                    | MprisCommand::Play => {
-                        self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-                    }
-                    MprisCommand::Raise | MprisCommand::Quit | MprisCommand::OpenUri(_) => {}
-                }
-            }
-            MprisAppAction::OpenUri(uri) => {
-                self.accept_dropped_uris([uri.as_str()], true, true);
-                self.mpris_events.push(MprisEvent::MetadataChanged);
-                self.mpris_events.push(MprisEvent::PlaybackStatusChanged);
-            }
+        let translation = translate_mpris_command(&command, self.core.store().state());
+        for event in translation.events {
+            let RuntimeEvent::Command(app_command) = event else {
+                unreachable!()
+            };
+            self.dispatch_store_command(app_command);
         }
+        let playback_events = mpris_open_uri_playback_events(&command, self.core.store().state());
+        if !playback_events.is_empty() {
+            self.schedule_missing_local_playlist_durations();
+        }
+        for event in playback_events {
+            let RuntimeEvent::Command(app_command) = event else {
+                unreachable!()
+            };
+            self.dispatch_store_command(app_command);
+        }
+        // Raise/Quit on GTK are service requests, not direct window actions.
+        self.mpris_events.extend(mpris_service_events(
+            &command,
+            self.core.store().state(),
+            translation.properties_before.as_ref(),
+        ));
     }
 
     pub(crate) fn scan_skin_browser_dirs<P: AsRef<Path>>(&mut self, dirs: &[P]) -> io::Result<()> {
-        self.skin_browser.entries = discover_skins_in_dirs(dirs)?;
-        self.skin_browser.selected_index = self
-            .store
-            .state()
-            .config
-            .skin
-            .as_deref()
-            .and_then(|current| {
-                self.skin_browser
-                    .entries
-                    .iter()
-                    .position(|entry| entry.path == Path::new(current))
-                    .map(|index| index + 1)
-            })
-            .unwrap_or(0);
+        self.skin.entries = discover_skins_in_dirs(dirs)?;
         Ok(())
     }
 
     pub(crate) fn skin_browser_entries(&self) -> &[SkinEntry] {
-        &self.skin_browser.entries
+        &self.skin.entries
     }
 
     pub(crate) fn selected_skin_index(&self) -> usize {
-        self.skin_browser.selected_index
+        self.skin
+            .selected_index(self.core.store().state().config.skin.as_deref())
     }
 
     pub(crate) fn selected_skin(&self) -> Option<&str> {
-        self.store.state().config.skin.as_deref()
+        self.core.store().state().config.skin.as_deref()
     }
 
     pub(crate) fn select_skin_browser_index(&mut self, index: usize) -> bool {
-        let previous_skin = self.store.state().config.skin.clone();
-        let previous_index = self.skin_browser.selected_index;
+        let previous_skin = self.core.store().state().config.skin.clone();
         let next_skin = if index == 0 {
             None
         } else {
-            let Some(entry) = self.skin_browser.entries.get(index - 1) else {
+            let Some(entry) = self.skin.entries.get(index - 1) else {
                 return false;
             };
             Some(entry.path.display().to_string())
         };
         self.update_config_via_store(|config| config.skin = next_skin);
-        self.skin_browser.selected_index = index;
 
         if let Err(err) = self.reload_skin() {
             eprintln!("xmms-rs: failed to load selected skin: {err}");
             self.update_config_via_store(|config| config.skin = previous_skin);
-            self.skin_browser.selected_index = previous_index;
             return false;
         }
         true
@@ -6647,18 +6404,19 @@ impl MainWindowUiState {
 
     pub(crate) fn reload_skin(&mut self) -> io::Result<()> {
         self.load_configured_skin()?;
-        self.skin_browser.reload_count = self.skin_browser.reload_count.saturating_add(1);
+        self.skin.reload_count = self.skin.reload_count.saturating_add(1);
         Ok(())
     }
 
     pub(crate) fn skin_reload_count(&self) -> u32 {
-        self.skin_browser.reload_count
+        self.skin.reload_count
     }
 
     pub(crate) fn clone_configured_skin_for_editor(&mut self) -> io::Result<()> {
         self.load_configured_skin()?;
         let name = self
-            .store
+            .core
+            .store()
             .state()
             .config
             .skin
@@ -6667,17 +6425,17 @@ impl MainWindowUiState {
             .and_then(|name| name.to_str())
             .map(|name| format!("{name} copy"))
             .unwrap_or_else(|| "Default Skin Copy".to_string());
-        self.skin_editor.working_name = name;
+        self.skin.editor.working_name = name;
         Ok(())
     }
 
     pub(crate) fn save_editor_skin_to_user_dir(&mut self) -> io::Result<PathBuf> {
         let user_skin_dir = crate::skin::user_skin_import_dir();
         fs::create_dir_all(&user_skin_dir)?;
-        let name = sanitized_skin_name(&self.skin_editor.working_name);
+        let name = sanitized_skin_name(&self.skin.editor.working_name);
         let destination =
             unique_skin_import_destination(&user_skin_dir, std::ffi::OsStr::new(&name));
-        self.active_skin.save_to_dir(&destination)?;
+        self.skin.active.save_to_dir(&destination)?;
         self.update_config_via_store(|config| {
             config.skin = Some(destination.display().to_string())
         });
@@ -6687,7 +6445,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn export_editor_skin_wsz(&self, path: &Path) -> io::Result<()> {
-        self.active_skin.export_wsz(path)
+        self.skin.active.export_wsz(path)
     }
 
     pub(crate) fn active_skin_pixel_argb(
@@ -6696,18 +6454,19 @@ impl MainWindowUiState {
         x: usize,
         y: usize,
     ) -> Option<u32> {
-        self.active_skin
+        self.skin
+            .active
             .get(kind)
             .and_then(|image| image.pixel_argb(x, y))
     }
 
     pub(crate) fn toggle_sticky(&mut self) {
-        let sticky = !self.store.state().config.sticky;
+        let sticky = !self.core.store().state().config.sticky;
         self.update_config_via_store(|config| config.sticky = sticky);
     }
 
     pub(crate) fn sticky(&self) -> bool {
-        self.store.state().config.sticky
+        self.core.store().state().config.sticky
     }
 
     pub(crate) fn toggle_double_size(&mut self) {
@@ -6715,56 +6474,55 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn double_fractional_scale(&mut self) {
-        let scale = self.store.state().config.scale_factor * 2.0;
+        let scale = self.core.store().state().config.scale_factor * 2.0;
         self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn halve_fractional_scale(&mut self) {
-        let scale = self.store.state().config.scale_factor / 2.0;
+        let scale = self.core.store().state().config.scale_factor / 2.0;
         self.update_config_via_store(|config| set_config_scale_factor(config, scale));
     }
 
     pub(crate) fn double_size(&self) -> bool {
-        self.store.state().config.doublesize
+        self.core.store().state().config.doublesize
     }
 
     pub(crate) fn toggle_easy_move(&mut self) {
-        let easy_move = !self.store.state().config.easy_move;
+        let easy_move = !self.core.store().state().config.easy_move;
         self.update_config_via_store(|config| config.easy_move = easy_move);
     }
 
     pub(crate) fn show_selected_or_current_file_info(&mut self) {
-        self.last_playlist_file_info = self
+        self.dialogs.last_playlist_file_info = self
             .selected_or_current_file_info_details()
             .map(|details| details.title);
     }
 
     pub(crate) fn selected_or_current_file_info_details(&mut self) -> Option<FileInfoDetails> {
         let details = {
-            let state = self.store.state();
+            let state = self.core.store().state();
             self.selected_playlist_index()
                 .or_else(|| state.playlist.position())
                 .and_then(|index| state.playlist.entries().get(index))
                 .or_else(|| state.playlist.entries().first())
                 .map(file_info_details_for_entry)
         };
-        self.last_playlist_file_info = details.as_ref().map(|details| details.title.clone());
-        self.dispatch_store_command_and_apply_local_effects(UiCommand::SetFileInfoVisible(
-            details.is_some(),
-        ));
+        self.dialogs.last_playlist_file_info =
+            details.as_ref().map(|details| details.title.clone());
+        self.dispatch_store_command(UiCommand::SetFileInfoVisible(details.is_some()));
         details
     }
 
     pub(crate) fn is_file_info_dialog_visible(&self) -> bool {
-        self.store.state().ui.file_info_visible
+        self.core.store().state().ui.file_info_visible
     }
 
     pub(crate) fn set_file_info_dialog_visible(&mut self, visible: bool) {
-        self.dispatch_store_command_and_apply_local_effects(UiCommand::SetFileInfoVisible(visible));
+        self.dispatch_store_command(UiCommand::SetFileInfoVisible(visible));
     }
 
     pub(crate) fn select_first_playlist_entry(&mut self) -> bool {
-        if self.store.state().playlist.is_empty() {
+        if self.core.store().state().playlist.is_empty() {
             return false;
         }
         self.select_single_playlist_entry(0);
@@ -6773,9 +6531,9 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn play_first_playlist_entry(&mut self) {
-        if !self.store.state().playlist.is_empty() {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::SetPosition(0));
-            self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+        if !self.core.store().state().playlist.is_empty() {
+            self.dispatch_store_command(PlaylistCommand::SetPosition(0));
+            self.dispatch_store_command(PlayerCommand::StartCurrentTrack);
         }
     }
 
@@ -6812,7 +6570,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn last_playlist_file_info(&self) -> Option<&str> {
-        self.last_playlist_file_info.as_deref()
+        self.dialogs.last_playlist_file_info.as_deref()
     }
 
     pub(crate) fn update_playlist_title_for_uri(&mut self, uri: &str, title: &str) {
@@ -6820,47 +6578,44 @@ impl MainWindowUiState {
         if title.is_empty() {
             return;
         }
-        self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::UpdateTitleForUri {
+        self.dispatch_store_command(PlaylistCommand::UpdateTitleForUri {
             uri: uri.to_string(),
             title: title.to_string(),
         });
-        self.last_playlist_file_info = Some(title.to_string());
+        self.dialogs.last_playlist_file_info = Some(title.to_string());
     }
 
     pub(crate) fn playlist_options_opened(&self) -> bool {
-        self.playlist_options_opened
+        self.playlist_ui.options_opened
     }
 
     pub(crate) fn load_playlist_file(&mut self, path: &Path) -> std::io::Result<()> {
         let playlist = Playlist::load_m3u_file(path)?;
-        let effects = self.store.replace_playlist_for_file_load(playlist).effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
-        self.playlist_ui.scroll_offset = 0;
-        self.playlist_ui.search.stop();
+        self.handle_runtime_event(RuntimeEvent::ReplacePlaylist(playlist));
+        self.playlist_ui.reset_for_loaded_playlist();
         self.schedule_missing_local_playlist_durations();
         Ok(())
     }
 
     pub(crate) fn save_playlist_file(&self, path: &Path) -> std::io::Result<()> {
-        self.store.state().playlist.save_m3u_file(path)
+        self.core.store().state().playlist.save_m3u_file(path)
     }
 
     pub(crate) fn last_open_location(&self) -> Option<&str> {
-        self.last_open_location.as_deref()
+        self.dialogs.last_open_location.as_deref()
     }
 
     pub(crate) fn last_jump_time_ms(&self) -> Option<i64> {
-        self.last_jump_time_ms
+        self.dialogs.last_jump_time_ms
     }
 
     pub(crate) fn playlist_len(&self) -> usize {
-        self.store.state().playlist.len()
+        self.core.store().state().playlist.len()
     }
 
     pub(crate) fn playlist_entry_uri(&self, index: usize) -> Option<&str> {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .entries()
@@ -6869,7 +6624,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_entry_title(&self, index: usize) -> Option<&str> {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .entries()
@@ -6878,7 +6634,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_entry_length_ms(&self, index: usize) -> Option<i64> {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .entries()
@@ -6887,7 +6644,8 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn playlist_entry_selected(&self, index: usize) -> Option<bool> {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .entries()
@@ -6906,53 +6664,25 @@ impl MainWindowUiState {
         self.playlist_ui
             .scroll_offset
             .checked_add(row)
-            .and_then(|index| self.store.state().playlist.entries().get(index))
+            .and_then(|index| self.core.store().state().playlist.entries().get(index))
             .map(|entry| self.formatted_playlist_entry_title(entry))
     }
 
     pub(crate) fn playlist_position(&self) -> Option<usize> {
-        self.store.state().playlist.position()
+        self.core.store().state().playlist.position()
     }
 
     pub(crate) fn current_playlist_entry_uri(&self) -> Option<&str> {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .position()
             .and_then(|position| self.playlist_entry_uri(position))
     }
 
-    #[allow(dead_code)]
-    fn start_current_playlist_playback(&mut self) {
-        self.start_current_playlist_playback_at(
-            self.playback_transition
-                .play_start_position_ms(self.store.state().config.playback_position_ms),
-        );
-    }
-
-    #[allow(dead_code)]
-    fn start_current_playlist_playback_from_beginning(&mut self) {
-        self.start_current_playlist_playback_at(0);
-    }
-
-    #[allow(dead_code)]
-    fn start_current_playlist_playback_at(&mut self, position_ms: i64) {
-        self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
-        if position_ms > 0 {
-            self.dispatch_store_command_and_apply_local_effects(PlayerCommand::SeekToMs(
-                position_ms,
-            ));
-        } else {
-            self.playback_transition = PlaybackTransitionState::Idle;
-            let result = self.store.update_playback_position_from_runtime(0);
-            for effect in result.effects {
-                self.apply_store_effect(effect);
-            }
-        }
-    }
-
     fn load_equalizer_auto_preset_for_uri(&mut self, uri: &str) {
-        if !self.store.state().config.equalizer_auto {
+        if !self.core.store().state().config.equalizer_auto {
             return;
         }
         let Some(path) = file_uri_to_path(uri) else {
@@ -6960,11 +6690,18 @@ impl MainWindowUiState {
             return;
         };
 
-        if !self.store.state().config.eqpreset_extension.is_empty() {
+        if !self
+            .core
+            .store()
+            .state()
+            .config
+            .eqpreset_extension
+            .is_empty()
+        {
             let per_file = PathBuf::from(format!(
                 "{}.{}",
                 path.to_string_lossy(),
-                self.store.state().config.eqpreset_extension
+                self.core.store().state().config.eqpreset_extension
             ));
             match load_xmms_preset_file(&per_file) {
                 Ok(Some(preset)) => {
@@ -6979,10 +6716,17 @@ impl MainWindowUiState {
             }
         }
 
-        if !self.store.state().config.eqpreset_default_file.is_empty() {
+        if !self
+            .core
+            .store()
+            .state()
+            .config
+            .eqpreset_default_file
+            .is_empty()
+        {
             if let Some(parent) = path.parent() {
                 let directory_preset =
-                    parent.join(&self.store.state().config.eqpreset_default_file);
+                    parent.join(&self.core.store().state().config.eqpreset_default_file);
                 match load_xmms_preset_file(&directory_preset) {
                     Ok(Some(preset)) => {
                         self.apply_equalizer_preset_values(&preset);
@@ -7007,22 +6751,6 @@ impl MainWindowUiState {
         self.load_equalizer_default_preset();
     }
 
-    fn pause_playback(&mut self) {
-        if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().pause() {
-                eprintln!("xmms-rs: failed to pause playback: {err}");
-            }
-        }
-    }
-
-    fn unpause_playback(&mut self) {
-        if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().unpause() {
-                eprintln!("xmms-rs: failed to resume playback: {err}");
-            }
-        }
-    }
-
     #[allow(dead_code)]
     fn handle_playback_control_event(&mut self, event: PlaybackControlEvent) -> bool {
         let command = match event {
@@ -7032,27 +6760,19 @@ impl MainWindowUiState {
             PlaybackControlEvent::Previous => PlayerCommand::PreviousTrack,
             PlaybackControlEvent::Next => PlayerCommand::NextTrack,
         };
-        let result = self.dispatch_store_command(command);
-        let changed = !result.changes.is_empty() || !result.effects.is_empty();
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
-        changed
+        let update = self.dispatch_store_command(command);
+        !update.changes.is_empty()
+            || !update.playback_effects.is_empty()
+            || !update.frontend_effects.is_empty()
     }
 
     fn stop_playback(&mut self) {
-        self.playback_transition = PlaybackTransitionState::stop_playback();
-        if let Some(backend) = &self.playback_backend {
-            if let Err(err) = backend.borrow().stop() {
-                eprintln!("xmms-rs: failed to stop playback: {err}");
-            }
-        }
-        self.visualization.clear_data();
+        self.handle_runtime_event(RuntimeEvent::StopBackend);
     }
 
     #[allow(dead_code)]
     fn request_stop_playback(&mut self) {
-        if self.store.state().config.stop_with_fadeout {
+        if self.core.store().state().config.stop_with_fadeout {
             self.stop_with_fade();
         } else {
             self.stop_playback();
@@ -7061,82 +6781,58 @@ impl MainWindowUiState {
 
     #[allow(dead_code)]
     fn stop_with_fade(&mut self) {
-        if self.store.state().player.state() == PlayerState::Stopped {
+        if self.core.store().state().player.state() == PlayerState::Stopped {
             self.stop_playback();
             return;
         }
-        let start_volume = self.store.state().player.volume().max(0);
-        if start_volume == 0 {
+        if self.core.store().state().player.volume() <= 0 {
             self.stop_playback();
             return;
         }
-        self.playback_transition = PlaybackTransitionState::start_fadeout(start_volume);
-    }
-
-    fn set_runtime_volume(&mut self, volume: i32) {
-        let result = self.store.set_runtime_volume_for_transition(volume);
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::BeginStopFade);
     }
 
     pub(crate) fn playback_position_ms(&self) -> i64 {
-        self.store.state().config.playback_position_ms
+        self.core.store().state().config.playback_position_ms
     }
 
     pub(crate) fn last_playback_request(&self) -> Option<&str> {
-        self.last_playback_request.as_deref()
+        self.core.last_playback_request()
     }
 
     pub(crate) fn add_timed_entry(&mut self, uri: &str, title: &str, duration_ms: i64) {
-        let mut playlist = self.store.state().playlist.clone();
+        let mut playlist = self.core.store().state().playlist.clone();
         playlist.add_timed_uri(uri, title, duration_ms);
-        let effects = self.store.replace_playlist_for_file_load(playlist).effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::ReplacePlaylist(playlist));
     }
 
     pub(crate) fn add_playlist_uri(&mut self, uri: &str) {
-        let effects = self
-            .dispatch_store_command(PlaylistCommand::AddUris(vec![uri.to_string()]))
-            .effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
+        self.dispatch_store_command(PlaylistCommand::AddUris(vec![uri.to_string()]));
     }
 
     pub(crate) fn set_stream_channels_for_e2e(&mut self, channels: i32) {
-        let result = self.store.handle_playback_event(PlaybackEvent::StreamInfo(
+        self.handle_runtime_event(RuntimeEvent::Playback(PlaybackEvent::StreamInfo(
             crate::player::StreamInfo {
                 bitrate: None,
                 frequency: None,
                 channels: Some(channels),
             },
-        ));
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
+        )));
     }
 
     pub(crate) fn set_visualization_data_for_e2e(
         &mut self,
         data: crate::audio_model::SpectrumData,
     ) {
-        let result = self
-            .store
-            .handle_playback_event(PlaybackEvent::Spectrum(data));
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::Playback(PlaybackEvent::Spectrum(data)));
     }
 
     pub(crate) fn ensure_playing_for_e2e(&mut self) {
-        if self.store.state().playlist.is_empty() {
+        if self.core.store().state().playlist.is_empty() {
             self.add_timed_entry("file:///xmms-renascene-e2e.ogg", "E2E", -1);
         }
-        if self.store.state().player.state() != PlayerState::Playing {
-            self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+        if self.core.store().state().player.state() != PlayerState::Playing {
+            self.dispatch_store_command(PlayerCommand::StartCurrentTrack);
         }
     }
 
@@ -7150,21 +6846,20 @@ impl MainWindowUiState {
 
     pub(crate) fn set_playlist_entry_selected(&mut self, index: usize, selected: bool) {
         if self
-            .store
+            .core
+            .store()
             .state()
             .playlist
             .entries()
             .get(index)
             .is_some_and(|entry| entry.selected != selected)
         {
-            self.dispatch_store_command_and_apply_local_effects(
-                PlaylistCommand::ToggleEntrySelection(index),
-            );
+            self.dispatch_store_command(PlaylistCommand::ToggleEntrySelection(index));
         }
     }
 
     pub(crate) fn start_playlist_search(&mut self) -> bool {
-        if !self.store.state().config.vim_playlist_navigation {
+        if !self.core.store().state().config.vim_playlist_navigation {
             return false;
         }
         self.playlist_ui.menu.close();
@@ -7189,29 +6884,29 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn sort_playlist_by(&mut self, key: PlaylistSortKey) {
-        self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::Sort(key));
+        self.dispatch_store_command(PlaylistCommand::Sort(key));
     }
 
     pub(crate) fn sort_selected_playlist_by(&mut self, key: PlaylistSortKey) {
-        self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::SortSelected(key));
+        self.dispatch_store_command(PlaylistCommand::SortSelected(key));
     }
 
     pub(crate) fn remove_selected_playlist_entries(&mut self) -> bool {
-        let before = self.store.state().playlist.len();
-        self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::RemoveSelected);
-        self.store.state().playlist.len() != before
+        let before = self.core.store().state().playlist.len();
+        self.dispatch_store_command(PlaylistCommand::RemoveSelected);
+        self.core.store().state().playlist.len() != before
     }
 
     pub(crate) fn reverse_playlist(&mut self) {
-        self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::Reverse);
+        self.dispatch_store_command(PlaylistCommand::Reverse);
     }
 
     pub(crate) fn randomize_playlist(&mut self) {
-        self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::Randomize);
+        self.dispatch_store_command(PlaylistCommand::Randomize);
     }
 
     pub(crate) fn index_missing_playlist_durations_for_e2e(&mut self) {
-        let mut playlist = self.store.state().playlist.clone();
+        let mut playlist = self.core.store().state().playlist.clone();
         let _ = playlist.index_missing_durations_with(|item| {
             Ok::<_, std::convert::Infallible>(Some(DurationIndexResult {
                 index: item.index,
@@ -7220,10 +6915,7 @@ impl MainWindowUiState {
                 title: Some(format!("Indexed {}", item.index + 1)),
             }))
         });
-        let effects = self.store.replace_playlist_for_file_load(playlist).effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::ReplacePlaylist(playlist));
     }
 
     pub(crate) fn queue_playlist_duration_result_for_e2e(
@@ -7235,138 +6927,38 @@ impl MainWindowUiState {
         let Some(uri) = self.playlist_entry_uri(index).map(ToString::to_string) else {
             return;
         };
-        let _ = self.duration_index_sender.send(DurationIndexResult {
+        self.core.enqueue_duration_batch(vec![DurationIndexResult {
             index,
             uri,
             length_ms,
             title,
-        });
+        }]);
     }
 
     fn schedule_missing_local_playlist_durations(&mut self) {
-        let items = self
-            .store
-            .state()
-            .playlist
-            .missing_duration_items()
-            .into_iter()
-            .filter(|item| file_uri_to_path(&item.uri).is_some_and(|path| path.exists()))
-            .collect::<Vec<_>>();
-        if items.is_empty() {
-            return;
-        }
-
-        let sender = self.duration_index_sender.clone();
-        thread::spawn(move || {
-            #[cfg(feature = "rodio-backend")]
-            {
-                use crate::playback::backend::AudioMetadataProbe as _;
-
-                let probe = crate::playback::rodio::RodioMetadataProbe;
-                for item in items {
-                    match probe.probe(&item) {
-                        Ok(Some(result)) => {
-                            if sender.send(result).is_err() {
-                                return;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(err) => eprintln!(
-                            "xmms-rs: failed to probe playlist item {} with rodio: {err}",
-                            item.uri
-                        ),
-                    }
-                }
-            }
-            #[cfg(all(not(feature = "rodio-backend"), feature = "gstreamer-backend"))]
-            {
-                if let Err(err) = gstreamer::init() {
-                    eprintln!(
-                        "xmms-rs: failed to initialize GStreamer for playlist durations: {err}"
-                    );
-                    return;
-                }
-                let discoverer =
-                    match gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5))
-                    {
-                        Ok(discoverer) => discoverer,
-                        Err(err) => {
-                            eprintln!(
-                                "xmms-rs: failed to create playlist duration discoverer: {err}"
-                            );
-                            return;
-                        }
-                    };
-
-                for item in items {
-                    let Some(path) = file_uri_to_path(&item.uri).filter(|path| path.exists())
-                    else {
-                        continue;
-                    };
-                    let info = match discoverer.discover_uri(&item.uri) {
-                        Ok(info) => info,
-                        Err(err) => {
-                            eprintln!(
-                                "xmms-rs: failed to discover playlist item {}: {err}",
-                                path.display()
-                            );
-                            continue;
-                        }
-                    };
-                    let length_ms = info
-                        .duration()
-                        .map(|duration| duration.mseconds() as i64)
-                        .unwrap_or(-1);
-                    if sender
-                        .send(DurationIndexResult {
-                            index: item.index,
-                            uri: item.uri,
-                            length_ms,
-                            title: None,
-                        })
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            }
-        });
+        self.core.schedule_missing_durations();
     }
 
     fn poll_duration_index_results(&mut self) -> GtkTickRedraw {
-        let mut redraw = GtkTickRedraw::default();
-        while let Ok(result) = self.duration_index_receiver.try_recv() {
-            let dispatch = self.store.apply_duration_index_result(result);
-            redraw.merge(GtkTickRedraw::from_changes(dispatch.changes));
-            for effect in dispatch.effects {
-                self.apply_store_effect(effect);
-            }
-        }
+        let update = self.core.drain_duration_updates();
+        let redraw = GtkTickRedraw::from_changes(update.changes);
+        self.apply_runtime_update(&update);
         redraw
     }
 
     pub(crate) fn accept_open_location(&mut self, text: &str) {
-        if text.is_empty() {
+        if !self.dialogs.accept_open_location(text) {
             return;
         }
-        self.last_open_location = Some(text.to_string());
-        let before = self.store.state().playlist.len();
-        let effects = self
-            .dispatch_store_command(PlaylistCommand::AddLocations(vec![text.to_string()]))
-            .effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
-        if self.store.state().playlist.len() > before {
+        let before = self.core.store().state().playlist.len();
+        self.dispatch_store_command(PlaylistCommand::AddLocations(vec![text.to_string()]));
+        if self.core.store().state().playlist.len() > before {
             self.schedule_missing_local_playlist_durations();
-            if self.store.state().playlist.position().is_none() {
-                self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::SetPosition(
-                    0,
-                ));
+            if self.core.store().state().playlist.position().is_none() {
+                self.dispatch_store_command(PlaylistCommand::SetPosition(0));
             }
-            self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+            self.dispatch_store_command(PlayerCommand::StartCurrentTrack);
         }
-        self.dialogs.open_location = false;
     }
 
     pub(crate) fn accept_dropped_uris<I, S>(
@@ -7388,25 +6980,20 @@ impl MainWindowUiState {
             return false;
         }
         if clear_first {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::Clear);
+            self.dispatch_store_command(PlaylistCommand::Clear);
         }
-        let before = self.store.state().playlist.len();
-        let effects = self
-            .dispatch_store_command(PlaylistCommand::AddLocations(locations))
-            .effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
-        let accepted = self.store.state().playlist.len() > before
-            || (clear_first && !self.store.state().playlist.is_empty());
+        let before = self.core.store().state().playlist.len();
+        self.dispatch_store_command(PlaylistCommand::AddLocations(locations));
+        let accepted = self.core.store().state().playlist.len() > before
+            || (clear_first && !self.core.store().state().playlist.is_empty());
         if accepted && clear_first {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::SetPosition(0));
+            self.dispatch_store_command(PlaylistCommand::SetPosition(0));
         }
         if accepted {
             self.schedule_missing_local_playlist_durations();
         }
         if accepted && start_playback {
-            self.dispatch_store_command_and_apply_local_effects(PlayerCommand::StartCurrentTrack);
+            self.dispatch_store_command(PlayerCommand::StartCurrentTrack);
         }
         accepted
     }
@@ -7420,12 +7007,9 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn accept_jump_time(&mut self, text: &str) {
-        let Some(ms) = parse_time_ms(text) else {
-            return;
-        };
-        self.last_jump_time_ms = Some(ms);
-        self.dispatch_store_command_and_apply_local_effects(PlayerCommand::SeekToMs(ms));
-        self.dialogs.jump_time = false;
+        if let Some(ms) = self.dialogs.accept_jump_time(text) {
+            self.dispatch_store_command(PlayerCommand::SeekToMs(ms));
+        }
     }
 
     pub(crate) fn set_playlist_size(&mut self, width: i32, height: i32) -> bool {
@@ -7454,19 +7038,20 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_active(&self) -> bool {
-        self.store.state().config.equalizer_active
+        self.core.store().state().config.equalizer_active
     }
 
     pub(crate) fn equalizer_automatic(&self) -> bool {
-        self.store.state().config.equalizer_auto
+        self.core.store().state().config.equalizer_auto
     }
 
     pub(crate) fn equalizer_preamp_position(&self) -> i32 {
-        self.store.state().config.equalizer_preamp_pos
+        self.core.store().state().config.equalizer_preamp_pos
     }
 
     pub(crate) fn equalizer_band_position(&self, band: usize) -> Option<i32> {
-        self.store
+        self.core
+            .store()
             .state()
             .config
             .equalizer_band_pos
@@ -7475,11 +7060,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_preamp_db(&self) -> f64 {
-        equalizer_position_to_db(self.store.state().config.equalizer_preamp_pos)
+        equalizer_position_to_db(self.core.store().state().config.equalizer_preamp_pos)
     }
 
     pub(crate) fn equalizer_band_db(&self, band: usize) -> Option<f64> {
-        self.store
+        self.core
+            .store()
             .state()
             .config
             .equalizer_band_pos
@@ -7488,7 +7074,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn equalizer_gstreamer_band_db_values(&self) -> EqualizerBandDb {
-        let config = &self.store.state().config;
+        let config = &self.core.store().state().config;
         if config.equalizer_active {
             config.equalizer_band_pos.map(equalizer_position_to_db)
         } else {
@@ -7592,19 +7178,18 @@ impl MainWindowUiState {
     fn adjust_equalizer_slider(&mut self, slider: EqualizerSlider, diff: i32) -> bool {
         match slider {
             EqualizerSlider::Preamp => {
-                let current = self.store.state().config.equalizer_preamp_pos;
+                let current = self.core.store().state().config.equalizer_preamp_pos;
                 let next = (current + diff).clamp(0, 100);
                 let changed = current != next;
                 if changed {
-                    self.dispatch_store_command_and_apply_local_effects(
-                        EqualizerCommand::SetPreamp(next),
-                    );
+                    self.dispatch_store_command(EqualizerCommand::SetPreamp(next));
                 }
                 changed
             }
             EqualizerSlider::Band(band) => {
                 let Some(value) = self
-                    .store
+                    .core
+                    .store()
                     .state()
                     .config
                     .equalizer_band_pos
@@ -7616,12 +7201,10 @@ impl MainWindowUiState {
                 let next = (value + diff).clamp(0, 100);
                 let changed = value != next;
                 if changed {
-                    self.dispatch_store_command_and_apply_local_effects(
-                        EqualizerCommand::SetBand {
-                            band,
-                            position: next,
-                        },
-                    );
+                    self.dispatch_store_command(EqualizerCommand::SetBand {
+                        band,
+                        position: next,
+                    });
                 }
                 changed
             }
@@ -7639,14 +7222,10 @@ impl MainWindowUiState {
                     app_log_info!(equalizer, "control activated", control_name);
                     match control {
                         EqualizerControl::On => {
-                            self.dispatch_store_command_and_apply_local_effects(
-                                EqualizerCommand::ToggleActive,
-                            );
+                            self.dispatch_store_command(EqualizerCommand::ToggleActive);
                         }
                         EqualizerControl::Auto => {
-                            self.dispatch_store_command_and_apply_local_effects(
-                                EqualizerCommand::ToggleAuto,
-                            );
+                            self.dispatch_store_command(EqualizerCommand::ToggleAuto);
                         }
                         EqualizerControl::Presets => return PanelAction::ShowEqualizerPresets,
                     }
@@ -7681,13 +7260,10 @@ impl MainWindowUiState {
             }
             _ => {}
         }
-        let effects = self
-            .store
-            .apply_equalizer_preset_positions(50, band_positions)
-            .effects;
-        for effect in effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::EqualizerPreset {
+            preamp: 50,
+            bands: band_positions,
+        });
     }
 
     fn set_equalizer_slider_position(
@@ -7701,11 +7277,9 @@ impl MainWindowUiState {
                 let position = eq_slider_pixel_to_position(
                     coordinate - equalizer_slider_layout(slider).rect.y - offset,
                 );
-                let changed = self.store.state().config.equalizer_preamp_pos != position;
+                let changed = self.core.store().state().config.equalizer_preamp_pos != position;
                 if changed {
-                    self.dispatch_store_command_and_apply_local_effects(
-                        EqualizerCommand::SetPreamp(position),
-                    );
+                    self.dispatch_store_command(EqualizerCommand::SetPreamp(position));
                 }
                 changed
             }
@@ -7714,16 +7288,15 @@ impl MainWindowUiState {
                     coordinate - equalizer_slider_layout(slider).rect.y - offset,
                 );
                 let changed = self
-                    .store
+                    .core
+                    .store()
                     .state()
                     .config
                     .equalizer_band_pos
                     .get(band)
                     .is_some_and(|value| *value != position);
                 if changed {
-                    self.dispatch_store_command_and_apply_local_effects(
-                        EqualizerCommand::SetBand { band, position },
-                    );
+                    self.dispatch_store_command(EqualizerCommand::SetBand { band, position });
                 }
                 changed
             }
@@ -7731,11 +7304,9 @@ impl MainWindowUiState {
                 let position =
                     (coordinate - equalizer_slider_layout(slider).rect.x - offset).clamp(0, 94);
                 let volume = eq_shaded_position_to_volume(position);
-                let changed = self.store.state().player.volume() != volume;
+                let changed = self.core.store().state().player.volume() != volume;
                 if changed {
-                    self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(
-                        volume,
-                    ));
+                    self.dispatch_store_command(AudioCommand::SetVolume(volume));
                 }
                 changed
             }
@@ -7743,11 +7314,9 @@ impl MainWindowUiState {
                 let position =
                     (coordinate - equalizer_slider_layout(slider).rect.x - offset).clamp(0, 39);
                 let balance = eq_shaded_position_to_balance(position);
-                let changed = self.store.state().player.balance() != balance;
+                let changed = self.core.store().state().player.balance() != balance;
                 if changed {
-                    self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetBalance(
-                        balance,
-                    ));
+                    self.dispatch_store_command(AudioCommand::SetBalance(balance));
                 }
                 changed
             }
@@ -7786,10 +7355,11 @@ impl MainWindowUiState {
     fn equalizer_slider_pixel_position(&self, slider: EqualizerSlider) -> i32 {
         match slider {
             EqualizerSlider::Preamp => {
-                eq_slider_position_to_pixel(self.store.state().config.equalizer_preamp_pos)
+                eq_slider_position_to_pixel(self.core.store().state().config.equalizer_preamp_pos)
             }
             EqualizerSlider::Band(band) => self
-                .store
+                .core
+                .store()
                 .state()
                 .config
                 .equalizer_band_pos
@@ -7798,23 +7368,16 @@ impl MainWindowUiState {
                 .map(eq_slider_position_to_pixel)
                 .unwrap_or(25),
             EqualizerSlider::ShadedVolume => {
-                volume_to_eq_shaded_position(self.store.state().player.volume())
+                volume_to_eq_shaded_position(self.core.store().state().player.volume())
             }
             EqualizerSlider::ShadedBalance => {
-                balance_to_eq_shaded_position(self.store.state().player.balance())
+                balance_to_eq_shaded_position(self.core.store().state().player.balance())
             }
         }
     }
 
-    fn sync_equalizer_to_backend(&self) {
-        if let Some(backend) = &self.playback_backend {
-            let config = &self.store.state().config;
-            let _ = backend.borrow().set_equalizer(EqualizerBackendState {
-                active: config.equalizer_active,
-                preamp_position: config.equalizer_preamp_pos,
-                band_positions: config.equalizer_band_pos,
-            });
-        }
+    fn sync_equalizer_to_backend(&mut self) {
+        self.handle_runtime_event(RuntimeEvent::RefreshBackendEqualizer);
     }
 
     pub(crate) fn panel_title_drag_region(&self, kind: PanelKind, x: i32, y: i32) -> bool {
@@ -7956,7 +7519,7 @@ impl MainWindowUiState {
         };
         if ctrl_pressed {
             for command in playlist_row_click_commands(index, false, true) {
-                self.dispatch_store_command_and_apply_local_effects(command);
+                self.dispatch_store_command(command);
             }
             self.playlist_ui.last_click = None;
             self.playlist_ui.pending_double_click = None;
@@ -7975,7 +7538,7 @@ impl MainWindowUiState {
         self.playlist_ui.last_click = Some((index, now));
         self.playlist_ui.pending_double_click = is_double_click.then_some(index);
         for command in playlist_row_click_commands(index, false, false) {
-            self.dispatch_store_command_and_apply_local_effects(command);
+            self.dispatch_store_command(command);
         }
         self.playlist_ui.pointer = PlaylistPointer::DraggingEntry {
             index,
@@ -8000,7 +7563,7 @@ impl MainWindowUiState {
         self.playlist_ui.pending_double_click = None;
         self.playlist_ui.pointer = PlaylistPointer::Idle;
         for command in playlist_row_click_commands(index, true, false) {
-            self.dispatch_store_command_and_apply_local_effects(command);
+            self.dispatch_store_command(command);
         }
     }
 
@@ -8010,10 +7573,7 @@ impl MainWindowUiState {
                 return false;
             };
             if !self
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::MoveEntry {
-                    from,
-                    to,
-                })
+                .dispatch_store_command(PlaylistCommand::MoveEntry { from, to })
                 .changes
                 .is_empty()
             {
@@ -8075,33 +7635,31 @@ impl MainWindowUiState {
             PlaylistMenuCommand::ShowSortMenu => return PanelAction::ShowPlaylistSortMenu,
             PlaylistMenuCommand::ShowFileInfo => return PanelAction::ShowFileInfo,
             PlaylistMenuCommand::OpenOptions => {
-                self.playlist_options_opened = true;
+                self.playlist_ui.options_opened = true;
                 true
             }
             PlaylistMenuCommand::ClearList => !self
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::Clear)
+                .dispatch_store_command(PlaylistCommand::Clear)
                 .changes
                 .is_empty(),
             PlaylistMenuCommand::CropToSelection => !self
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::CropToSelection)
+                .dispatch_store_command(PlaylistCommand::CropToSelection)
                 .changes
                 .is_empty(),
             PlaylistMenuCommand::RemoveSelectedOrCurrent => !self
-                .dispatch_store_command_and_apply_local_effects(
-                    PlaylistCommand::RemoveSelectedOrCurrent,
-                )
+                .dispatch_store_command(PlaylistCommand::RemoveSelectedOrCurrent)
                 .changes
                 .is_empty(),
             PlaylistMenuCommand::InvertSelection => !self
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::InvertSelection)
+                .dispatch_store_command(PlaylistCommand::InvertSelection)
                 .changes
                 .is_empty(),
             PlaylistMenuCommand::SelectNone => !self
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::SelectNone)
+                .dispatch_store_command(PlaylistCommand::SelectNone)
                 .changes
                 .is_empty(),
             PlaylistMenuCommand::SelectAll => !self
-                .dispatch_store_command_and_apply_local_effects(PlaylistCommand::SelectAll)
+                .dispatch_store_command(PlaylistCommand::SelectAll)
                 .changes
                 .is_empty(),
             PlaylistMenuCommand::SavePlaylist => return PanelAction::OpenPlaylistSaveDialog,
@@ -8127,10 +7685,7 @@ impl MainWindowUiState {
             PlaylistContextAction::SelectNone => PlaylistCommand::SelectNone,
             PlaylistContextAction::InvertSelection => PlaylistCommand::InvertSelection,
         };
-        let changed = !self
-            .dispatch_store_command_and_apply_local_effects(command)
-            .changes
-            .is_empty();
+        let changed = !self.dispatch_store_command(command).changes.is_empty();
         if changed {
             self.clamp_playlist_scroll_offset();
         }
@@ -8138,7 +7693,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn activate_playlist_sort_action(&mut self, action: PlaylistSortAction) -> bool {
-        self.dispatch_store_command_and_apply_local_effects(action.command());
+        self.dispatch_store_command(action.command());
         self.clamp_playlist_scroll_offset();
         true
     }
@@ -8148,19 +7703,19 @@ impl MainWindowUiState {
         if query.is_empty() {
             return;
         }
-        let total = self.store.state().playlist.len();
+        let total = self.core.store().state().playlist.len();
         if total == 0 {
             return;
         }
         let query = query.to_lowercase();
         let start = self
             .selected_playlist_index()
-            .or_else(|| self.store.state().playlist.position())
+            .or_else(|| self.core.store().state().playlist.position())
             .unwrap_or(0)
             .min(total);
 
         let matching_index = (start..total).chain(0..start).find(|index| {
-            let Some(entry) = self.store.state().playlist.entries().get(*index) else {
+            let Some(entry) = self.core.store().state().playlist.entries().get(*index) else {
                 return false;
             };
             let text = if entry.title.is_empty() {
@@ -8177,7 +7732,8 @@ impl MainWindowUiState {
     }
 
     fn selected_playlist_index(&self) -> Option<usize> {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .entries()
@@ -8186,7 +7742,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn move_playlist_selection(&mut self, delta: isize) -> bool {
-        if !self.store.state().config.vim_playlist_navigation {
+        if !self.core.store().state().config.vim_playlist_navigation {
             return false;
         }
         self.move_playlist_selection_by(delta)
@@ -8197,13 +7753,13 @@ impl MainWindowUiState {
     }
 
     fn move_playlist_selection_by(&mut self, delta: isize) -> bool {
-        let len = self.store.state().playlist.len();
+        let len = self.core.store().state().playlist.len();
         if len == 0 {
             return false;
         }
         let current = self
             .selected_playlist_index()
-            .or_else(|| self.store.state().playlist.position())
+            .or_else(|| self.core.store().state().playlist.position())
             .unwrap_or(if delta < 0 { len - 1 } else { 0 });
         let next = current.saturating_add_signed(delta).min(len - 1);
         self.select_single_playlist_entry(next);
@@ -8221,7 +7777,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn move_playlist_to_end(&mut self) -> bool {
-        let Some(last) = self.store.state().playlist.len().checked_sub(1) else {
+        let Some(last) = self.core.store().state().playlist.len().checked_sub(1) else {
             return false;
         };
         self.select_single_playlist_entry(last);
@@ -8231,36 +7787,35 @@ impl MainWindowUiState {
 
     pub(crate) fn crop_playlist_to_selected_or_current(&mut self) -> bool {
         !self
-            .dispatch_store_command_and_apply_local_effects(PlaylistCommand::CropToSelection)
+            .dispatch_store_command(PlaylistCommand::CropToSelection)
             .changes
             .is_empty()
     }
 
     pub(crate) fn toggle_queue_selected_playlist_entries(&mut self) -> bool {
-        let targets = playlist_queue_target_indices(&self.store.state().playlist);
+        let targets = playlist_queue_target_indices(&self.core.store().state().playlist);
         if targets.is_empty() {
             return false;
         }
         !self
-            .dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleQueue(targets))
+            .dispatch_store_command(PlaylistCommand::ToggleQueue(targets))
             .changes
             .is_empty()
     }
 
     pub(crate) fn clear_playlist_queue(&mut self) -> bool {
         !self
-            .dispatch_store_command_and_apply_local_effects(PlaylistCommand::ClearQueue)
+            .dispatch_store_command(PlaylistCommand::ClearQueue)
             .changes
             .is_empty()
     }
 
     pub(crate) fn open_queue_manager(&mut self) -> bool {
-        self.queue_manager_opened = true;
         true
     }
 
     pub(crate) fn play_selected_playlist_entry(&mut self) -> bool {
-        if !self.store.state().config.vim_playlist_navigation {
+        if !self.core.store().state().config.vim_playlist_navigation {
             return false;
         }
         self.activate_selected_or_current_playlist_entry()
@@ -8269,8 +7824,8 @@ impl MainWindowUiState {
     pub(crate) fn activate_selected_or_current_playlist_entry(&mut self) -> bool {
         let Some(index) = self
             .selected_playlist_index()
-            .or_else(|| self.store.state().playlist.position())
-            .or_else(|| (!self.store.state().playlist.is_empty()).then_some(0))
+            .or_else(|| self.core.store().state().playlist.position())
+            .or_else(|| (!self.core.store().state().playlist.is_empty()).then_some(0))
         else {
             return false;
         };
@@ -8280,7 +7835,7 @@ impl MainWindowUiState {
 
     fn select_single_playlist_entry(&mut self, index: usize) {
         for command in playlist_row_click_commands(index, false, false) {
-            self.dispatch_store_command_and_apply_local_effects(command);
+            self.dispatch_store_command(command);
         }
     }
 
@@ -8313,11 +7868,12 @@ impl MainWindowUiState {
             return None;
         }
         let index = self.playlist_ui.scroll_offset + row;
-        (index < self.store.state().playlist.len()).then_some(index)
+        (index < self.core.store().state().playlist.len()).then_some(index)
     }
 
     fn playlist_max_scroll(&self) -> usize {
-        self.store
+        self.core
+            .store()
             .state()
             .playlist
             .len()
@@ -8341,7 +7897,7 @@ impl MainWindowUiState {
 
     fn playlist_scrollbar_geometry(&self) -> Option<(i32, i32)> {
         let visible = self.playlist_visible_entries();
-        let total = self.store.state().playlist.len();
+        let total = self.core.store().state().playlist.len();
         if total <= visible || visible == 0 {
             return None;
         }
@@ -8357,7 +7913,7 @@ impl MainWindowUiState {
 
     fn update_playlist_scroll_from_thumb_y(&mut self, thumb_y: i32) {
         let visible = self.playlist_visible_entries();
-        let total = self.store.state().playlist.len();
+        let total = self.core.store().state().playlist.len();
         if total <= visible || visible == 0 {
             self.playlist_ui.scroll_offset = 0;
             return;
@@ -8401,14 +7957,10 @@ impl MainWindowUiState {
             if self.panel_close_button_hit(kind, x) {
                 match kind {
                     PanelKind::Equalizer => {
-                        self.dispatch_store_command_and_apply_local_effects(
-                            PanelCommand::SetEqualizerVisibility(false),
-                        );
+                        self.dispatch_store_command(PanelCommand::SetEqualizerVisibility(false));
                     }
                     PanelKind::Playlist => {
-                        self.dispatch_store_command_and_apply_local_effects(
-                            PanelCommand::SetPlaylistVisibility(false),
-                        );
+                        self.dispatch_store_command(PanelCommand::SetPlaylistVisibility(false));
                     }
                 }
                 return PanelAction::Changed;
@@ -8444,23 +7996,23 @@ impl MainWindowUiState {
         app_log_info!(playlist, "footer button", button_name);
         match button {
             PlaylistFooterButton::Previous => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::PreviousTrack);
+                self.dispatch_store_command(PlayerCommand::PreviousTrack);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Play => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Play);
+                self.dispatch_store_command(PlayerCommand::Play);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Pause => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Pause);
+                self.dispatch_store_command(PlayerCommand::Pause);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Stop => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Halt);
+                self.dispatch_store_command(PlayerCommand::Halt);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Next => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::NextTrack);
+                self.dispatch_store_command(PlayerCommand::NextTrack);
                 PanelAction::Changed
             }
             PlaylistFooterButton::Eject => PanelAction::OpenFileDialog,
@@ -8490,29 +8042,29 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn player_state(&self) -> PlayerState {
-        self.store.state().player.state()
+        self.core.store().state().player.state()
     }
 
     pub(crate) fn shuffle(&self) -> bool {
-        self.store.state().playlist.shuffle()
+        self.core.store().state().playlist.shuffle()
     }
 
     pub(crate) fn repeat(&self) -> bool {
-        self.store.state().playlist.repeat()
+        self.core.store().state().playlist.repeat()
     }
 
     pub(crate) fn no_advance(&self) -> bool {
-        self.store.state().playlist.no_advance()
+        self.core.store().state().playlist.no_advance()
     }
 
     pub(crate) fn set_no_advance(&mut self, enabled: bool) {
-        if self.store.state().playlist.no_advance() != enabled {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleNoAdvance);
+        if self.core.store().state().playlist.no_advance() != enabled {
+            self.dispatch_store_command(PlaylistCommand::ToggleNoAdvance);
         }
     }
 
     pub(crate) fn toggle_shaded(&mut self) {
-        self.dispatch_store_command_and_apply_local_effects(PanelCommand::ToggleMainShade);
+        self.dispatch_store_command(PanelCommand::ToggleMainShade);
     }
 
     pub(crate) fn toggle_selected_window_shade(&mut self) -> Option<PanelKind> {
@@ -8539,24 +8091,20 @@ impl MainWindowUiState {
     fn toggle_panel_shaded(&mut self, kind: PanelKind) {
         match kind {
             PanelKind::Equalizer => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    PanelCommand::ToggleEqualizerShade,
-                );
+                self.dispatch_store_command(PanelCommand::ToggleEqualizerShade);
             }
             PanelKind::Playlist => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    PanelCommand::TogglePlaylistShade,
-                );
+                self.dispatch_store_command(PanelCommand::TogglePlaylistShade);
             }
         }
     }
 
     pub(crate) fn volume(&self) -> i32 {
-        self.store.state().player.volume()
+        self.core.store().state().player.volume()
     }
 
     pub(crate) fn balance(&self) -> i32 {
-        self.store.state().player.balance()
+        self.core.store().state().player.balance()
     }
 
     pub(crate) fn position(&self) -> i32 {
@@ -8584,33 +8132,28 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_output_device(&mut self, device: Option<String>) {
-        if let Some(backend) = &self.playback_backend {
-            let selection = device
-                .as_deref()
-                .map(OutputDeviceSelection::System)
-                .unwrap_or(OutputDeviceSelection::Automatic);
-            let mut backend = backend.borrow_mut();
-            if let Err(err) = backend.select_output_device(selection) {
+        if let Some((result, groups)) = self.core.select_output_device(device.as_deref()) {
+            if let Err(err) = result {
                 eprintln!("xmms-rs: failed to switch output device: {err}");
             }
-            self.output_device_groups = backend.output_device_groups();
+            self.output_devices.groups = groups;
         }
         self.sync_equalizer_to_backend();
         self.update_config_via_store(|config| config.output_device = device);
     }
 
     pub(crate) fn preference_output_device(&self) -> Option<&str> {
-        self.store.state().config.output_device.as_deref()
+        self.core.store().state().config.output_device.as_deref()
     }
 
     pub(crate) fn set_preference_volume(&mut self, volume: i32) {
         let volume = volume.clamp(0, 100);
-        self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(volume));
+        self.dispatch_store_command(AudioCommand::SetVolume(volume));
     }
 
     pub(crate) fn set_preference_balance(&mut self, balance: i32) {
         let balance = balance.clamp(-100, 100);
-        self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetBalance(balance));
+        self.dispatch_store_command(AudioCommand::SetBalance(balance));
     }
 
     pub(crate) fn set_preference_scale_factor(&mut self, scale: f64) {
@@ -8618,36 +8161,33 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_repeat(&mut self, enabled: bool) {
-        if self.store.state().playlist.repeat() != enabled {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleRepeat);
+        if self.core.store().state().playlist.repeat() != enabled {
+            self.dispatch_store_command(PlaylistCommand::ToggleRepeat);
         }
     }
 
     pub(crate) fn set_preference_shuffle(&mut self, enabled: bool) {
-        if self.store.state().playlist.shuffle() != enabled {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleShuffle);
+        if self.core.store().state().playlist.shuffle() != enabled {
+            self.dispatch_store_command(PlaylistCommand::ToggleShuffle);
         }
     }
 
     pub(crate) fn set_preference_no_playlist_advance(&mut self, enabled: bool) {
-        if self.store.state().playlist.no_advance() != enabled {
-            self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleNoAdvance);
+        if self.core.store().state().playlist.no_advance() != enabled {
+            self.dispatch_store_command(PlaylistCommand::ToggleNoAdvance);
         }
     }
 
     pub(crate) fn preference_no_playlist_advance(&self) -> bool {
-        self.store.state().playlist.no_advance()
+        self.core.store().state().playlist.no_advance()
     }
 
     pub(crate) fn set_preference_pause_between_songs(&mut self, enabled: bool) {
         self.update_config_via_store(|config| config.pause_between_songs = enabled);
-        if !enabled {
-            self.playback_transition = PlaybackTransitionState::stop_playback();
-        }
     }
 
     pub(crate) fn preference_pause_between_songs(&self) -> bool {
-        self.store.state().config.pause_between_songs
+        self.core.store().state().config.pause_between_songs
     }
 
     pub(crate) fn set_preference_stop_with_fadeout(&mut self, enabled: bool) {
@@ -8655,7 +8195,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_stop_with_fadeout(&self) -> bool {
-        self.store.state().config.stop_with_fadeout
+        self.core.store().state().config.stop_with_fadeout
     }
 
     pub(crate) fn set_preference_pause_between_songs_time(&mut self, seconds: i32) {
@@ -8665,7 +8205,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_pause_between_songs_time(&self) -> i32 {
-        self.store.state().config.pause_between_songs_time
+        self.core.store().state().config.pause_between_songs_time
     }
 
     pub(crate) fn set_preference_mouse_wheel_change(&mut self, percent: i32) {
@@ -8675,7 +8215,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_mouse_wheel_change(&self) -> i32 {
-        self.store.state().config.mouse_wheel_change
+        self.core.store().state().config.mouse_wheel_change
     }
 
     pub(crate) fn set_preference_timer_remaining(&mut self, enabled: bool) {
@@ -8689,13 +8229,11 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_timer_remaining(&self) -> bool {
-        self.store.state().config.timer_mode == TimerMode::Remaining
+        self.core.store().state().config.timer_mode == TimerMode::Remaining
     }
 
     pub(crate) fn set_preference_playlist_docked(&mut self, docked: bool) {
-        self.dispatch_store_command_and_apply_local_effects(PanelCommand::SetPlaylistDetached(
-            !docked,
-        ));
+        self.dispatch_store_command(PanelCommand::SetPlaylistDetached(!docked));
         if docked {
             self.playlist_ui.width = PLAYLIST_MIN_WIDTH;
             self.clamp_playlist_scroll_offset();
@@ -8703,9 +8241,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn set_preference_equalizer_docked(&mut self, docked: bool) {
-        self.dispatch_store_command_and_apply_local_effects(PanelCommand::SetEqualizerDetached(
-            !docked,
-        ));
+        self.dispatch_store_command(PanelCommand::SetEqualizerDetached(!docked));
     }
 
     pub(crate) fn set_preference_convert_underscore(&mut self, enabled: bool) {
@@ -8713,7 +8249,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_convert_underscore(&self) -> bool {
-        self.store.state().config.convert_underscore
+        self.core.store().state().config.convert_underscore
     }
 
     pub(crate) fn set_preference_convert_twenty(&mut self, enabled: bool) {
@@ -8721,7 +8257,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_convert_twenty(&self) -> bool {
-        self.store.state().config.convert_twenty
+        self.core.store().state().config.convert_twenty
     }
 
     pub(crate) fn set_preference_show_numbers_in_playlist(&mut self, enabled: bool) {
@@ -8729,7 +8265,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_show_numbers_in_playlist(&self) -> bool {
-        self.store.state().config.show_numbers_in_pl
+        self.core.store().state().config.show_numbers_in_pl
     }
 
     pub(crate) fn set_preference_vim_playlist_navigation(&mut self, enabled: bool) {
@@ -8737,7 +8273,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_vim_playlist_navigation(&self) -> bool {
-        self.store.state().config.vim_playlist_navigation
+        self.core.store().state().config.vim_playlist_navigation
     }
 
     pub(crate) fn set_preference_playlist_font(&mut self, font: &str) {
@@ -8745,7 +8281,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_playlist_font(&self) -> &str {
-        &self.store.state().config.playlist_font
+        &self.core.store().state().config.playlist_font
     }
 
     pub(crate) fn set_preference_playlist_font_size(&mut self, size: f64) {
@@ -8755,7 +8291,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_playlist_font_size(&self) -> f64 {
-        playlist_font_size_from_descriptor(&self.store.state().config.playlist_font)
+        playlist_font_size_from_descriptor(&self.core.store().state().config.playlist_font)
     }
 
     pub(crate) fn set_preference_title_format(&mut self, format: &str) {
@@ -8765,7 +8301,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn preference_title_format(&self) -> &str {
-        &self.store.state().config.title_format
+        &self.core.store().state().config.title_format
     }
 
     pub(crate) fn set_visualization_mode(&mut self, mode: VisMode) {
@@ -8774,7 +8310,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_mode(&self) -> VisMode {
-        self.visualization.mode()
+        self.core.visualization_render_state().mode
     }
 
     pub(crate) fn set_visualization_analyzer_style(&mut self, style: VisAnalyzerStyle) {
@@ -8783,7 +8319,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_analyzer_style(&self) -> VisAnalyzerStyle {
-        self.visualization.analyzer_style()
+        self.core.visualization_render_state().analyzer_style
     }
 
     pub(crate) fn set_visualization_analyzer_mode(&mut self, mode: VisAnalyzerMode) {
@@ -8792,7 +8328,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_analyzer_mode(&self) -> VisAnalyzerMode {
-        self.visualization.analyzer_mode()
+        self.core.visualization_render_state().analyzer_mode
     }
 
     pub(crate) fn set_visualization_scope_mode(&mut self, mode: VisScopeMode) {
@@ -8801,7 +8337,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_scope_mode(&self) -> VisScopeMode {
-        self.visualization.scope_mode()
+        self.core.visualization_render_state().scope_mode
     }
 
     pub(crate) fn set_visualization_peaks_enabled(&mut self, enabled: bool) {
@@ -8810,15 +8346,15 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_peaks_enabled(&self) -> bool {
-        self.visualization.peaks_enabled()
+        self.core.visualization_render_state().peaks_enabled
     }
 
     pub(crate) fn visualization_analyzer_falloff(&self) -> VisFalloffSpeed {
-        self.store.state().config.vis_analyzer_falloff
+        self.core.store().state().config.vis_analyzer_falloff
     }
 
     pub(crate) fn visualization_peaks_falloff(&self) -> VisFalloffSpeed {
-        self.store.state().config.vis_peaks_falloff
+        self.core.store().state().config.vis_peaks_falloff
     }
 
     pub(crate) fn set_visualization_falloff(
@@ -8838,7 +8374,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_vu_mode(&self) -> VisVuMode {
-        self.store.state().config.vis_vu_mode
+        self.core.store().state().config.vis_vu_mode
     }
 
     pub(crate) fn set_visualization_refresh_divisor(&mut self, divisor: i32) {
@@ -8848,7 +8384,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn visualization_refresh_divisor(&self) -> i32 {
-        self.store.state().config.vis_refresh_divisor.clamp(1, 8)
+        self.core
+            .store()
+            .state()
+            .config
+            .vis_refresh_divisor
+            .clamp(1, 8)
     }
 
     pub(crate) fn visualization_render_state(&self) -> VisualizationRenderState {
@@ -8856,47 +8397,20 @@ impl MainWindowUiState {
     }
 
     fn apply_visualization_preferences(&mut self) {
-        let config = self.store.state().config.clone();
-        self.visualization.set_mode(config.vis_mode);
-        self.visualization
-            .set_analyzer_mode(config.vis_analyzer_mode);
-        self.visualization
-            .set_analyzer_style(config.vis_analyzer_style);
-        self.visualization.set_scope_mode(config.vis_scope_mode);
-        self.visualization
-            .set_peaks_enabled(config.vis_peaks_enabled);
-        self.visualization
-            .set_falloff(config.vis_analyzer_falloff, config.vis_peaks_falloff);
+        self.core.apply_visualization_preferences();
     }
 
     #[cfg(test)]
     fn set_playback_position_ms(&mut self, position_ms: i64) {
         self.ensure_current_playlist_position_for_seek();
-        let result = self
-            .store
-            .update_playback_position_from_runtime(position_ms);
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
-        let position_ms = self.store.state().config.playback_position_ms;
-        if self.store.state().player.state() == PlayerState::Stopped {
-            self.playback_transition = PlaybackTransitionState::stopped_at_or_idle(position_ms);
-            return;
-        }
-        if self.playback_transition.pending_backend_seek_ms().is_some() {
-            self.playback_transition = PlaybackTransitionState::request_backend_seek(position_ms);
-            return;
-        }
-        self.playback_transition = PlaybackTransitionState::request_backend_seek(position_ms);
-        if let Some(backend) = &self.playback_backend {
-            match backend.borrow().seek(position_ms) {
-                Ok(()) => {
-                    self.playback_transition =
-                        PlaybackTransitionState::await_backend_seek(position_ms);
-                }
-                Err(err) => {
-                    eprintln!("xmms-rs: failed to seek playback: {err}");
-                }
+        self.handle_runtime_event(RuntimeEvent::PlaybackPosition(position_ms));
+        let position_ms = self.core.store().state().config.playback_position_ms;
+        if self.core.store().state().player.state() == PlayerState::Stopped {
+            self.core.reset_stopped_position();
+        } else {
+            self.core.request_backend_seek(position_ms);
+            if self.core.has_backend() {
+                let _ = self.core.seek_backend(position_ms);
             }
         }
     }
@@ -8909,14 +8423,16 @@ impl MainWindowUiState {
         let mut redraw = self.poll_duration_index_results();
         redraw.merge(self.poll_playback_backend());
         let fading = self.update_stop_fade(elapsed_ms);
-        let eof_waiting = self.update_pending_eof_advance(elapsed_ms);
+        let eof_waiting = self
+            .handle_runtime_event(RuntimeEvent::TransitionTick(i64::from(elapsed_ms)))
+            .transition_changed;
         let title = self
             .equalizer_drag_info_text()
             .unwrap_or_else(|| self.formatted_current_title());
-        let marquee_changed = self.title_marquee.update(
+        let marquee_changed = self.main.title_marquee.update(
             &title,
             crate::render::MAIN_TITLE_TEXT_WIDTH,
-            self.store.state().player.state(),
+            self.core.store().state().player.state(),
             !self.is_shaded(),
             Duration::from_millis(u64::from(elapsed_ms)),
         );
@@ -8925,73 +8441,50 @@ impl MainWindowUiState {
             redraw.main = true;
             redraw.playlist = true;
         }
-        if self.store.state().player.state() != PlayerState::Playing {
-            self.visualization_tick_counter = 0;
+        if self.core.store().state().player.state() != PlayerState::Playing {
+            self.core.reset_visualization_tick();
             self.update_playlist_footer_redraw(&mut redraw);
             return redraw;
         }
 
-        if self.playback_backend.is_none() {
+        if !self.core.has_backend() {
             let pending_visualization_data = self
-                .store
+                .core
+                .store()
                 .state()
                 .player
                 .visualization_data_valid()
-                .then(|| *self.store.state().player.visualization_data());
-            let result = self.store.tick_playback_position(i64::from(elapsed_ms));
-            redraw.merge(GtkTickRedraw::from_changes(result.changes));
-            for effect in result.effects {
-                self.apply_store_effect(effect);
-            }
+                .then(|| *self.core.store().state().player.visualization_data());
+            let update =
+                self.handle_runtime_event(RuntimeEvent::PlaybackTick(i64::from(elapsed_ms)));
+            redraw.merge(GtkTickRedraw::from_changes(update.changes));
             if let Some(data) = pending_visualization_data {
-                let result = self
-                    .store
-                    .handle_playback_event(PlaybackEvent::Spectrum(data));
-                redraw.merge(GtkTickRedraw::from_changes(result.changes));
-                for effect in result.effects {
-                    self.apply_store_effect(effect);
-                }
+                let update = self
+                    .handle_runtime_event(RuntimeEvent::Playback(PlaybackEvent::Spectrum(data)));
+                redraw.merge(GtkTickRedraw::from_changes(update.changes));
             }
         }
-        self.visualization_tick_counter += 1;
-        if self.visualization_tick_counter >= self.visualization_refresh_divisor() {
-            self.visualization_tick_counter = 0;
-            let data = self
-                .store
-                .state()
-                .player
-                .visualization_data_valid()
-                .then(|| *self.store.state().player.visualization_data());
-            self.visualization.tick_with_steps(
-                data.as_ref().map(|data| data.as_slice()),
-                self.visualization_refresh_divisor() as usize,
-            );
-        }
+        self.core
+            .advance_visualization_tick(self.visualization_refresh_divisor());
         redraw.main = true;
         self.update_playlist_footer_redraw(&mut redraw);
         redraw
     }
 
     fn runtime_tick_interval(&self) -> Duration {
-        if self.playback_transition.fadeout().is_some()
-            || self.playback_transition.eof_pause_remaining_ms().is_some()
-            || self.playback_transition.pending_backend_seek_ms().is_some()
-            || self
-                .playback_transition
-                .awaiting_backend_seek_ms()
-                .is_some()
-        {
+        if self.core.stop_fade_active() || self.core.transition().needs_fast_tick() {
             return GTK_TRANSITION_TICK;
         }
 
-        match self.store.state().player.state() {
-            PlayerState::Playing if self.visualization.mode() != VisMode::Off => {
+        match self.core.store().state().player.state() {
+            PlayerState::Playing if self.core.visualization_render_state().mode != VisMode::Off => {
                 GTK_TRANSITION_TICK
             }
             PlayerState::Playing
                 if self
+                    .main
                     .title_marquee
-                    .is_scrolling(self.store.state().player.state(), !self.is_shaded()) =>
+                    .is_scrolling(self.core.store().state().player.state(), !self.is_shaded()) =>
             {
                 GTK_MARQUEE_TICK
             }
@@ -9002,84 +8495,36 @@ impl MainWindowUiState {
     }
 
     fn update_stop_fade(&mut self, elapsed_ms: u32) -> bool {
-        let Some((next_transition, volume)) = self.playback_transition.tick_fadeout(elapsed_ms)
-        else {
+        if !self.core.stop_fade_active() {
             return false;
-        };
-        if next_transition
-            .fadeout()
-            .is_some_and(|(remaining_ms, _)| remaining_ms == 0)
-        {
-            let restore_volume = next_transition
-                .fadeout()
-                .map(|(_, start_volume)| start_volume)
-                .unwrap_or_default();
-            let result = self.store.complete_stop_fade(restore_volume);
-            for effect in result.effects {
-                self.apply_store_effect(effect);
-            }
-            self.playback_transition = PlaybackTransitionState::stop_playback();
-            self.visualization.clear_data();
-            return true;
         }
-        self.playback_transition = next_transition;
-        self.set_runtime_volume(volume);
-        true
-    }
-
-    fn update_pending_eof_advance(&mut self, elapsed_ms: u32) -> bool {
-        let Some((next_transition, should_advance)) =
-            self.playback_transition.tick_eof_pause(elapsed_ms)
-        else {
-            return false;
-        };
-        self.playback_transition = next_transition;
-        if !should_advance {
-            return true;
-        }
-        self.advance_playlist_after_eof();
+        let update = self.core.tick_stop_fade(i64::from(elapsed_ms));
+        self.apply_runtime_update(&update);
         true
     }
 
     fn poll_playback_backend(&mut self) -> GtkTickRedraw {
         let mut redraw = GtkTickRedraw::default();
-        let Some(backend) = self.playback_backend.as_ref().map(Rc::clone) else {
+        if !self.core.has_backend() {
             return redraw;
-        };
-        let spectrum_layout = if self.visualization.mode() == VisMode::Analyzer
-            && self.visualization.analyzer_style() == VisAnalyzerStyle::Bars
-        {
-            SpectrumLayout::AnalyzerBars
-        } else {
-            SpectrumLayout::Lines
-        };
+        }
+        let events = self.core.poll_playback_events().expect("checked backend");
         let mut applied_pending_seek = false;
-        let backend_ref = backend.borrow();
-        backend_ref.set_spectrum_layout(spectrum_layout);
-        let events = backend_ref.poll_events();
-        drop(backend_ref);
         match events {
             Ok(events) => {
                 let mut end_of_stream = false;
                 let mut backend_ready = false;
                 for event in events {
-                    if matches!(event, PlaybackEvent::EndOfStream) {
-                        end_of_stream = true;
-                    }
-                    if matches!(
+                    end_of_stream |= matches!(event, PlaybackEvent::EndOfStream);
+                    backend_ready |= matches!(
                         event,
                         PlaybackEvent::AsyncDone | PlaybackEvent::DurationChanged(_)
-                    ) {
-                        backend_ready = true;
-                    }
-                    let result = self.store.handle_playback_event(event);
-                    redraw.merge(GtkTickRedraw::from_changes(result.changes));
-                    for effect in result.effects {
-                        self.apply_store_effect(effect);
-                    }
+                    );
+                    let update = self.handle_runtime_event(RuntimeEvent::Playback(event));
+                    redraw.merge(GtkTickRedraw::from_changes(update.changes));
                 }
                 if backend_ready {
-                    applied_pending_seek |= self.apply_pending_backend_seek(&backend, false);
+                    applied_pending_seek |= self.apply_pending_backend_seek(false);
                 }
                 if end_of_stream {
                     self.playlist_eof_reached();
@@ -9089,110 +8534,50 @@ impl MainWindowUiState {
             }
             Err(err) => eprintln!("xmms-rs: failed to poll playback backend: {err}"),
         }
-        let (stream_info, duration_ms) = {
-            let backend = backend.borrow();
-            (backend.stream_info(), backend.duration_ms())
-        };
-        let result = self
-            .store
-            .handle_playback_event(PlaybackEvent::StreamInfo(stream_info));
-        redraw.merge(GtkTickRedraw::from_changes(result.changes));
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
+        let stream_info = self.core.backend_stream_info().expect("checked backend");
+        let duration_ms = self.core.backend_duration_ms();
+        let update = self.handle_runtime_event(RuntimeEvent::Playback(PlaybackEvent::StreamInfo(
+            stream_info,
+        )));
+        redraw.merge(GtkTickRedraw::from_changes(update.changes));
         if let Some(duration_ms) = duration_ms {
-            let result =
-                self.store
-                    .handle_playback_event(crate::player::PlaybackEvent::DurationChanged(Some(
-                        duration_ms,
-                    )));
-            redraw.merge(GtkTickRedraw::from_changes(result.changes));
-            for effect in result.effects {
-                self.apply_store_effect(effect);
-            }
-            applied_pending_seek |= self.apply_pending_backend_seek(&backend, true);
+            let update = self.handle_runtime_event(RuntimeEvent::Playback(
+                PlaybackEvent::DurationChanged(Some(duration_ms)),
+            ));
+            redraw.merge(GtkTickRedraw::from_changes(update.changes));
+            applied_pending_seek |= self.apply_pending_backend_seek(true);
         }
-        let position_ms = { backend.borrow().position_ms() };
-        if let Some(position_ms) = position_ms {
-            if let Some(target_ms) = self.playback_transition.awaiting_backend_seek_ms() {
-                if position_ms.saturating_sub(target_ms).abs() <= 250 {
-                    self.playback_transition = PlaybackTransitionState::Idle;
-                    let result = self
-                        .store
-                        .update_playback_position_from_runtime(position_ms.max(target_ms));
-                    redraw.merge(GtkTickRedraw::from_changes(result.changes));
-                    for effect in result.effects {
-                        self.apply_store_effect(effect);
-                    }
-                }
-            } else if self.should_sync_backend_position(applied_pending_seek) {
-                let result = self
-                    .store
-                    .update_playback_position_from_runtime(position_ms);
-                redraw.merge(GtkTickRedraw::from_changes(result.changes));
-                for effect in result.effects {
-                    self.apply_store_effect(effect);
-                }
+        if !applied_pending_seek {
+            if let Some(position_ms) = self.core.backend_position_ms() {
+                let update = self.handle_runtime_event(RuntimeEvent::BackendPosition(position_ms));
+                redraw.merge(GtkTickRedraw::from_changes(update.changes));
             }
         }
         redraw
     }
 
+    #[cfg(test)]
     fn should_sync_backend_position(&self, applied_pending_seek: bool) -> bool {
-        !applied_pending_seek
-            && self.playback_transition.pending_backend_seek_ms().is_none()
-            && self
-                .playback_transition
-                .awaiting_backend_seek_ms()
-                .is_none()
-            && self.playback_transition.eof_pause_remaining_ms().is_none()
+        !applied_pending_seek && self.core.transition().observe_position(0).1.is_some()
     }
 
-    fn apply_pending_backend_seek(
-        &mut self,
-        backend: &SharedPlaybackBackend,
-        log_failure: bool,
-    ) -> bool {
-        let Some(position_ms) = self.playback_transition.pending_backend_seek_ms() else {
+    fn apply_pending_backend_seek(&mut self, final_attempt: bool) -> bool {
+        let Some(position_ms) = self.core.pending_seek_ms() else {
             return false;
         };
-        match backend.borrow().seek(position_ms) {
-            Ok(()) => {
-                app_log_info!(backend, "gtk applied pending start seek", position_ms);
-                self.playback_transition = PlaybackTransitionState::await_backend_seek(position_ms);
-                true
-            }
-            Err(err) => {
-                if log_failure {
-                    eprintln!("xmms-rs: failed to seek playback: {err}");
-                    self.playback_transition = PlaybackTransitionState::Idle;
-                }
-                false
-            }
+        let update = self.core.apply_pending_start_seek(final_attempt);
+        let succeeded = update.transition_changed;
+        if final_attempt {
+            self.apply_runtime_update(&update);
         }
+        if succeeded {
+            app_log_info!(backend, "gtk applied pending start seek", position_ms);
+        }
+        succeeded
     }
 
     pub(crate) fn playlist_eof_reached(&mut self) {
-        let result = self.store.update_playback_position_from_runtime(0);
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
-        if self.store.state().config.pause_between_songs
-            && self.store.state().config.pause_between_songs_time > 0
-        {
-            self.playback_transition = PlaybackTransitionState::wait_between_songs(
-                i64::from(self.store.state().config.pause_between_songs_time) * 1_000,
-            );
-            return;
-        }
-        self.advance_playlist_after_eof();
-    }
-
-    fn advance_playlist_after_eof(&mut self) {
-        let result = self.store.handle_playlist_eof();
-        for effect in result.effects {
-            self.apply_store_effect(effect);
-        }
+        self.handle_runtime_event(RuntimeEvent::PlaylistEof);
     }
 
     pub(crate) fn click(&mut self, x: i32, y: i32) -> UiAction {
@@ -9202,12 +8587,12 @@ impl MainWindowUiState {
 
     pub(crate) fn press(&mut self, x: i32, y: i32) {
         let Some(control) = self.hit_test(x, y) else {
-            self.main_pointer = MainPointer::Idle;
+            self.main.pointer = MainPointer::Idle;
             return;
         };
 
-        self.main_pointer = if let MainControl::Slider(slider) = control {
-            self.main_keyboard_slider = Some(slider);
+        self.main.pointer = if let MainControl::Slider(slider) = control {
+            self.main.keyboard_slider = Some(slider);
             let offset = self.begin_slider_drag(slider, x);
             MainPointer::DraggingSlider {
                 slider,
@@ -9223,12 +8608,12 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn motion(&mut self, x: i32, y: i32) -> bool {
-        match self.main_pointer {
+        match self.main.pointer {
             MainPointer::Idle => false,
             MainPointer::PressedButton { control, inside } => {
                 let next_inside = self.control_rect(control).contains(x, y);
                 let changed = inside != next_inside;
-                self.main_pointer = MainPointer::PressedButton {
+                self.main.pointer = MainPointer::PressedButton {
                     control,
                     inside: next_inside,
                 };
@@ -9244,7 +8629,7 @@ impl MainWindowUiState {
                 if next_position == position {
                     return false;
                 }
-                self.main_pointer = MainPointer::DraggingSlider {
+                self.main.pointer = MainPointer::DraggingSlider {
                     slider,
                     offset,
                     position: next_position,
@@ -9255,7 +8640,7 @@ impl MainWindowUiState {
     }
 
     pub(crate) fn release(&mut self, x: i32, y: i32) -> UiAction {
-        match std::mem::take(&mut self.main_pointer) {
+        match std::mem::take(&mut self.main.pointer) {
             MainPointer::Idle => UiAction::None,
             MainPointer::PressedButton { control, inside } => {
                 let activated = inside && self.control_rect(control).contains(x, y);
@@ -9309,7 +8694,13 @@ impl MainWindowUiState {
     }
 
     fn scroll_volume(&mut self, dy: f64) -> bool {
-        let step = self.store.state().config.mouse_wheel_change.clamp(1, 100);
+        let step = self
+            .core
+            .store()
+            .state()
+            .config
+            .mouse_wheel_change
+            .clamp(1, 100);
         let diff = if dy < 0.0 {
             step
         } else if dy > 0.0 {
@@ -9321,16 +8712,22 @@ impl MainWindowUiState {
     }
 
     fn adjust_volume_by(&mut self, diff: i32) -> bool {
-        let volume = (self.store.state().player.volume() + diff).clamp(0, 100);
-        if volume == self.store.state().player.volume() {
+        let volume = (self.core.store().state().player.volume() + diff).clamp(0, 100);
+        if volume == self.core.store().state().player.volume() {
             return false;
         }
-        self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(volume));
+        self.dispatch_store_command(AudioCommand::SetVolume(volume));
         true
     }
 
     fn scroll_balance(&mut self, dy: f64) -> bool {
-        let step = self.store.state().config.mouse_wheel_change.clamp(1, 100);
+        let step = self
+            .core
+            .store()
+            .state()
+            .config
+            .mouse_wheel_change
+            .clamp(1, 100);
         let diff = if dy < 0.0 {
             step
         } else if dy > 0.0 {
@@ -9342,11 +8739,11 @@ impl MainWindowUiState {
     }
 
     fn adjust_balance_by(&mut self, diff: i32) -> bool {
-        let balance = (self.store.state().player.balance() + diff).clamp(-100, 100);
-        if balance == self.store.state().player.balance() {
+        let balance = (self.core.store().state().player.balance() + diff).clamp(-100, 100);
+        if balance == self.core.store().state().player.balance() {
             return false;
         }
-        self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetBalance(balance));
+        self.dispatch_store_command(AudioCommand::SetBalance(balance));
         true
     }
 
@@ -9356,7 +8753,7 @@ impl MainWindowUiState {
             return false;
         };
         let step_ms = (duration_ms / 100).max(1_000);
-        let old_position = self.store.state().config.playback_position_ms;
+        let old_position = self.core.store().state().config.playback_position_ms;
         let position_ms = if dy < 0.0 {
             old_position - step_ms
         } else if dy > 0.0 {
@@ -9364,8 +8761,8 @@ impl MainWindowUiState {
         } else {
             return false;
         };
-        self.dispatch_store_command_and_apply_local_effects(PlayerCommand::SeekToMs(position_ms));
-        self.store.state().config.playback_position_ms != old_position
+        self.dispatch_store_command(PlayerCommand::SeekToMs(position_ms));
+        self.core.store().state().config.playback_position_ms != old_position
     }
 
     fn hit_test(&self, x: i32, y: i32) -> Option<MainControl> {
@@ -9419,33 +8816,31 @@ impl MainWindowUiState {
             MainPushButton::Close => UiAction::Quit,
             MainPushButton::Minimize => UiAction::Minimize,
             MainPushButton::Menu => {
-                self.dispatch_store_command_and_apply_local_effects(UiCommand::SetMainMenuVisible(
-                    true,
-                ));
+                self.dispatch_store_command(UiCommand::SetMainMenuVisible(true));
                 UiAction::ShowMenu
             }
             MainPushButton::Shade => {
-                self.dispatch_store_command_and_apply_local_effects(PanelCommand::ToggleMainShade);
+                self.dispatch_store_command(PanelCommand::ToggleMainShade);
                 UiAction::Resize
             }
             MainPushButton::Play => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Play);
+                self.dispatch_store_command(PlayerCommand::Play);
                 UiAction::None
             }
             MainPushButton::Pause => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Pause);
+                self.dispatch_store_command(PlayerCommand::Pause);
                 UiAction::None
             }
             MainPushButton::Stop => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::Halt);
+                self.dispatch_store_command(PlayerCommand::Halt);
                 UiAction::None
             }
             MainPushButton::Previous => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::PreviousTrack);
+                self.dispatch_store_command(PlayerCommand::PreviousTrack);
                 UiAction::None
             }
             MainPushButton::Next => {
-                self.dispatch_store_command_and_apply_local_effects(PlayerCommand::NextTrack);
+                self.dispatch_store_command(PlayerCommand::NextTrack);
                 UiAction::None
             }
             MainPushButton::Eject => UiAction::OpenFileDialog,
@@ -9455,20 +8850,16 @@ impl MainWindowUiState {
     pub(crate) fn activate_toggle(&mut self, toggle: MainToggleButton) {
         match toggle {
             MainToggleButton::Shuffle => {
-                self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleShuffle);
+                self.dispatch_store_command(PlaylistCommand::ToggleShuffle);
             }
             MainToggleButton::Repeat => {
-                self.dispatch_store_command_and_apply_local_effects(PlaylistCommand::ToggleRepeat);
+                self.dispatch_store_command(PlaylistCommand::ToggleRepeat);
             }
             MainToggleButton::Equalizer => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    PanelCommand::ToggleEqualizerVisibility,
-                );
+                self.dispatch_store_command(PanelCommand::ToggleEqualizerVisibility);
             }
             MainToggleButton::Playlist => {
-                self.dispatch_store_command_and_apply_local_effects(
-                    PanelCommand::TogglePlaylistVisibility,
-                );
+                self.dispatch_store_command(PanelCommand::TogglePlaylistVisibility);
             }
         }
     }
@@ -9503,15 +8894,11 @@ impl MainWindowUiState {
         match slider {
             MainSlider::Volume => {
                 let volume = position_to_volume(position);
-                self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetVolume(
-                    volume,
-                ));
+                self.dispatch_store_command(AudioCommand::SetVolume(volume));
             }
             MainSlider::Balance => {
                 let balance = position_to_balance(position);
-                self.dispatch_store_command_and_apply_local_effects(AudioCommand::SetBalance(
-                    balance,
-                ));
+                self.dispatch_store_command(AudioCommand::SetBalance(balance));
             }
             MainSlider::Position => {
                 if let Some(duration_ms) =
@@ -9523,9 +8910,7 @@ impl MainWindowUiState {
                         let position_slider = main_slider_layout(MainSlider::Position, false);
                         (duration_ms * i64::from(position)) / i64::from(position_slider.max)
                     };
-                    self.dispatch_store_command_and_apply_local_effects(PlayerCommand::SeekToMs(
-                        position_ms,
-                    ));
+                    self.dispatch_store_command(PlayerCommand::SeekToMs(position_ms));
                 }
             }
         }
@@ -9534,8 +8919,8 @@ impl MainWindowUiState {
 
     fn slider_position(&self, slider: MainSlider) -> i32 {
         match slider {
-            MainSlider::Volume => volume_to_position(self.store.state().player.volume()),
-            MainSlider::Balance => balance_to_position(self.store.state().player.balance()),
+            MainSlider::Volume => volume_to_position(self.core.store().state().player.volume()),
+            MainSlider::Balance => balance_to_position(self.core.store().state().player.balance()),
             MainSlider::Position if self.is_shaded() => self.shaded_position_slider_position(),
             MainSlider::Position => self.position_slider_position(),
         }
@@ -9554,21 +8939,21 @@ impl MainWindowUiState {
     }
 
     fn pressed_push(&self) -> Option<MainPushButton> {
-        match self.main_pointer.pressed_control() {
+        match self.main.pointer.pressed_control() {
             Some(MainControl::Push(button)) => Some(button),
             _ => None,
         }
     }
 
     fn pressed_toggle(&self) -> Option<MainToggleButton> {
-        match self.main_pointer.pressed_control() {
+        match self.main.pointer.pressed_control() {
             Some(MainControl::Toggle(toggle)) => Some(toggle),
             _ => None,
         }
     }
 
     fn pressed_slider(&self) -> Option<MainSlider> {
-        self.main_pointer.pressed_slider()
+        self.main.pointer.pressed_slider()
     }
 
     fn control_rect(&self, control: MainControl) -> ControlRect {
@@ -9871,6 +9256,55 @@ fn shortcut_matches(key: gtk::gdk::Key, state: gtk::gdk::ModifierType, accelerat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::playback_transition::PlaybackTransition as PlaybackTransitionState;
+
+    #[test]
+    fn dialog_prompts_only_close_and_record_valid_input() {
+        let mut dialogs = DialogUiState::default();
+        dialogs.open_location = true;
+        dialogs.jump_time = true;
+        assert!(!dialogs.accept_open_location(""));
+        assert_eq!(dialogs.accept_jump_time("not a time"), None);
+        assert!(dialogs.open_location && dialogs.jump_time);
+        assert!(dialogs.last_open_location.is_none() && dialogs.last_jump_time_ms.is_none());
+
+        assert!(dialogs.accept_open_location("file:///song.mp3"));
+        assert_eq!(
+            dialogs.last_open_location.as_deref(),
+            Some("file:///song.mp3")
+        );
+        assert!(!dialogs.open_location);
+        assert_eq!(dialogs.accept_jump_time("1:23"), Some(83_000));
+        assert_eq!(dialogs.last_jump_time_ms, Some(83_000));
+        assert!(!dialogs.jump_time);
+    }
+
+    #[test]
+    fn playlist_presentation_resets_search_and_only_redraws_for_new_footer_second() {
+        let mut playlist = PlaylistUiState::new();
+        playlist.scroll_offset = 12;
+        playlist.search.start();
+        playlist.search.push_char('x');
+        assert!(playlist.update_footer_second(Some(1)));
+        assert!(!playlist.update_footer_second(Some(1)));
+        playlist.reset_for_loaded_playlist();
+        assert_eq!(playlist.scroll_offset, 0);
+        assert!(!playlist.search.is_active());
+        assert!(playlist.update_footer_second(None));
+        assert!(!playlist.update_footer_second(None));
+    }
+
+    #[test]
+    fn skin_browser_selection_follows_config_without_a_cached_index() {
+        let mut skin = SkinWorkspace::new(DefaultSkin::load_bundled().unwrap());
+        skin.entries = vec![SkinEntry {
+            name: "Classic".into(),
+            path: PathBuf::from("/skins/classic"),
+        }];
+        assert_eq!(skin.selected_index(None), 0);
+        assert_eq!(skin.selected_index(Some("/skins/classic")), 1);
+        assert_eq!(skin.selected_index(Some("/skins/missing")), 0);
+    }
 
     fn init_gtk_for_tests() -> std::sync::MutexGuard<'static, ()> {
         static GTK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -9958,17 +9392,17 @@ mod tests {
             mouse_wheel_change: 12,
             ..Config::default()
         }));
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
-        state.store.state_mut().playlist.set_position(0);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
+        state.core.store_mut().state_mut().playlist.set_position(0);
 
         assert!(state.scroll_main(108, 58, -1.0));
         assert_eq!(state.volume(), 62);
         assert!(state.scroll_main(178, 58, -1.0));
-        assert_eq!(state.store.state().player.balance(), 12);
+        assert_eq!(state.core.store().state().player.balance(), 12);
         assert!(state.scroll_main(140, 73, 1.0));
         let forward_position = state.playback_position_ms();
         assert!(forward_position > 0);
@@ -9979,18 +9413,21 @@ mod tests {
     #[test]
     fn mouse_wheel_seeking_selects_first_entry_before_initial_playback() {
         let mut state = MainWindowUiState::default();
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
 
-        assert_eq!(state.store.state().playlist.position(), None);
+        assert_eq!(state.core.store().state().playlist.position(), None);
         assert!(state.scroll_main(140, 73, 1.0));
 
-        assert_eq!(state.store.state().playlist.position(), Some(0));
+        assert_eq!(state.core.store().state().playlist.position(), Some(0));
         assert!(state.playback_position_ms() > 0);
-        assert_eq!(state.store.state().player.state(), PlayerState::Stopped);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Stopped
+        );
     }
 
     #[test]
@@ -10000,13 +9437,13 @@ mod tests {
             mouse_wheel_change: 12,
             ..Config::default()
         }));
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
-        state.store.state_mut().playlist.set_position(0);
-        state.store.state_mut().player.mark_playing();
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
+        state.core.store_mut().state_mut().playlist.set_position(0);
+        state.core.store_mut().state_mut().player.mark_playing();
         state.dispatch_store_command(PanelCommand::SetMainShade(true));
         state.toggle_equalizer_shaded();
 
@@ -10018,7 +9455,7 @@ mod tests {
         assert!(state.equalizer_scroll(62, 5, -1.0));
         assert_eq!(state.volume(), 62);
         assert!(state.equalizer_scroll(165, 5, -1.0));
-        assert_eq!(state.store.state().player.balance(), 12);
+        assert_eq!(state.core.store().state().player.balance(), 12);
     }
 
     #[test]
@@ -10052,7 +9489,8 @@ mod tests {
         let mut state = MainWindowUiState::default();
         for index in 0..20 {
             state
-                .store
+                .core
+                .store_mut()
                 .state_mut()
                 .playlist
                 .add_uri(format!("file:///tmp/song{index}.mp3"));
@@ -10076,18 +9514,19 @@ mod tests {
         }));
         assert_eq!(state.runtime_tick_interval(), GTK_IDLE_TICK);
 
-        state.store.state_mut().player.mark_playing();
+        state.core.store_mut().state_mut().player.mark_playing();
         assert_eq!(state.runtime_tick_interval(), GTK_PLAYBACK_TICK);
 
         state.set_visualization_mode(VisMode::Analyzer);
         state.set_visualization_refresh_divisor(3);
         assert_eq!(state.runtime_tick_interval(), GTK_TRANSITION_TICK);
 
-        state.playback_transition = PlaybackTransitionState::start_fadeout(100);
+        state.handle_runtime_event(RuntimeEvent::BeginStopFade);
         assert_eq!(state.runtime_tick_interval(), GTK_TRANSITION_TICK);
 
-        state.playback_transition = PlaybackTransitionState::Idle;
-        state.store.state_mut().player.pause();
+        state.core.tick_stop_fade(1_000);
+        state.core.store_mut().state_mut().player.mark_playing();
+        state.core.store_mut().state_mut().player.pause();
         assert_eq!(state.runtime_tick_interval(), GTK_PAUSED_TICK);
     }
 
@@ -10097,7 +9536,7 @@ mod tests {
             vis_mode: VisMode::Off,
             ..Config::default()
         }));
-        state.store.state_mut().player.mark_playing();
+        state.core.store_mut().state_mut().player.mark_playing();
         state.update_timer_tick_targets(250);
 
         assert_eq!(
@@ -10136,40 +9575,105 @@ mod tests {
             ..Config::default()
         }));
         state
-            .store
+            .core
+            .store_mut()
             .state_mut()
             .playlist
             .add_uri("file:///tmp/one.mp3");
         state
-            .store
+            .core
+            .store_mut()
             .state_mut()
             .playlist
             .add_uri("file:///tmp/two.mp3");
-        state.store.state_mut().playlist.set_position(0);
+        state.core.store_mut().state_mut().playlist.set_position(0);
 
         state.playlist_eof_reached();
-        assert_eq!(state.store.state().playlist.position(), Some(0));
+        assert_eq!(state.core.store().state().playlist.position(), Some(0));
         assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::WaitingBetweenSongs {
-                remaining_ms: 2_000
-            }
+            state.core.transition(),
+            PlaybackTransitionState::WaitingBetweenSongs(2_000)
         );
         assert_eq!(state.playback_position_ms(), 0);
 
         assert!(state.update_timer_tick(1_000));
-        assert_eq!(state.store.state().playlist.position(), Some(0));
+        assert_eq!(state.core.store().state().playlist.position(), Some(0));
         assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::WaitingBetweenSongs {
-                remaining_ms: 1_000
-            }
+            state.core.transition(),
+            PlaybackTransitionState::WaitingBetweenSongs(1_000)
         );
         assert_eq!(state.playback_position_ms(), 0);
 
         assert!(state.update_timer_tick(1_000));
-        assert_eq!(state.store.state().playlist.position(), Some(1));
-        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
+        assert_eq!(state.core.store().state().playlist.position(), Some(1));
+        assert_eq!(state.core.transition(), PlaybackTransitionState::Idle);
+    }
+
+    #[test]
+    fn gtk_playlist_eof_prepares_next_track_before_playback() {
+        struct OrderedBackend(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        impl crate::playback::backend::PlaybackBackend for OrderedBackend {
+            fn play_uri(&self, uri: &str) -> Result<(), String> {
+                self.0.lock().unwrap().push(format!("play:{uri}"));
+                Ok(())
+            }
+            fn pause(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn unpause(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn stop(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn seek(&self, _: i64) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_volume(&self, _: i32) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_balance(&self, _: i32) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_equalizer(
+                &self,
+                equalizer: crate::playback::model::EqualizerBackendState,
+            ) -> Result<(), String> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push(format!("eq:{}", equalizer.preamp_position));
+                Ok(())
+            }
+        }
+        let mut state = MainWindowUiState::from_state(AppState::from_config(Config {
+            equalizer_auto: true,
+            eqpreset_extension: String::new(),
+            eqpreset_default_file: String::new(),
+            ..Config::default()
+        }));
+        state.equalizer.auto_presets =
+            vec![EqualizerPreset::from_positions("two.mp3", 30, [30; 10])];
+        for uri in ["file:///tmp/one.mp3", "file:///tmp/two.mp3"] {
+            state.core.store_mut().state_mut().playlist.add_uri(uri);
+        }
+        state.core.store_mut().state_mut().playlist.set_position(0);
+        state.core.request_backend_seek(5_000);
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        state.set_playback_backend(Box::new(OrderedBackend(calls.clone())));
+        calls.lock().unwrap().clear(); // Ignore initial DSP installation.
+
+        state.playlist_eof_reached();
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["eq:30", "play:file:///tmp/two.mp3"]
+        );
+        assert_eq!(state.core.store().state().playlist.position(), Some(1));
+        assert_eq!(state.last_playback_request(), Some("file:///tmp/two.mp3"));
+        assert_eq!(state.equalizer_preamp_position(), 30);
+        assert_eq!(state.equalizer_band_position(0), Some(30));
+        assert_eq!(state.core.transition(), PlaybackTransitionState::Idle);
     }
 
     #[test]
@@ -10179,29 +9683,30 @@ mod tests {
             pause_between_songs_time: 2,
             ..Config::default()
         }));
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
-        state.store.state_mut().playlist.set_position(0);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
+        state.core.store_mut().state_mut().playlist.set_position(0);
 
         state.playlist_eof_reached();
         assert!(state.update_timer_tick(1_000));
         assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::WaitingBetweenSongs {
-                remaining_ms: 1_000
-            }
+            state.core.transition(),
+            PlaybackTransitionState::WaitingBetweenSongs(1_000)
         );
         assert_eq!(state.playback_position_ms(), 0);
 
-        state.start_current_playlist_playback();
+        state.dispatch_store_command(PlayerCommand::Play);
 
-        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
+        assert_eq!(state.core.transition(), PlaybackTransitionState::Idle);
         assert_eq!(state.playback_position_ms(), 0);
         assert_eq!(state.playback_position_ms(), 0);
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
     }
 
     #[test]
@@ -10212,26 +9717,26 @@ mod tests {
             ..Config::default()
         }));
         state
-            .store
+            .core
+            .store_mut()
             .state_mut()
             .playlist
             .add_uri("file:///tmp/one.mp3");
         state
-            .store
+            .core
+            .store_mut()
             .state_mut()
             .playlist
             .add_uri("file:///tmp/two.mp3");
-        state.store.state_mut().playlist.set_position(0);
+        state.core.store_mut().state_mut().playlist.set_position(0);
 
         assert!(state.should_sync_backend_position(false));
 
         state.playlist_eof_reached();
 
         assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::WaitingBetweenSongs {
-                remaining_ms: 2_000
-            }
+            state.core.transition(),
+            PlaybackTransitionState::WaitingBetweenSongs(2_000)
         );
         assert_eq!(state.playback_position_ms(), 0);
         assert!(!state.should_sync_backend_position(false));
@@ -10246,38 +9751,56 @@ mod tests {
             playback_position_ms: 42_000,
             ..Config::default()
         }));
-        state.store.state_mut().player.mark_playing();
+        state.core.store_mut().state_mut().player.mark_playing();
 
         state.activate_push(MainPushButton::Stop);
         assert_eq!(state.playback_position_ms(), 0);
-        assert_eq!(state.store.state().player.state(), PlayerState::Stopped);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Stopped
+        );
         assert_eq!(state.volume(), 80);
-        assert_eq!(state.playback_transition, PlaybackTransitionState::Idle);
+        assert_eq!(state.core.transition(), PlaybackTransitionState::Idle);
     }
 
     #[test]
     fn playback_control_event_handles_play_pause_transitions() {
         let mut state = MainWindowUiState::default();
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
 
         assert!(state.handle_playback_control_event(PlaybackControlEvent::Play));
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
 
         assert!(state.handle_playback_control_event(PlaybackControlEvent::Pause));
-        assert_eq!(state.store.state().player.state(), PlayerState::Paused);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Paused
+        );
 
         assert!(!state.handle_playback_control_event(PlaybackControlEvent::Pause));
-        assert_eq!(state.store.state().player.state(), PlayerState::Paused);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Paused
+        );
 
         assert!(state.handle_playback_control_event(PlaybackControlEvent::Play));
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
 
         assert!(!state.handle_playback_control_event(PlaybackControlEvent::Play));
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
     }
 
     #[test]
@@ -10309,40 +9832,32 @@ mod tests {
         let mut state = MainWindowUiState::default();
         let mut revisions = Vec::new();
 
-        revisions.push(
-            state
-                .dispatch_store_command(PanelCommand::SetMainShade(true))
-                .revision,
-        );
+        state.dispatch_store_command(PanelCommand::SetMainShade(true));
+        revisions.push(state.core.store().revision());
         state.set_preference_scale_factor(1.5);
-        revisions.push(state.store.revision());
+        revisions.push(state.core.store().revision());
         state.apply_equalizer_preset_values(&EqualizerPreset::from_positions("GTK", 25, [40; 10]));
-        revisions.push(state.store.revision());
+        revisions.push(state.core.store().revision());
         state.set_stream_channels_for_e2e(2);
-        revisions.push(state.store.revision());
-        state.store.update_playback_position_from_runtime(250);
-        revisions.push(state.store.revision());
+        revisions.push(state.core.store().revision());
+        state.handle_runtime_event(RuntimeEvent::PlaybackPosition(250));
+        revisions.push(state.core.store().revision());
 
         assert!(revisions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
-    fn gtk_store_dispatch_separates_domain_changes_from_effect_execution() {
+    fn gtk_store_dispatch_executes_effects_once_through_coordinator() {
         let mut state = MainWindowUiState::default();
 
         let result = state.dispatch_store_command(AudioCommand::SetVolume(37));
 
-        assert_eq!(state.store.state().player.volume(), 37);
+        assert_eq!(state.core.store().state().player.volume(), 37);
         assert!(result
             .changes
             .contains(crate::app::store::StateChangeSet::PLAYER));
-        assert!(result.effects.contains(&AppEffect::SetOutputVolume(37)));
-        assert!(state.last_playback_request.is_none());
-
-        for effect in result.effects {
-            state.apply_store_effect(effect);
-        }
-        assert!(state.last_playback_request.is_none());
+        assert!(result.playback_effects.is_empty());
+        assert!(state.core.last_playback_request().is_none());
     }
 
     #[test]
@@ -10359,13 +9874,13 @@ mod tests {
         state.set_playlist_entry_selected(2, true);
 
         assert!(state.toggle_queue_selected_playlist_entries());
-        assert_eq!(state.store.playlist_queue(), vec![0, 2]);
+        assert_eq!(state.core.store().playlist_queue(), vec![0, 2]);
 
         state.reverse_playlist();
-        assert_eq!(state.store.playlist_queue(), vec![2, 0]);
+        assert_eq!(state.core.store().playlist_queue(), vec![2, 0]);
 
         assert!(state.clear_playlist_queue());
-        assert!(state.store.playlist_queue().is_empty());
+        assert!(state.core.store().playlist_queue().is_empty());
         assert!(!state.clear_playlist_queue());
     }
 
@@ -10373,10 +9888,83 @@ mod tests {
     fn gtk_playback_request_observability_keeps_only_latest_uri() {
         let mut state = MainWindowUiState::default();
 
-        state.start_backend_playback_uri("file:///music/one.ogg", 0);
-        state.start_backend_playback_uri("file:///music/two.ogg", 0);
+        state.dispatch_store_command(PlaylistCommand::AddUris(vec![
+            "file:///music/one.ogg".into(),
+            "file:///music/two.ogg".into(),
+        ]));
+        state.dispatch_store_command(PlayerCommand::StartCurrentTrack);
+        state.dispatch_store_command(PlaylistCommand::SetPosition(1));
+        state.dispatch_store_command(PlayerCommand::StartCurrentTrack);
 
         assert_eq!(state.last_playback_request(), Some("file:///music/two.ogg"));
+    }
+
+    #[test]
+    fn gtk_mpris_open_uri_emits_only_for_accepted_location() {
+        let mut state = MainWindowUiState::default();
+        state.dispatch_store_command(PlaylistCommand::AddUris(vec![
+            "file:///music/old.ogg".into()
+        ]));
+        state.execute_mpris_command(MprisCommand::OpenUri(" \t ".into()));
+        assert_eq!(
+            state.core.store().state().playlist.entries()[0].filename,
+            "file:///music/old.ogg"
+        );
+        assert!(state.take_mpris_events().is_empty());
+
+        state.execute_mpris_command(MprisCommand::OpenUri("file:///music/new.ogg".into()));
+        assert_eq!(state.core.store().state().playlist.len(), 1);
+        assert_eq!(
+            state.core.store().state().playlist.entries()[0].filename,
+            "file:///music/new.ogg"
+        );
+        assert_eq!(state.core.store().state().playlist.position(), Some(0));
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
+        assert_eq!(
+            state.take_mpris_events(),
+            vec![
+                MprisEvent::MetadataChanged,
+                MprisEvent::PlaybackStatusChanged
+            ]
+        );
+    }
+
+    #[test]
+    fn gtk_mpris_empty_directory_notifies_about_cleared_playback_and_metadata() {
+        let empty_dir = unique_temp_dir("xmms-rs-mpris-empty-directory");
+        fs::create_dir_all(&empty_dir).unwrap();
+        let mut state = MainWindowUiState::default();
+        state.dispatch_store_command(PlaylistCommand::AddUris(vec![
+            "file:///music/old.ogg".into()
+        ]));
+        state.dispatch_store_command(PlaylistCommand::SetPosition(0));
+        state.dispatch_store_command(PlayerCommand::StartCurrentTrack);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
+
+        state.execute_mpris_command(MprisCommand::OpenUri(format!(
+            "file://{}",
+            empty_dir.canonicalize().unwrap().display()
+        )));
+
+        assert!(state.core.store().state().playlist.is_empty());
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Stopped
+        );
+        assert_eq!(
+            state.take_mpris_events(),
+            vec![
+                MprisEvent::MetadataChanged,
+                MprisEvent::PlaybackStatusChanged
+            ]
+        );
+        fs::remove_dir_all(empty_dir).unwrap();
     }
 
     #[test]
@@ -10405,7 +9993,7 @@ mod tests {
 
         assert_eq!(state.volume(), 73);
         assert!(state.repeat());
-        let snapshot = state.store.state().persistence_snapshot();
+        let snapshot = state.core.store().state().persistence_snapshot();
         assert_eq!(snapshot.config.volume, 73);
         assert!(snapshot.config.repeat);
         assert_eq!(snapshot.config.scale_factor, 1.5);
@@ -10424,11 +10012,11 @@ mod tests {
         state.save_equalizer_winamp_file(&path).unwrap();
         state
             .apply_equalizer_preset_values(&EqualizerPreset::from_positions("Reset", 50, [50; 10]));
-        let revision_before_load = state.store.revision();
+        let revision_before_load = state.core.store().revision();
 
         state.load_equalizer_winamp_file(&path).unwrap();
 
-        assert_eq!(state.store.revision(), revision_before_load + 1);
+        assert_eq!(state.core.store().revision(), revision_before_load + 1);
         assert_eq!(state.equalizer_preamp_position(), 30);
         assert_eq!(state.equalizer_band_position(0), Some(25));
         assert!(state
@@ -10464,32 +10052,98 @@ mod tests {
     #[test]
     fn play_from_stopped_preserves_selected_position() {
         let mut state = MainWindowUiState::default();
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
         state.set_playback_position_ms(42_000);
 
         state.press(40, 90);
         assert_eq!(state.release(40, 90), UiAction::None);
 
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
         assert_eq!(state.playback_position_ms(), 42_000);
         assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::PendingBackendSeek(42_000)
+            state.core.transition(),
+            PlaybackTransitionState::PendingSeek(42_000)
+        );
+    }
+
+    #[test]
+    fn failed_playback_start_does_not_seek_on_later_backend_readiness() {
+        struct RejectingBackend(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+        impl PlaybackBackend for RejectingBackend {
+            fn play_uri(&self, uri: &str) -> Result<(), String> {
+                self.0.lock().unwrap().push(format!("play:{uri}"));
+                Err("cannot play track".into())
+            }
+            fn pause(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn unpause(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn stop(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn seek(&self, position_ms: i64) -> Result<(), String> {
+                self.0.lock().unwrap().push(format!("seek:{position_ms}"));
+                Ok(())
+            }
+            fn set_volume(&self, _: i32) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_balance(&self, _: i32) -> Result<(), String> {
+                Ok(())
+            }
+            fn set_equalizer(
+                &self,
+                _: crate::playback::model::EqualizerBackendState,
+            ) -> Result<(), String> {
+                Ok(())
+            }
+            fn poll_events(&self) -> Result<Vec<PlaybackEvent>, String> {
+                Ok(vec![PlaybackEvent::AsyncDone])
+            }
+            fn duration_ms(&self) -> Option<i64> {
+                Some(120_000)
+            }
+        }
+
+        let mut state = MainWindowUiState::default();
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/unplayable.ogg",
+            "Unplayable",
+            120_000,
+        );
+        state.set_playback_position_ms(42_000);
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        state.set_playback_backend(Box::new(RejectingBackend(calls.clone())));
+
+        let update = state.dispatch_store_command(PlayerCommand::Play);
+        assert_eq!(update.messages, vec!["cannot play track"]);
+        assert_eq!(state.core.transition(), PlaybackTransitionState::Idle);
+        state.poll_playback_backend();
+        assert_eq!(state.core.transition(), PlaybackTransitionState::Idle);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec!["play:file:///tmp/unplayable.ogg"]
         );
     }
 
     #[test]
     fn seeking_while_playing_waits_for_backend_position_confirmation() {
         let mut state = MainWindowUiState::default();
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 120_000);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            120_000,
+        );
         state.press(40, 90);
         assert_eq!(state.release(40, 90), UiAction::None);
 
@@ -10497,8 +10151,8 @@ mod tests {
 
         assert_eq!(state.playback_position_ms(), 42_000);
         assert_eq!(
-            state.playback_transition,
-            PlaybackTransitionState::PendingBackendSeek(42_000)
+            state.core.transition(),
+            PlaybackTransitionState::PendingSeek(42_000)
         );
         assert!(!state.should_sync_backend_position(false));
     }
@@ -10506,23 +10160,23 @@ mod tests {
     #[test]
     fn changing_to_next_track_starts_from_beginning() {
         let mut state = MainWindowUiState::default();
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/one.ogg", "One", 120_000);
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/two.ogg", "Two", 120_000);
-        state.store.state_mut().playlist.set_position(0);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/one.ogg",
+            "One",
+            120_000,
+        );
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/two.ogg",
+            "Two",
+            120_000,
+        );
+        state.core.store_mut().state_mut().playlist.set_position(0);
         state.set_playback_position_ms(42_000);
 
         state.press(109, 90);
         assert_eq!(state.release(109, 90), UiAction::None);
 
-        assert_eq!(state.store.state().playlist.position(), Some(1));
+        assert_eq!(state.core.store().state().playlist.position(), Some(1));
         assert_eq!(state.playback_position_ms(), 0);
         assert_eq!(state.playback_position_ms(), 0);
     }
@@ -10577,7 +10231,7 @@ mod tests {
         );
         assert_eq!(list.selected_row().map(|row| row.index()), Some(0));
 
-        state.store.state_mut().config.skin = Some(classic.display().to_string());
+        state.core.store_mut().state_mut().config.skin = Some(classic.display().to_string());
         fs::create_dir_all(skins.join("Zed")).unwrap();
         refresh_skin_browser_list(&list, &mut state, std::slice::from_ref(&skins)).unwrap();
 
@@ -10714,28 +10368,37 @@ static char * main_xpm[] = {
 
         state.press(40, 90);
         assert_eq!(state.release(40, 90), UiAction::None);
-        assert_eq!(state.store.state().player.state(), PlayerState::Stopped);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Stopped
+        );
 
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.ogg", "Test", 10_000);
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.ogg",
+            "Test",
+            10_000,
+        );
         state.press(40, 90);
         assert_eq!(state.release(40, 90), UiAction::None);
-        assert_eq!(state.store.state().player.state(), PlayerState::Playing);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Playing
+        );
 
         state.press(63, 90);
         assert_eq!(state.release(63, 90), UiAction::None);
-        assert_eq!(state.store.state().player.state(), PlayerState::Paused);
+        assert_eq!(
+            state.core.store().state().player.state(),
+            PlayerState::Paused
+        );
 
         state.press(165, 90);
         assert_eq!(state.release(165, 90), UiAction::None);
-        assert!(state.store.state().playlist.shuffle());
+        assert!(state.core.store().state().playlist.shuffle());
 
         state.press(243, 59);
         assert_eq!(state.release(243, 59), UiAction::None);
-        assert!(state.store.state().config.playlist_visible);
+        assert!(state.core.store().state().config.playlist_visible);
     }
 
     #[test]
@@ -10746,7 +10409,8 @@ static char * main_xpm[] = {
         assert_eq!(state.render_state().frequency_text, "  ");
 
         state
-            .store
+            .core
+            .store_mut()
             .handle_playback_event(PlaybackEvent::StreamInfo(crate::player::StreamInfo {
                 bitrate: Some(192),
                 frequency: Some(44_100),
@@ -10756,7 +10420,8 @@ static char * main_xpm[] = {
         assert_eq!(state.render_state().frequency_text, "44");
 
         state
-            .store
+            .core
+            .store_mut()
             .handle_playback_event(PlaybackEvent::StreamInfo(crate::player::StreamInfo {
                 bitrate: Some(1280),
                 frequency: Some(48),
@@ -10773,11 +10438,11 @@ static char * main_xpm[] = {
         state.press(107, 58);
         state.motion(107, 58);
         assert_eq!(state.release(107, 58), UiAction::None);
-        assert_eq!(state.store.state().player.volume(), 0);
+        assert_eq!(state.core.store().state().player.volume(), 0);
 
         state.press(214, 58);
         assert_eq!(state.release(214, 58), UiAction::None);
-        assert!(state.store.state().player.balance() > 70);
+        assert!(state.core.store().state().player.balance() > 70);
 
         state.press(263, 73);
         assert_eq!(state.release(263, 73), UiAction::None);
@@ -10787,23 +10452,21 @@ static char * main_xpm[] = {
     #[test]
     fn held_position_slider_does_not_seek_again_when_playback_advances() {
         let mut state = MainWindowUiState::default();
-        state
-            .store
-            .state_mut()
-            .playlist
-            .add_timed_uri("file:///tmp/test.wav", "Test", 120_000);
-        state.store.state_mut().player.mark_playing();
+        state.core.store_mut().state_mut().playlist.add_timed_uri(
+            "file:///tmp/test.wav",
+            "Test",
+            120_000,
+        );
+        state.core.store_mut().state_mut().player.mark_playing();
 
         state.press(20, 73);
         assert!(state.motion(140, 73));
         let dragged_position_ms = state.playback_position_ms();
-        state
-            .store
-            .update_playback_position_from_runtime(dragged_position_ms + 1_000);
-        let revision_before_release = state.store.revision();
+        state.handle_runtime_event(RuntimeEvent::PlaybackPosition(dragged_position_ms + 1_000));
+        let revision_before_release = state.core.store().revision();
 
         assert_eq!(state.release(140, 73), UiAction::None);
-        assert_eq!(state.store.revision(), revision_before_release);
+        assert_eq!(state.core.store().revision(), revision_before_release);
         assert_eq!(state.playback_position_ms(), dragged_position_ms + 1_000);
     }
 

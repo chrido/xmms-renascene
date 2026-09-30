@@ -1,4 +1,3 @@
-use crate::app::command::{AppCommand, PlayerCommand};
 use crate::app_state::AppState;
 use crate::player::PlayerState;
 
@@ -176,43 +175,6 @@ pub fn mpris_metadata(state: &AppState) -> MprisMetadata {
             .map(|entry| entry.length_ms)
             .filter(|length| *length > 0)
             .map(|length| length * 1_000),
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum MprisAppAction {
-    Raise,
-    Quit,
-    Dispatch(AppCommand),
-    OpenUri(String),
-}
-
-pub fn app_action_for_mpris_command(
-    command: &MprisCommand,
-    current_position_ms: i64,
-) -> MprisAppAction {
-    match command {
-        MprisCommand::Raise => MprisAppAction::Raise,
-        MprisCommand::Quit => MprisAppAction::Quit,
-        MprisCommand::Next => MprisAppAction::Dispatch(PlayerCommand::NextTrack.into()),
-        MprisCommand::Previous => MprisAppAction::Dispatch(PlayerCommand::PreviousTrack.into()),
-        MprisCommand::Pause => MprisAppAction::Dispatch(PlayerCommand::Pause.into()),
-        MprisCommand::PlayPause => MprisAppAction::Dispatch(PlayerCommand::PlayPause.into()),
-        MprisCommand::Stop => MprisAppAction::Dispatch(PlayerCommand::Halt.into()),
-        MprisCommand::Play => MprisAppAction::Dispatch(PlayerCommand::Play.into()),
-        MprisCommand::Seek { offset_us } => {
-            let target_ms = current_position_ms
-                .max(0)
-                .saturating_mul(1_000)
-                .saturating_add(*offset_us)
-                .max(0)
-                / 1_000;
-            MprisAppAction::Dispatch(PlayerCommand::SeekToMs(target_ms).into())
-        }
-        MprisCommand::SetPosition { position_us, .. } => {
-            MprisAppAction::Dispatch(PlayerCommand::SeekToMs((position_us / 1_000).max(0)).into())
-        }
-        MprisCommand::OpenUri(uri) => MprisAppAction::OpenUri(uri.clone()),
     }
 }
 
@@ -1048,9 +1010,10 @@ pub mod zbus_service {
             let wakeups = Arc::new(AtomicUsize::new(0));
             let wakeups_for_callback = Arc::clone(&wakeups);
             let shared = SharedMprisState {
-                state: Arc::new(Mutex::new(MprisServiceState::new(
-                    mpris_player_properties(&AppState::default(), 0),
-                ))),
+                state: Arc::new(Mutex::new(MprisServiceState::new(mpris_player_properties(
+                    &AppState::default(),
+                    0,
+                )))),
                 requests,
                 wakeup: Some(Arc::new(move || {
                     wakeups_for_callback.fetch_add(1, Ordering::Relaxed);
@@ -1108,7 +1071,6 @@ pub mod zbus_service {
 #[cfg(test)]
 mod shared_tests {
     use super::*;
-    use crate::app::command::{AppCommand, PlayerCommand};
     use crate::app_state::AppState;
 
     #[test]
@@ -1140,40 +1102,5 @@ mod shared_tests {
         assert!(properties.can_pause);
         assert!(properties.can_seek);
         assert!(properties.can_control);
-    }
-
-    #[test]
-    fn mpris_commands_map_to_shared_app_actions() {
-        assert_eq!(
-            app_action_for_mpris_command(&MprisCommand::Play, 0),
-            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::Play))
-        );
-        assert_eq!(
-            app_action_for_mpris_command(
-                &MprisCommand::Seek {
-                    offset_us: -2_000_000,
-                },
-                5_000,
-            ),
-            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::SeekToMs(3_000)))
-        );
-        assert_eq!(
-            app_action_for_mpris_command(&MprisCommand::Seek { offset_us: -999 }, 1_000,),
-            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::SeekToMs(999)))
-        );
-        assert_eq!(
-            app_action_for_mpris_command(
-                &MprisCommand::SetPosition {
-                    track_id: "/org/xmms/Track/0".to_string(),
-                    position_us: 42_000_000,
-                },
-                0,
-            ),
-            MprisAppAction::Dispatch(AppCommand::Player(PlayerCommand::SeekToMs(42_000)))
-        );
-        assert_eq!(
-            app_action_for_mpris_command(&MprisCommand::OpenUri("file:///tmp/a.ogg".into()), 0),
-            MprisAppAction::OpenUri("file:///tmp/a.ogg".into())
-        );
     }
 }

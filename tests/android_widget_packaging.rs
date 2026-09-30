@@ -84,19 +84,19 @@ fn android_document_import_and_metadata_work_stays_off_the_ui_thread() {
     assert!(!progress_bridge.contains("complete_operation"));
     assert!(progress_bridge.contains("complete: false"));
 
-    let duration_index = app
-        .split("fn schedule_missing_local_playlist_durations")
+    let duration_index = include_str!("../src/playback/duration_indexer.rs");
+    let duration_worker = duration_index
+        .split("fn schedule_with_factory")
         .nth(1)
-        .expect("duration indexing scheduler")
-        .split("fn poll_duration_index_results")
+        .expect("shared duration indexing scheduler")
+        .split("pub fn drain")
         .next()
-        .expect("duration indexing scheduler body");
-    assert!(duration_index.contains("thread::spawn(move ||"));
-    assert!(duration_index.contains("probe.probe(&item)"));
-    assert!(duration_index.contains("send_duration_index_batch(&sender, results)"));
-    assert!(duration_index.contains("send_batch(&mut results)"));
-    assert!(app.contains("const DURATION_INDEX_BATCH_SIZE: usize = 16;"));
-    let duration_preflight = duration_index
+        .expect("duration indexing worker body");
+    assert!(duration_worker.contains("thread::spawn(move ||"));
+    assert!(duration_worker.contains("probe(&item)"));
+    assert!(duration_worker.contains("send_batch(&sender"));
+    assert!(duration_index.contains("const BATCH_SIZE: usize = 16;"));
+    let duration_preflight = duration_worker
         .split("thread::spawn(move ||")
         .next()
         .expect("duration preflight");
@@ -143,10 +143,9 @@ fn android_output_volume_uses_stream_music_without_backend_scaling() {
     assert!(output_effect.contains("playback.set_output_volume(volume)"));
 
     assert!(controller.contains("AppEffect::SetOutputVolume(self.state.player.volume())"));
-    assert_eq!(
-        gtk.matches("AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume)")
-            .count(),
-        1
+    assert!(gtk.contains("FrontendEffect::Platform(PlatformEffect::SetOutputVolume(volume))"));
+    assert!(
+        !gtk.contains("AppEffect::SetOutputVolume(volume) | AppEffect::SetBackendVolume(volume)")
     );
     assert!(store.contains("AppEffect::SetBackendVolume(volume)"));
     assert!(store.contains("AppEffect::SetBackendVolume(restore_volume)"));
@@ -249,16 +248,18 @@ fn android_persists_explicit_saves_and_exit_without_foreground_delay() {
     let app = include_str!("../src/ui/egui/app.rs");
     let executor = include_str!("../src/ui/egui/effect_executor.rs");
 
+    let coordinator = include_str!("../src/app/runtime.rs");
+    assert!(coordinator.contains("update.force_persistence = true"));
     let platform_effect = app
-        .split("EffectOwner::Platform(effect) =>")
+        .split("fn process_store_event")
         .nth(1)
-        .expect("platform effect execution")
-        .split("fn execute_ui_effect")
+        .expect("runtime update persistence policy")
+        .split("fn handle_frontend_playback_error")
         .next()
-        .expect("platform effect body");
-    assert!(platform_effect
-        .contains("let force_persistence = matches!(effect, PlatformEffect::SaveConfig);"));
-    assert!(platform_effect.contains("force_persistence"));
+        .expect("runtime update persistence body");
+    assert!(
+        platform_effect.contains("self.flush_android_platform_policies(update.force_persistence)")
+    );
 
     let persistence = executor
         .split("pub(crate) fn flush_android_persistence(")
@@ -357,9 +358,7 @@ fn service_media_controls_do_not_complete_activity_controls() {
 
     assert!(activity.contains("complete_activity_control: true"));
     assert!(service.contains("complete_activity_control: false"));
-    assert!(app.contains(
-        "activity_media_control_handled |= control.complete_activity_control"
-    ));
+    assert!(app.contains("activity_media_control_handled |= control.complete_activity_control"));
     assert!(java.contains("if (activityResumed && hasWindowFocus())"));
 }
 
@@ -523,8 +522,8 @@ fn android_external_media_volume_is_observed_coalesced_and_not_echoed() {
         .split("fn handle_android_media_control")
         .next()
         .expect("external media-volume handler body");
-    assert!(external_poll.contains("sync_external_output_volume(volume)"));
-    assert!(external_poll.contains("process_dispatch_result(result, EffectExecution::LOCAL)"));
+    assert!(external_poll.contains("RuntimeEvent::ExternalOutputVolume(volume)"));
+    assert!(external_poll.contains("process_store_event("));
     assert!(!external_poll.contains("AudioCommand::SetVolume"));
     assert!(!external_poll.contains("set_media_volume_percent"));
     let post_dispatch = executor

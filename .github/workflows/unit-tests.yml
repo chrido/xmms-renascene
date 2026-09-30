@@ -43,6 +43,7 @@ jobs:
         run: >-
           python3 -m unittest
           scripts.test_performance scripts.test_perf_driver
+          scripts.test_android_sdk
 
       - name: Run unit tests
         run: xvfb-run -a cargo test --locked --all-targets
@@ -104,7 +105,8 @@ jobs:
       - name: Test selected frontend/audio backend combination
         run: |
           FEATURES="${{ matrix.frontend_feature }},${{ matrix.audio_feature }}"
-          xvfb-run -a cargo test --locked --no-default-features --features "$FEATURES" ${{ matrix.cargo_targets }}
+          xvfb-run -a cargo test --locked --no-default-features \
+            --features "$FEATURES" ${{ matrix.cargo_targets }}
 
   pye2e-docker:
     name: Python GUI E2E Docker
@@ -194,7 +196,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: perf-${{ matrix.platform }}-${{ matrix.scenario }}-${{ github.sha }}
+          name: >-
+            perf-${{ matrix.platform }}-${{ matrix.scenario }}-${{ github.sha }}
           path: target/perf/${{ matrix.platform }}/${{ matrix.scenario }}
           retention-days: 30
           if-no-files-found: error
@@ -246,14 +249,7 @@ jobs:
           packages: platform-tools
 
       - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-${ANDROID_API_LEVEL}" \
-            "build-tools;${ANDROID_BUILD_TOOLS}" \
-            "ndk;${ANDROID_NDK_VERSION}"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${ANDROID_NDK_VERSION}" >> "$GITHUB_ENV"
+        run: python3 -m scripts.android_sdk
 
       - name: Install Rust Android toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -286,13 +282,17 @@ jobs:
 
       - name: Enable KVM access
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          printf '%s%s\n' \
+            'KERNEL=="kvm", GROUP="kvm", MODE="0666", ' \
+            'OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Capture directional Android performance scenario
-        uses: reactivecircus/android-emulator-runner@v2
+        # v2: keep scripts/android_sdk.py aligned with its SDK packages.
+        # yamllint disable-line rule:line-length
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 35
           target: google_apis
@@ -357,13 +357,7 @@ jobs:
           packages: platform-tools
 
       - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-${ANDROID_API_LEVEL}" \
-            "build-tools;${ANDROID_BUILD_TOOLS}" \
-            "ndk;${ANDROID_NDK_VERSION}"
+        run: python3 -m scripts.android_sdk
 
       - name: Install Rust Android toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -383,13 +377,17 @@ jobs:
 
       - name: Enable KVM access
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          printf '%s%s\n' \
+            'KERNEL=="kvm", GROUP="kvm", MODE="0666", ' \
+            'OPTIONS+="static_node=kvm"' \
             | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Run Android UI E2E tests
-        uses: reactivecircus/android-emulator-runner@v2
+        # v2: keep scripts/android_sdk.py aligned with its SDK packages.
+        # yamllint disable-line rule:line-length
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 35
           target: google_apis
