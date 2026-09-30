@@ -498,6 +498,11 @@ impl FrontendRuntime {
                 result.effects
             }
             RuntimeEvent::BackendPosition(position) => {
+                // Backends can retain the last track's position after stop. It
+                // must not overwrite zero (or an explicit saved stopped seek).
+                if self.state().player.state() == PlayerState::Stopped {
+                    return update;
+                }
                 let (next, confirmed) = self.transition.observe_position(position);
                 self.transition = next;
                 let Some(position) = confirmed else {
@@ -925,6 +930,7 @@ mod tests {
             runtime.equalizer_state(),
             true,
         );
+        runtime.store_mut().state_mut().player.mark_playing();
         runtime.request_backend_seek(500);
         assert!(runtime.apply_pending_start_seek(false).messages.is_empty());
         assert_eq!(runtime.pending_seek_ms(), Some(500));
@@ -1018,6 +1024,61 @@ mod tests {
             ]
         );
         assert!(volume.force_persistence);
+    }
+
+    #[test]
+    fn stopped_backend_samples_cannot_restore_the_previous_track_position() {
+        let (mut runtime, calls) = recording_runtime(false);
+        runtime.handle(
+            RuntimeEvent::Command(PlaylistCommand::AddUris(vec!["song".into()]).into()),
+            PlaybackExecution::Local,
+        );
+        runtime.store_mut().state_mut().player.mark_playing();
+        runtime.handle(
+            RuntimeEvent::BackendPosition(30_000),
+            PlaybackExecution::Local,
+        );
+        runtime.handle(
+            RuntimeEvent::Command(PlayerCommand::Halt.into()),
+            PlaybackExecution::Local,
+        );
+        let stopped_revision = runtime.store().revision();
+        let stale = runtime.handle(
+            RuntimeEvent::BackendPosition(30_000),
+            PlaybackExecution::Local,
+        );
+        assert_eq!(runtime.state().config.playback_position_ms, 0);
+        assert_eq!(runtime.store().revision(), stopped_revision);
+        assert_eq!(stale, RuntimeUpdate::default());
+        let start = runtime
+            .handle(
+                RuntimeEvent::Command(PlayerCommand::Play.into()),
+                PlaybackExecution::Local,
+            )
+            .pending_playback_starts
+            .pop()
+            .unwrap();
+        assert_eq!(start.position_ms, 0);
+        runtime.handle(
+            RuntimeEvent::PlaybackStartPrepared(start),
+            PlaybackExecution::Local,
+        );
+        assert_eq!(*calls.lock().unwrap(), vec!["stop", "play:song"]);
+
+        // A deliberate seek while stopped remains authoritative too.
+        runtime.handle(
+            RuntimeEvent::Command(PlayerCommand::Halt.into()),
+            PlaybackExecution::Local,
+        );
+        runtime.handle(
+            RuntimeEvent::Command(PlayerCommand::SeekToMs(5_000).into()),
+            PlaybackExecution::Local,
+        );
+        runtime.handle(
+            RuntimeEvent::BackendPosition(30_000),
+            PlaybackExecution::Local,
+        );
+        assert_eq!(runtime.state().config.playback_position_ms, 5_000);
     }
 
     #[test]
@@ -1307,6 +1368,7 @@ mod tests {
     #[test]
     fn pending_seek_requires_confirmation_and_stale_samples_cannot_undo_it() {
         let (mut runtime, calls) = recording_runtime(false);
+        runtime.store_mut().state_mut().player.mark_playing();
         runtime.request_backend_seek(5_000);
         assert!(runtime
             .handle(RuntimeEvent::BackendPosition(100), PlaybackExecution::Local)

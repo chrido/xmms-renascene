@@ -6,10 +6,11 @@ import re
 import time
 import wave
 import zipfile
-from io import BytesIO
+from collections.abc import Callable
 from importlib import import_module
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from PIL import Image
 
@@ -405,12 +406,23 @@ def test_android_stop_then_play_stays_synchronized(
     time.sleep(1.2)
     assert _private_config_int(android_device, "playback_position_ms") == 0
 
+    android_device.clear_logcat()
+    restart_started = time.monotonic()
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY], player_bounds)
+    android_device.assert_log_contains(
+        "backend: play_uri, "
+        "uri=file:///data/user/0/org.xmms.renascene/files/imports/stop-restart.wav, "
+        "position_ms=0, pending_seek=false",
+    )
     android_device.wait_for_service("XmmsPlaybackService")
     restarted_position = android_device.wait_for_media_session_position_at_least(
         500,
         timeout=10.0,
     )
+    restart_elapsed_ms = (time.monotonic() - restart_started) * 1_000
+    # ADB/service polling can take >3s on CI. Position must reflect only time
+    # since this zero-position start, not a resumed offset from the old track.
+    assert restarted_position <= restart_elapsed_ms + 1_000
     restarted = android_device.wait_for_rendered_screenshot(
         test_output.screenshot_path(),
         changed_from=stopped,
@@ -421,7 +433,6 @@ def test_android_stop_then_play_stays_synchronized(
     android_device.assert_player_rendered(playing)
     android_device.assert_player_rendered(stopped)
     android_device.assert_player_rendered(restarted)
-    assert restarted_position < 3_000
     assert not android_device.rendered_screens_match(playing, stopped)
     assert not android_device.rendered_screens_match(stopped, restarted)
 
@@ -1132,7 +1143,7 @@ def test_android_playlist_swipe_up_starts_only_selected_item(
 
     android_device.assert_log_contains(
         "playlist: swipe playback started, selected_index=1",
-        "backend: egui play_uri, "
+        "backend: play_uri, "
         "uri=file:///data/user/0/org.xmms.renascene/files/imports/second.wav"
     )
     android_device.wait_for_service("XmmsPlaybackService")
@@ -1154,7 +1165,7 @@ def test_android_playlist_swipe_up_starts_first_selected_item_in_playlist_order(
 
     log = android_device.assert_log_contains(
         "playlist: swipe playback started, selected_index=0",
-        "backend: egui play_uri, "
+        "backend: play_uri, "
         "uri=file:///data/user/0/org.xmms.renascene/files/imports/first.wav"
     )
     assert (
@@ -1175,7 +1186,7 @@ def test_android_playlist_swipe_down_pauses_and_does_not_resume(
     _prepare_android_swipe_playlist(android_device)
     android_device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
     android_device.assert_log_contains(
-        "backend: egui play_uri, "
+        "backend: play_uri, "
         "uri=file:///data/user/0/org.xmms.renascene/files/imports/first.wav"
     )
     android_device.wait_for_service("XmmsPlaybackService")
@@ -1193,7 +1204,7 @@ def test_android_playlist_swipe_down_pauses_and_does_not_resume(
     android_device.main_player_bounds()
 
     second_swipe_log = _swipe_playlist_down(android_device, touched_index=0)
-    assert "backend: egui play_uri" not in second_swipe_log
+    assert "backend: play_uri" not in second_swipe_log
     android_device.go_home()
     time.sleep(1.0)
     still_paused_position = _private_config_int(
@@ -1212,7 +1223,7 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
     _swipe_playlist_up(android_device, touched_index=1, selected_index=0)
     android_device.assert_log_contains(
         "playlist: swipe playback started, selected_index=0",
-        "backend: egui play_uri, "
+        "backend: play_uri, "
         "uri=file:///data/user/0/org.xmms.renascene/files/imports/first.wav",
     )
     android_device.wait_for_service("XmmsPlaybackService")
@@ -1234,7 +1245,7 @@ def test_android_playlist_swipe_up_resumes_selected_paused_track(
         touched_index=1,
         selected_index=0,
     )
-    assert "backend: egui play_uri" not in resume_log
+    assert "backend: play_uri" not in resume_log
     time.sleep(1.0)
     android_device.go_home()
     resumed_position = android_device.wait_for_private_file_int_at_least(
@@ -1415,6 +1426,8 @@ def test_android_external_media_volume_source_bridge() -> None:
     events = (root / "src/ui/egui/android_events.rs").read_text()
     app = (root / "src/ui/egui/app.rs").read_text()
     app_state = (root / "src/app_state.rs").read_text()
+    runtime = (root / "src/app/runtime.rs").read_text()
+    effect_executor = (root / "src/ui/egui/effect_executor.rs").read_text()
     store = (root / "src/app/store.rs").read_text()
 
     assert "new ContentObserver(MAIN_HANDLER)" in activity
@@ -1437,8 +1450,14 @@ def test_android_external_media_volume_source_bridge() -> None:
     assert "retain(|queued|" in events
     assert "events::request_registered_repaint();" in bridge
 
-    assert "sync_external_output_volume(volume)" in app
-    assert "self.android.mark_persistence();" in app
+    external_volume = app.split("fn handle_external_android_media_volume", 1)[1].split(
+        "fn handle_android_media_control", 1
+    )[0]
+    assert "RuntimeEvent::ExternalOutputVolume(volume)" in external_volume
+    assert "process_store_event(" in external_volume
+    assert "sync_external_output_volume(volume)" in runtime
+    assert "apply_android_post_dispatch(&mut self.android, update.changes)" in app
+    assert "android.mark_position_persistence()" in effect_executor
     platform_poll = app.split("fn poll_android_platform_events", 1)[1].split(
         "\n}\n\nimpl EguiFrontendState", 1
     )[0]
