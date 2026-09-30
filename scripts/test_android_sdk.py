@@ -43,6 +43,23 @@ class AndroidSdkTest(unittest.TestCase):
             self.assertEqual(run.call_args_list[1].args, run.call_args_list[2].args)
             sleep.assert_called_once_with(10)
 
+    def test_emulator_and_system_image_downloads_use_the_retry_path(self):
+        for package in ["emulator", "system-images;android-35;google_apis;x86_64"]:
+            with (
+                self.subTest(package=package),
+                tempfile.TemporaryDirectory() as root,
+                mock.patch(
+                    "scripts.android_sdk.subprocess.run",
+                    side_effect=[None, subprocess.CalledProcessError(1, "sdkmanager"), None],
+                ) as run,
+                mock.patch("scripts.android_sdk.time.sleep") as sleep,
+            ):
+                install(Path(root), [package])
+                self.assertEqual(run.call_count, 3)
+                self.assertEqual(run.call_args_list[1].args[0][-1], package)
+                self.assertEqual(run.call_args_list[1].args, run.call_args_list[2].args)
+                sleep.assert_called_once_with(10)
+
     def test_timeout_retries_are_bounded_and_failure_propagates(self):
         with (
             tempfile.TemporaryDirectory() as root,
@@ -87,6 +104,7 @@ class AndroidSdkTest(unittest.TestCase):
                 main()
             installer.assert_called_once_with(Path(root), [
                 "platform-tools", "platforms;android-36", "build-tools;36.0.0",
-                "ndk;27.2.12479018",
+                "ndk;27.2.12479018", "build-tools;37.0.0", "platforms;android-35",
+                "emulator", "system-images;android-35;google_apis;x86_64",
             ])
             self.assertEqual(output.read_text(), f"ANDROID_NDK_HOME={root}/ndk/27.2.12479018\n")

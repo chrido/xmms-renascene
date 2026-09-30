@@ -7,9 +7,12 @@ import tempfile
 import time
 from pathlib import Path
 
-
 ATTEMPTS = 3
 TIMEOUT_SECONDS = 600
+# Match the SDK packages requested by the pinned android-emulator-runner action.
+# Preinstall them here so its setup does not perform unprotected downloads.
+EMULATOR_API_LEVEL = "35"
+EMULATOR_BUILD_TOOLS = "37.0.0"
 
 
 def install(sdk_root: Path, packages: list[str]) -> None:
@@ -57,6 +60,10 @@ def main() -> None:
             f"platforms;android-{os.environ['ANDROID_API_LEVEL']}",
             f"build-tools;{os.environ['ANDROID_BUILD_TOOLS']}",
             f"ndk;{os.environ['ANDROID_NDK_VERSION']}",
+            f"build-tools;{EMULATOR_BUILD_TOOLS}",
+            f"platforms;android-{EMULATOR_API_LEVEL}",
+            "emulator",
+            f"system-images;android-{EMULATOR_API_LEVEL};google_apis;x86_64",
         ],
     )
     try:

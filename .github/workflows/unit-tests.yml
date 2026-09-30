@@ -290,7 +290,9 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Capture directional Android performance scenario
-        uses: reactivecircus/android-emulator-runner@v2
+        # v2: keep scripts/android_sdk.py aligned with its SDK packages.
+        # yamllint disable-line rule:line-length
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 35
           target: google_apis
@@ -383,7 +385,9 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Run Android UI E2E tests
-        uses: reactivecircus/android-emulator-runner@v2
+        # v2: keep scripts/android_sdk.py aligned with its SDK packages.
+        # yamllint disable-line rule:line-length
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 35
           target: google_apis
