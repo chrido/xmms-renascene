@@ -1038,6 +1038,7 @@ impl EguiFrontendState {
     }
 
     fn execute_ui_effect(&mut self, effect: UiEffect) {
+        app_log_debug!(frontend_effect, "egui {effect:?}");
         match effect {
             UiEffect::OpenFileDialog(request) => self.handle_file_dialog(request),
             UiEffect::OpenFileInfoDialog => self.dispatch(UiCommand::SetFileInfoVisible(true)),
