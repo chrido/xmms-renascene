@@ -28,6 +28,7 @@ from gui import (
 )
 
 pytest: Any = import_module("pytest")
+save_swipe_diagnostics = import_module("android_diagnostics").save_swipe_diagnostics
 
 pytestmark = pytest.mark.android
 
@@ -952,7 +953,9 @@ def _run_playlist_swipe_until_log(
     duration_ms: int,
     expected_log: str,
 ) -> str:
+    previous_log = android_device.command("logcat", "-d", check=False).stdout
     android_device.clear_logcat()
+    diagnostics_dir: Path | None = None
     last_error: AssertionError | None = None
     for attempt in range(3):
         android_device.wait_for_app()
@@ -970,10 +973,23 @@ def _run_playlist_swipe_until_log(
             return android_device.assert_log_contains(expected_log, timeout=6.0)
         except AssertionError as error:
             last_error = error
+            diagnostics_dir = save_swipe_diagnostics(
+                android_device,
+                label=f"attempt-{attempt + 1}",
+                details=(
+                    f"expected_log={expected_log}\nduration_ms={duration_ms}\n"
+                    f"start=({start_x}, {start_y})\nend=({end_x}, {end_y})\n"
+                ),
+                directory=diagnostics_dir,
+                previous_log=previous_log,
+            )
+            print(f"Failed swipe attempt {attempt + 1}; diagnostics: {diagnostics_dir}", flush=True)
             if attempt < 2:
                 android_device.recover_input_dispatch()
     assert last_error is not None
-    raise last_error
+    raise AssertionError(
+        f"{last_error}\nAll swipe-attempt diagnostics: {diagnostics_dir}"
+    ) from last_error
 
 
 def _tap_skin_rect_until_log(

@@ -651,6 +651,9 @@ fn handle_playlist_touch_scroll(
             let index = app.playlist.scroll_offset.saturating_add(row);
             (index < row_count).then_some(index)
         };
+        app_log_info!(playlist,
+            "swipe gesture began: origin={drag_start:?}, row={row:?}, rows_rect={rows_rect:?}, scroll_offset={}, scale={}",
+            app.playlist.scroll_offset, app.scale_factor());
         app.playlist.touch_gesture.begin(drag_start, row);
     }
     if let Some(drag_start) = app.playlist.touch_gesture.start() {
@@ -696,7 +699,25 @@ fn handle_playlist_touch_scroll(
         let drag_delta = release.delta;
         gesture_handled = drag_delta.length_sq() >= 8.0_f32.powi(2);
         let release_velocity = ui.ctx().input(|input| input.pointer.velocity());
-        if is_playlist_right_swipe(drag_delta) || is_playlist_left_swipe(drag_delta) {
+        let right_swipe = is_playlist_right_swipe(drag_delta);
+        let left_swipe = is_playlist_left_swipe(drag_delta);
+        let play_swipe =
+            is_playlist_upward_play_swipe(drag_delta, release_velocity, release.duration);
+        let pause_swipe =
+            is_playlist_downward_pause_swipe(drag_delta, release_velocity, release.duration);
+        let state = app.controller().state();
+        let selected_indices: Vec<_> = state
+            .playlist
+            .entries()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| entry.selected.then_some(index))
+            .collect();
+        app_log_info!(playlist,
+            "swipe gesture released: delta={drag_delta:?}, velocity={release_velocity:?}, duration_ms={}, row={:?}, selected_indices={selected_indices:?}, player_state={:?}, scroll_offset={}, right={right_swipe}, left={left_swipe}, play={play_swipe}, pause={pause_swipe}",
+            release.duration.as_millis(), release.row, state.player.state(),
+            app.playlist.scroll_offset);
+        if right_swipe || left_swipe {
             let swiped_index = release.row.or_else(|| {
                 response.interact_pointer_pos().and_then(|pointer| {
                     let drag_start = pointer - drag_delta;
@@ -714,13 +735,9 @@ fn handle_playlist_touch_scroll(
                 }
             }
         } else {
-            if is_playlist_upward_play_swipe(drag_delta, release_velocity, release.duration) {
+            if play_swipe {
                 play_first_selected_playlist_entry(app);
-            } else if is_playlist_downward_pause_swipe(
-                drag_delta,
-                release_velocity,
-                release.duration,
-            ) {
+            } else if pause_swipe {
                 app.dispatch(PlayerCommand::Pause);
                 app_log_info!(playlist, "swipe playback paused");
             }
@@ -802,6 +819,10 @@ fn play_first_selected_playlist_entry(app: &mut EguiFrontendState) {
         playlist_play_first_selected_commands(&state.playlist, state.player.state())
     };
     let Some(action) = action else {
+        app_log_info!(
+            playlist,
+            "swipe playback skipped: no selected playlist entry"
+        );
         return;
     };
     app.dispatch_all(action.commands);
