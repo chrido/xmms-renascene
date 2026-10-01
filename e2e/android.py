@@ -12,6 +12,7 @@ from collections import defaultdict
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from PIL import Image
 
@@ -609,7 +610,7 @@ class AndroidDevice:
                         geometry.height - geometry.bottom_inset,
                     )
                 )
-                visible = right_region.point(lambda value: 255 if value >= 18 else 0)
+                visible = right_region.point([255 if value >= 18 else 0 for value in range(256)])
                 bounds = visible.getbbox()
             if bounds is not None:
                 panel_left, panel_top, panel_right, panel_bottom = bounds
@@ -757,7 +758,7 @@ class AndroidDevice:
                 player_region = screenshot.convert("L").crop(
                     (0, 0, crop_right, crop_bottom)
                 )
-                visible = player_region.point(lambda value: 255 if value >= 18 else 0)
+                visible = player_region.point([255 if value >= 18 else 0 for value in range(256)])
                 bounds = visible.getbbox()
             if bounds is not None:
                 left, _top, right, _bottom = bounds
@@ -1014,6 +1015,8 @@ def _horizontal_button_group_centers(
     button_count: int,
 ) -> list[tuple[int, int]] | None:
     pixels = screenshot.load()
+    if pixels is None:
+        raise ValueError("Screenshot must have pixel data")
     min_width = round(geometry.usable_width * 0.15)
     max_width = round(geometry.usable_width * 0.32)
     runs: dict[tuple[tuple[int, int, int], int, int], list[int]] = defaultdict(list)
@@ -1024,7 +1027,7 @@ def _horizontal_button_group_centers(
         x = geometry.left_inset
         usable_right = geometry.width - geometry.right_inset
         while x < usable_right:
-            color = pixels[x, y]
+            color = cast(tuple[int, int, int], pixels[x, y])
             left = x
             x += 1
             while x < usable_right and pixels[x, y] == color:

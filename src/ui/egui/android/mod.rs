@@ -86,6 +86,13 @@ pub fn initialize(
 ) -> Result<AndroidActivityGeneration, String> {
     let _order = events::lock_media_control_order();
     let initialized = activity::initialize(app)?;
+    crate::app_log_info!(
+        frontend,
+        "Android Activity initialized: pid={}, generation={:?}, resumed={}",
+        std::process::id(),
+        initialized.generation,
+        initialized.resumed
+    );
     media_session::initialize_media_library_locked(initialized.files_dir, initialized.cache_dir);
     events::replace_activity();
     media_session::replace_activity(initialized.generation, initialized.resumed);
@@ -134,6 +141,10 @@ pub fn is_foreground_activity(activity_generation: AndroidActivityGeneration) ->
 }
 
 pub fn runtime_exited(activity_generation: AndroidActivityGeneration) {
+    crate::app_log_info!(
+        frontend,
+        "Android frontend runtime exited: generation={activity_generation:?}"
+    );
     let _order = events::lock_media_control_order();
     events::unregister_repaint_context(activity_generation);
     if !activity::is_current(activity_generation) {
@@ -153,6 +164,10 @@ pub(crate) fn handle_activity_resumed(env: &mut JNIEnv<'_>, activity_object: &JO
     let Some(activity_generation) = activity::set_resumed(env, activity_object, true) else {
         return;
     };
+    crate::app_log_info!(
+        frontend,
+        "Android Activity resumed: generation={activity_generation:?}"
+    );
     media_session::activity_resumed(activity_generation);
 }
 
@@ -161,6 +176,10 @@ pub(crate) fn handle_activity_paused(env: &mut JNIEnv<'_>, activity_object: &JOb
     let Some(activity_generation) = activity::set_resumed(env, activity_object, false) else {
         return;
     };
+    crate::app_log_info!(
+        frontend,
+        "Android Activity paused: generation={activity_generation:?}"
+    );
     media_session::persist_playback_position_now();
     media_session::activity_paused_or_exited(activity_generation);
 }
@@ -170,6 +189,10 @@ pub(crate) fn handle_activity_destroyed(env: &mut JNIEnv<'_>, activity_object: &
     let Some(activity_generation) = activity::destroy_current(env, activity_object) else {
         return;
     };
+    crate::app_log_info!(
+        frontend,
+        "Android Activity destroyed: generation={activity_generation:?}"
+    );
     media_session::activity_paused_or_exited(activity_generation);
     events::unregister_repaint_context(activity_generation);
     picker::replace_activity();
