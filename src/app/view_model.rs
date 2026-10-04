@@ -86,7 +86,7 @@ impl TitleMarquee {
 }
 
 pub fn title_overflow_px(title: &str, viewport_width: i32) -> i32 {
-    let glyphs = i32::try_from(title.chars().count()).unwrap_or(i32::MAX);
+    let glyphs = i32::try_from(TextBox::glyph_count(title)).unwrap_or(i32::MAX);
     glyphs
         .saturating_mul(TextBox::CHAR_WIDTH)
         .saturating_sub(viewport_width.max(0))
@@ -618,6 +618,7 @@ mod tests {
     fn title_marquee_detects_only_real_overflow() {
         assert_eq!(title_overflow_px("12345", 25), 0);
         assert_eq!(title_overflow_px("123456", 25), 5);
+        assert_eq!(title_overflow_px("12🙂345", 25), 0);
 
         let mut marquee = TitleMarquee::default();
         marquee.update(
