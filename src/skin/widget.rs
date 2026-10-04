@@ -452,8 +452,12 @@ impl TextBox {
             '=' => Some((140, 6)),
             '$' => Some((145, 6)),
             '#' => Some((150, 6)),
-            '?' => Some((50, 12)),
-            '*' => Some((55, 12)),
+            'å' | 'Å' => Some((0, 12)),
+            'ö' | 'Ö' => Some((5, 12)),
+            'ä' | 'Ä' => Some((10, 12)),
+            'ü' | 'Ü' => Some((100, 0)),
+            '?' => Some((15, 12)),
+            '*' => Some((20, 12)),
             _ => None,
         }
     }
@@ -1426,7 +1430,16 @@ mod tests {
         assert_eq!(TextBox::glyph_source('A'), Some((0, 0)));
         assert_eq!(TextBox::glyph_source('z'), Some((125, 0)));
         assert_eq!(TextBox::glyph_source('9'), Some((45, 6)));
-        assert_eq!(TextBox::glyph_source('?'), Some((50, 12)));
+        assert_eq!(TextBox::glyph_source('å'), Some((0, 12)));
+        assert_eq!(TextBox::glyph_source('Å'), Some((0, 12)));
+        assert_eq!(TextBox::glyph_source('ö'), Some((5, 12)));
+        assert_eq!(TextBox::glyph_source('Ö'), Some((5, 12)));
+        assert_eq!(TextBox::glyph_source('ä'), Some((10, 12)));
+        assert_eq!(TextBox::glyph_source('Ä'), Some((10, 12)));
+        assert_eq!(TextBox::glyph_source('ü'), Some((100, 0)));
+        assert_eq!(TextBox::glyph_source('Ü'), Some((100, 0)));
+        assert_eq!(TextBox::glyph_source('?'), Some((15, 12)));
+        assert_eq!(TextBox::glyph_source('*'), Some((20, 12)));
         assert_eq!(TextBox::glyph_source(' '), None);
         assert_eq!(TextBox::glyph_source('~'), None);
     }
