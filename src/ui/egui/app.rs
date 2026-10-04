@@ -397,6 +397,21 @@ impl EguiFrontendState {
         apply_preview_options_to_config(&mut app_state.config, &options)?;
         apply_preview_playlist(&mut app_state, &options)?;
         app_state.ui.preferences_visible = options.open_preferences;
+        #[cfg(target_os = "android")]
+        {
+            let selected_indices: Vec<_> = app_state
+                .playlist
+                .entries()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| entry.selected.then_some(index))
+                .collect();
+            app_log_info!(frontend,
+                "Android frontend runtime initialized: pid={}, reset={}, playlist_len={}, playlist_position={:?}, selected_indices={selected_indices:?}, player_state={:?}, playback_position_ms={}",
+                std::process::id(), options.reset, app_state.playlist.len(),
+                app_state.playlist.position(), app_state.player.state(),
+                app_state.config.playback_position_ms);
+        }
         let active_skin = load_skin_from_config(&app_state)?;
         let persistence_config = app_state.persistence_snapshot().config;
         let ui = EguiUiState::new(
