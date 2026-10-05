@@ -412,11 +412,18 @@ pub(super) fn render_text_offset(
         f64::from(TextBox::CHAR_HEIGHT),
     );
     cr.clip();
-    for (index, ch) in text.chars().enumerate() {
-        let Some((sx, sy)) = TextBox::glyph_source(ch) else {
+    let mut glyph_index = 0i32;
+    for ch in text.chars() {
+        let source = TextBox::glyph_source(ch);
+        if source.is_none() && ch != ' ' {
+            continue;
+        }
+
+        let dx = xdest + (glyph_index * TextBox::CHAR_WIDTH) - offset_px;
+        glyph_index = glyph_index.saturating_add(1);
+        let Some((sx, sy)) = source else {
             continue;
         };
-        let dx = xdest + (index as i32 * TextBox::CHAR_WIDTH) - offset_px;
         if dx >= xdest + width {
             break;
         }

@@ -571,10 +571,11 @@ impl Context {
         let state = self.state.borrow();
         let font = font_for(&state.font_family, state.font_slant, state.font_weight)?;
         let size = state.font_size as f32;
-        let width = text
-            .chars()
-            .map(|ch| font.metrics(ch, size).advance_width as f64)
-            .sum();
+        let mut width = 0.0;
+        for ch in text.chars() {
+            let glyph_font = font_for_character(font, ch)?;
+            width += glyph_font.metrics(ch, size).advance_width as f64;
+        }
         Ok(TextExtents {
             width,
             height: self.state.borrow().font_size,
@@ -615,7 +616,8 @@ impl Context {
             let mut pen_x = (state.current_x as f32 * scale_x) + state.tx as f32;
             let baseline = (state.current_y as f32 * scale_y) + state.ty as f32;
             for ch in text.chars() {
-                let (metrics, bitmap) = font.rasterize(ch, device_font_size);
+                let glyph_font = font_for_character(font, ch)?;
+                let (metrics, bitmap) = glyph_font.rasterize(ch, device_font_size);
                 let origin_x = pen_x + metrics.xmin as f32;
                 let origin_y = baseline - metrics.height as f32 - metrics.ymin as f32;
                 for by in 0..metrics.height {
@@ -640,7 +642,8 @@ impl Context {
         let mut pen_x = state.current_x as f32;
         let baseline = state.current_y as f32;
         for ch in text.chars() {
-            let (metrics, bitmap) = font.rasterize(ch, state.font_size as f32);
+            let glyph_font = font_for_character(font, ch)?;
+            let (metrics, bitmap) = glyph_font.rasterize(ch, state.font_size as f32);
             let origin_x = pen_x + metrics.xmin as f32;
             let origin_y = baseline - metrics.height as f32 - metrics.ymin as f32;
             for by in 0..metrics.height {
@@ -695,6 +698,108 @@ fn rgba_to_argb([r, g, b, a]: [u8; 4]) -> u32 {
 fn argb_to_rgba(argb: u32) -> [u8; 4] {
     let [a, r, g, b] = argb.to_be_bytes();
     [r, g, b, a]
+}
+
+#[cfg(test)]
+mod font_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn playlist_fallback_selects_cjk_and_preserves_primary_styles() {
+        for (slant, weight) in [
+            (FontSlant::Normal, FontWeight::Normal),
+            (FontSlant::Normal, FontWeight::Bold),
+            (FontSlant::Italic, FontWeight::Normal),
+            (FontSlant::Italic, FontWeight::Bold),
+        ] {
+            let primary = font_for("Helvetica", slant, weight).unwrap();
+            for ch in "A åöäü".chars() {
+                assert!(std::ptr::eq(
+                    font_for_character(primary, ch).unwrap(),
+                    primary
+                ));
+            }
+            for ch in "中文日本語한글".chars() {
+                assert!(!primary.has_glyph(ch));
+                let fallback = font_for_character(primary, ch).unwrap();
+                assert!(fallback.has_glyph(ch));
+                assert!(!std::ptr::eq(fallback, primary));
+            }
+            assert!(std::ptr::eq(
+                font_for_character(primary, '\u{10ffff}').unwrap(),
+                primary,
+            ));
+        }
+    }
+
+    #[test]
+    fn playlist_fallback_measurement_matches_selected_fonts() {
+        let surface = ImageSurface::create(Format::ARgb32, 100, 40).unwrap();
+        let cr = Context::new(&surface).unwrap();
+        cr.set_font_size(16.0);
+        let primary = font_for("Helvetica", FontSlant::Normal, FontWeight::Normal).unwrap();
+        let text = "A中한B";
+        let expected: f64 = text
+            .chars()
+            .map(|ch| {
+                font_for_character(primary, ch)
+                    .unwrap()
+                    .metrics(ch, 16.0)
+                    .advance_width as f64
+            })
+            .sum();
+        assert_eq!(cr.text_extents(text).unwrap().width(), expected);
+    }
+
+    #[test]
+    fn playlist_fallback_rasterizes_at_native_and_scaled_resolution() {
+        let primary = font_for("Helvetica", FontSlant::Normal, FontWeight::Normal).unwrap();
+        let fallback = font_for_character(primary, '中').unwrap();
+        for scale in [1.0, 2.0] {
+            let surface = ImageSurface::create(Format::ARgb32, 80, 80).unwrap();
+            let cr = Context::new(&surface).unwrap();
+            cr.scale(scale, scale);
+            cr.set_font_size(16.0);
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.move_to(4.0, 24.0);
+            cr.show_text("中").unwrap();
+            let (_, bitmap) = fallback.rasterize('中', (16.0 * scale) as f32);
+            let expected_alpha: u64 = bitmap.iter().map(|&a| u64::from(a)).sum();
+            let actual_alpha: u64 = surface
+                .data()
+                .unwrap()
+                .chunks_exact(4)
+                .map(|pixel| u64::from(u32::from_ne_bytes(pixel.try_into().unwrap()) >> 24))
+                .sum();
+            assert!(expected_alpha > 0);
+            assert_eq!(actual_alpha, expected_alpha);
+        }
+    }
+}
+
+// Keep measurement and both rasterization paths on the same fallback chain.
+// Characters absent from every bundled font retain the primary missing-glyph box.
+fn font_for_character(primary: &'static Font, ch: char) -> Result<&'static Font, Error> {
+    if primary.has_glyph(ch) {
+        return Ok(primary);
+    }
+
+    static FALLBACK: OnceLock<Result<Font, String>> = OnceLock::new();
+    let fallback = FALLBACK
+        .get_or_init(|| {
+            Font::from_bytes(
+                include_bytes!("../../data/fonts/DroidSansFallback.ttf") as &[u8],
+                fontdue::FontSettings::default(),
+            )
+            .map_err(|err| err.to_string())
+        })
+        .as_ref()
+        .map_err(|err| Error::new(err.clone()))?;
+    Ok(if fallback.has_glyph(ch) {
+        fallback
+    } else {
+        primary
+    })
 }
 
 fn font_for(_family: &str, slant: FontSlant, weight: FontWeight) -> Result<&'static Font, Error> {

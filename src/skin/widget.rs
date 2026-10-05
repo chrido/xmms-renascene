@@ -399,7 +399,8 @@ impl TextBox {
 
         self.original_text = text.map(ToOwned::to_owned);
         self.text = text.map(|text| {
-            let text_width = text.len() as i32 * Self::CHAR_WIDTH;
+            let glyphs = i32::try_from(Self::glyph_count(text)).unwrap_or(i32::MAX);
+            let text_width = glyphs.saturating_mul(Self::CHAR_WIDTH);
             if self.scroll_enabled && text_width > self.widget.rect().width {
                 format!("{text}{}", Self::SCROLL_SEPARATOR)
             } else {
@@ -422,6 +423,12 @@ impl TextBox {
         }
         self.widget.queue_draw();
         true
+    }
+
+    pub fn glyph_count(text: &str) -> usize {
+        text.chars()
+            .filter(|&ch| ch == ' ' || Self::glyph_source(ch).is_some())
+            .count()
     }
 
     pub fn glyph_source(ch: char) -> Option<(i32, i32)> {
@@ -452,8 +459,12 @@ impl TextBox {
             '=' => Some((140, 6)),
             '$' => Some((145, 6)),
             '#' => Some((150, 6)),
-            '?' => Some((50, 12)),
-            '*' => Some((55, 12)),
+            'å' | 'Å' => Some((0, 12)),
+            'ö' | 'Ö' => Some((5, 12)),
+            'ä' | 'Ä' => Some((10, 12)),
+            'ü' | 'Ü' => Some((100, 0)),
+            '?' => Some((15, 12)),
+            '*' => Some((20, 12)),
             _ => None,
         }
     }
@@ -462,7 +473,12 @@ impl TextBox {
         self.rendered_width = self
             .text
             .as_deref()
-            .map(|text| (text.len() as i32 * Self::CHAR_WIDTH).max(Self::CHAR_WIDTH))
+            .map(|text| {
+                i32::try_from(Self::glyph_count(text))
+                    .unwrap_or(i32::MAX)
+                    .saturating_mul(Self::CHAR_WIDTH)
+                    .max(Self::CHAR_WIDTH)
+            })
             .unwrap_or(Self::CHAR_WIDTH);
         self.scrollable = self.rendered_width > self.widget.rect().width;
     }
@@ -1426,9 +1442,19 @@ mod tests {
         assert_eq!(TextBox::glyph_source('A'), Some((0, 0)));
         assert_eq!(TextBox::glyph_source('z'), Some((125, 0)));
         assert_eq!(TextBox::glyph_source('9'), Some((45, 6)));
-        assert_eq!(TextBox::glyph_source('?'), Some((50, 12)));
+        assert_eq!(TextBox::glyph_source('å'), Some((0, 12)));
+        assert_eq!(TextBox::glyph_source('Å'), Some((0, 12)));
+        assert_eq!(TextBox::glyph_source('ö'), Some((5, 12)));
+        assert_eq!(TextBox::glyph_source('Ö'), Some((5, 12)));
+        assert_eq!(TextBox::glyph_source('ä'), Some((10, 12)));
+        assert_eq!(TextBox::glyph_source('Ä'), Some((10, 12)));
+        assert_eq!(TextBox::glyph_source('ü'), Some((100, 0)));
+        assert_eq!(TextBox::glyph_source('Ü'), Some((100, 0)));
+        assert_eq!(TextBox::glyph_source('?'), Some((15, 12)));
+        assert_eq!(TextBox::glyph_source('*'), Some((20, 12)));
         assert_eq!(TextBox::glyph_source(' '), None);
         assert_eq!(TextBox::glyph_source('~'), None);
+        assert_eq!(TextBox::glyph_count("a ~å"), 3);
     }
 
     fn slider_spec() -> HorizontalSliderSpec {
