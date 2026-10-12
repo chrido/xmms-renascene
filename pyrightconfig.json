@@ -1,0 +1,10 @@
+{
+  "include": ["e2e", "scripts"],
+  "exclude": ["e2e/.venv", "target", "testoutput"],
+  "executionEnvironments": [
+    { "root": "e2e", "extraPaths": ["e2e"] },
+    { "root": "scripts", "extraPaths": ["."] }
+  ],
+  "venvPath": "e2e",
+  "venv": ".venv"
+}

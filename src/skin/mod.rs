@@ -1,6 +1,8 @@
 mod archive;
 pub mod edit;
 pub mod layout;
+#[cfg(test)]
+mod palette_tests;
 mod source;
 pub mod widget;
 pub mod xpm;
@@ -175,6 +177,11 @@ pub const DEFAULT_VIS_COLORS: [[u8; 3]; 24] = [
     [200, 200, 200],
 ];
 
+/// Limits for worker-only palette lookup, independent of full bitmap loading.
+pub const MAX_VIS_COLOR_TEXT_BYTES: u64 = 64 * 1024;
+const MAX_PALETTE_DIRECTORY_ENTRIES: usize = 4096;
+const MAX_PALETTE_DIRECTORY_DEPTH: usize = 32;
+
 impl DefaultSkin {
     pub fn load_bundled() -> io::Result<Self> {
         const BUNDLED_XPMS: &[(SkinPixmapKind, &str)] = &[
@@ -269,6 +276,36 @@ impl DefaultSkin {
         } else {
             Self::load_from_archive(path)
         }
+    }
+
+    /// Blocking palette-only lookup for background artwork workers. Preserve
+    /// the full loader's case-insensitive named-text/DFS/archive precedence,
+    /// parser fallback and errors, but never decode bitmap assets. Large skins
+    /// beyond the documented palette budgets fail instead of doing unbounded
+    /// traversal/decompression; callers may use the built-in fallback palette.
+    pub fn load_vis_colors_from_path(path: &Path) -> io::Result<[[u8; 3]; 24]> {
+        let metadata = fs::metadata(path).map_err(|err| {
+            io::Error::new(err.kind(), format!("stat skin {}: {err}", path.display()))
+        })?;
+        let text = if metadata.is_dir() {
+            AssetSource::directory_bounded(
+                path,
+                MAX_PALETTE_DIRECTORY_ENTRIES,
+                MAX_PALETTE_DIRECTORY_DEPTH,
+            )?
+            .text_bounded("viscolor.txt", MAX_VIS_COLOR_TEXT_BYTES)?
+        } else if metadata.is_file() {
+            archive::named_text(path, "viscolor.txt", MAX_VIS_COLOR_TEXT_BYTES)?
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "skin palette source is not a directory or regular archive file",
+            ));
+        };
+        Ok(text
+            .as_deref()
+            .map(parse_vis_colors)
+            .unwrap_or(DEFAULT_VIS_COLORS))
     }
 
     fn load_from_archive(path: &Path) -> io::Result<Self> {

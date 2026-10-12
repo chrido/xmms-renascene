@@ -1,5 +1,6 @@
 pub mod app;
 pub mod app_state;
+pub mod artwork;
 mod atomic_file;
 pub mod audio_model;
 pub mod config;

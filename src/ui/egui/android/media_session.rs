@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use jni::objects::{JObject, JValue};
 use jni::JNIEnv;
 
+use crate::artwork::projection::ProjectionLedger;
 use crate::playback::backend::PlaybackBackend;
 use crate::playback::model::{PlaybackEvent, PlayerAction, PlayerTransition};
 use crate::playback::rodio::RodioBackend;
@@ -48,6 +49,151 @@ struct AndroidMediaNotification {
     queue_version: u64,
     has_previous: bool,
     has_next: bool,
+    source: Option<(String, u64, Option<u64>, i64)>,
+    owner: AndroidMediaPlaylistAuthority,
+}
+
+static MEDIA_PROJECTION: OnceLock<Mutex<ProjectionLedger<AndroidMediaNotification>>> =
+    OnceLock::new();
+
+fn projection_owner() -> AndroidMediaPlaylistAuthority {
+    MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .authority()
+}
+
+fn publish_projection(notification: AndroidMediaNotification) -> Result<String, String> {
+    MEDIA_PROJECTION
+        .get_or_init(|| Mutex::new(ProjectionLedger::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .publish(notification)
+        .map(|revision| revision.to_string())
+        .map_err(|err| err.to_string())
+}
+
+/// Receiver-side validation is memory-only and includes the live playlist and
+/// ownership, not just the last revision emitted by the foreground Activity.
+pub(crate) fn current_projection_token() -> String {
+    let owner = projection_owner();
+    let source = artwork_media_identity();
+    let ledger = MEDIA_PROJECTION
+        .get_or_init(|| Mutex::new(ProjectionLedger::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    ledger
+        .current()
+        .filter(|(_, value)| value.owner == owner && value.source == source)
+        .map_or_else(String::new, |(revision, _)| revision.to_string())
+}
+
+pub(crate) fn projection_valid(token: &str, require_owner: bool) -> bool {
+    let source = artwork_media_identity();
+    let owner = projection_owner();
+    let ledger = MEDIA_PROJECTION
+        .get_or_init(|| Mutex::new(ProjectionLedger::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    ledger.current().is_some_and(|(revision, value)| {
+        if revision.to_string() != token {
+            return false;
+        }
+        if require_owner {
+            value.owner == owner && value.source == source
+        } else {
+            // Ownership-only Home/resume transitions do not make the same
+            // track's already-rendered image stale. Actual selection/revision
+            // changes still reject it until the matching metadata is accepted.
+            let stable = |s: &Option<(String, u64, Option<u64>, i64)>| {
+                s.as_ref()
+                    .map(|(uri, revision, _, index)| (uri.clone(), *revision, *index))
+            };
+            stable(&value.source) == stable(&source)
+        }
+    })
+}
+
+pub(crate) fn refresh_service(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
+    update_service_from_backend(env, service);
+}
+
+/// Debug-only caller guard lives in Java. Exercise real playlist mutation and
+/// projection invalidation while no Activity owns foreground transitions.
+pub(crate) fn debug_reverse_playlist(env: &mut JNIEnv<'_>, service: &JObject<'_>) -> bool {
+    let order = events::lock_media_control_order();
+    {
+        let mut state = MEDIA_PLAYLIST
+            .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.authority() != AndroidMediaPlaylistAuthority::Authoritative {
+            return false;
+        }
+        let Some(media) = state.media().cloned() else {
+            return false;
+        };
+        let mut playlist = media.playlist;
+        playlist.reverse();
+        let titles = media.titles.into_iter().rev().collect();
+        *state =
+            AndroidMediaPlaylistState::Authoritative(AndroidMediaPlaylist::new(playlist, titles));
+    }
+    drop(order);
+    update_service_from_backend(env, service);
+    true
+}
+
+pub(crate) fn debug_replace_current(
+    env: &mut JNIEnv<'_>,
+    service: &JObject<'_>,
+    clear: bool,
+) -> bool {
+    let order = events::lock_media_control_order();
+    {
+        let mut state = MEDIA_PLAYLIST
+            .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.authority() != AndroidMediaPlaylistAuthority::Authoritative {
+            return false;
+        }
+        let Some(mut media) = state.media().cloned() else {
+            return false;
+        };
+        let Some(backend) = existing_playback_backend() else {
+            return false;
+        };
+        if clear {
+            if backend.stop().is_err() {
+                return false;
+            }
+            media.playlist.clear();
+            media.titles.clear();
+        } else {
+            let entries = media.playlist.entries();
+            if entries.len() < 2 {
+                return false;
+            }
+            let Some(position) = media.playlist.position() else {
+                return false;
+            };
+            let uri = entries[1].filename.clone();
+            let title = media.titles.get(position).cloned().unwrap_or_default();
+            if backend.play_uri(&uri).is_err() {
+                return false;
+            }
+            media.playlist.clear();
+            media.playlist.add_uri(uri);
+            media.playlist.set_position(0);
+            media.titles = vec![title];
+        }
+        *state = AndroidMediaPlaylistState::Authoritative(media);
+    }
+    drop(order);
+    update_service_from_backend(env, service);
+    true
 }
 
 static MEDIA_NOTIFICATION: OnceLock<Mutex<Option<AndroidMediaNotification>>> = OnceLock::new();
@@ -195,6 +341,8 @@ pub fn update_playback_notification(
         queue_version,
         has_previous,
         has_next,
+        source: artwork_media_identity(),
+        owner: projection_owner(),
     };
     let mut previous = MEDIA_NOTIFICATION
         .get_or_init(|| Mutex::new(None))
@@ -208,13 +356,17 @@ pub fn update_playback_notification(
         .vm
         .attach_current_thread()
         .map_err(|err| format!("failed to attach Android media-control thread: {err}"))?;
+    let token = publish_projection(notification.clone())?;
+    let token = env
+        .new_string(token)
+        .map_err(|err| format!("failed to create media projection token: {err}"))?;
     let title = env
         .new_string(title)
         .map_err(|err| format!("failed to create Android media title: {err}"))?;
     env.call_method(
         context.activity.as_obj(),
         "updatePlaybackNotification",
-        "(ILjava/lang/String;IIIJJJIZZ)V",
+        "(ILjava/lang/String;IIIJJJIZZLjava/lang/String;)V",
         &[
             JValue::Int(state as i32),
             JValue::Object(&title),
@@ -227,6 +379,7 @@ pub fn update_playback_notification(
             JValue::Int(playlist_len),
             JValue::Bool(has_previous.into()),
             JValue::Bool(has_next.into()),
+            JValue::Object(&token),
         ],
     )
     .map_err(|err| format!("failed to update Android playback notification: {err}"))?;
@@ -549,6 +702,43 @@ fn media_item_title(title: &str, filename: &str) -> String {
         .to_string()
 }
 
+/// Memory-only artwork identity. This deliberately does not acquire the media
+/// ordering lock, call the backend, or query filesystem metadata.
+pub(crate) fn artwork_media_item_identity(index: usize) -> Option<(String, u64, Option<u64>, i64)> {
+    let state = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let media = state.media()?;
+    let entry = media.playlist.entries().get(index)?;
+    Some((
+        entry.filename.clone(),
+        media.playlist.revisions().content,
+        None,
+        index as i64,
+    ))
+}
+
+pub(crate) fn artwork_media_identity() -> Option<(String, u64, Option<u64>, i64)> {
+    let state = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let media = state.media()?;
+    let position = media.playlist.position()?;
+    let entry = media.playlist.entries().get(position)?;
+    let activity = match state.authority() {
+        AndroidMediaPlaylistAuthority::Mirror(generation) => Some(generation.0),
+        _ => None,
+    };
+    Some((
+        entry.filename.clone(),
+        media.playlist.revisions().content,
+        activity,
+        position as i64,
+    ))
+}
+
 fn current_media_entry() -> Option<(String, String, i64)> {
     let shared = MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
@@ -621,13 +811,34 @@ fn update_service_from_backend(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
             )
         });
     let has_entries = playlist_len > 0;
+    let notification = AndroidMediaNotification {
+        state,
+        title: title.clone(),
+        bitrate: stream_info.bitrate.unwrap_or_default(),
+        frequency: stream_info.frequency.unwrap_or_default(),
+        channels: stream_info.channels.unwrap_or_default(),
+        duration_ms,
+        current_index,
+        playlist_len,
+        queue_version: artwork_media_identity().map_or(0, |(_, revision, _, _)| revision),
+        has_previous: has_entries,
+        has_next: has_entries,
+        source: artwork_media_identity(),
+        owner: projection_owner(),
+    };
+    let Ok(token) = publish_projection(notification) else {
+        return;
+    };
+    let Ok(token) = env.new_string(token) else {
+        return;
+    };
     let Ok(title) = env.new_string(title) else {
         return;
     };
     let _ = env.call_method(
         service,
         "applyNativePlaybackState",
-        "(ILjava/lang/String;IIIJJJIZZ)V",
+        "(ILjava/lang/String;IIIJJJIZZLjava/lang/String;)V",
         &[
             JValue::Int(state as i32),
             JValue::Object(&title),
@@ -640,6 +851,7 @@ fn update_service_from_backend(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
             JValue::Int(playlist_len),
             JValue::Bool(has_entries.into()),
             JValue::Bool(has_entries.into()),
+            JValue::Object(&token),
         ],
     );
 }

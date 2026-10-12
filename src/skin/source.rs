@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use super::SkinPixmapKind;
@@ -136,6 +136,21 @@ impl<'a> AssetSource<'a> {
         Ok(Self::Directory(inventory))
     }
 
+    /// Same lookup precedence as the full loader, with bounded traversal for
+    /// background palette-only requests. Symlinks remain ignored as before.
+    pub fn directory_bounded(dir: &Path, max_entries: usize, max_depth: usize) -> io::Result<Self> {
+        let mut inventory = DirectoryInventory {
+            root: FileIndex::default(),
+            nested: FileIndex::default(),
+        };
+        let mut budget = Some(DirectoryBudget {
+            remaining: max_entries,
+            max_depth,
+        });
+        visit_directory_with_budget(dir, &mut inventory, true, 0, &mut budget)?;
+        Ok(Self::Directory(inventory))
+    }
+
     pub fn archive(path: &'a Path, entries: &'a [(String, Vec<u8>)]) -> Self {
         let mut files = FileIndex::default();
         for (index, (name, _)) in entries.iter().enumerate() {
@@ -162,12 +177,23 @@ impl<'a> AssetSource<'a> {
     }
 
     pub fn text(&self, name: &str) -> io::Result<Option<String>> {
+        self.text_with_limit(name, None)
+    }
+
+    pub fn text_bounded(&self, name: &str, max_bytes: u64) -> io::Result<Option<String>> {
+        self.text_with_limit(name, Some(max_bytes))
+    }
+
+    fn text_with_limit(&self, name: &str, max_bytes: Option<u64>) -> io::Result<Option<String>> {
         let asset = match self {
             Self::Directory(inventory) => inventory
                 .root
                 .named(name)
                 .or_else(|| inventory.nested.named(name))
-                .map(|path| read_directory_asset(path))
+                .map(|path| match max_bytes {
+                    Some(limit) => read_directory_asset_bounded(path, limit),
+                    None => read_directory_asset(path),
+                })
                 .transpose()?,
             Self::Archive(inventory) => inventory
                 .files
@@ -176,6 +202,12 @@ impl<'a> AssetSource<'a> {
         };
         asset
             .map(|asset| {
+                if max_bytes.is_some_and(|limit| asset.contents.len() as u64 > limit) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "skin text exceeds byte limit",
+                    ));
+                }
                 std::str::from_utf8(&asset.contents)
                     .map(str::to_owned)
                     .map_err(|err| {
@@ -236,17 +268,81 @@ fn read_directory_asset(path: &Path) -> io::Result<Asset<'static>> {
     })
 }
 
+fn read_directory_asset_bounded(path: &Path, max_bytes: u64) -> io::Result<Asset<'static>> {
+    if !fs::metadata(path)
+        .map_err(|err| with_path(err, "read skin asset", path))?
+        .is_file()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "skin text is not a regular file",
+        ));
+    }
+    let probe_limit = max_bytes
+        .checked_add(1)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid skin text limit"))?;
+    let file = fs::File::open(path).map_err(|err| with_path(err, "read skin asset", path))?;
+    let mut contents = Vec::new();
+    file.take(probe_limit)
+        .read_to_end(&mut contents)
+        .map_err(|err| with_path(err, "read skin asset", path))?;
+    if contents.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "skin text exceeds byte limit",
+        ));
+    }
+    Ok(Asset {
+        label: path.display().to_string(),
+        path: path.to_path_buf(),
+        contents: Cow::Owned(contents),
+    })
+}
+
+struct DirectoryBudget {
+    remaining: usize,
+    max_depth: usize,
+}
+
 fn visit_directory(
     dir: &Path,
     inventory: &mut DirectoryInventory,
     is_root: bool,
 ) -> io::Result<()> {
+    visit_directory_with_budget(dir, inventory, is_root, 0, &mut None)
+}
+
+fn visit_directory_with_budget(
+    dir: &Path,
+    inventory: &mut DirectoryInventory,
+    is_root: bool,
+    depth: usize,
+    budget: &mut Option<DirectoryBudget>,
+) -> io::Result<()> {
+    if budget
+        .as_ref()
+        .is_some_and(|budget| depth > budget.max_depth)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "skin directory depth exceeds limit",
+        ));
+    }
     // Retain read_dir order: examine every file in this directory before
     // descending into its children, without sorting either group.
     let entries = fs::read_dir(dir).map_err(|err| with_path(err, "read_dir", dir))?;
     let mut children = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|err| with_path(err, "read_dir entry in", dir))?;
+        if let Some(budget) = budget {
+            if budget.remaining == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "skin directory entry count exceeds limit",
+                ));
+            }
+            budget.remaining -= 1;
+        }
         let path = entry.path();
         let file_type = entry
             .file_type()
@@ -266,7 +362,7 @@ fn visit_directory(
         }
     }
     for child in children {
-        visit_directory(&child, inventory, false)?;
+        visit_directory_with_budget(&child, inventory, false, depth + 1, budget)?;
     }
     Ok(())
 }

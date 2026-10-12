@@ -68,6 +68,7 @@ public final class XmmsActivity extends NativeActivity {
     private native void nativeOnMediaControl(int control);
     private native void nativeOnMediaVolumeChanged(int volumePercent);
     private native void nativeRequestRepaint();
+    private native boolean nativeValidateMediaProjection(String token);
 
     private static final class SafeInsetSnapshot {
         static final SafeInsetSnapshot EMPTY =
@@ -349,8 +350,10 @@ public final class XmmsActivity extends NativeActivity {
             long currentIndex,
             int playlistSize,
             boolean hasPrevious,
-            boolean hasNext) {
+            boolean hasNext,
+            String projectionToken) {
         runOnUiThread(() -> {
+            if (!nativeValidateMediaProjection(projectionToken)) return;
             Intent intent = new Intent(this, XmmsPlaybackService.class)
                     .setAction(XmmsPlaybackService.ACTION_UPDATE)
                     .putExtra(XmmsPlaybackService.EXTRA_STATE, state)
@@ -363,7 +366,8 @@ public final class XmmsActivity extends NativeActivity {
                     .putExtra(XmmsPlaybackService.EXTRA_CURRENT_INDEX, currentIndex)
                     .putExtra(XmmsPlaybackService.EXTRA_PLAYLIST_SIZE, playlistSize)
                     .putExtra(XmmsPlaybackService.EXTRA_HAS_PREVIOUS, hasPrevious)
-                    .putExtra(XmmsPlaybackService.EXTRA_HAS_NEXT, hasNext);
+                    .putExtra(XmmsPlaybackService.EXTRA_HAS_NEXT, hasNext)
+                    .putExtra(XmmsPlaybackService.EXTRA_PROJECTION_TOKEN, projectionToken);
             if (state == 0) {
                 XmmsPlayerInfoWidget.updateAll(this, state, title, 0, 0, 0);
                 stopService(intent);
@@ -373,6 +377,13 @@ public final class XmmsActivity extends NativeActivity {
                 startService(intent);
             }
         });
+    }
+
+    public void refreshPlaybackArtwork() {
+        Context application = getApplicationContext();
+        MAIN_HANDLER.post(() -> application.sendBroadcast(
+                new Intent(XmmsPlaybackService.ACTION_ARTWORK_INVALIDATE)
+                        .setPackage(application.getPackageName())));
     }
 
     private void registerMediaVolumeObserver() {

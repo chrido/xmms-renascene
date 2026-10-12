@@ -413,6 +413,14 @@ impl EguiFrontendState {
                 app_state.config.playback_position_ms);
         }
         let active_skin = load_skin_from_config(&app_state)?;
+        #[cfg(target_os = "android")]
+        if let Err(err) = super::android::publish_artwork_settings(
+            app_state.config.skin.clone(),
+            app_state.config.artwork_policy,
+            *active_skin.vis_colors(),
+        ) {
+            app_log_error!(frontend, "failed to publish Android artwork settings", err);
+        }
         let persistence_config = app_state.persistence_snapshot().config;
         let ui = EguiUiState::new(
             &persistence_config,
@@ -600,6 +608,7 @@ impl EguiFrontendState {
         self.apply_visualization_preferences();
         #[cfg(target_os = "android")]
         {
+            self.sync_android_artwork_settings();
             if skin_changed {
                 self.flush_android_platform_policies(true);
                 if let Err(err) = super::android::refresh_player_widgets() {
@@ -1646,6 +1655,22 @@ impl EguiFrontendState {
     fn replace_active_skin(&mut self, skin: DefaultSkin) {
         self.active_skin = skin;
         self.render_cache.invalidate();
+        #[cfg(target_os = "android")]
+        self.sync_android_artwork_settings();
+    }
+
+    #[cfg(target_os = "android")]
+    fn sync_android_artwork_settings(&mut self) {
+        let config = &self.core.store().state().config;
+        if let Err(err) = super::android::publish_artwork_settings(
+            config.skin.clone(),
+            config.artwork_policy,
+            *self.active_skin.vis_colors(),
+        ) {
+            self.runtime
+                .pending_messages
+                .push(format!("failed to refresh artwork settings: {err}"));
+        }
     }
 
     pub(crate) fn refresh_runtime_skins(&mut self) {
