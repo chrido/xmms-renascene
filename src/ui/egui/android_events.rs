@@ -17,6 +17,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
 use crate::app::effect::FileDialogRequest;
+use crate::app::store::ExternalPlaybackSnapshot;
 use crate::playback::model::{PlaybackEvent, PlayerState};
 
 pub struct AndroidPickerResult {
@@ -35,6 +36,7 @@ impl AndroidPickerResult {
 pub enum AndroidPlatformEvent {
     Picker(AndroidPickerResult),
     MediaControl(AndroidMediaControlEvent),
+    PlaybackSnapshot(ExternalPlaybackSnapshot),
     Playback(PlaybackEvent),
     ExternalVolumeChanged(i32),
 }
@@ -110,6 +112,27 @@ pub struct AndroidEventInbox {
 impl AndroidEventInbox {
     pub fn push(&mut self, event: AndroidPlatformEvent) {
         match &event {
+            AndroidPlatformEvent::PlaybackSnapshot(_) => {
+                // A snapshot describes only work already executed by the
+                // service. Pending frontend input (transport or picker results)
+                // must run AFTER reconciliation, or resume would undo a new
+                // selection/import while the backend had already advanced.
+                let (deferred, executed): (VecDeque<_>, VecDeque<_>) =
+                    self.events.drain(..).partition(|queued| {
+                        matches!(
+                            queued,
+                            AndroidPlatformEvent::Picker(_)
+                                | AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
+                                    backend_executed: false,
+                                    ..
+                                })
+                        )
+                    });
+                self.events = executed;
+                self.events.push_back(event);
+                self.events.extend(deferred);
+                return;
+            }
             AndroidPlatformEvent::ExternalVolumeChanged(_) => self
                 .events
                 .retain(|queued| !matches!(queued, AndroidPlatformEvent::ExternalVolumeChanged(_))),
@@ -136,7 +159,9 @@ impl AndroidEventInbox {
         self.events.retain(|event| {
             matches!(
                 event,
-                AndroidPlatformEvent::MediaControl(_) | AndroidPlatformEvent::Playback(_)
+                AndroidPlatformEvent::MediaControl(_)
+                    | AndroidPlatformEvent::PlaybackSnapshot(_)
+                    | AndroidPlatformEvent::Playback(_)
             )
         });
     }
@@ -255,6 +280,57 @@ mod tests {
                     control: AndroidMediaControl::PreviousTrack,
                     ..
                 })
+            ]
+        ));
+    }
+
+    #[test]
+    fn snapshots_precede_pending_frontend_input_without_reordering_it() {
+        use crate::player::StreamInfo;
+        use crate::playlist::Playlist;
+
+        let mut inbox = AndroidEventInbox::default();
+        inbox.push(media(AndroidMediaControl::NextTrack));
+        inbox.push(AndroidPlatformEvent::Playback(PlaybackEvent::AsyncDone));
+        inbox.push(AndroidPlatformEvent::Picker(AndroidPickerResult {
+            request: FileDialogRequest::AddAudioFiles,
+            paths: vec![PathBuf::from("new-song.ogg")],
+            error: None,
+            complete: true,
+        }));
+        inbox.push(media(AndroidMediaControl::PreviousTrack));
+        for position_ms in [100, 200] {
+            inbox.push(AndroidPlatformEvent::PlaybackSnapshot(
+                ExternalPlaybackSnapshot {
+                    playlist: Playlist::new(),
+                    player_state: PlayerState::Playing,
+                    position_ms,
+                    duration_ms: None,
+                    stream_info: StreamInfo::default(),
+                },
+            ));
+        }
+        assert!(matches!(
+            inbox.drain_frame().0.as_slice(),
+            [
+                AndroidPlatformEvent::Playback(PlaybackEvent::AsyncDone),
+                AndroidPlatformEvent::PlaybackSnapshot(ExternalPlaybackSnapshot {
+                    position_ms: 100,
+                    ..
+                }),
+                AndroidPlatformEvent::PlaybackSnapshot(ExternalPlaybackSnapshot {
+                    position_ms: 200,
+                    ..
+                }),
+                AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
+                    control: AndroidMediaControl::NextTrack,
+                    ..
+                }),
+                AndroidPlatformEvent::Picker(_),
+                AndroidPlatformEvent::MediaControl(AndroidMediaControlEvent {
+                    control: AndroidMediaControl::PreviousTrack,
+                    ..
+                }),
             ]
         ));
     }

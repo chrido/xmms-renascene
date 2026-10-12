@@ -7,8 +7,8 @@
 //! `PLAYBACK_BACKEND` is process-wide so Activity and service callbacks use one
 //! backend. Service transport JNI mutates the backend and playlist only in
 //! authoritative mode. Foreground controls are queued for egui, while paused
-//! controls execute immediately and are tagged `backend_executed` so a resumed
-//! Activity applies only the matching domain transition.
+//! controls execute immediately and publish absolute playback snapshots so a
+//! resumed Activity never replays relative/shuffled playlist transitions.
 //! Media-browser JNI queries are synchronous read-only endpoints required by
 //! `MediaBrowserService`.
 
@@ -19,9 +19,10 @@ use std::time::{Duration, Instant};
 use jni::objects::{JObject, JValue};
 use jni::JNIEnv;
 
+use crate::app::store::ExternalPlaybackSnapshot;
 use crate::artwork::projection::ProjectionLedger;
 use crate::playback::backend::PlaybackBackend;
-use crate::playback::model::{PlaybackEvent, PlayerAction, PlayerTransition};
+use crate::playback::model::{PlaybackEvent, PlayerAction, PlayerState, PlayerTransition};
 use crate::playback::rodio::RodioBackend;
 use crate::playlist::{Playlist, TrackDirection};
 use crate::session::{fallback_state_paths, load_saved_state};
@@ -235,7 +236,10 @@ pub(crate) fn existing_playback_backend() -> Option<RodioBackend> {
         .clone()
 }
 
+// Callers hold the media-control ordering lock. Capture service state before
+// foreground projection can overwrite it, including when the UI was recreated.
 pub(crate) fn replace_activity(activity: AndroidActivityGeneration, resumed: bool) {
+    queue_playback_snapshot();
     MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
@@ -244,11 +248,41 @@ pub(crate) fn replace_activity(activity: AndroidActivityGeneration, resumed: boo
 }
 
 pub(crate) fn activity_resumed(activity: AndroidActivityGeneration) {
+    queue_playback_snapshot();
     MEDIA_PLAYLIST
         .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
         .activity_resumed(activity);
+    events::request_registered_repaint();
+}
+
+/// Absolute selection, queue and backend state, serialized with transport and
+/// lifecycle changes. Do not initialize audio just to reconcile a cold UI.
+fn queue_playback_snapshot() {
+    let Some(backend) = existing_playback_backend() else {
+        return;
+    };
+    let state = MEDIA_PLAYLIST
+        .get_or_init(|| Mutex::new(AndroidMediaPlaylistState::default()))
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if let Some(media) = state.media() {
+        let player_state = backend.state();
+        events::push(AndroidPlatformEvent::PlaybackSnapshot(
+            ExternalPlaybackSnapshot {
+                playlist: media.playlist.clone(),
+                player_state,
+                position_ms: if player_state == PlayerState::Stopped {
+                    0
+                } else {
+                    backend.position_ms().unwrap_or(0)
+                },
+                duration_ms: backend.duration_ms(),
+                stream_info: backend.stream_info(),
+            },
+        ));
+    }
 }
 
 pub(crate) fn activity_paused_or_exited(activity: AndroidActivityGeneration) {
@@ -573,15 +607,23 @@ pub(crate) fn poll_playback(env: &mut JNIEnv<'_>, service: &JObject<'_>) {
                 true
             }
         };
-        events::push(AndroidPlatformEvent::MediaControl(
-            AndroidMediaControlEvent {
-                control: AndroidMediaControl::PlaylistEof,
-                backend_executed,
-                complete_activity_control: false,
-            },
-        ));
+        drop(state);
+        if backend_executed {
+            queue_playback_snapshot();
+        } else {
+            events::push(AndroidPlatformEvent::MediaControl(
+                AndroidMediaControlEvent {
+                    control: AndroidMediaControl::PlaylistEof,
+                    backend_executed: false,
+                    complete_activity_control: false,
+                },
+            ));
+        }
         backend_executed
     });
+    if eof || refresh_state {
+        events::request_registered_repaint();
+    }
     drop(order);
     if backend_executed == Some(true) || (!eof && refresh_state) {
         update_service_from_backend(env, service);
@@ -630,17 +672,19 @@ pub(crate) fn handle_media_control(
             }
         }
     };
-    events::push(AndroidPlatformEvent::MediaControl(
-        AndroidMediaControlEvent {
-            control,
-            backend_executed,
-            complete_activity_control: false,
-        },
-    ));
     if backend_executed {
+        queue_playback_snapshot();
         if let Some(service) = service {
             update_service_from_backend(&mut env, &service);
         }
+    } else {
+        events::push(AndroidPlatformEvent::MediaControl(
+            AndroidMediaControlEvent {
+                control,
+                backend_executed: false,
+                complete_activity_control: false,
+            },
+        ));
     }
     events::request_registered_repaint();
 }

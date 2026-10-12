@@ -1396,6 +1396,17 @@ impl EguiFrontendState {
         );
     }
 
+    #[cfg(any(target_os = "android", test))]
+    fn handle_android_playback_snapshot(
+        &mut self,
+        snapshot: crate::app::store::ExternalPlaybackSnapshot,
+    ) {
+        self.process_store_event(
+            RuntimeEvent::ReconcileExternalPlayback(snapshot),
+            EffectExecution::AlreadyExecuted,
+        );
+    }
+
     #[cfg(target_os = "android")]
     fn poll_android_platform_events(&mut self, ctx: &egui::Context) -> bool {
         let activity_generation = self.android.activity_generation();
@@ -1413,6 +1424,12 @@ impl EguiFrontendState {
                 super::android::AndroidPlatformEvent::MediaControl(control) => {
                     activity_media_control_handled |= control.complete_activity_control;
                     self.handle_android_media_control(control);
+                }
+                super::android::AndroidPlatformEvent::PlaybackSnapshot(snapshot) => {
+                    // The snapshot supersedes earlier backend metadata. Do not
+                    // let an old AsyncDone apply a pending seek to the new song.
+                    playback_events.clear();
+                    self.handle_android_playback_snapshot(snapshot);
                 }
                 super::android::AndroidPlatformEvent::Playback(event) => {
                     playback_events.push(event);
@@ -3380,6 +3397,10 @@ fn load_skin_from_config(app_state: &AppState) -> Result<DefaultSkin, String> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "android_reconciliation_tests.rs"]
+mod android_reconciliation_tests;
 
 #[cfg(test)]
 mod tests {

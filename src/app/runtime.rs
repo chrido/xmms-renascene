@@ -9,7 +9,7 @@ use crate::app::effect::{
     UiEffect,
 };
 use crate::app::playback_transition::{PlaybackTransition, TransitionEvent};
-use crate::app::store::{AppStore, DispatchResult, StateChangeSet};
+use crate::app::store::{AppStore, DispatchResult, ExternalPlaybackSnapshot, StateChangeSet};
 use crate::app_state::AppState;
 use crate::config::Config;
 use crate::playback::backend::PlaybackBackend;
@@ -61,6 +61,7 @@ pub enum RuntimeEvent {
     CompleteStopFade(i32),
     DurationBatch(Vec<DurationIndexResult>),
     ReplacePlaylist(Playlist),
+    ReconcileExternalPlayback(ExternalPlaybackSnapshot),
     Preferences(Config),
     EqualizerPreset {
         preamp: i32,
@@ -540,6 +541,27 @@ impl FrontendRuntime {
             }
             RuntimeEvent::ReplacePlaylist(playlist) => {
                 let result = self.store.replace_playlist_for_file_load(playlist);
+                update.invalidate(result.changes);
+                result.effects
+            }
+            RuntimeEvent::ReconcileExternalPlayback(snapshot) => {
+                // The external owner already executed playback. Expire local
+                // preparations/seeks/countdowns so they cannot replay on resume.
+                self.pending_playback_start = None;
+                self.stop_fade = None;
+                self.transition = PlaybackTransition::Idle.transition(
+                    if snapshot.player_state == PlayerState::Stopped {
+                        TransitionEvent::StoppedPosition(snapshot.position_ms.max(0))
+                    } else {
+                        TransitionEvent::Start(0)
+                    },
+                );
+                self.last_playback_request = snapshot
+                    .playlist
+                    .position()
+                    .and_then(|position| snapshot.playlist.entries().get(position))
+                    .map(|entry| entry.filename.clone());
+                let result = self.store.reconcile_external_playback(snapshot);
                 update.invalidate(result.changes);
                 result.effects
             }
