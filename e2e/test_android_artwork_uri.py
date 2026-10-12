@@ -17,6 +17,16 @@ pytestmark = pytest.mark.android
 CLIENT = "org.xmms.artworkclient/.ArtworkClientActivity"
 
 
+@pytest.fixture(scope="session")
+def android_artwork_client(android_device: AndroidDevice) -> AndroidDevice:
+    """Install the separate-UID client even when a URI test runs on its own."""
+    apk = Path(__file__).resolve().parents[1] / "target/android/artwork-test-client/artwork-client.apk"
+    if not apk.is_file():
+        raise AssertionError("Build external client with python3 scripts/build_artwork_test_client.py")
+    android_device.command("install", "-r", str(apk))
+    return android_device
+
+
 def _client(device: AndroidDevice, mode: str, uri: str = "", *, stats: bool = False, audit_provider: bool = False) -> dict[str, Any]:
     device.shell("am", "force-stop", "org.xmms.artworkclient")
     device.clear_logcat()
@@ -38,12 +48,8 @@ def _client(device: AndroidDevice, mode: str, uri: str = "", *, stats: bool = Fa
     raise AssertionError("Separate-UID artwork client timed out")
 
 
-def test_android_artwork_uri_external_security_browse_and_missing_recovery(android_device: AndroidDevice) -> None:
-    device = android_device
-    apk = Path(__file__).resolve().parents[1] / "target/android/artwork-test-client/artwork-client.apk"
-    if not apk.exists():
-        raise AssertionError("Build external client with python3 scripts/build_artwork_test_client.py")
-    device.command("install", "-r", str(apk))
+def test_android_artwork_uri_external_security_browse_and_missing_recovery(android_artwork_client: AndroidDevice) -> None:
+    device = android_artwork_client
     _prepare_audio(device)
     first = _client(device, "high-resolution", stats=True, audit_provider=True)
     assert first["uriWidth"] == first["uriHeight"] == 512
@@ -89,8 +95,8 @@ def test_android_artwork_uri_external_security_browse_and_missing_recovery(andro
                                  "final": final, "staleAfterReset": stale, "freshAfterReset": fresh}, indent=2))
 
 
-def test_android_artwork_unpaged_large_playlist_never_prefetches(android_device: AndroidDevice) -> None:
-    device = android_device
+def test_android_artwork_unpaged_large_playlist_never_prefetches(android_artwork_client: AndroidDevice) -> None:
+    device = android_artwork_client
     _prepare_audio(device)
     playlist = "#EXTM3U\n" + "".join(f"#EXTINF:180,Track {index}\nfile:///data/user/0/org.xmms.renascene/files/imports/first.wav\n" for index in range(200))
     device.write_private_file("files/config/xmms-renascene/playlist.m3u", playlist)

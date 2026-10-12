@@ -350,6 +350,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install artwork test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+
       - name: Install Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -374,6 +379,9 @@ jobs:
 
       - name: Build Android emulator APK
         run: ./repo android-apk-emulator
+
+      - name: Build separate-UID artwork test client
+        run: python3 scripts/build_artwork_test_client.py
 
       - name: Enable KVM access
         run: |

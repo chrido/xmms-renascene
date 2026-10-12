@@ -266,13 +266,22 @@ def test_android_artwork_skin_switch_refreshes_without_track_change(android_devi
     assert red["checksum"] != original["checksum"] and red["title"] == original["title"]
     device.restart_app(reset_data=False)
     device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.PLAY])
-    time.sleep(0.5)
+    # Make the CI race deterministic: stats must describe the pending default
+    # palette render, not finish on the preceding red generation's ready status.
+    _client(device, root / "restore-delay", command="configure", extras=["--ei", "delay_ms", "1500"])
     device.tap_skin_rect(MAIN_BUTTON_RECTS[MainButton.MENU])
     time.sleep(0.3)
     device.tap_usable_fraction(0.5, 0.463)
     time.sleep(0.3)
     device.tap_usable_fraction(0.25, 0.196)  # Default skin
-    time.sleep(0.5)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        config = device.read_private_file("files/config/xmms-renascene/config")
+        if not any(line.startswith("skin=") for line in config.splitlines()):
+            break
+        time.sleep(0.1)
+    else:
+        raise AssertionError("Default skin selection was not persisted")
     stats, restored = _client(device, root / "restored")
     assert restored["checksum"] == original["checksum"]
     assert restored["blueMax"] > 100

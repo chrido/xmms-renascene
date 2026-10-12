@@ -748,7 +748,8 @@ public final class XmmsPlaybackService extends MediaBrowserService {
         try {
             if (browseArtwork != null) stats.put("browseArtwork", browseArtwork.metrics());
             stats.put("metadataPublications", metadataPublications).put("notificationPublications", notificationPublications)
-                .put("rejectedProjections", rejectedProjections).put("hasMetadataArt", readyArtwork != null && playbackState != STATE_STOPPED)
+                .put("rejectedProjections", rejectedProjections).put("playbackState", playbackState)
+                .put("hasMetadataArt", readyArtwork != null && playbackState != STATE_STOPPED)
                 .put("metadataPublishedNs", metadataPublishedNs).put("metadataCallNs", metadataCallNs)
                 .put("notificationCallNs", notificationCallNs).put("eventNs", SystemClock.elapsedRealtimeNanos())
                 .put("mutationPending", debugMutationPending);

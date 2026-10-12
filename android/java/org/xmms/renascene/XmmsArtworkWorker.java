@@ -209,6 +209,9 @@ final class XmmsArtworkWorker {
         lastRequestNs = notedRequestNs == 0 ? SystemClock.elapsedRealtimeNanos() : notedRequestNs;
         notedRequestNs = 0;
         completedNs = 0; lastTimings = new long[7];
+        // Diagnostics describe this generation, not the previous ready bitmap.
+        // A stats client must not finish while the replacement is still running.
+        lastStatus = "pending";
         nativeSelect(epoch, generation);
         synchronized (queueLock) {
             if (pending != null) coalesced.incrementAndGet();

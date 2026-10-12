@@ -170,6 +170,28 @@ fn artwork_only_publication_has_no_audio_focus_or_foreground_restart() {
 }
 
 #[test]
+fn artwork_probe_waits_for_current_generation_and_metadata_publication() {
+    let worker = include_str!("../android/java/org/xmms/renascene/XmmsArtworkWorker.java");
+    let request = worker
+        .split("private void requestInternal(")
+        .nth(1)
+        .unwrap()
+        .split("private boolean cancelled(")
+        .next()
+        .unwrap();
+    let pending = request.find("lastStatus = \"pending\"").unwrap();
+    assert!(request.find("completedNs = 0").unwrap() < pending);
+    assert!(pending < request.find("Job job = new Job(").unwrap());
+    let probe = include_str!("../android/java/org/xmms/renascene/XmmsAutoProbeActivity.java");
+    assert!(probe.contains("artworkPublicationReady(value)"));
+    assert!(probe.contains("stats.optLong(\"completedNs\") >= stats.optLong(\"requestNs\", 1)"));
+    assert!(probe.contains("stats.optBoolean(\"hasMetadataArt\")"));
+    assert!(probe.contains("waitingForPublication"));
+    let service = include_str!("../android/java/org/xmms/renascene/XmmsPlaybackService.java");
+    assert!(service.contains(".put(\"playbackState\", playbackState)"));
+}
+
+#[test]
 fn timing_instrumentation_uses_durations_and_opt_in_bounded_logs() {
     let java = include_str!("../android/java/org/xmms/renascene/XmmsArtworkWorker.java");
     assert!(java.contains("long[] timings"));

@@ -205,11 +205,22 @@ public final class XmmsAutoProbeActivity extends Activity {
         } catch (JSONException error) { Log.e(TAG, "art inspection failed"); }
     }
 
+    private boolean artworkPublicationReady(JSONObject stats) {
+        // A retained bitmap/status can belong to the previous generation. For
+        // live playback also wait for the service's validated metadata publish.
+        return stats.optLong("completedNs") >= stats.optLong("requestNs", 1)
+                && (stats.optInt("playbackState") == 0 || stats.optBoolean("hasMetadataArt"));
+    }
+
     private final MediaController.Callback artworkCallback = new MediaController.Callback() {
         @Override public void onMetadataChanged(MediaMetadata metadata) {
             callbackNs = SystemClock.elapsedRealtimeNanos(); metadataChanges++;
             inspectArtwork();
-            if (getIntent().getStringExtra("expected_media_id") != null && transportSettled && controlSatisfied()) {
+            boolean waitingForPublication = lastWorkerStats != null
+                    && ("ready".equals(lastWorkerStats.optString("status"))
+                        || "cache-hit".equals(lastWorkerStats.optString("status")));
+            if ((getIntent().getStringExtra("expected_media_id") != null || waitingForPublication)
+                    && transportSettled && controlSatisfied()) {
                 Bundle inspect = new Bundle(); inspect.putString("command", "stats");
                 controller.getTransportControls().sendCustomAction("xmms-debug-artwork-worker", inspect);
             }
@@ -238,8 +249,8 @@ public final class XmmsAutoProbeActivity extends Activity {
                     return;
                 }
                 if ("observe".equals(getIntent().getStringExtra("command"))) return;
-                if ("ready".equals(status) || "cache-hit".equals(status) || "closed".equals(status)
-                        || "disabled".equals(status) || "snapshot-error".equals(status) || "main-rejected".equals(status)
+                if ((("ready".equals(status) || "cache-hit".equals(status)) && artworkPublicationReady(value))
+                        || "closed".equals(status) || "disabled".equals(status) || "snapshot-error".equals(status) || "main-rejected".equals(status)
                         || ("error".equals(status) && value.optInt("failures") >= 3)) finish();
             } catch (JSONException error) { Log.e(TAG, "invalid artwork event"); finish(); }
         }
