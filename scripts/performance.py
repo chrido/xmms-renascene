@@ -110,6 +110,12 @@ SCENARIOS = {
             audio=True,
             expected_hotspots=("JNI polling", "service work", "persistence"),
         ),
+        Scenario("artworkcold", frozenset(("android",)), 1, expected_hotspots=("palette", "rasterization", "JNI transfer")),
+        Scenario("artworkwarm", frozenset(("android",)), 1, expected_hotspots=("cache", "publication")),
+        Scenario("artworkskip", frozenset(("android",)), 10, expected_hotspots=("coalescing", "stale cancellation")),
+        Scenario("artworkskin", frozenset(("android",)), 1, expected_hotspots=("palette invalidation",)),
+        Scenario("artworksteady", frozenset(("android",)), 600, expected_hotspots=("zero steady artwork work",)),
+        Scenario("artworkrecreate", frozenset(("android",)), 1, expected_hotspots=("epoch lifecycle",)),
         Scenario(
             "widgets",
             frozenset(("android",)),
@@ -288,6 +294,9 @@ class PerformanceRunner:
             "thresholds": {"regression_percent": regression_threshold},
             "profiler": profiler,
         }
+        if scenario.startswith("artwork"):
+            metrics["artwork"] = [sample.get("artwork") for sample in samples]
+            metrics["artwork_artifacts"] = [sample.get("artwork_artifacts") for sample in samples]
         baseline_metrics = self._load_metrics(Path(baseline)) if baseline else None
         if baseline_metrics is not None:
             deltas = metric_deltas(metrics["summary"], baseline_metrics["summary"])
@@ -304,6 +313,13 @@ class PerformanceRunner:
             metrics,
             expected_hotspot or ", ".join(spec.expected_hotspots),
         )
+        if scenario.startswith("artwork"):
+            with (result_dir / "report.md").open("a") as report:
+                report.write("\n## Android artwork evidence\n\n")
+                report.write("Artwork latency distributions/counters are in the per-iteration artifact directories. "
+                             "Emulator measurements validate instrumentation only; no physical-performance gate is inferred.\n")
+                for artifact in metrics["artwork_artifacts"]:
+                    report.write(f"- `{artifact}`: samples.json, samples.csv, summary.json and device receipts\n")
         return result_dir
 
     def compare(
@@ -458,8 +474,9 @@ class PerformanceRunner:
 
     def _android_device_info(self) -> dict[str, Any]:
         serial = os.environ.get("ANDROID_SERIAL", "")
-        model = self._command_output(["adb", "shell", "getprop", "ro.product.model"])
-        sdk = self._command_output(["adb", "shell", "getprop", "ro.build.version.sdk"])
+        adb = ["adb"] + (["-s", serial] if serial else [])
+        model = self._command_output([*adb, "shell", "getprop", "ro.product.model"])
+        sdk = self._command_output([*adb, "shell", "getprop", "ro.build.version.sdk"])
         return {"serial": serial, "model": model or "unavailable", "sdk": sdk or "unavailable"}
 
     def _build(self, platform: str, result_dir: Path, *, dry_run: bool) -> dict[str, Any]:
@@ -520,7 +537,7 @@ class PerformanceRunner:
             if not shutil.which("adb"):
                 raise RuntimeError("adb is required to install the Android profiling APK")
             install = subprocess.run(
-                ["adb", "install", "-r", str(binary)],
+                ["adb", *(["-s", os.environ["ANDROID_SERIAL"]] if os.environ.get("ANDROID_SERIAL") else []), "install", "-r", str(binary)],
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
@@ -568,7 +585,10 @@ class PerformanceRunner:
         if status != 0:
             raise RuntimeError(f"scenario iteration failed; see {log}")
         if metrics_path.is_file():
-            return json.loads(metrics_path.read_text())
+            try:
+                return json.loads(metrics_path.read_text())
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"invalid iteration metrics; see {metrics_path}") from error
         sample = self._empty_sample()
         sample.update({"elapsed_ms": 0.0, "dry_run": True})
         self._write_json(metrics_path, sample)
@@ -661,8 +681,13 @@ class PerformanceRunner:
         profiler: tuple[str, ...],
         trace_dir: Path | None = None,
     ) -> list[str]:
+        driver_python = "python3"
+        if platform == "android" and spec.name.startswith("artwork"):
+            candidate = self.repo_dir / "e2e/.venv/bin/python"
+            if candidate.is_file():
+                driver_python = str(candidate)
         command = [
-            "python3",
+            driver_python,
             "-m",
             "scripts.perf_driver",
             f"--platform={platform}",
@@ -671,6 +696,14 @@ class PerformanceRunner:
             f"--binary={build['binary']}",
             f"--metrics={metrics_path}",
         ]
+        if platform == "android":
+            if os.environ.get("ANDROID_SERIAL"):
+                command.append("--serial=" + os.environ["ANDROID_SERIAL"])
+            if spec.name.startswith("artwork"):
+                command += ["--artwork-policy=" + os.environ.get("XMMS_ARTWORK_POLICY", "generated"),
+                            "--artwork-samples=" + os.environ.get("XMMS_ARTWORK_SAMPLES", "0")]
+                if os.environ.get("XMMS_ARTWORK_ALLOW_RESET") == "1":
+                    command.append("--allow-data-reset")
         if inputs.get("playlist"):
             command.append(f"--playlist={inputs['playlist']}")
         if inputs.get("audio"):
@@ -831,8 +864,11 @@ class PerformanceRunner:
         metrics_path = path / "metrics.json" if path.is_dir() else path
         if not metrics_path.is_file():
             raise ValueError(f"metrics file not found: {metrics_path}")
-        value = json.loads(metrics_path.read_text())
-        if not isinstance(value.get("summary"), dict):
+        try:
+            value = json.loads(metrics_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid metrics file: {metrics_path}") from error
+        if not isinstance(value, dict) or not isinstance(value.get("summary"), dict):
             raise ValueError(f"invalid metrics file: {metrics_path}")
         return value
 
@@ -883,7 +919,7 @@ class PerformanceRunner:
         path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
     def _empty_sample(self) -> dict[str, Any]:
-        return {name: None for name in METRIC_NAMES}
+        return dict.fromkeys(METRIC_NAMES)
 
     def _format_metric(self, value: Any) -> str:
         if value is None:

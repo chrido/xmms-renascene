@@ -1,3 +1,4 @@
+pub mod artwork;
 mod commands;
 mod core;
 mod docked;

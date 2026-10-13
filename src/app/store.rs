@@ -12,8 +12,8 @@ use crate::app::logging::ConsoleLogLevel;
 use crate::app_log;
 use crate::app_state::{AppState, RuntimeSnapshot};
 use crate::config::Config;
-use crate::player::PlaybackEvent;
-use crate::playlist::DurationIndexResult;
+use crate::player::{PlaybackEvent, PlayerState, StreamInfo};
+use crate::playlist::{DurationIndexResult, Playlist};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -121,6 +121,17 @@ impl std::ops::BitOrAssign for StateChangeSet {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
     }
+}
+
+/// Absolute state from a backend/playlist owner outside this frontend. Applying
+/// it must never replay transport commands (notably shuffle or queued Next).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternalPlaybackSnapshot {
+    pub playlist: Playlist,
+    pub player_state: PlayerState,
+    pub position_ms: i64,
+    pub duration_ms: Option<i64>,
+    pub stream_info: StreamInfo,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,6 +342,42 @@ impl AppStore {
             event_label,
             before.diff(&after),
             effects,
+        )
+    }
+
+    /// Reconciles an externally executed transition, including selection and
+    /// consumed queue entries, without starting, stopping, or seeking audio.
+    pub fn reconcile_external_playback(
+        &mut self,
+        snapshot: ExternalPlaybackSnapshot,
+    ) -> DispatchResult {
+        let state = self.controller.state_mut();
+        state.playlist = snapshot.playlist;
+        state.player.terminate();
+        state.player.clear_visualization_data();
+        if snapshot.player_state != PlayerState::Stopped {
+            state.player.mark_playing();
+            if snapshot.player_state == PlayerState::Paused {
+                state.player.pause();
+            }
+            state.player.set_stream_info(
+                snapshot.stream_info.bitrate,
+                snapshot.stream_info.frequency,
+                snapshot.stream_info.channels,
+            );
+            state
+                .player
+                .apply_playback_event(&PlaybackEvent::DurationChanged(snapshot.duration_ms));
+        }
+        state.config.playback_position_ms = snapshot.position_ms.max(0);
+        self.finish_dispatch_logged(
+            ConsoleLogLevel::Info,
+            "external-playback-snapshot",
+            StateChangeSet::PLAYER
+                | StateChangeSet::PLAYLIST
+                | StateChangeSet::CONFIG
+                | StateChangeSet::RENDER_ALL,
+            vec![AppEffect::QueueRender(RenderTarget::All)],
         )
     }
 

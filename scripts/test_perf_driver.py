@@ -350,6 +350,27 @@ class CommandTransportTest(unittest.TestCase):
         )
 
 
+class ArtworkDriverTest(unittest.TestCase):
+    def test_artwork_dispatch_uses_the_artwork_runner(self):
+        args = argparse.Namespace(scenario="artworkcold")
+        with mock.patch.object(perf_driver.shutil, "which", return_value="adb"), mock.patch("scripts.artwork_perf.run", return_value={"artwork": "measured"}) as run:
+            self.assertEqual(perf_driver.run_android(args), {"artwork": "measured"})
+        run.assert_called_once_with(args)
+
+    def test_artwork_runner_requires_consent_and_explicit_target_before_mutating_device(self):
+        from scripts.artwork_perf import run
+        with self.assertRaisesRegex(ValueError, "reset"):
+            run(argparse.Namespace(allow_data_reset=False))
+        with mock.patch.dict("os.environ", {}, clear=True), self.assertRaisesRegex(ValueError, "explicit"):
+            run(argparse.Namespace(allow_data_reset=True, serial=""))
+
+    def test_ordinary_android_driver_honors_explicit_serial(self):
+        args = argparse.Namespace(scenario="idle", duration=0, serial="device-123")
+        with mock.patch.object(perf_driver.shutil, "which", return_value="adb"), mock.patch.object(perf_driver.subprocess, "run") as run:
+            perf_driver.run_android(args)
+        self.assertTrue(all(call.args[0][:3] == ["adb", "-s", "device-123"] for call in run.call_args_list))
+
+
 class FailureLogTest(unittest.TestCase):
     def test_failed_command_prints_bounded_tail_but_retains_full_log(self):
         with tempfile.TemporaryDirectory() as directory:

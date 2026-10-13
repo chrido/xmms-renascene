@@ -3,9 +3,18 @@ import tempfile
 import unittest
 import wave
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from scripts import perf_driver
+from scripts.artwork_metrics import (
+    COUNTERS,
+    TIMINGS,
+    distribution,
+    records,
+    summarize,
+    validate_sample,
+)
 from scripts.performance import (
     PerformanceRunner,
     metric_deltas,
@@ -16,6 +25,52 @@ from scripts.performance import (
 
 
 class PerformanceTest(unittest.TestCase):
+    def test_artwork_scenarios_are_android_only_and_include_steady_workload(self):
+        for name in ["artworkcold", "artworkwarm", "artworkskip", "artworkskin", "artworksteady", "artworkrecreate"]:
+            self.assertEqual(validate_scenario(name, "android").name, name)
+            with self.assertRaisesRegex(ValueError, "unsupported on platform"):
+                validate_scenario(name, "egui")
+        self.assertEqual(validate_scenario("artworksteady", "android").duration_seconds, 600)
+
+    def test_artwork_distribution_keeps_missing_values_null_and_rejects_bad_samples(self):
+        self.assertEqual(distribution([]), {"count": 0, "p50": None, "p95": None, "max": None})
+        self.assertEqual(distribution([1, 2, 3, 4]), {"count": 4, "p50": 2, "p95": 4, "max": 4})
+        for sample in [float("nan"), float("inf"), -1]:
+            with self.assertRaises(ValueError):
+                distribution([sample])
+        report = summarize([], ["missing samples"], emulator=True)
+        self.assertFalse(report["performance_verified"])
+        self.assertEqual(report["errors"], ["missing samples"])
+
+    def test_artwork_parser_and_schema_require_correlated_valid_images(self):
+        self.assertEqual(records('artwork {"renders":1}', "artwork"), [{"renders": 1}])
+        with self.assertRaisesRegex(ValueError, "Malformed"):
+            records('artwork {bad}', "artwork")
+        worker: dict[str, Any] = dict.fromkeys(COUNTERS, 0)
+        worker.update(dict.fromkeys(TIMINGS, 1))
+        worker.update({"checksum": "abc", "requestTag": "1:1", "requestNs": 10, "completedNs": 20})
+        client = {"checksum": "abc", "requestTag": "1:1", "width": 320, "height": 320, "opaque": True}
+        for policy in ["generated", "auto", "audio-inspired"]:
+            validate_sample(worker, client, policy)
+        with self.assertRaisesRegex(ValueError, "Unsupported artwork policy"):
+            validate_sample(worker, client, "unrecognized")
+        for field, value in [("peakPending", 2), ("cacheEntries", 3), ("renders", -1), ("accepted", True)]:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_sample({**worker, field: value}, client, "generated")
+        for altered in [{**client, "checksum": "wrong"}, {**client, "requestTag": "1:0"}, {**client, "opaque": "true"}]:
+            with self.assertRaises(ValueError):
+                validate_sample(worker, altered, "generated")
+        with self.assertRaises(ValueError):
+            validate_sample(worker, client, "off")
+
+    def test_artwork_driver_uses_explicit_serial_and_reset_consent(self):
+        runner = PerformanceRunner(Path("."))
+        with mock.patch.dict("os.environ", {"ANDROID_SERIAL": "test-device", "XMMS_ARTWORK_ALLOW_RESET": "1", "XMMS_ARTWORK_POLICY": "off"}):
+            command = runner._driver_command("android", validate_scenario("artworkcold", "android"), 1, {}, {"binary": "app.apk"}, Path("metrics.json"), profiler=())
+        self.assertIn("--serial=test-device", command)
+        self.assertIn("--artwork-policy=off", command)
+        self.assertIn("--allow-data-reset", command)
+
     def test_validates_platform_specific_scenarios(self):
         self.assertEqual(validate_scenario("coldstart", "gtk").name, "coldstart")
         with self.assertRaisesRegex(ValueError, "unsupported on platform"):

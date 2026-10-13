@@ -9,9 +9,9 @@ import hashlib
 import logging
 import os
 import re
-import signal
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -20,7 +20,15 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, cast
 
-from .commandline import AsyncBackgroundProcess, acmd_background, cli_follow, command_exists, configure_logging, raise_on_error, required_command
+from .commandline import (
+    AsyncBackgroundProcess,
+    acmd_background,
+    cli_follow,
+    command_exists,
+    configure_logging,
+    raise_on_error,
+    required_command,
+)
 from .fire_lite import FireLite
 from .flatpak import FlatpakInstaller
 from .performance import PerformanceRunner
@@ -173,8 +181,8 @@ def _diff_plain_ppm(left: Path, right: Path, diff: Path, tolerance: int) -> tupl
     changed = 0
     max_delta = 0
     diff_pixels = []
-    for left_pixel, right_pixel in zip(left_pixels, right_pixels):
-        delta = max(abs(a - b) for a, b in zip(left_pixel, right_pixel))
+    for left_pixel, right_pixel in zip(left_pixels, right_pixels, strict=True):
+        delta = max(abs(a - b) for a, b in zip(left_pixel, right_pixel, strict=True))
         max_delta = max(max_delta, delta)
         if delta > tolerance:
             changed += 1
@@ -211,7 +219,7 @@ def _diff_images(left: Path, right: Path, diff: Path, tolerance: int) -> tuple[i
         changed = 0
         max_delta = 0
         diff_pixels = []
-        for delta, base in zip(list(cast(Any, delta_image.getdata())), list(cast(Any, left_image.getdata()))):
+        for delta, base in zip(list(cast(Any, delta_image.getdata())), list(cast(Any, left_image.getdata())), strict=True):
             pixel_delta = max(delta)
             max_delta = max(max_delta, pixel_delta)
             if pixel_delta > tolerance:
@@ -342,10 +350,10 @@ class RepoTool:
     def _stop_managed_android_emulator(self, adb: Path, pid_path: Path) -> None:
         try:
             pid = int(pid_path.read_text().strip())
-        except (FileNotFoundError, ValueError):
+        except (FileNotFoundError, ValueError) as error:
             raise RuntimeError(
                 "A headless Android emulator is already running but its managed PID is unavailable"
-            )
+            ) from error
         os.kill(pid, signal.SIGTERM)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -519,10 +527,8 @@ class RepoTool:
         work_dir = REPO_DIR / "target" / "android" / "java"
         classes_dir = work_dir / "classes"
         dex_dir = work_dir / "dex"
-        try:
+        with contextlib.suppress(FileNotFoundError):
             shutil.rmtree(work_dir)
-        except FileNotFoundError:
-            pass
         classes_dir.mkdir(parents=True)
         dex_dir.mkdir()
 
@@ -627,11 +633,15 @@ class RepoTool:
             </intent-filter>
         </activity>
 {debug_probe_activity}
+        <provider android:name=".XmmsArtworkProvider"
+            android:authorities="{ANDROID_PACKAGE}.artwork"
+            android:exported="true" android:grantUriPermissions="true" />
         <service
             android:name=".XmmsPlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback"
             android:stopWithTask="false">
+            <meta-data android:name="androidx.car.app.launchable" android:value="true" />
             <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>

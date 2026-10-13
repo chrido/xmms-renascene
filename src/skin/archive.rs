@@ -77,6 +77,76 @@ pub(super) fn entries(path: &Path) -> io::Result<Vec<(String, Vec<u8>)>> {
     entries_with_limits(path, DEFAULT_LIMITS)
 }
 
+/// Retain only the first case-insensitive named text asset, not skin bitmaps.
+/// Still drain/validate all payloads, so duplicates, CRCs and compressed trailing
+/// data cannot bypass expansion limits. ZIP metadata is parsed by the library
+/// before entry count checks; the input-size preflight additionally bounds the
+/// file, not the library's internal metadata-allocation strategy.
+pub(super) fn named_text(
+    path: &Path,
+    name: &str,
+    max_text_bytes: u64,
+) -> io::Result<Option<String>> {
+    named_text_with_limits(
+        path,
+        name,
+        Limits {
+            max_asset_bytes: max_text_bytes,
+            max_total_bytes: 32 * 1024 * 1024,
+            max_entries: 4096,
+        },
+        16 * 1024 * 1024,
+    )
+}
+
+fn named_text_with_limits(
+    path: &Path,
+    name: &str,
+    limits: Limits,
+    max_input_bytes: u64,
+) -> io::Result<Option<String>> {
+    let label = path.display().to_string();
+    let file = File::open(path).map_err(|err| context(err, "open archive", &label))?;
+    if file
+        .metadata()
+        .map_err(|err| context(err, "stat archive", &label))?
+        .len()
+        > max_input_bytes
+    {
+        return Err(invalid(&label, "palette archive input exceeds byte limit"));
+    }
+    let selected = |entry_name: &str| {
+        Path::new(entry_name)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|base| base.eq_ignore_ascii_case(name))
+            .map(str::to_ascii_lowercase)
+    };
+    let entries = match classify_path(path).map(|matched| matched.format) {
+        Some(ArchiveFormat::Zip) => zip_archive_entries_matching(file, &label, limits, &selected)?,
+        Some(ArchiveFormat::Tar) => tar_archive_entries_matching(file, &label, limits, &selected)?,
+        Some(ArchiveFormat::TarGz) => tar_archive_entries_matching(
+            flate2::read::GzDecoder::new(file),
+            &label,
+            limits,
+            &selected,
+        )?,
+        Some(ArchiveFormat::TarBz2) => tar_archive_entries_matching(
+            bzip2::read::BzDecoder::new(file),
+            &label,
+            limits,
+            &selected,
+        )?,
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported skin archive format: {label}"),
+            ))
+        }
+    };
+    super::source::AssetSource::archive(path, &entries).text_bounded(name, limits.max_asset_bytes)
+}
+
 fn entries_with_limits(path: &Path, limits: Limits) -> io::Result<Vec<(String, Vec<u8>)>> {
     let label = path.display().to_string();
     match classify_path(path).map(|matched| matched.format) {
@@ -209,6 +279,15 @@ fn zip_archive_entries<R: Read + Seek>(
     label: &str,
     limits: Limits,
 ) -> io::Result<Vec<(String, Vec<u8>)>> {
+    zip_archive_entries_matching(reader, label, limits, &archive_asset_key)
+}
+
+fn zip_archive_entries_matching<R: Read + Seek>(
+    reader: R,
+    label: &str,
+    limits: Limits,
+    asset_key: &dyn Fn(&str) -> Option<String>,
+) -> io::Result<Vec<(String, Vec<u8>)>> {
     let mut archive =
         zip::ZipArchive::new(reader).map_err(|err| context(zip_error(err), "open zip", label))?;
     check_count(archive.len(), label, limits)?;
@@ -224,8 +303,7 @@ fn zip_archive_entries<R: Read + Seek>(
         // Even a directory entry can carry data in a malformed ZIP; count it.
         // Drain duplicates and irrelevant members rather than trusting their
         // advertised sizes: they count against the actual expansion budget too.
-        let selected =
-            !entry.is_dir() && archive_asset_key(&name).is_some_and(|key| seen.insert(key));
+        let selected = !entry.is_dir() && asset_key(&name).is_some_and(|key| seen.insert(key));
         let size = entry.size();
         let contents = read_file(&mut entry, size, selected, &mut total, &entry_label, limits)?;
         if selected {
@@ -271,6 +349,15 @@ fn tar_archive_entries<R: Read>(
     label: &str,
     limits: Limits,
 ) -> io::Result<Vec<(String, Vec<u8>)>> {
+    tar_archive_entries_matching(reader, label, limits, &archive_asset_key)
+}
+
+fn tar_archive_entries_matching<R: Read>(
+    reader: R,
+    label: &str,
+    limits: Limits,
+    asset_key: &dyn Fn(&str) -> Option<String>,
+) -> io::Result<Vec<(String, Vec<u8>)>> {
     let bounded = BoundedReader {
         inner: reader,
         remaining: limits.max_total_bytes,
@@ -294,7 +381,7 @@ fn tar_archive_entries<R: Read>(
             .to_string_lossy()
             .into_owned();
         let entry_label = format!("{label}:{name}");
-        let selected = archive_asset_key(&name).is_some_and(|key| seen.insert(key));
+        let selected = asset_key(&name).is_some_and(|key| seen.insert(key));
         let size = entry.size();
         let contents = read_file(&mut entry, size, selected, &mut total, &entry_label, limits)?;
         if selected {
@@ -385,6 +472,99 @@ mod tests {
             }
             self.cursor.read(buf)
         }
+    }
+
+    #[test]
+    fn named_text_selection_retains_no_images_and_checks_discarded_payloads() {
+        let image = vec![b'x'; 128];
+        let files: &[(&str, &[u8])] = &[
+            ("Main.xpm", &image),
+            ("Nested/VISCOLOR.TXT", b"ok"),
+            ("viscolor.txt", b"extra"),
+            ("junk.bin", b"trash"),
+        ];
+        let selected = |name: &str| {
+            Path::new(name)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .filter(|n| n.eq_ignore_ascii_case("viscolor.txt"))
+                .map(str::to_ascii_lowercase)
+        };
+        let zip = zip_bytes(files);
+        let retained = zip_archive_entries_matching(
+            Cursor::new(&zip),
+            "palette.zip",
+            limits(2, 140, 4),
+            &selected,
+        )
+        .unwrap();
+        assert_eq!(
+            retained,
+            vec![("Nested/VISCOLOR.TXT".into(), b"ok".to_vec())]
+        );
+        assert_limited(
+            zip_archive_entries_matching(
+                Cursor::new(&zip),
+                "palette.zip",
+                limits(1, 140, 4),
+                &selected,
+            ),
+            "per-asset",
+        );
+        assert_limited(
+            zip_archive_entries_matching(
+                Cursor::new(&zip),
+                "palette.zip",
+                limits(2, 139, 4),
+                &selected,
+            ),
+            "total byte limit",
+        );
+        assert_limited(
+            zip_archive_entries_matching(
+                Cursor::new(&zip),
+                "palette.zip",
+                limits(2, 140, 3),
+                &selected,
+            ),
+            "entry count",
+        );
+        let tar = tar_bytes(files);
+        assert_eq!(
+            tar_archive_entries_matching(
+                Cursor::new(&tar),
+                "palette.tar",
+                limits(2, tar.len() as u64, 4),
+                &selected
+            )
+            .unwrap(),
+            retained
+        );
+        assert_limited(
+            tar_archive_entries_matching(
+                Cursor::new(&tar),
+                "palette.tar",
+                limits(2, tar.len() as u64 - 1, 4),
+                &selected,
+            ),
+            "total byte limit",
+        );
+        let mut corrupt = zip_bytes(&[
+            ("viscolor.txt", b"ok"),
+            ("ignored.bin", b"unique-palette-test-payload"),
+        ]);
+        let offset = corrupt
+            .windows(b"unique-palette-test-payload".len())
+            .position(|bytes| bytes == b"unique-palette-test-payload")
+            .unwrap();
+        corrupt[offset] ^= 1;
+        assert!(zip_archive_entries_matching(
+            Cursor::new(corrupt),
+            "palette.zip",
+            limits(2, 100, 2),
+            &selected
+        )
+        .is_err());
     }
 
     #[test]

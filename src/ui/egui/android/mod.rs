@@ -39,6 +39,7 @@ use jni::objects::JObject;
 use jni::JNIEnv;
 
 mod activity;
+mod artwork;
 mod audio_focus;
 mod events;
 #[path = "jni.rs"]
@@ -51,6 +52,7 @@ pub(crate) mod playlist_manager;
 mod widgets;
 
 pub(crate) use super::android_media::AndroidActivityGeneration;
+pub use artwork::publish_foreground as publish_artwork_settings;
 pub use audio_focus::{media_volume_percent, set_media_volume_percent};
 pub use events::{
     AndroidMediaControl, AndroidMediaControlEvent, AndroidPickerResult, AndroidPlatformEvent,

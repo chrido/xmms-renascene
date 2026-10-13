@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use crate::artwork::ArtworkPolicy;
 use crate::audio_model::{
     db_to_equalizer_position, equalizer_position_to_db, EqualizerBandPositions,
 };
@@ -17,6 +18,7 @@ pub struct Config {
     pub player_y: i32,
     pub scale_factor: f64,
     pub skin: Option<String>,
+    pub artwork_policy: ArtworkPolicy,
     pub timer_mode: TimerMode,
     pub output_device: Option<String>,
     // Persisted startup values. Once AppState is live, Player/Playlist are the
@@ -90,6 +92,7 @@ impl Default for Config {
             player_y: 100,
             scale_factor: 2.0,
             skin: None,
+            artwork_policy: ArtworkPolicy::default(),
             timer_mode: TimerMode::Elapsed,
             output_device: None,
             volume: 100,
@@ -167,6 +170,9 @@ impl Config {
             .clamp(1.0, 5.0);
         cfg.doublesize = cfg.scale_factor > 1.0;
         cfg.skin = get_non_empty_string(&keys, "skin");
+        if let Some(value) = keys.get("artwork_policy") {
+            cfg.artwork_policy = ArtworkPolicy::from_config_value(value);
+        }
         cfg.output_device = get_non_empty_string(&keys, "output_device");
         cfg.timer_mode = TimerMode::from_i32(get_i32(&keys, "timer_mode").unwrap_or(0));
         cfg.volume = get_i32(&keys, "volume").unwrap_or(cfg.volume).clamp(0, 100);
@@ -360,6 +366,11 @@ impl Config {
         if let Some(skin) = &self.skin {
             push_string(&mut out, "skin", skin);
         }
+        push_string(
+            &mut out,
+            "artwork_policy",
+            self.artwork_policy.as_config_value(),
+        );
         push_bool(&mut out, "convert_underscore", self.convert_underscore);
         push_bool(&mut out, "convert_twenty", self.convert_twenty);
         push_bool(&mut out, "show_numbers_in_pl", self.show_numbers_in_pl);
@@ -484,6 +495,9 @@ fn push_string(out: &mut String, key: &str, value: &str) {
 fn trim_leading_dots(value: String) -> String {
     value.trim().trim_start_matches('.').to_string()
 }
+
+#[cfg(test)]
+mod artwork_tests;
 
 #[cfg(test)]
 mod tests {

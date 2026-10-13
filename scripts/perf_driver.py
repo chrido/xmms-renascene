@@ -82,7 +82,12 @@ def send_command(
             response = reader.readline()
     if not response:
         raise ConnectionError(f"control socket closed before acknowledging {command!r}")
-    value = json.loads(response)
+    try:
+        value = json.loads(response)
+    except json.JSONDecodeError:
+        # Preserve the explicit protocol error type; readiness/shutdown callers
+        # must not retry malformed responses as transient transport failures.
+        raise
     if not value.get("accepted"):
         raise CommandRejected(command, value)
     return (time.perf_counter() - started) * 1000.0
@@ -325,14 +330,18 @@ def run_desktop(args: argparse.Namespace) -> dict[str, Any]:
 def run_android(args: argparse.Namespace) -> dict[str, Any]:
     if not shutil.which("adb"):
         raise RuntimeError("adb is required for Android performance scenarios")
+    if args.scenario.startswith("artwork"):
+        from scripts.artwork_perf import run
+        return run(args)
     started = time.perf_counter()
+    adb = ["adb"] + (["-s", getattr(args, "serial", "") or os.environ.get("ANDROID_SERIAL", "")] if getattr(args, "serial", "") or os.environ.get("ANDROID_SERIAL") else [])
     package = "org.xmms.renascene"
     activity = f"{package}/org.xmms.renascene.XmmsActivity"
-    subprocess.run(["adb", "shell", "am", "force-stop", package], check=True)
-    subprocess.run(["adb", "shell", "am", "start", "-W", "-n", activity], check=True)
+    subprocess.run([*adb, "shell", "am", "force-stop", package], check=True)
+    subprocess.run([*adb, "shell", "am", "start", "-W", "-n", activity], check=True)
     startup_ms = (time.perf_counter() - started) * 1000.0
     time.sleep(max(0, args.duration))
-    subprocess.run(["adb", "shell", "am", "force-stop", package], check=True)
+    subprocess.run([*adb, "shell", "am", "force-stop", package], check=True)
     return {
         "elapsed_ms": (time.perf_counter() - started) * 1000.0,
         "startup_ms": startup_ms,
@@ -366,6 +375,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--audio", default="")
     parser.add_argument("--profiler-arg", action="append", default=[])
     parser.add_argument("--trace-dir", default="")
+    parser.add_argument("--serial", default="")
+    parser.add_argument("--artwork-policy", choices=["off", "generated", "auto", "audio-inspired"], default="generated")
+    parser.add_argument("--artwork-samples", type=int, default=0)
+    parser.add_argument("--artwork-cover-fixture", action="store_true")
+    parser.add_argument("--artwork-trace", action="store_true")
+    parser.add_argument("--allow-data-reset", action="store_true")
     return parser.parse_args()
 
 

@@ -343,10 +343,40 @@ fn service_and_widget_controls_execute_immediately_only_when_authoritative() {
     assert!(handler.contains("AndroidMediaPlaylistAuthority::Mirror(_) => false"));
     assert!(handler.contains("AndroidMediaPlaylistAuthority::Authoritative"));
     assert!(handler.contains("execute_android_media_control("));
-    assert!(handler.contains("backend_executed,"));
-    assert!(handler.contains("complete_activity_control: false"));
+    let (executed, deferred) = handler
+        .split_once("if backend_executed {")
+        .expect("executed controls reconcile through a snapshot");
+    assert!(executed.contains("execute_android_media_control("));
+    let (executed, deferred) = deferred
+        .split_once("} else {")
+        .expect("foreground controls remain deferred");
+    assert!(executed.contains("queue_playback_snapshot()"));
+    assert!(executed.contains("update_service_from_backend("));
+    assert!(!executed.contains("AndroidMediaControlEvent"));
+    assert!(deferred.contains("AndroidPlatformEvent::MediaControl("));
+    assert!(deferred.contains("backend_executed: false"));
+    assert!(deferred.contains("complete_activity_control: false"));
     assert!(!handler.contains("ui_runtime_registered"));
     assert!(!events.contains("fn ui_runtime_registered"));
+}
+
+#[test]
+fn android_ci_prepares_artwork_test_dependencies() {
+    let workflow = include_str!("../.github/workflows/unit-tests.yml");
+    let android_job = workflow
+        .split("  android-pye2e:")
+        .nth(1)
+        .expect("Android E2E job");
+    assert!(android_job.contains("ffmpeg"));
+    assert!(android_job.contains("python3 scripts/build_artwork_test_client.py"));
+    let build = android_job
+        .find("python3 scripts/build_artwork_test_client.py")
+        .unwrap();
+    let run = android_job.find("Run Android UI E2E tests").unwrap();
+    assert!(
+        build < run,
+        "Build the separate-UID client before running its tests"
+    );
 }
 
 #[test]

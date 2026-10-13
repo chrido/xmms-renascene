@@ -7,6 +7,8 @@ use crate::app::command::UiCommand;
 use crate::app::preferences_model::{
     clamped_scale_factor, mirror_live_preferences_fields, set_scale_factor, title_format_preview,
 };
+#[cfg(target_os = "android")]
+use crate::artwork::ArtworkPolicy;
 use crate::config::{Config, TimerMode};
 use crate::skin::widget::{
     VisAnalyzerMode, VisAnalyzerStyle, VisFalloffSpeed, VisMode, VisScopeMode, VisVuMode,
@@ -643,6 +645,19 @@ fn show_visualization_page(ui: &mut egui::Ui, config: &mut Config) {
     ui.heading("Visualization Plugins");
     #[cfg(target_os = "android")]
     {
+        android_combo(
+            ui,
+            "Native media artwork",
+            &mut config.artwork_policy,
+            &[
+                (ArtworkPolicy::Off, "Off"),
+                (ArtworkPolicy::Generated, "Generated (skin colors)"),
+                (ArtworkPolicy::Auto, "Auto (cover or generated)"),
+                (ArtworkPolicy::AudioInspired, "Audio-inspired (WAV summary)"),
+            ],
+        );
+        ui.label("Generated art uses skin colors. Auto preserves embedded covers; audio-inspired analyzes a bounded PCM WAV excerpt.");
+        ui.separator();
         android_combo(
             ui,
             "Visualization mode",

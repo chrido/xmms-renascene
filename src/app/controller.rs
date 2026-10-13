@@ -416,7 +416,11 @@ impl AppController {
     }
 
     fn update_queue(&mut self, update: impl FnOnce(&mut Playlist) -> bool) -> Vec<AppEffect> {
-        if update(&mut self.state.playlist) { self.queue_changed_effects() } else { Default::default() }
+        if update(&mut self.state.playlist) {
+            self.queue_changed_effects()
+        } else {
+            Default::default()
+        }
     }
 
     fn clear_playlist(&mut self) -> Vec<AppEffect> {

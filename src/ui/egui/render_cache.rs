@@ -153,13 +153,7 @@ mod tests {
         assert_eq!(first, second);
 
         state.playlist.select_all(true);
-        assert!(
-            cache
-                .playlist_projection_and_staging(&state)
-                .0
-                .rows[0]
-                .selected
-        );
+        assert!(cache.playlist_projection_and_staging(&state).0.rows[0].selected);
     }
 
     #[test]
