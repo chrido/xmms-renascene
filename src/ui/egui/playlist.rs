@@ -2,7 +2,7 @@
 
 use crate::app::command::{PanelCommand, PlayerCommand, PlaylistCommand};
 use crate::app::effect::FileDialogRequest;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 use crate::app::playlist_actions::playlist_play_first_selected_commands;
 use crate::app::playlist_actions::{
     playlist_queue_target_indices, playlist_row_click_commands, PlaylistSortAction,
@@ -621,7 +621,22 @@ fn toggle_playlist_queue_targets(app: &mut EguiFrontendState) -> bool {
     true
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
+fn playlist_touch_gestures_blocked(app: &EguiFrontendState) -> bool {
+    #[cfg(target_os = "android")]
+    if app.android.playlist_manager.is_open() {
+        return true;
+    }
+    app.preferences_open()
+        || app.main_menu_open()
+        || app.ui.prompt_open.is_some()
+        || app.skin_browser_open()
+        || app.file_info_open()
+        || app.ui.active_overlay.is_open()
+        || !app.runtime.pending_messages.is_empty()
+}
+
+#[cfg(any(target_os = "android", test))]
 fn handle_playlist_touch_scroll(
     ui: &egui::Ui,
     app: &mut EguiFrontendState,
@@ -629,6 +644,12 @@ fn handle_playlist_touch_scroll(
     rows_rect: egui::Rect,
     row_count: usize,
 ) -> bool {
+    // Dialogs are drawn after the playlist, so layer hit-testing alone cannot
+    // prevent their first frame of input from reaching the underlying rows.
+    if playlist_touch_gestures_blocked(app) || !response.enabled() {
+        app.playlist.touch_gesture = Default::default();
+        return false;
+    }
     let mut gesture_handled = false;
     let press_origin = ui.ctx().input(|input| {
         input
@@ -636,15 +657,17 @@ fn handle_playlist_touch_scroll(
             .button_pressed(egui::PointerButton::Primary)
             .then(|| input.pointer.press_origin())
             .flatten()
-            .filter(|origin| rows_rect.contains(*origin))
+            .filter(|origin| rows_rect.contains(*origin) && response.contains_pointer())
     });
-    let drag_start = press_origin.or_else(|| {
-        response
-            .drag_started()
-            .then(|| response.interact_pointer_pos())
-            .flatten()
-    });
-    if let Some(drag_start) = drag_start {
+    // Only a press owned by these rows can begin a gesture. Do not start one
+    // later when a drag that began elsewhere moves over the playlist.
+    if ui
+        .ctx()
+        .input(|input| input.pointer.button_pressed(egui::PointerButton::Primary))
+    {
+        app.playlist.touch_gesture = Default::default();
+    }
+    if let Some(drag_start) = press_origin {
         let row = {
             let row =
                 ((drag_start.y - rows_rect.top()) / (11.0 * app.scale_factor())).floor() as usize;
@@ -683,9 +706,8 @@ fn handle_playlist_touch_scroll(
             ui.ctx().request_repaint();
         }
     }
-    let drag_released = response.drag_stopped()
-        || (app.playlist.touch_gesture.is_active()
-            && !ui.ctx().input(|input| input.pointer.primary_down()));
+    let drag_released = app.playlist.touch_gesture.is_active()
+        && (response.drag_stopped() || !ui.ctx().input(|input| input.pointer.primary_down()));
     if drag_released {
         let release_pointer = ui
             .ctx()
@@ -795,7 +817,7 @@ fn has_vertical_swipe_momentum(
         || (gesture_duration <= std::time::Duration::from_secs(1) && average_speed >= 300.0)
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn set_swiped_playlist_selection(app: &mut EguiFrontendState, swiped_index: usize, selected: bool) {
     let Some(entry) = app
         .controller()
@@ -812,7 +834,7 @@ fn set_swiped_playlist_selection(app: &mut EguiFrontendState, swiped_index: usiz
     }
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn play_first_selected_playlist_entry(app: &mut EguiFrontendState) {
     let action = {
         let state = app.controller().state();
@@ -830,7 +852,7 @@ fn play_first_selected_playlist_entry(app: &mut EguiFrontendState) {
     app_log_info!(playlist, "swipe playback started", selected_index);
 }
 
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 fn scroll_playlist_rows(app: &mut EguiFrontendState, rows: i32) {
     if rows < 0 {
         app.playlist.scroll_offset = app
@@ -1218,6 +1240,88 @@ fn scale_skin_rect(base: egui::Rect, rect: SkinRect, scale: f32) -> egui::Rect {
 mod tests {
     use super::*;
     use crate::playlist::PlaylistMenuKind;
+
+    fn touch_frame(ctx: &egui::Context, app: &mut EguiFrontendState, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let rows_rect =
+                    egui::Rect::from_min_size(egui::pos2(50.0, 100.0), egui::vec2(200.0, 200.0));
+                let response = ui.interact(
+                    rows_rect,
+                    ui.id().with("playlist-rows"),
+                    egui::Sense::click_and_drag(),
+                );
+                handle_playlist_touch_scroll(ui, app, &response, rows_rect, 1);
+            });
+        });
+    }
+
+    fn touch_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    #[test]
+    fn playlist_touch_play_requires_a_press_on_unobstructed_rows() {
+        use crate::app::command::UiCommand;
+
+        for (preferences_open, start, should_play) in [
+            (false, egui::pos2(100.0, 250.0), true),
+            (true, egui::pos2(100.0, 250.0), false),
+            (false, egui::pos2(300.0, 250.0), false),
+        ] {
+            let mut app =
+                EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+            app.controller_mut().state_mut().playlist.add_timed_uri(
+                "file:///tmp/song.ogg",
+                "Song",
+                12_000,
+            );
+            app.dispatch(PlaylistCommand::SelectAll);
+            app.dispatch(UiCommand::SetPreferencesVisible(preferences_open));
+            let ctx = egui::Context::default();
+            touch_frame(&ctx, &mut app, vec![]);
+            touch_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerMoved(start), touch_button(start, true)],
+            );
+            assert_eq!(app.playlist.touch_gesture.is_active(), should_play);
+            let end = egui::pos2(100.0, 130.0);
+            touch_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(end)]);
+            touch_frame(&ctx, &mut app, vec![touch_button(end, false)]);
+            assert_eq!(
+                app.controller().state().player.state() == PlayerState::Playing,
+                should_play,
+            );
+            assert!(!app.playlist.touch_gesture.is_active());
+        }
+    }
+
+    #[test]
+    fn opening_preferences_cancels_an_active_playlist_touch() {
+        let mut app =
+            EguiFrontendState::new(crate::app::preview::PreviewOptions::default()).unwrap();
+        let ctx = egui::Context::default();
+        app.playlist
+            .touch_gesture
+            .begin(egui::pos2(100.0, 250.0), Some(0));
+        app.dispatch(crate::app::command::UiCommand::SetPreferencesVisible(true));
+        touch_frame(&ctx, &mut app, vec![]);
+        assert!(!app.playlist.touch_gesture.is_active());
+    }
 
     #[test]
     fn sort_popover_stays_within_narrow_playlist_window() {

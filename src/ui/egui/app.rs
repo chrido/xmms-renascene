@@ -316,7 +316,7 @@ pub(crate) struct PlaylistPresentation {
     pub(crate) width: i32,
     pub(crate) height: i32,
     pub(crate) resize_start: Option<i32>,
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", test))]
     pub(crate) touch_gesture: PlaylistTouchGesture,
 }
 
@@ -327,7 +327,7 @@ impl PlaylistPresentation {
             width,
             height,
             resize_start: None,
-            #[cfg(target_os = "android")]
+            #[cfg(any(target_os = "android", test))]
             touch_gesture: PlaylistTouchGesture::default(),
         }
     }

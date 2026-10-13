@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::app::command::UiCommand;
-use crate::app::preferences_model::{
-    clamped_scale_factor, mirror_live_preferences_fields, set_scale_factor, title_format_preview,
-};
+#[cfg(not(target_os = "android"))]
+use crate::app::preferences_model::{clamped_scale_factor, set_scale_factor};
+use crate::app::preferences_model::{mirror_live_preferences_fields, title_format_preview};
 #[cfg(target_os = "android")]
 use crate::artwork::ArtworkPolicy;
 use crate::config::{Config, TimerMode};
@@ -843,13 +843,6 @@ fn show_options_page(ui: &mut egui::Ui, config: &mut Config) {
 
         ui.separator();
         ui.heading("Layout");
-        let mut scale_factor = clamped_scale_factor(config.scale_factor);
-        android_slider(
-            ui,
-            "Player zoom",
-            egui::Slider::new(&mut scale_factor, 1.0..=5.0).suffix("x"),
-        );
-        set_scale_factor(config, scale_factor);
         ui.checkbox(&mut config.playlist_visible, "Show playlist");
         ui.checkbox(&mut config.equalizer_visible, "Show equalizer");
         return;
